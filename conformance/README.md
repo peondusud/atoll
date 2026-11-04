@@ -11,4 +11,6 @@ The language-neutral contract between the Go and Rust versions of Atoll (`specs.
 
 Every behavior change first adds or updates a vector or scenario.
 
+The vector format is described in [`vectors/README.md`](vectors/README.md); the Go unit tests load the files through `internal/vectors`.
+
 Run the scenarios with `make conformance`. Their file format is not defined yet, so the runner refuses any scenario it finds instead of passing over it.

@@ -62,6 +62,7 @@ internal/watch/        fanotify / inotify, rescans, event grouping, file identit
 internal/integrity/    hashing (pure), scrub, repair, quarantine, duplicates
 internal/view/         mergerfs configuration and runtime branches, FUSE view
 internal/fsx/          disk I/O abstraction (real, and with fault injection)
+internal/vectors/      loads conformance/vectors/ for unit tests
 internal/trash/  internal/notify/  internal/alerts/  internal/cache/
 api/                   openapi.yaml, schemas/ for --json outputs
 schema/                migrations/NNNN_name.sql, config.schema.json

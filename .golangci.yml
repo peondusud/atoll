@@ -115,7 +115,7 @@ linters:
       # forbidigo has no per-path patterns, so its rules are scoped by message.
       - linters: [forbidigo]
         text: internal/fsx
-        path: (^internal/fsx/|^conformance/runner/|^test/|_test\.go$)
+        path: (^internal/fsx/|^internal/vectors/|^conformance/runner/|^test/|_test\.go$)
       - linters: [forbidigo]
         text: pure core
         path-except: ^internal/(glob|names|rules|solver)/
