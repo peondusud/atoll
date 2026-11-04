@@ -56,6 +56,7 @@ internal/rules/        parsing, matching, effective policy (pure)
 internal/glob/         in-house glob matcher (pure)
 internal/names/        exact paths, collision keys, per-filesystem compatibility (pure)
 internal/solver/       placement, capacity, original selection, job plan (pure)
+internal/value/        value grammars: durations, sizes, percentages, time windows (pure)
 internal/jobs/         queue, atomic copy pipeline, per-path locks
 internal/ops/          operation journal, crash recovery
 internal/watch/        fanotify / inotify, rescans, event grouping, file identity
@@ -94,7 +95,7 @@ deploy/                systemd units, sample configuration
 ## Rust-rewrite readiness
 - Persisted and exchanged formats follow specs.md §29.3: SQL migration files, TOML configuration with a JSON Schema, OpenAPI for the local API, JSON schemas for `--json`, documented exit codes. Never `gob` or any other language-specific encoding.
 - Paths are BLOBs in SQLite; times are integer Unix nanoseconds UTC; in JSON, `path` or `path_b64`.
-- Pure core packages (`rules`, `glob`, `names`, `solver`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.
+- Pure core packages (`rules`, `glob`, `names`, `solver`, `value`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.
 - Every behavior change adds or updates a conformance vector or scenario before the code.
 - Sort every output explicitly; never depend on map iteration order or random seeds.
 - Reject regex constructs outside the common Go/Rust subset when the configuration loads (`\d`, `\w`, `\s`, `\b`, `\Q…\E`).
