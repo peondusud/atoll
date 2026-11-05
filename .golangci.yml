@@ -1,0 +1,134 @@
+# golangci-lint v2. The project-specific rules enforce conventions from
+# CLAUDE.md and specs.md §29.
+version: "2"
+
+run:
+  # Also lint the files behind the test tags of the Makefile.
+  build-tags:
+    - integration
+    - loopdev
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - contextcheck # context.Context everywhere
+    - depguard # architecture boundaries, below
+    - durationcheck
+    - errorlint # fmt.Errorf("context: %w", err)
+    - exhaustive # states and kinds are closed lists (specs.md §29.3)
+    - forbidigo # conventions, below
+    - gochecknoglobals # pure core only, see the exclusions
+    - misspell
+    - nilerr
+    - noctx
+    - rowserrcheck
+    - sloglint
+    - sqlclosecheck
+    - unconvert
+
+  settings:
+    depguard:
+      rules:
+        everywhere:
+          deny:
+            - pkg: encoding/gob
+              desc: "language-specific encoding: persisted and exchanged formats stay language-neutral (specs.md §29.3)"
+            - pkg: log$
+              desc: "structured logs: use log/slog"
+        # No I/O in the pure core, and dependencies point from the shell to the
+        # core, never back (specs.md §29.6).
+        pure-core:
+          files:
+            - "**/internal/glob/**"
+            - "**/internal/names/**"
+            - "**/internal/rules/**"
+            - "**/internal/solver/**"
+          deny:
+            - pkg: database/sql
+              desc: "pure core: no I/O"
+            - pkg: golang.org/x/sys
+              desc: "pure core: no I/O"
+            - pkg: io/fs
+              desc: "pure core: no I/O"
+            - pkg: log
+              desc: "pure core: no I/O"
+            - pkg: math/rand
+              desc: "pure core: deterministic, no random seeds"
+            - pkg: net
+              desc: "pure core: no I/O"
+            - pkg: os
+              desc: "pure core: no I/O"
+            - pkg: path/filepath
+              desc: "pure core: logical paths use the / separator on every OS"
+            - pkg: syscall
+              desc: "pure core: no I/O"
+            - pkg: github.com/peondusud/atoll/internal/alerts
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/cache
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/catalog
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/disks
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/fsx
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/integrity
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/jobs
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/notify
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/ops
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/trash
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/view
+              desc: "pure core: dependencies never point back to the shell"
+            - pkg: github.com/peondusud/atoll/internal/watch
+              desc: "pure core: dependencies never point back to the shell"
+        conformance-runner:
+          files:
+            - "**/conformance/runner/**"
+          deny:
+            - pkg: github.com/peondusud/atoll/internal
+              desc: "the runner talks to the binary through the CLI and the filesystem only"
+
+    forbidigo:
+      forbid:
+        - pattern: ^panic$
+          msg: "no panic outside initialization; add a nolint comment there"
+        - pattern: ^os\.(Chmod|Chown|Chtimes|CopyFS|Create|CreateTemp|DirFS|Lchown|Link|Lstat|Mkdir|MkdirAll|MkdirTemp|Open|OpenFile|OpenInRoot|OpenRoot|ReadDir|ReadFile|Readlink|Remove|RemoveAll|Rename|Stat|Symlink|Truncate|WriteFile)$
+          msg: "all disk I/O goes through internal/fsx"
+        - pattern: ^filepath\.(EvalSymlinks|Glob|Walk|WalkDir)$
+          msg: "all disk I/O goes through internal/fsx"
+        - pattern: ^(path|filepath)\.Match$
+          msg: "globs use the in-house matcher, internal/glob"
+        - pattern: ^(time\.(Now|Since|Until)|fmt\.Print(f|ln)?)$
+          msg: "pure core: no clock and no I/O"
+
+    misspell:
+      locale: US
+
+  exclusions:
+    rules:
+      # forbidigo has no per-path patterns, so its rules are scoped by message.
+      - linters: [forbidigo]
+        text: internal/fsx
+        path: (^internal/fsx/|^conformance/runner/|^test/|_test\.go$)
+      - linters: [forbidigo]
+        text: pure core
+        path-except: ^internal/(glob|names|rules|solver)/
+      - linters: [gochecknoglobals]
+        path-except: ^internal/(glob|names|rules|solver)/
+      - linters: [gochecknoglobals]
+        path: _test\.go$
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/peondusud/atoll
