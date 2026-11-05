@@ -7,14 +7,14 @@ Atoll copies a file to another disk at the same relative path, byte for byte, an
 ## Summary
 
 - ext4, XFS and btrfs hold any component of 1 to 255 bytes, except `/` and NUL. Invalid UTF-8, control characters, `:`, a trailing dot and `CON` all work. Measured on Linux 6.18 with loop images.
-- The Linux NTFS drivers hold almost anything, but Windows does not. Without `windows_names`, ntfs3 and ntfs-3g accept `:`, `*`, control characters, a trailing dot and `CON`, and Windows cannot open such names. Even with `windows_names`, both drivers accept `CON .txt`, `COM¹`, `CONIN$` and U+007F.
+- The Linux NTFS drivers hold almost anything, but Windows does not. Without `windows_names`, ntfs3 and ntfs-3g accept `:`, `*`, control characters, a trailing dot and `CON`, and Windows cannot open such names. Even with `windows_names`, both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$`.
 - ntfs3 on Linux 7.3 reads `a:b` as the stream `b` of the file `a`, through its new `ads` option, which is on by default. Measured:
   - creating `a:b` when `a` exists writes into `a`;
   - a rename onto `m:n` replaces the file `m`;
   - `windows_names` stops none of this.
 
   So Atoll must never write a `:` to NTFS.
-- Windows 10 reserves device names even with an extension (`CON.txt`, `NUL.tar.gz`, `CON .txt`). Windows 11 reserves bare names only, but Explorer and the SMB client still refuse some of them. Microsoft removed `COM0` and `LPT0` from its list in April 2025. The superscripts `¹ ² ³` count as port digits.
+- Windows 10 reserves device names even with an extension (`CON.txt`, `NUL.tar.gz`, `CON .txt`). Windows 11 no longer reserves a device name followed by an extension, according to Microsoft's .NET documentation; its exact rule is not established, and secondary sources report that Explorer and the SMB client still refuse some bare names. Microsoft removed `COM0` and `LPT0` from its list in April 2025. The superscripts `¹ ² ³` count as port digits.
 - Names that are not valid UTF-8 cannot go to NTFS safely: ntfs3 refuses encoded surrogates, ntfs-3g stores them, and ntfs-3g silently rewrites a CESU-8 pair, which changes the name.
 - lowntfs-3g refuses components of more than 255 bytes, and mount information cannot tell it apart from ntfs-3g.
 - A UTF-16 length is never more than the UTF-8 length for any character (checked over every scalar value). So on NTFS the 255-byte limit always binds before the 255-unit limit.
@@ -27,7 +27,7 @@ The maintainer chose (§15.8):
 |---|---|
 | Which NTFS disks follow the Windows rules | All of them, in both versions. A name like `a:b.mkv` on ext4 never gets an NTFS replica. |
 | Reserved names | The Windows 10 rule, the strictest: the part before the first `.`, without trailing U+0020, compared ignoring the case of ASCII letters, against `CON PRN AUX NUL CONIN$ CONOUT$ COM1-9 COM¹²³ LPT1-9 LPT¹²³`. |
-| Variants (ext4 `casefold`, XFS `ascii-ci`, NTFS `nocase`) | Refused at `disk add`; a case-insensitive folder found later makes the disk name-incompatible below it. On NTFS, at most 255 bytes per component as well, for lowntfs-3g. |
+| Variants (ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase`, lowntfs-3g `ignore_case`) | Refused at `disk add`; a case-insensitive folder found later makes the disk name-incompatible below it. On NTFS, at most 255 bytes per component as well, for lowntfs-3g. |
 | Verdicts and corpus | Every component is checked, folders included. Reasons form a closed list: `too-long`, `invalid-utf8`, `control-character`, `forbidden-character`, `trailing-dot-or-space`, `reserved-name`. The corpus is one JSON file in the vector format. |
 
 ## Linux filesystems
@@ -73,10 +73,11 @@ The rule Atoll keeps (§15.8) is the Windows 10 superset, as a fixed table. The 
 
 ## Verification
 
-- An independent Python implementation of the §15.8 rules, written from the spec text, generated the corpus (82 names) and the whole-path vectors (25 cases).
+- An independent Python implementation of the §15.8 rules, written from the spec text, generated the corpus (101 names) and the whole-path vectors (27 cases).
 - The Go implementation (`internal/names/compat.go`) agrees with it on the corpus, on the vectors, and on 300,000 random names mixing ASCII specials, reserved-name pieces, superscripts, NBSP, fullwidth forms and invalid UTF-8: no disagreement.
-- Mutation checks: removing `CONIN$`, the superscripts, the space trimming, the trailing-space rule, U+001F, the byte limit on NTFS or the ASCII case folding each makes the tests fail.
-- `sudo make test-loopdev` creates every name the corpus accepts on real ext4, XFS, btrfs and NTFS loop images, as a file and as a folder, and checks the listing byte for byte. On ext4, XFS and btrfs it also checks that every refused name is refused. In this sandbox, the run passed on all four, NTFS through ntfs-3g.
+- Mutation checks: removing `CONIN$`, the superscripts, the space trimming, the trailing-space rule, U+001F, the byte limit on NTFS or the ASCII case folding each makes the tests fail. A later review found mutants that survived (trimming one space only, Unicode uppercase, dropped port digits, reserved names checked only on valid UTF-8); the corpus now pins each of them.
+- `sudo make test-loopdev` creates every name the corpus accepts on real ext4, XFS, btrfs and NTFS loop images, as a file and as a folder, each in a fresh folder, and checks the listing byte for byte and `lstat`. On ext4, XFS and btrfs it also checks that every refused name is refused. NTFS runs on every driver present (ntfs3, ntfs-3g, lowntfs-3g), with and without `windows_names`. In this sandbox it passed on ext4, XFS, btrfs, ntfs-3g and lowntfs-3g; ntfs3 is not in this kernel.
+- A second review replayed the corpus on ntfs3 (Linux 7.2 and 7.3, with and without `windows_names` and `ads`), ntfs-3g and lowntfs-3g: every name the corpus accepts was created, listed, found by `stat`, and read back by the other drivers. Two spec-only ports agreed with Go on 5.4 million names and paths. The review also found lowntfs-3g `-o ignore_case`, which lists names in lowercase and is invisible in mount information: it is now a refused variant.
 
 ## Open questions
 

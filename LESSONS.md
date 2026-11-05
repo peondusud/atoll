@@ -24,6 +24,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
   - To count them, decompose character by character, never with `norm.NFKD` on the whole string, which inserts U+034F itself.
 - Two x/text releases with the same Unicode version can still normalize differently (v0.41.0 and v0.43.0). A version tag for cached keys must name the release.
 - Go's `encoding/json` silently turns an unpaired `\uD800` escape, or an invalid byte, into U+FFFD, while `serde_json` fails. Shared JSON files must be valid UTF-8 with no unpaired surrogate escape; other names go in a `*_b64` field.
+- Go's `encoding/json` also matches keys without case (even `ſ` for `s`), keeps the last of two equal keys, and decodes `-0` into an integer. Go's base64 skips line breaks even in strict mode. A shared-format loader must check keys, numbers and base64 spelling itself, or Go accepts files that Rust rejects.
 - NFC can change regex syntax: a combining mark after an escape letter or a range endpoint composes with it (`\n` followed by U+0303 becomes `\ñ`). The grammar must apply to the NFC form, and errors must show the typed text.
 - A UTF-16 length is never more than the UTF-8 length of the same valid text. So on NTFS the 255-byte limit always binds before the 255-unit limit.
 
@@ -32,7 +33,8 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - Linux NTFS drivers accept names Windows cannot open. Even with `windows_names`, they accept `CON .txt`, `COM¹`, `CONIN$` and U+007F. ntfs3 on Linux 7.3 reads `a:b` as a stream of `a`, and a rename onto `m:n` replaces `m`. Never rely on the driver: check names with a fixed table.
 - Windows 10 and 11 differ on device names with an extension. Microsoft's list changed in 2022, 2023 and 2025. Follow the strictest version as a table; never call `RtlIsDosDeviceName_U`.
 - ntfs-3g gives `EINVAL` for `RENAME_NOREPLACE`, and its `stat` of an 8.3 short name returns another file.
-- lowntfs-3g limits names to 255 bytes, and mount information cannot tell it apart from ntfs-3g.
+- lowntfs-3g limits names to 255 bytes, and mount information cannot tell it apart from ntfs-3g. Its `-o ignore_case` lists every name in lowercase, and is invisible too.
+- A real-filesystem test must give each name a fresh folder and must test every driver variant: one driver hid the 255-byte rule, and a leftover name made a later one fail.
 
 ## Tooling in this environment
 

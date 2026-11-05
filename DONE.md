@@ -4,7 +4,7 @@ Finished work, newest first. Each item names its commits on `claude/funny-allen-
 
 ## Name compatibility per filesystem (specs.md §15.8)
 
-Commits `f7b6502`, `10c1c2b`, `b9fbeb3`.
+Commits `f7b6502`, `10c1c2b`, `b9fbeb3`, and the follow-up after the review.
 
 - Researched:
   - the Windows 10 and 11 rules;
@@ -22,9 +22,9 @@ Commits `f7b6502`, `10c1c2b`, `b9fbeb3`.
   - every component is checked, folders included;
   - a closed list of six reason codes.
 - Contract:
-  - `conformance/corpus/names/names.json` holds 82 names with their reasons on ext4, xfs, btrfs and ntfs;
-  - `conformance/vectors/name_compat.json` holds 25 whole-path cases;
-  - vector files must not hold an unpaired surrogate escape.
+  - `conformance/corpus/names/names.json` holds 101 names with their reasons on ext4, xfs, btrfs and ntfs;
+  - `conformance/vectors/name_compat.json` holds 27 whole-path cases;
+  - vector files must not hold an unpaired surrogate escape. Keys must be lowercase ASCII and unique, integers plain, and base64 written exactly as the standard encoder writes it, because Go's decoder would otherwise accept what Rust's rejects.
 - Code:
   - `internal/names/compat.go`: `ComponentReasons`, `CheckPath`;
   - `internal/vectors` loads the corpus and checks the text rules.
@@ -32,7 +32,8 @@ Commits `f7b6502`, `10c1c2b`, `b9fbeb3`.
   - an independent Python model agrees on 300,000 random names;
   - mutation checks;
   - fuzzing;
-  - `sudo make test-loopdev` creates the corpus on real ext4, XFS, btrfs and NTFS (ntfs-3g) loop images.
+  - `sudo make test-loopdev` creates the corpus on real ext4, XFS and btrfs loop images, and on NTFS with every driver present (ntfs3, ntfs-3g, lowntfs-3g), with and without `windows_names`;
+  - an independent review: two spec-only ports agreed with Go on 5.4 million names and paths, and the corpus was replayed on ntfs3 (Linux 7.2 and 7.3), ntfs-3g and lowntfs-3g. The review found lowntfs-3g `ignore_case`, now a refused variant.
 
 ## Regex grammar and weight (specs.md §29.5)
 

@@ -2,10 +2,6 @@
 
 Open work, in a suggested order. Finished work is in [DONE.md](DONE.md), lessons in [LESSONS.md](LESSONS.md). Items marked **decision** change a contract (specs.md §29.3) or an invariant: ask the maintainer first (CLAUDE.md).
 
-## In progress
-
-- Act on the independent review of name compatibility (a spec-only Rust port, the corpus replayed on ntfs3 and lowntfs-3g, and a review of the spec and corpus). Fix what it finds, vectors and corpus first.
-
 ## Names (specs.md §30)
 
 To decide before the solver, the scanner and `atoll names check` need them:
@@ -26,13 +22,15 @@ To decide before the solver, the scanner and `atoll names check` need them:
   - the precedence between `name-incompatible` and `degraded`.
 - NTFS 8.3 short names: never decide that a file exists with `stat` alone, and treat an `EEXIST` without a visible exact entry as name-incompatible.
 - Mount checks:
+  - how to detect lowntfs-3g `-o ignore_case`, which mount information does not show (the FUSE daemon's command line?);
   - ntfs3 must use `iocharset=utf8`;
   - report its `ads` option (on by default from Linux 7.3) and `nocase`;
   - a listed entry whose `lstat` fails is a name the driver cannot read, never a missing file.
-- `disk add`: refuse ext4 `casefold`, XFS `ascii-ci` and NTFS `nocase`. Watch `FS_CASEFOLD_FL` on folders under `<root>/`.
+- `disk add`: refuse ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase` and lowntfs-3g `ignore_case`. Watch `FS_CASEFOLD_FL` on folders under `<root>/`.
 
 ## Pure core still without vectors (specs.md §29.4)
 
+- Vector tests: the other vector files share the loose case shape that `name_compat.json` no longer accepts (an error case that also carries an expected result). Require exactly one of the expected output and `"error": true` in every vector test.
 - **Capacity formula** (§13.1): `capacity.json` can be written now. Decide two points first:
   - rounding to whole bytes (floor);
   - k greater than the number of disks (capacity 0).
