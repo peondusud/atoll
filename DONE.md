@@ -2,6 +2,25 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Name collisions on NTFS targets (specs.md §15.7)
+
+Commit "Refuse name collisions on NTFS targets", on `main`.
+
+- The maintainer's decisions:
+  - a colliding copy is blocked: a hard constraint of the solver, not only a report;
+  - `entries` gets an `lpath_key` column, so folders are looked up the same way as files.
+- Also stated in §15.7:
+  - names already side by side on an NTFS disk, created outside Atoll, are only reported;
+  - a case-only rename does not collide with its own old name;
+  - between two new names, the first in the plan's order gets the disk.
+- Contract: `conformance/vectors/ntfs_collision.json` holds 39 cases.
+- Code: `names.TargetNames`. The solver and the catalog do not exist yet, so nothing calls it outside its tests.
+- Tests:
+  - the cases were checked outside Go, in PowerShell with .NET normalization and an upcase built from the rule of §15.8;
+  - a property test compares it with a pairwise comparison, on names mixing case, NFC and NFD forms and invalid UTF-8;
+  - 11 code mutations each make a vector fail, and 11 mutations of the vector shape each make the test fail.
+- Measured: ntfs-3g holds both names, so the driver does not protect against collisions. Not measured: ntfs3, and what Windows does with such names.
+
 ## Capacity formula (specs.md §13.1)
 
 Commit "Add the capacity formula and its vectors", on `main`.

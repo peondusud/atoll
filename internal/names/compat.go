@@ -73,11 +73,8 @@ func CheckPath(path string, fs Filesystem) ([]Problem, error) {
 // UTF-8 still gets its other reasons. An error means name is empty, "." or
 // "..", or holds "/" or NUL, or that fs is unknown.
 func ComponentReasons(name string, fs Filesystem) ([]Reason, error) {
-	switch {
-	case name == "" || name == "." || name == "..":
-		return nil, fmt.Errorf("component %q is not a name", name)
-	case strings.ContainsAny(name, "/\x00"):
-		return nil, fmt.Errorf("component %q holds / or NUL", name)
+	if err := checkComponent(name); err != nil {
+		return nil, err
 	}
 	switch fs {
 	case Ext4, XFS, Btrfs:
@@ -90,6 +87,17 @@ func ComponentReasons(name string, fs Filesystem) ([]Reason, error) {
 	default:
 		return nil, fmt.Errorf("unknown filesystem %q", fs)
 	}
+}
+
+// checkComponent rejects what can never be a component of a logical path.
+func checkComponent(name string) error {
+	switch {
+	case name == "" || name == "." || name == "..":
+		return fmt.Errorf("component %q is not a name", name)
+	case strings.ContainsAny(name, "/\x00"):
+		return fmt.Errorf("component %q holds / or NUL", name)
+	}
+	return nil
 }
 
 // ntfsReasons applies the Windows rules that every NTFS disk follows.

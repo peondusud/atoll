@@ -29,6 +29,7 @@ The maintainer chose (§15.8):
 | Reserved names | The Windows 10 rule, the strictest: the part before the first `.`, without trailing U+0020, compared ignoring the case of ASCII letters, against `CON PRN AUX NUL CONIN$ CONOUT$ COM1-9 COM¹²³ LPT1-9 LPT¹²³`. |
 | Variants (ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase`, lowntfs-3g `ignore_case`) | Refused at `disk add`; a case-insensitive folder found later makes the disk name-incompatible below it. On NTFS, at most 255 bytes per component as well, for lowntfs-3g. |
 | Verdicts and corpus | Every component is checked, folders included. Reasons form a closed list: `too-long`, `invalid-utf8`, `control-character`, `forbidden-character`, `trailing-dot-or-space`, `reserved-name`. The corpus is one JSON file in the vector format. |
+| Case collisions on NTFS targets (§15.7) | A hard constraint of the solver, checked with `lpath_key` at every component against the target's existing and planned names. `entries` gets an `lpath_key` column, so folders are looked up the same way as files. |
 
 ## Linux filesystems
 
@@ -44,6 +45,8 @@ Measured on the sandbox kernel 6.18 with loop images (ext4, XFS, btrfs) and FUSE
 | lowntfs-3g | 255 bytes and 255 UTF-16 units | as ntfs-3g | `strlen(name) < 256` in `src/lowntfs-3g.c`. |
 
 `FS_IOC_GETFLAGS` reports `FS_CASEFOLD_FL` for ext4 `casefold` folders and for ntfs3 `nocase`. It does so for XFS `ascii-ci` only from Linux 7.2. Before that, `xfs_info` shows `ascii-ci=1`.
+
+ntfs-3g 2022.10.3, with and without `windows_names`, holds `Film.mkv` beside `film.mkv` and `Films/` beside `films/`, and renames a third file to `FILM.MKV` beside them. So the driver does not protect against case collisions, and `windows_names` does not either. Measured on an image file in a container (Linux 6.6, WSL2). ntfs3 was not measured for this, as that kernel does not have it.
 
 ## Windows
 
@@ -83,11 +86,10 @@ The rule Atoll keeps (§15.8) is the Windows 10 superset, as a fixed table. The 
 
 These are listed in `specs.md` §30:
 
-- **Case collisions as a hard constraint.** Should case collisions on NTFS targets block a copy? And the whole-path `lpath_key` misses collisions between folders: `Films/a.mkv` and `films/b.mkv` get different keys, although `Films` and `films` collide on Windows and Samba.
 - **Renames to an incompatible name.** A user may rename a file to a name that another copy's filesystem refuses (§15.3, §6.1). What happens to the copy left at the old name?
 - **Trash layout.** `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17).
 - **Total path length.** mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes. Windows applications without long-path support stop at 259 units.
-- **Output of `atoll names check`.** Its JSON schema, sort key and exit code are not defined, nor the precedence between `name-incompatible` and `degraded`.
+- **Output of `atoll names check`.** Its JSON schema, sort key and exit code are not defined, nor the precedence between `name-incompatible`, `name-collision` and `degraded`.
 - **8.3 short names.** Both Linux drivers refuse to create a name equal to another file's short name. ntfs-3g's `stat` of that name returns the other file. So existence on NTFS must never be decided by `stat` alone.
 - **Mount checks.**
   - ntfs3 must run with `iocharset=utf8`, and its `ads` option should be reported.

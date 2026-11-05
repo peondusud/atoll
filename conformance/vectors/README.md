@@ -132,6 +132,17 @@ The rules for a single name are pinned by the name corpus, `conformance/corpus/n
 
 A case has exactly one of `key` and `no_key`. Paths that collide have the same key.
 
+### `ntfs_collision.json` — name collisions on an NTFS target (§15.7)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `existing` | array of strings | the names on the target that are valid UTF-8; each one also stands for its parent folders |
+| `existing_b64` | array of strings | optional: the names on the target that are not valid UTF-8, in base64 |
+| `path`, `path_b64` | string | the path to write |
+| `component` | integer | the first component that collides, from 0; absent when `with` is empty |
+| `with` | array of strings | the exact names on the target that the path collides with at that component, in byte order; an empty array means no collision |
+| `error` | boolean | `true` when `path` or a name on the target is not a well-formed logical path |
+
 ### `capacity.json` — capacity of a pool (§13.1)
 
 | Field | Type | Meaning |
@@ -143,4 +154,4 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 
 ## Unicode versions
 
-The Go and Rust libraries do not use the same Unicode version (`specs.md` §29.5). Vectors that involve Unicode data (`nfc.json`, `match.json`, `regex.json`, `lpath_key.json`) only use characters assigned in Unicode 16.0, with expected results that no later version of the libraries' data changes. No accepted pattern and no path holds a run of non-starters long enough for Go's normalization to insert U+034F (`specs.md` §29.5); the Go tests check it. Rejected patterns may: both versions reject them before they normalize them.
+The Go and Rust libraries do not use the same Unicode version (`specs.md` §29.5). Vectors that involve Unicode data (`nfc.json`, `match.json`, `regex.json`, `lpath_key.json`, `ntfs_collision.json`) only use characters assigned in Unicode 16.0, with expected results that no later version of the libraries' data changes. No accepted pattern and no path holds a run of non-starters long enough for Go's normalization to insert U+034F (`specs.md` §29.5); the Go tests check it. Rejected patterns may: both versions reject them before they normalize them.

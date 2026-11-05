@@ -49,3 +49,13 @@ What this work taught, so the next change goes faster and breaks less. Finished 
   - `staticcheck` QF1002: a tagged `switch`.
 - Patch files with scripts that assert how many times each old string occurs, so a silent no-op is impossible.
 - Go 1.27 runs through `GOTOOLCHAIN=go1.27.0`. golangci-lint is in the session scratchpad's `bin/`.
+
+## Tooling on the maintainer's Windows machine
+
+- There is no Go or make on the host. Everything compiles in the `golangci/golangci-lint:v2.15.0` image (Go 1.27.2, make, gcc), with the project mounted read-only and copied inside the container.
+- Docker Desktop can fail to start with `remove …: The file cannot be accessed by the system`, on `%LOCALAPPDATA%\Docker\run\dockerInference`, then on `%LOCALAPPDATA%\docker-secrets-engine\engine.sock`.
+  - `docker desktop stop` sometimes leaves these empty Unix sockets behind, and each failed start recreates the ones before it, so removing one socket at a time never ends.
+  - From a tool, Windows refuses to open them, even through the reparse point: `Remove-Item`, `del` and the recycle bin all give error 1920. Git Bash `rm -f` returns 0 and removes nothing, so check with `dir /a`.
+  - With Docker stopped, renaming both parent folders and creating them again empty works, since a rename never opens the children. The cause in Windows or Docker is not established.
+- The Write tool, too, can turn `\u` escapes into raw characters. In a vector file, check the bytes: NFC and NFD forms look the same once raw.
+- In PowerShell, `@{}` ignores case and `-cne` compares by culture, so `é` equals `e` followed by U+0301. Use a `Dictionary` with `StringComparer.Ordinal` and `[string]::CompareOrdinal` to check names. A control that injects a known error shows whether such a check can fail at all.

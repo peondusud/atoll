@@ -6,9 +6,6 @@ Open work, in a suggested order. Finished work is in [DONE.md](DONE.md), lessons
 
 To decide before the solver, the scanner and `atoll names check` need them:
 
-- **decision**: case collisions on NTFS targets.
-  - Should a collision with the target's existing and planned siblings block the copy, or only be reported?
-  - Folders also collide, and the whole-path `lpath_key` misses that: `Films/a.mkv` against `films/b.mkv`. Add a key for each prefix, or a key on `entries`?
 - **decision**: a user rename to a name that another copy's filesystem refuses (§15.3, §6.1). What happens to the copy left at the old name?
 - **decision**: the trash layout `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17).
 - **decision**: total path length:
@@ -19,7 +16,8 @@ To decide before the solver, the scanner and `atoll names check` need them:
 - **decision**: the output of `atoll names check`:
   - JSON schema, sort key, exit code;
   - which paths and filesystems it covers;
-  - the precedence between `name-incompatible` and `degraded`.
+  - the precedence between `name-incompatible`, `name-collision` and `degraded`.
+- Measure whether ntfs3 holds names that differ only by case, as ntfs-3g does, in `test/loopdev`.
 - NTFS 8.3 short names: never decide that a file exists with `stat` alone, and treat an `EEXIST` without a visible exact entry as name-incompatible.
 - Mount checks:
   - how to detect lowntfs-3g `-o ignore_case`, which mount information does not show (the FUSE daemon's command line?);
@@ -41,7 +39,7 @@ To decide before the solver, the scanner and `atoll names check` need them:
   - the properties of §11.2.
 
   Needs the configuration schema below.
-- **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility included), the job plan, and property tests.
+- **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility and NTFS collisions included, the latter through `names.TargetNames`), the job plan, and property tests.
 - **decision**: **BLAKE3** (§16): choose a Go implementation with SIMD after a throughput benchmark. It is a new dependency, and its license must be compatible with GPL-3.0-or-later.
 
 ## Contracts not yet defined (specs.md §29.3)

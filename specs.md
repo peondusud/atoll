@@ -260,6 +260,7 @@ CREATE TABLE copies(
 
 CREATE TABLE entries(                  -- everything else the view must list
   lpath BLOB NOT NULL,
+  lpath_key TEXT,                      -- as in files (§15.8); collisions only; NULL if not UTF-8
   disk_id TEXT NOT NULL REFERENCES disks(id),
   kind TEXT NOT NULL,                  -- dir | symlink | ignored
   mode INTEGER, mtime_ns INTEGER,
@@ -302,6 +303,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 
 - All INTEGER times are Unix nanoseconds, UTC. Times are compared at the coarser precision of the filesystems involved (`time_precision_ns`), so an ext4 → NTFS replica still matches.
+- `files.lpath_key` and `entries.lpath_key` are indexed: the collision checks of §15.7 look names up by key.
 - Chunk hash volume: 20 TB ÷ 4 MiB × 32 bytes ≈ 150 MB, one BLOB per file.
 - Catalog location: `/var/lib/atoll/catalog.db` (Linux), `%ProgramData%\Atoll\catalog.db` (Windows).
 - Daily catalog backup on the system disk and, if enabled, in each disk's `Atoll/catalog/`, inside the time window (§21.6).
@@ -398,6 +400,7 @@ Until a strategy is implemented (see §28), it falls back to `most-free`, and th
   - `min_free` respected;
   - disk `online` or `standby`, and not `draining`, `failed` or `readonly`;
   - name compatible with the target filesystem (§15.8);
+  - on an NTFS target, no name collision with the names on that disk (§15.7);
   - the target path is free.
 - **Strict settings**, which `overflow` never relaxes:
   - `spread_mode = "strict"`: at least one copy in each failure domain, as long as the number of copies allows it;
@@ -531,7 +534,15 @@ Each copy is compared with the recorded current version:
 - Same logical path with different content on two disks, at adoption or after concurrent changes: `conflict` state, every version kept.
 - Atoll's own view keeps presenting the copy it presented before; for a conflict found when adding a disk, the copy already in the pool. With mergerfs, the first branch's copy is shown.
 - Resolution: `atoll conflicts resolve <path> --keep <disk>`, with confirmation; the other versions go to the trash.
-- Paths with the same `lpath_key` (§15.8), which differ only by NFC/NFD form, by case as NTFS and Samba compare it, or by both, are reported as `name-collision`: the merged view shows both, and Windows or macOS clients may treat them as one name. Nothing is changed automatically.
+- Paths with the same `lpath_key` (§15.8), which differ only by NFC/NFD form, by case as NTFS and Samba compare it, or by both, are reported as `name-collision`: the merged view shows both, and Windows or macOS clients may treat them as one name. Folders count too: `Films/a.mkv` and `films/b.mkv` are reported, because `Films` and `films` have the same key. Nothing is changed automatically.
+- Atoll never writes a colliding name to an NTFS disk. This is a hard constraint of the solver (§12.4), checked on NTFS targets only: ext4, XFS and btrfs hold both names, and the variants that would not are refused (§10). Atoll checks it itself, as a pure function of the names, and never relies on the driver:
+  - a path collides with a name on the target when, at some component, their prefixes up to that component have the same `lpath_key` and different bytes. So `film.mkv` collides with `Film.mkv`, `films/b.mkv` with the folder `Films`, and `films/a.mkv` with a file named `Films`;
+  - the names on the target are its files, folders and symlinks (`copies`, `entries`) and those planned earlier in the same plan, so the first name in the plan's order gets the disk;
+  - a path never collides with itself, and a case-only rename does not collide with its own old name;
+  - a name without a key, which is not valid UTF-8, never collides; it cannot go to NTFS anyway (§15.8);
+  - `lpath_key` is wider than NTFS: the check also refuses an NFC/NFD pair that NTFS could hold, and `ς` against `σ`. Such pairs are rare and are reported anyway.
+- A colliding copy goes to another disk. Failing that, the file keeps fewer replicas than wanted, is reported as `name-collision`, and an alert is raised. So a folder `films/` against `Films/` blocks everything below it on that disk until the user renames one of them. Never an automatic rename.
+- Names already side by side on an NTFS disk, created outside Atoll, are only reported: Atoll does not touch them.
 
 ### 15.8 Extended names
 
@@ -552,7 +563,7 @@ Each copy is compared with the recorded current version:
     - not end with U+0020 or U+002E, which also rules out `...` and ` `; other spaces and dots, such as U+00A0, are allowed;
     - not be a reserved name, as Windows 10 reads it (which also cuts at a `:`, forbidden anyway): take the component up to its first `.`, remove every trailing U+0020 (`CON  .txt` reads as `CON`), and compare it, ignoring the case of ASCII letters only, with `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1`–`COM9`, `LPT1`–`LPT9`, and `COM` or `LPT` followed by `¹`, `²` or `³` (U+00B9, U+00B2, U+00B3). So `CON.txt`, `NUL.tar.gz` and `CON .txt` are reserved, as on Windows 10. Windows 11 no longer reserves a device name followed by an extension, according to Microsoft's .NET documentation; its exact rule is not established. `COM0`, `LPT0`, `NULL`, `CLOCK$`, `CONERR$`, ` CON` (leading space) and `ＣＯＮ` (fullwidth) are not;
   - a component that fails gets one or more reasons, from a closed list (§29.3), reported in this order: `too-long`, `invalid-utf8`, `control-character`, `forbidden-character`, `trailing-dot-or-space`, `reserved-name`. On ext4, XFS and btrfs, only `too-long` applies. Every rule reads bytes, except the UTF-16 length, so a name that is not valid UTF-8 still gets its other reasons;
-  - NTFS is case-insensitive: `Film.mkv` and `film.mkv` in the same folder collide (§15.7);
+  - NTFS is case-insensitive: `Film.mkv` and `film.mkv` in the same folder collide, and so do the folders `Films` and `films`. Atoll never writes a colliding name there (§15.7);
   - variants that change these rules are refused when a disk is added (§10): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase` or with lowntfs-3g `ignore_case`. A case-insensitive folder found later under `<root>/` (`FS_CASEFOLD_FL`) makes that disk name-incompatible for every path below it.
 - Incompatible name: the solver picks a compatible disk. Failing that, `name-incompatible` state and an alert. Never an automatic rename.
 - Recommended: mount NTFS disks on Linux with `windows_names` (Linux 6.2 or later for ntfs3), so applications cannot create most names Windows rejects. It enforces only part of the rules above: both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$` with it.
@@ -980,7 +991,7 @@ atoll daemon [--foreground] [--dry-run]
   - bursts of renames (Sonarr-like) and folder renames during a replication;
   - hard-linked paths never mistaken for renames.
 - Guards: mass-deletion guard; propagation limited to copies unchanged since the last sync.
-- Names: NFC/NFD and case collisions reported as `name-collision`; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not).
+- Names: NFC/NFD and case collisions reported as `name-collision`, folders included; no colliding name ever written to an NTFS target; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not).
 - mergerfs with a dying branch: files stay readable through their replicas once the branch is removed; behavior before removal recorded.
 - Disk sleep: SMART polling does not wake a sleeping disk; no background work outside the windows.
 - **Break-glass test**, in CI, on a pool with no stale copy and no conflict: daemon stopped then uninstalled, plain mergerfs mounted from `mergerfs-config` at the same mount point: identical listing and content, no hidden file, test library unchanged.
@@ -1164,10 +1175,9 @@ number   = digits [ "." digits ]
 - Rust rewrite: cost of a second implementation and of keeping both in sync until the switch; maturity of the `winfsp` crate to check before phase 4.
 - Windows arrives after the rewrite; until then, Windows PCs use the SMB share.
 - Names (research in `docs/research/name-compatibility.md`), to decide before the solver, the scanner and `atoll names check`:
-  - case collisions on NTFS targets: a hard constraint checked against the target's existing and planned siblings, or a report only; and folders, since the whole-path `lpath_key` misses `Films/a.mkv` against `films/b.mkv`;
   - a user rename to a name that another copy's filesystem refuses (§15.3, §6.1): what happens to the copy left at the old name;
   - the trash layout `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17);
   - total path length: mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes; Windows applications without long-path support stop at 259 UTF-16 units;
-  - the output of `atoll names check` (JSON schema, sort key, exit code) and the precedence between `name-incompatible` and `degraded`;
+  - the output of `atoll names check` (JSON schema, sort key, exit code) and the precedence between `name-incompatible`, `name-collision` and `degraded`;
   - on NTFS, 8.3 short names: both Linux drivers refuse to create a name equal to another file's short name, and ntfs-3g's `stat` returns that other file, so existence must never be decided by `stat` alone;
   - mount checks: how to detect lowntfs-3g `ignore_case`, which mount information does not show (the FUSE daemon's command line?); ntfs3 must use `iocharset=utf8`, and its `ads` option (on by default from Linux 7.3) reads `a:b` as a stream; a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file.
