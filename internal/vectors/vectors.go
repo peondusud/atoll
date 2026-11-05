@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"unicode/utf8"
 )
@@ -61,6 +62,9 @@ func load[C any](folder, name string) ([]C, error) {
 		return nil, fmt.Errorf("read: %w", err)
 	}
 	if err := checkText(data); err != nil {
+		return nil, err
+	}
+	if err := checkTokens(data); err != nil {
 		return nil, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -117,6 +121,98 @@ func checkText(data []byte) error {
 	return nil
 }
 
+// checkTokens rejects what Go's decoder would accept but Rust's rejects or
+// reads differently: a key that is not lowercase ASCII (Go matches Name or
+// NAME to name, even through Unicode folding), a key repeated in one object
+// (Go keeps the last), and a number that is not a plain integer, such as -0,
+// 1.0 or 1e3.
+func checkTokens(data []byte) error {
+	type frame struct {
+		object, wantKey bool
+		keys            map[string]bool
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var stack []*frame
+	valueDone := func() {
+		if n := len(stack); n > 0 && stack[n-1].object {
+			stack[n-1].wantKey = true
+		}
+	}
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		top := (*frame)(nil)
+		if n := len(stack); n > 0 {
+			top = stack[n-1]
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				stack = append(stack, &frame{object: true, wantKey: true, keys: map[string]bool{}})
+			case '[':
+				stack = append(stack, &frame{})
+			default:
+				stack = stack[:len(stack)-1]
+				valueDone()
+			}
+		case string:
+			if top != nil && top.object && top.wantKey {
+				if !lowercaseKey(t) {
+					return fmt.Errorf("key %q: keys are lowercase ASCII", t)
+				}
+				if top.keys[t] {
+					return fmt.Errorf("key %q appears twice in one object", t)
+				}
+				top.keys[t] = true
+				top.wantKey = false
+				continue
+			}
+			valueDone()
+		case json.Number:
+			if !plainInteger(string(t)) {
+				return fmt.Errorf("number %s: write a plain integer, without a fraction, an exponent or -0", t)
+			}
+			valueDone()
+		default:
+			valueDone()
+		}
+	}
+}
+
+func lowercaseKey(k string) bool {
+	if k == "" {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		c := k[i]
+		lower, digit := 'a' <= c && c <= 'z', '0' <= c && c <= '9'
+		if !lower && !digit && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func plainInteger(n string) bool {
+	digits := strings.TrimPrefix(n, "-")
+	if digits == "" || digits == "0" && n != "0" || len(digits) > 1 && digits[0] == '0' {
+		return false
+	}
+	for i := 0; i < len(digits); i++ {
+		if digits[i] < '0' || digits[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // conformanceDir finds conformance/ from the working directory of the test,
 // which is the folder of the package under test.
 func conformanceDir() (string, error) {
@@ -159,6 +255,11 @@ func text(field string, plain, b64 *string) (string, error) {
 		b, err := base64.StdEncoding.Strict().DecodeString(*b64)
 		if err != nil {
 			return "", fmt.Errorf("%s_b64: %w", field, err)
+		}
+		// Go's decoder skips line breaks even in strict mode; Rust's refuses
+		// them. Only the standard encoder's own spelling is accepted.
+		if base64.StdEncoding.EncodeToString(b) != *b64 {
+			return "", fmt.Errorf("%s_b64 %q: write it as the standard encoder does", field, *b64)
 		}
 		if utf8.Valid(b) {
 			return "", fmt.Errorf("%s_b64 %q is valid UTF-8: use %s", field, *b64, field)

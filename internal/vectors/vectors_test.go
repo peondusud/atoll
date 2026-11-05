@@ -20,6 +20,8 @@ func TestPath(t *testing.T) {
 		{name: "both", path: str("a"), pathB64: str("Yf9i"), wantErr: true},
 		{name: "path_b64 of valid UTF-8", pathB64: str("YWI="), wantErr: true},
 		{name: "invalid base64", pathB64: str("Yf9"), wantErr: true},
+		{name: "base64 with a line break", pathB64: str("Yf9i\n"), wantErr: true},
+		{name: "base64 split by a line break", pathB64: str("Y\r\nf9i"), wantErr: true},
 	} {
 		got, err := Path(tc.path, tc.pathB64)
 		switch {
@@ -57,7 +59,7 @@ func TestCheckText(t *testing.T) {
 	}
 }
 
-// Every vector file and the corpus follow the text rules.
+// Every vector file and the corpus follow the text and token rules.
 func TestFilesFollowTextRules(t *testing.T) {
 	root, err := conformanceDir()
 	if err != nil {
@@ -79,6 +81,34 @@ func TestFilesFollowTextRules(t *testing.T) {
 			if err := checkText(data); err != nil {
 				t.Errorf("%s: %v", f, err)
 			}
+			if err := checkTokens(data); err != nil {
+				t.Errorf("%s: %v", f, err)
+			}
+		}
+	}
+}
+
+func TestCheckTokens(t *testing.T) {
+	for _, tc := range []struct {
+		data string
+		ok   bool
+	}{
+		{`{"cases": [{"name": "a", "n": 0}, {"n": -12}]}`, true},
+		{`{"cases": [{"name": "a"}], "description": "x"}`, true},
+		{`{"cases": [{"name": [{"a": 1}], "b": {"c": "NAME"}}]}`, true},
+		{`{"NAME": "a"}`, false},
+		{`{"Ntfs": []}`, false},
+		{"{\"ntf\u017f\": []}", false},
+		{`{"name": "a", "name": "b"}`, false},
+		{`{"cases": [{"ntfs": [], "ntfs": []}]}`, false},
+		{`{"a": {"b": 1}, "b": 2}`, true},
+		{`{"n": -0}`, false},
+		{`{"n": 1.0}`, false},
+		{`{"n": 1e3}`, false},
+		{`{"n": 0}`, true},
+	} {
+		if err := checkTokens([]byte(tc.data)); (err == nil) != tc.ok {
+			t.Errorf("checkTokens(%s) = %v, want ok %v", tc.data, err, tc.ok)
 		}
 	}
 }

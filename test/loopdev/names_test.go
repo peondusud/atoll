@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,39 +26,58 @@ type corpusName struct {
 	Note    string   `json:"note"`
 }
 
+// mounter mounts the image img on dir, or returns an error.
+type mounter func(img, dir string) error
+
 // TestNameCorpus creates every name of conformance/corpus/names/ that the
 // corpus says a filesystem accepts, as a file and as a folder, on a real
-// filesystem in a loop image, and checks that the folder lists it back byte
-// for byte (specs.md §15.8, §29.4). On ext4, XFS and btrfs, whose only rule
-// is the length, a refused name must also fail. On NTFS the Windows rules are
-// stricter than either Linux driver, so only accepted names are checked.
+// filesystem in a loop image. Each name gets a fresh folder, which must list
+// it back byte for byte, and lstat must find it (specs.md §15.8, §29.4).
+//
+// On ext4, XFS and btrfs, whose only rule is the length, a refused name must
+// also fail. On NTFS the Windows rules are stricter than every Linux driver,
+// so only accepted names are checked, on each driver this machine has (ntfs3,
+// ntfs-3g, lowntfs-3g), with and without windows_names.
 func TestNameCorpus(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root: sudo make test-loopdev")
 	}
 	cases := vectors.LoadCorpus[corpusName](t, "names/names.json")
+	loop := func(img, dir string) error { return try("mount", "-o", "loop", img, dir) }
 	for _, fs := range []struct {
 		name    string
 		mb      int64
 		mkfs    []string
+		mount   mounter
 		verdict func(corpusName) []string
 		exact   bool
 	}{
-		{"ext4", 64, []string{"mkfs.ext4", "-q", "-F"}, func(c corpusName) []string { return c.Ext4 }, true},
-		{"xfs", 320, []string{"mkfs.xfs", "-q", "-f"}, func(c corpusName) []string { return c.XFS }, true},
-		{"btrfs", 128, []string{"mkfs.btrfs", "-q", "-f"}, func(c corpusName) []string { return c.Btrfs }, true},
-		{"ntfs", 64, []string{"mkntfs", "-q", "-F", "-f"}, func(c corpusName) []string { return c.NTFS }, false},
+		{"ext4", 64, []string{"mkfs.ext4", "-q", "-F"}, loop, func(c corpusName) []string { return c.Ext4 }, true},
+		{"xfs", 320, []string{"mkfs.xfs", "-q", "-f"}, loop, func(c corpusName) []string { return c.XFS }, true},
+		{"btrfs", 128, []string{"mkfs.btrfs", "-q", "-f"}, loop, func(c corpusName) []string { return c.Btrfs }, true},
+		{"ntfs3", 64, mkntfs, ntfs3(""), ntfsVerdict, false},
+		{"ntfs3-windows_names", 64, mkntfs, ntfs3(",windows_names"), ntfsVerdict, false},
+		{"ntfs-3g", 64, mkntfs, fuse("ntfs-3g", ""), ntfsVerdict, false},
+		{"ntfs-3g-windows_names", 64, mkntfs, fuse("ntfs-3g", "windows_names"), ntfsVerdict, false},
+		{"lowntfs-3g", 64, mkntfs, fuse("lowntfs-3g", ""), ntfsVerdict, false},
+		{"lowntfs-3g-windows_names", 64, mkntfs, fuse("lowntfs-3g", "windows_names"), ntfsVerdict, false},
 	} {
 		t.Run(fs.name, func(t *testing.T) {
-			dir := mountImage(t, fs.name, fs.mb, fs.mkfs)
+			dir := mountImage(t, fs.mb, fs.mkfs, fs.mount)
 			checked, refused := 0, 0
-			for _, c := range cases {
+			for i, c := range cases {
 				name, err := vectors.Name(c.Name, c.NameB64)
 				if err != nil {
 					t.Fatal(err)
 				}
+				// A fresh folder per name, so what an earlier name left
+				// behind, or a driver's rewrite of it, cannot collide.
+				sub := filepath.Join(dir, fmt.Sprintf("case-%03d", i))
+				if err := os.Mkdir(sub, 0o755); err != nil {
+					t.Fatal(err)
+				}
 				accepted := len(fs.verdict(c)) == 0
-				err = createListRemove(dir, name)
+				err = createListRemove(sub, name)
 				checked++
 				if err != nil {
 					refused++
@@ -74,55 +94,76 @@ func TestNameCorpus(t *testing.T) {
 	}
 }
 
-// createListRemove creates name in dir as a file, then as a folder, checks
-// each time that dir lists it with the exact bytes, and removes it.
+var mkntfs = []string{"mkntfs", "-q", "-F", "-f"}
+
+func ntfsVerdict(c corpusName) []string { return c.NTFS }
+
+// ntfs3 mounts with the kernel driver, which needs iocharset=utf8 (§30).
+func ntfs3(opts string) mounter {
+	return func(img, dir string) error {
+		return try("mount", "-t", "ntfs3", "-o", "loop,iocharset=utf8"+opts, img, dir)
+	}
+}
+
+// fuse mounts with a FUSE driver, ntfs-3g or lowntfs-3g.
+func fuse(driver, opts string) mounter {
+	return func(img, dir string) error {
+		if _, err := exec.LookPath(driver); err != nil {
+			return err
+		}
+		if opts == "" {
+			return try(driver, img, dir)
+		}
+		return try(driver, "-o", opts, img, dir)
+	}
+}
+
+// createListRemove creates name in dir as a file, then as a folder. Each time
+// dir must list it with the exact bytes and lstat must find it. It removes
+// what it created, also when a check fails.
 func createListRemove(dir, name string) error {
 	path := filepath.Join(dir, name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := listed(dir, name); err != nil {
-		return err
-	}
-	if err := os.Remove(path); err != nil {
+	err = errors.Join(f.Close(), found(dir, name), os.Remove(path))
+	if err != nil {
 		return err
 	}
 	if err := os.Mkdir(path, 0o755); err != nil {
 		return err
 	}
-	if err := listed(dir, name); err != nil {
-		return err
-	}
-	return os.Remove(path)
+	return errors.Join(found(dir, name), os.Remove(path))
 }
 
-func listed(dir, name string) error {
+// found checks that dir lists name with the exact bytes, and that lstat finds
+// it under that name.
+func found(dir, name string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
 		if bytes.Equal([]byte(e.Name()), []byte(name)) {
+			if _, err := os.Lstat(filepath.Join(dir, name)); err != nil {
+				return fmt.Errorf("listed, but lstat fails: %w", err)
+			}
 			return nil
 		}
 	}
 	return errors.New("created, but not listed with the same bytes")
 }
 
-// mountImage makes a filesystem in a sparse image of mb MiB and mounts it
-// through a loop device. NTFS is mounted with ntfs3 when the kernel has it,
-// otherwise with ntfs-3g. It skips the test when a tool or driver is missing.
-func mountImage(t *testing.T, fs string, mb int64, mkfs []string) string {
+// mountImage makes a filesystem in a sparse image of mb MiB and mounts it. It
+// skips the test when a tool or driver is missing.
+func mountImage(t *testing.T, mb int64, mkfs []string, mount mounter) string {
 	t.Helper()
 	if _, err := exec.LookPath(mkfs[0]); err != nil {
 		t.Skipf("%s not found", mkfs[0])
 	}
 	work := t.TempDir()
-	img, dir := filepath.Join(work, fs+".img"), filepath.Join(work, "mnt")
+	img, dir := filepath.Join(work, "fs.img"), filepath.Join(work, "mnt")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -137,20 +178,9 @@ func mountImage(t *testing.T, fs string, mb int64, mkfs []string) string {
 		t.Fatal(err)
 	}
 	run(t, append(mkfs, img)...)
-	driver := fs
-	switch {
-	case fs != "ntfs":
-		if try("mount", "-o", "loop", img, dir) != nil {
-			t.Skipf("cannot mount %s", fs)
-		}
-	case try("mount", "-t", "ntfs3", "-o", "loop,iocharset=utf8", img, dir) == nil:
-		driver = "ntfs3"
-	case try("ntfs-3g", img, dir) == nil:
-		driver = "ntfs-3g"
-	default:
-		t.Skip("cannot mount ntfs with ntfs3 or ntfs-3g")
+	if err := mount(img, dir); err != nil {
+		t.Skipf("cannot mount: %v", err)
 	}
-	t.Logf("%s mounted with %s", img, driver)
 	t.Cleanup(func() {
 		if err := syscall.Unmount(dir, 0); err != nil {
 			t.Errorf("unmount %s: %v", dir, err)
