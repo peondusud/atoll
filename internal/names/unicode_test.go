@@ -2,6 +2,7 @@ package names
 
 import (
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"unicode"
@@ -196,8 +197,25 @@ func TestNonStarterRun(t *testing.T) {
 	}
 }
 
+// CollisionKeyVersion names the x/text release the binary is built with.
 func TestCollisionKeyVersion(t *testing.T) {
-	if want := "go golang.org/x/text " + norm.Version; CollisionKeyVersion != want {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("no build information")
+	}
+	release := ""
+	for _, d := range bi.Deps {
+		if d.Path == "golang.org/x/text" {
+			release = d.Version
+			if d.Replace != nil {
+				release = d.Replace.Version
+			}
+		}
+	}
+	if release != normRelease {
+		t.Errorf("built with golang.org/x/text %q, but normRelease is %q", release, normRelease)
+	}
+	if want := "go golang.org/x/text " + release + " " + norm.Version; CollisionKeyVersion != want {
 		t.Errorf("CollisionKeyVersion = %q, want %q", CollisionKeyVersion, want)
 	}
 }

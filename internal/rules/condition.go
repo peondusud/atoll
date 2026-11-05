@@ -79,10 +79,11 @@ func Compile(field Field, value string, ignoreCase bool) (*Condition, error) {
 		return nil, fmt.Errorf("%s %q: %w", field, value, err)
 	}
 	// Errors quote the pattern in NFC form, which the grammars apply to; when
-	// that differs from the text as typed, the context quotes both.
+	// that differs from the text as typed, the context quotes the typed text
+	// too, with its non-ASCII characters escaped so the change shows.
 	context := field.String()
 	if nfc := names.NFC(value); nfc != value {
-		context = fmt.Sprintf("%s %q, in NFC form", field, value)
+		context = fmt.Sprintf("%s %+q, in NFC form", field, value)
 		value = nfc
 	}
 	c := &Condition{field: field, fold: ignoreCase}
@@ -95,7 +96,7 @@ func Compile(field Field, value string, ignoreCase bool) (*Condition, error) {
 		return c, nil
 	}
 	if field == FieldFilename && strings.Contains(value, "/") {
-		return nil, fmt.Errorf("filename %q: a file name never holds /: use path", value)
+		return nil, fmt.Errorf("%s: glob %q: a file name never holds /: use path", context, value)
 	}
 	g, err := glob.CompileWith(value, glob.Options{IgnoreCase: ignoreCase})
 	if err != nil {
@@ -136,7 +137,7 @@ func CompileExt(entries []string, ignoreCase bool) (*Condition, error) {
 // Rust's would not, so the two versions would read the pattern differently.
 func checkNonStarters(pattern string) error {
 	if n := names.NonStarterRun(pattern); n > names.MaxNonStarters {
-		return fmt.Errorf("%d non-starters (combining marks) in a row, more than %d", n, names.MaxNonStarters)
+		return fmt.Errorf("%d characters in a row that combine with the one before (non-starters, such as accents or Hangul jamo), more than %d", n, names.MaxNonStarters)
 	}
 	return nil
 }

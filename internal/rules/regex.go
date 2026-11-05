@@ -8,16 +8,18 @@ import (
 
 // MaxRegexBytes is the longest regex text the grammar of specs.md §29.5
 // accepts, in NFC form. It keeps Go's own size and nesting limits out of
-// reach, so both versions reject exactly the same regexes.
+// reach.
 const MaxRegexBytes = 1000
 
 // maxRepeat bounds each repeat count, and the product of nested counts.
 const maxRepeat = 1000
 
-// MaxRegexWeight bounds the weight of a regex (specs.md §29.5): a character,
-// escape, . or class item weighs 1, a property 100, each times the counts of
-// the counted repeats around it. It keeps the automaton Rust builds within the
-// regex crate's default size limit, which the length limit alone does not.
+// MaxRegexWeight bounds the weight of a regex (specs.md §29.5). Every element
+// that adds to the automaton weighs at least 1 per copy: a character, escape,
+// ., anchor, flag group or class item 1, a property 100, a capturing group 1
+// more than what it holds, a repeat its count times what it repeats, plus 1
+// when it adds a branch. It keeps the automaton Rust builds within the regex
+// crate's default size limit, which the length limit alone does not.
 const MaxRegexWeight = 1000
 
 // propertyWeight is the weight of \p or \P, in a class or not: Rust compiles
@@ -54,7 +56,8 @@ func checkRegex(text string) error {
 		return p.fail(p.i, ") without (")
 	}
 	if sz.weight > MaxRegexWeight {
-		return p.fail(0, "weighs more than %d: a character, escape, . or class item weighs 1 and a property %d, times the counts of the repeats around it",
+		return p.fail(0, "weighs more than %d: each character, escape, ., anchor, flag group and class item weighs 1 and each property %d; "+
+			"a capturing group and each *, +, ?, {n,} or {n,m} add 1; repeats multiply what they repeat",
 			MaxRegexWeight, propertyWeight)
 	}
 	return nil
@@ -95,7 +98,8 @@ func (p *regexParser) next() rune {
 }
 
 // The parse functions return the size of what they parsed. Every branch of
-// an alternation weighs in, as Rust compiles them all.
+// an alternation weighs in, as Rust compiles them all; a non-capturing group
+// weighs what it holds.
 
 // regex = branch { "|" branch }
 func (p *regexParser) regex() (size, error) {
@@ -139,10 +143,10 @@ func (p *regexParser) piece() (size, error) {
 	switch {
 	case rest[0] == '^' || rest[0] == '$':
 		p.i++
-		return size{prod: 1}, p.noRepeat(start) // no weight
+		return size{1, 1}, p.noRepeat(start)
 	case strings.HasPrefix(rest, `\A`) || strings.HasPrefix(rest, `\z`):
 		p.i += 2
-		return size{prod: 1}, p.noRepeat(start) // no weight
+		return size{1, 1}, p.noRepeat(start)
 	case strings.HasPrefix(rest, "(?") && !strings.HasPrefix(rest, "(?:"):
 		p.i += 2
 		if err := p.flags(start); err != nil {
@@ -151,7 +155,7 @@ func (p *regexParser) piece() (size, error) {
 		switch p.peek() {
 		case ')':
 			p.i++
-			return size{prod: 1}, p.noRepeat(start) // no weight
+			return size{1, 1}, p.noRepeat(start)
 		case ':':
 			p.i++
 			inner, err := p.group(start)
@@ -246,10 +250,12 @@ func (p *regexParser) atom() (size, error) {
 	case '(':
 		if strings.HasPrefix(p.s[p.i:], "(?:") {
 			p.i += 3
-		} else {
-			p.i++
+			return p.group(start)
 		}
-		return p.group(start)
+		// A capturing group adds its two capture states.
+		p.i++
+		inner, err := p.group(start)
+		return size{inner.prod, capWeight(inner.weight + 1)}, err
 	case '\\':
 		_, prop, err := p.escape(false)
 		if prop {
@@ -270,10 +276,11 @@ func (p *regexParser) atom() (size, error) {
 
 // repeat = ( "*" | "+" | "?" | "{" n "}" | "{" n ",}" | "{" n "," n "}" ) [ "?" ]
 // It returns the size of the repeated atom, whose own size is inner: the
-// count of the repeat multiplies the chain product and the weight.
+// count of the repeat multiplies the chain product and the weight, and a
+// repeat that adds a branch (*, +, ?, {n,} and {n,m} with n < m) weighs 1 more.
 func (p *regexParser) repeat(inner size) (size, error) {
 	start := p.i
-	count, weight := 1, inner.weight
+	count, weight, branch := 1, inner.weight, 1
 	switch p.peek() {
 	case '*', '+', '?':
 		p.i++
@@ -311,6 +318,9 @@ func (p *regexParser) repeat(inner size) (size, error) {
 		case lo > 0:
 			count = lo
 		}
+		if hi == lo {
+			branch = 0 // {n} and {n,n} repeat exactly
+		}
 	default:
 		return inner, nil
 	}
@@ -325,7 +335,7 @@ func (p *regexParser) repeat(inner size) (size, error) {
 	if prod > maxRepeat {
 		return size{}, p.fail(start, "nested repeats multiply to more than %d", maxRepeat)
 	}
-	return size{prod, capWeight(weight * count)}, nil
+	return size{prod, capWeight(branch + weight*count)}, nil
 }
 
 // number = "0" | nonzero { digit }, read at most up to 4 digits.

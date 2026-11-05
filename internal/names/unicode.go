@@ -11,12 +11,18 @@ import (
 // UnicodeVersion is the Unicode version of NFC and NFD, and so of CollisionKey.
 const UnicodeVersion = norm.Version
 
+// normRelease is the release of golang.org/x/text that go.mod requires. A
+// test checks it against the build.
+const normRelease = "v0.43.0"
+
 // CollisionKeyVersion names what computes CollisionKey: the language, the
-// normalization library and its Unicode version. The catalog records it with
-// the keys (meta.lpath_key_version, specs.md §15.8): keys computed by any other
-// version are recomputed, never compared. It names the implementation too, as
-// Go's normalization inserts U+034F after 30 non-starters and Rust's does not.
-const CollisionKeyVersion = "go golang.org/x/text " + UnicodeVersion
+// normalization library, its release and its Unicode version. The catalog
+// records it with the keys (meta.lpath_key_version, specs.md §15.8): keys
+// computed by any other version are recomputed, never compared. It names the
+// implementation, as Go's normalization inserts U+034F after 30 non-starters
+// and Rust's does not, and the release, as two releases with one Unicode
+// version may still normalize differently.
+const CollisionKeyVersion = "go golang.org/x/text " + normRelease + " " + UnicodeVersion
 
 // MaxNonStarters is the longest run of non-starters a pattern may hold
 // (specs.md §29.5). After it, Go's normalization inserts U+034F, following the

@@ -71,7 +71,7 @@ func TestRegexError(t *testing.T) {
 	if !errors.As(err, &re) {
 		t.Fatalf("Compile(%q): %v, want a *RegexError", typed, err)
 	}
-	if want := strconv.Quote(typed); !strings.Contains(err.Error(), want) {
+	if want := strconv.QuoteToASCII(typed); !strings.Contains(err.Error(), want) {
 		t.Errorf("Error() = %q, want it to quote the typed text %s", err.Error(), want)
 	}
 	if re.Regex != "\\\u0144" || re.Offset != 0 {
