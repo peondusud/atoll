@@ -31,7 +31,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 
 ## Stack and commands
 - Go, latest stable release; Linux amd64 and arm64.
-- SQLite: `modernc.org/sqlite` (no cgo). TOML: BurntSushi/toml or go-toml v2. Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
+- SQLite: `modernc.org/sqlite` (no cgo). TOML: BurntSushi/toml or go-toml v2. Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
 - BLAKE3: a Go implementation with SIMD, chosen after a throughput benchmark.
 - cgo and libfuse3 only for the FUSE view (phase 2a).
 
@@ -104,6 +104,7 @@ docs/research/         research reports behind open design decisions (not contra
 
 ## Cross-platform rules (Linux now, Windows in the Rust version)
 - Logical key: the exact relative path, `/` separator; bytes on Linux, WTF-8 on Windows (keeps unpaired UTF-16 surrogates).
+- `ignore_case` uses Unicode simple case folding, exactly as regex `(?i)` (data from `unicode.SimpleFold`); the NTFS upcase table serves `lpath_key` only (specs.md §11.3, §15.8). Never `strings.EqualFold`, `strings.ToLower` or `x/text/cases` on names.
 - ext4, XFS, btrfs: 255 bytes per path component. NTFS: 255 UTF-16 code units; under Windows, characters 1–31, `\ / : * ? " < > |`, reserved names (CON, PRN, AUX, NUL, COM1–9, COM¹–³, LPT1–9, LPT¹–³, also with an extension) and a trailing dot or space are forbidden; names are case-insensitive. Names that are not valid UTF-8 cannot go to NTFS.
 - Deep trees: relative operations (`openat`) on Linux; `\\?\` prefix on Windows.
 - `rename` is atomic only within one filesystem: always go through `<workdir>/tmp/` on the target disk.
