@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "atoll names check --json",
+  "description": "The report of specs.md §15.9.",
+  "type": "object",
+  "required": ["checked", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "checked": { "type": "integer", "minimum": 0 },
+    "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["invalid-utf8", "not-nfc", "incompatible", "collision", "branch-path-too-long", "windows-path-too-long"] },
+        "path": { "type": "string", "minLength": 1 },
+        "path_b64": { "type": "string", "contentEncoding": "base64", "minLength": 1 },
+        "fs": { "enum": ["ext4", "ntfs"] },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["too-long", "invalid-utf8", "control-character", "forbidden-character", "trailing-dot-or-space", "reserved-name"] }
+        },
+        "with": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "disk": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["path"], "not": { "required": ["path_b64"] } },
+        { "required": ["path_b64"], "not": { "required": ["path"] } }
+      ],
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "incompatible" } } },
+          "then": { "required": ["fs", "reasons"] },
+          "else": { "properties": { "fs": false, "reasons": false } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "collision" } } },
+          "then": { "required": ["with", "path"] },
+          "else": { "properties": { "with": false } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "branch-path-too-long" } } },
+          "then": { "required": ["disk"] },
+          "else": { "properties": { "disk": false } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "windows-path-too-long" } } },
+          "then": { "required": ["path"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "invalid-utf8" } } },
+          "then": { "required": ["path_b64"] }
+        }
+      ]
+    }
+  }
+}

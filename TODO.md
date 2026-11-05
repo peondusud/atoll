@@ -6,10 +6,6 @@ Open work, in a suggested order. Finished work is in [DONE.md](DONE.md), lessons
 
 To decide before the solver, the scanner and `atoll names check` need them:
 
-- **decision**: the output of `atoll names check`:
-  - JSON schema, sort key, exit code;
-  - which paths and filesystems it covers, and how it shows the two path limits (§15.8), which are not reasons of a component;
-  - the precedence between `name-incompatible`, `name-collision` and `degraded`.
 - **decision**, before phase 2a: should Atoll's own view refuse, with an error, a rename that a copy's filesystem refuses, instead of following §15.3?
 - Pin in `test/loopdev` what mergerfs and ntfs3 do with a refused name or an `ads` stream (`docs/research/name-compatibility.md`), re-reading through a cold cache, so that a release that changes it fails a test. The measurements so far were throwaway scripts in qemu.
 - Measure on the maintainer's Windows machine, with their go-ahead, what a report says is not established: which reserved names Windows 11 still refuses, and what Windows does with `Film.mkv` beside `film.mkv` on an NTFS volume (a VHD).
@@ -58,7 +54,8 @@ Every item here is a **decision**:
 - Trash, including the `.chunks` folders and copies whose name the driver refuses (§17).
 - Detection-only scrub.
 - `mergerfs-config` and runtime branches.
-- `status`.
+- `status`, with the state of `solver.ShownState`.
+- `atoll names check`: the CLI over `names.Check`, reading the catalog, with the JSON of `api/schemas/names-check.schema.json`.
 - ntfy alerts.
 - The operation journal (`ops`) and crash recovery, with fault injection.
 - The break-glass test and the failed-mount test in CI.

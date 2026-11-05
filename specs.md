@@ -57,7 +57,7 @@ Measurable goals:
 - **Disk**: a mounted filesystem that belongs to the pool. Exactly one pool filesystem per physical disk.
 - **Root** (`root`): the managed folder inside a disk, `media/` by default.
 - **Work folder** (`workdir`): visible folder `Atoll/`, sibling of `media/`, holding `trash/`, `tmp/` and, optionally, `links/`, `disk.toml`, `manifest.b3sum` and `catalog/`.
-- **Logical path**: exact path relative to the root, `/` separator, kept byte for byte on Linux and as WTF-8 on Windows, never normalized (e.g. `Films/Avatar (2009)/Avatar.mkv`, §15.8).
+- **Logical path**: exact path relative to the root, `/` separator, kept byte for byte on Linux and as WTF-8 on Windows, never normalized (e.g. `Films/Avatar (2009)/Avatar.mkv`, §15.8). It is well-formed when it has no empty component, no `.` or `..` component and no NUL byte.
 - **Copy**: an instance of a logical path on one disk, at `<disk>/media/<logical path>`.
 - **User copy** / **Atoll copy**: a copy that existed before Atoll indexed it, or that a user or an application wrote or modified, is a user copy; a copy Atoll created (replica, refresh, transfer) is an Atoll copy. Stored as `created_by`. Protection decisions rely on it (§6.1).
 - **Current version**: the size, modification time and hash that every copy of a file must match.
@@ -69,7 +69,7 @@ Measurable goals:
 - **Failure domain**: group of disks likely to fail together (same DAS, same power supply, same controller).
 - **Tag**: free label on a disk (`sata`, `usb`, `ssd`…), used by rules.
 - **Residency**: time a file stays on the SSD cache before its transfer to HDD.
-- **File states**: `ok`, `pending` (replicas to create), `degraded` (fewer replicas than wanted), `unprotected` (x1, or manual mode waiting), `unavailable` (no reachable copy), `corrupt`, `conflict`, `name-incompatible`, `name-collision` (§15.7).
+- **File states**: `ok`, `pending` (replicas to create), `degraded` (fewer replicas than wanted), `unprotected` (x1, or manual mode waiting), `unavailable` (no reachable copy), `corrupt`, `conflict`, `name-incompatible`, `name-collision` (§15.7). A file shows one state, the first that applies in this order: `unavailable`, `corrupt`, `conflict`, `name-incompatible`, `name-collision`, `degraded`, `pending`, `unprotected`, `ok`; it is `ok` when no other applies. The state serves display and alerts; placement and job order read the copies, never the state.
 - **Copy states**: `ok`, `pending`, `stale` (does not match the current version), `corrupt`, `unavailable`, `surplus` (beyond the wanted level).
 - **Disk states**: `online`, `standby` (spun down), `missing`, `readonly`, `draining`, `failed`, `retired`.
 
@@ -478,7 +478,7 @@ Rules:
 - One copy at a time per target disk (`max_parallel_per_disk`), at low I/O priority, except with `--force`.
 - Resume after a power cut or USB disconnection: the chunks already in the `.part` file are re-verified against their recorded hashes, then the copy resumes at the first missing or wrong chunk. The source is never re-read from the start, since the whole-file hash comes from the verification pass.
 - At startup, `tmp/` keeps the `.part` files that a pending job owns and deletes the others.
-- Processing order: the rule's `priority`, then degraded files before new ones.
+- Processing order: the rule's `priority`, then files that lost a replica before new ones, read from their copies (§4).
 - Attributes copied: modification time; POSIX permission bits and ownership where the target supports them; NTFS read-only and archive attributes. No ACLs or extended attributes in v1.
 - Creating, refreshing or moving replicas never triggers a media server notification: the logical tree does not change.
 - A replica is always an independent full copy: hard links are never mirrored.
@@ -586,6 +586,30 @@ Each copy is compared with the recorded current version:
   - mergerfs opens `<mount>/<root>/<logical path>` as one string, of at most 4095 bytes (`PATH_MAX`, 4096 with its NUL). Past that, the copy is still listed, but `stat` gives `ENOENT`, and a deletion or a rename through the view leaves it behind (measured with mergerfs 2.40.2). Such a copy protects nothing: if the other disk dies, the file stays listed and unreadable. So Atoll never writes a copy past this limit on a disk: this is a hard constraint of the solver (§12.4), and a path can fit on one disk and not on another, as `mount` differs. Another disk gets the copy. Failing that, the file keeps fewer replicas than wanted, is reported as `name-incompatible`, and an alert is raised. A copy already past the limit, which Atoll did not write, or past it after a mount path changed, is only reported;
   - Windows programs without long-path support stop at 259 UTF-16 code units (`MAX_PATH`, 260 with its NUL), whatever `LongPathsEnabled` says. Measured on Windows 11 with that setting on: `attrib`, `findstr`, `certutil`, `fc`, `xcopy` and `Scripting.FileSystemObject` work at 259 and fail at 260, while `cmd /c type` and PowerShell work at 300. As the limit depends on the program, it is only reported: `atoll names check` lists the paths where `D:\<root>\<logical path>` is past 259 units, with no state, no alert and no effect on placement. A path that is not valid UTF-8 has no UTF-16 length, so it gets no verdict.
 - The name corpus of §29.4 records, for each name, its reasons on each of `ext4`, `xfs`, `btrfs` and `ntfs`; the vectors pin the check on whole paths.
+
+### 15.9 `atoll names check`
+
+A read-only report of the names to fix. It reads the catalog and the configuration only, so it wakes no disk, and it reports what the last scan saw.
+
+- **Names**: every logical path in `files` and `entries`, and all their parent folders. Each distinct path is one name, and `checked` counts them.
+- **Findings**: a finding is about one name, the shortest path that has the problem. A folder `a:b/` holding 10,000 files gives one finding, on the folder. The kinds form a closed list:
+
+| `kind` | Other fields | Meaning |
+|---|---|---|
+| `invalid-utf8` | | the last component of the name is not valid UTF-8 |
+| `not-nfc` | | the last component is not in NFC form, computed run by run (§11.3) |
+| `incompatible` | `fs`, `reasons` | `fs` refuses the last component, for these `reasons` (§15.8) |
+| `collision` | `with` | the names in `with`, as full paths, have the same `lpath_key` as this one, different bytes and the same parent folder, byte for byte |
+| `branch-path-too-long` | `disk` | the name is past the limit of that disk's mergerfs branch, and its parent folder is not (§15.8) |
+| `windows-path-too-long` | | the name is past 259 UTF-16 code units, and its parent folder is not (§15.8) |
+
+- `incompatible` always checks `ext4` and `ntfs`, whatever filesystems the pool holds. XFS and btrfs follow the rule of ext4, so they get no finding of their own.
+- `collision`: names whose parent folders differ are not listed, as the finding on those folders covers them: `Films/a.mkv` and `films/a.mkv` give a finding on `Films` and one on `films`. A name without a key never collides (§15.7). The check agrees with the solver's: a path that the solver would find colliding has a finding on that name, with the same names.
+- `branch-path-too-long`: one finding per disk whose limit the name is past. `windows-path-too-long`: computed with the `root` of the pool that has the most UTF-16 code units, and not at all with no disks. A name at the top of the root has no parent folder to compare, so it only has to be past the limit.
+- `--path <path>` keeps the names equal to that path, its parents and everything below it, compared by whole components; `checked` counts those names. Collisions are still looked for in the whole pool.
+- **Order**: by `path` in byte order, then by `kind` in the order of the table, then by `fs` or `disk` in byte order. `reasons` keep their order of §15.8, and `with` is in byte order.
+- **Output**: `api/schemas/names-check.schema.json`. A name that is not valid UTF-8 goes in `path_b64` (§29.3); a name in `with` always has a key, so it is valid UTF-8.
+- **Exit code**: 0 whenever the check ran, with or without findings, as for `atoll dupes`. A script counts `.findings`. 1 when it cannot read the catalog or the configuration, 2 on a usage error (§29.3).
 
 ## 16. Integrity
 
@@ -966,7 +990,7 @@ atoll repair <path> [--mode chunk|file]
 atoll dupes [--path <path>] [--min-size <size>]
 atoll trash list | restore <path> [--to <disk>] | purge [--older-than <duration>]
 atoll conflicts list | resolve <path> --keep <disk>
-atoll names check [--path <path>]        read-only: names not in NFC, not valid UTF-8, incompatible with a filesystem, or colliding, and paths past a length limit (§15.7, §15.8)
+atoll names check [--path <path>]        read-only: names not in NFC, not valid UTF-8, incompatible with a filesystem, or colliding, and paths past a length limit (§15.9)
 atoll guard list | confirm | reject
 atoll prune [--dry-run]
 atoll balance [--dry-run] [--move-originals]
@@ -1078,7 +1102,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
@@ -1197,6 +1221,5 @@ number   = digits [ "." digits ]
 - Windows arrives after the rewrite; until then, Windows PCs use the SMB share.
 - Names (research in `docs/research/name-compatibility.md`), to decide before the solver, the scanner and `atoll names check`:
   - Atoll's own view (phase 2a): should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
-  - the output of `atoll names check` (JSON schema, sort key, exit code) and the precedence between `name-incompatible`, `name-collision` and `degraded`;
   - on NTFS, 8.3 short names: both Linux drivers refuse to create a name equal to another file's short name, and ntfs-3g's `stat` returns that other file, so existence must never be decided by `stat` alone;
   - mount checks: how to detect lowntfs-3g `ignore_case`, which mount information does not show (the FUSE daemon's command line?); ntfs3 must use `iocharset=utf8`; a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file (measured: under `ads`, a real name `a:b.mkv` is listed and `stat` gives `ENOENT`).

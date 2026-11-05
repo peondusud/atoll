@@ -2,6 +2,23 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The name report and the state a file shows (specs.md §4, §15.9)
+
+Commit "Define the name report and the state a file shows", on `main`.
+
+- The maintainer's decisions:
+  - one finding per name to fix, the shortest path with the problem, in a flat sorted list;
+  - `ext4` and `ntfs` are always checked, whatever the pool holds;
+  - exit code 0 whenever the check ran, with or without findings;
+  - the name states come before `degraded` in the order of states.
+- Also stated:
+  - placement and job order read the copies, never the state;
+  - the report reads the catalog only, so it wakes no disk;
+  - collisions are listed between siblings; a difference in a parent is covered by the finding on that parent;
+  - a well-formed logical path is defined in §4.
+- Contract: `api/schemas/names-check.schema.json`, the first of the `--json` schemas. `conformance/vectors/names_check.json` holds 56 cases, and `file_state.json` 27.
+- Code: `names.Check` and `solver.ShownState`. The CLI and the catalog do not exist yet, so nothing calls them outside their tests, and nothing writes this JSON yet.
+
 ## Total path length (specs.md §12.4, §15.8)
 
 Commit "Limit the total path length on mergerfs branches", on `main`.

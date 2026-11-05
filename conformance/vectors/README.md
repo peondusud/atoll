@@ -162,6 +162,26 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `fits` | boolean | whether `D:\<root>\<path>` holds at most 259 UTF-16 code units; `true` for a path that is not valid UTF-8, which gets no verdict |
 | `error` | boolean | `true` when `path` is not a well-formed logical path, or `root` is empty |
 
+### `names_check.json` — the report of `atoll names check` (§15.9)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `paths` | array of strings | the logical paths of the pool that are valid UTF-8, in any order; each also stands for its parent folders |
+| `paths_b64` | array of strings | optional: the logical paths that are not valid UTF-8, in base64 |
+| `disks` | array of objects | the disks of the pool, in any order: `id`, `mount` and `root`, all required |
+| `under`, `under_b64` | string | optional: the path given to `--path` |
+| `checked` | integer | the names in scope |
+| `findings` | array of objects | the findings, in the order of §15.9, as `api/schemas/names-check.schema.json` states them |
+| `error` | boolean | `true` when a path, `under` or a disk is rejected |
+
+### `file_state.json` — the state a file shows (§4)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `applies` | array of strings | the states that apply to the file, in any order |
+| `state` | string | the one it shows |
+| `error` | boolean | `true` when a state is unknown |
+
 ### `capacity.json` — capacity of a pool (§13.1)
 
 | Field | Type | Meaning |
