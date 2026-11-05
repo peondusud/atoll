@@ -107,7 +107,7 @@ A case has exactly one of `value` and `values`. An `error` case has no path and 
 | `match` | boolean | whether the regex matches the path |
 | `error` | boolean | `true` when the grammar rejects `pattern`, the length or weight is over its limit, or the text holds more than 30 non-starters in a row |
 
-Every accepted pattern comes with one path that shows its meaning, the same in Go `regexp` and Rust `regex`. Every accepted pattern, with and without `(?i)`, compiles in Rust with `size_limit` 10 MiB and `nest_limit` 1000 (§29.5).
+Every accepted pattern comes with one path that shows its meaning, the same in Go `regexp` and Rust `regex`. Every accepted pattern, with and without `(?i)`, compiles in Rust with `size_limit` 10 MiB and `nest_limit` 1000, on a thread with at least 8 MiB of stack (§29.5).
 
 ### `lpath_key.json` — collision keys (§15.7, §15.8)
 
