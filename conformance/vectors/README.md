@@ -24,7 +24,7 @@ One JSON file per function. Every file has this envelope:
 - Every case may carry a `note`: a short explanation for reviewers, never read by the tests.
 - Unknown fields are errors, so a typo cannot silently disable a check. Keys are lowercase ASCII and match a field exactly, and no key appears twice in one object: Go's decoder would otherwise match `Name` or `NAME` to `name`, and keep the last of two equal keys, where Rust's fails.
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
-- A flag (`error`, `no_key`, `absent`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
+- A flag (`error`, `no_key`, `absent`, `complete`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
 - Integers are exact JSON integers within the signed 64-bit range, without a fraction, an exponent or `-0`; they are never written as strings or floats.
 - Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding), written exactly as the standard encoder writes it: no line break, no other spelling. A case has exactly one of the two.
 - A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
@@ -240,6 +240,23 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `error` | boolean | `true` when `chunk_size` is not positive |
 
 The hashes come from the official `b3sum`, never from an implementation under test.
+
+### `config.json` — loading a configuration (§24)
+
+A case holds the text of a file, and says what loading it gives. Keys are written as §24.3 says, such as `disk[0].uuid`. Warnings about a later phase (§24.4) are never compared, as they change with each phase, and neither is `view.engine = "atoll"`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `toml` | string | the text of the file, when it is valid UTF-8 |
+| `toml_b64` | string | otherwise, its bytes in base64, with the rules of `path_b64` |
+| `error` | boolean | `true` on a syntax error (step 1), which has no key |
+| `errors` | array of strings | the keys with a problem (step 2, or step 3 when step 2 found none): each once, in byte order, and no others |
+| `effective` | array of objects | values the file must load to, each `{"key": …, "value": …}` with the value as in the file: a string, an integer, a boolean, a list of these, or an empty table. A value in a non-empty `path_map` has its own key. A list of tables is listed item by item (`rule[0].label`), and is the value `[]` when empty |
+| `complete` | boolean | `true` when `effective` lists every key the configuration has a value for |
+| `not_set` | array of strings | keys that must have no value |
+| `warnings` | array of strings | the keys of the warnings about names no disk carries (§24.4), in byte order |
+
+A case has `error`, or `errors`, or at least one of `effective`, `not_set` and `warnings`, and loads in the last case. `path`, `filename` and `ext` are shown as written, not compiled. A rule's keys hold what the file sets, plus `action` and `ignore_case`: its pool-wide values (§24.2) apply when it gives a file its policy, which these vectors do not cover.
 
 ### `capacity.json` — capacity of a pool (§13.1)
 

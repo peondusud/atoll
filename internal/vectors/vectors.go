@@ -194,7 +194,7 @@ func checkTokens(data []byte) error {
 	}
 }
 
-// checkFlags rejects a case whose "error", "no_key" or "absent" is anything but true. A
+// checkFlags rejects a case whose "error", "no_key", "absent" or "complete" is anything but true. A
 // flag is true or absent, so each case has one spelling. Go's decoder would read
 // null as false where Rust's fails, and a test written only to look for the key
 // would read "error": false as an error case. Checking here covers every test,
@@ -207,7 +207,7 @@ func checkFlags(data []byte) error {
 		return fmt.Errorf("decode: %w", err)
 	}
 	for i, c := range f.Cases {
-		for _, flag := range []string{"error", "no_key", "absent"} {
+		for _, flag := range []string{"error", "no_key", "absent", "complete"} {
 			if v, ok := c[flag]; ok && string(v) != "true" {
 				return fmt.Errorf("case %d: %q is %s: write true, or leave the field out", i, flag, v)
 			}
@@ -243,6 +243,21 @@ func plainInteger(n string) bool {
 	return true
 }
 
+// RepoFile reads a file of the repository, by its path from the root with /
+// separators, or fails t. The pure core has no os, so its tests read through here.
+func RepoFile(t testing.TB, name string) []byte {
+	t.Helper()
+	root, err := conformanceDir()
+	if err != nil {
+		t.Fatalf("repository file %s: %v", name, err)
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(root), filepath.FromSlash(name)))
+	if err != nil {
+		t.Fatalf("repository file %s: %v", name, err)
+	}
+	return data
+}
+
 // conformanceDir finds conformance/ from the working directory of the test,
 // which is the folder of the package under test.
 func conformanceDir() (string, error) {
@@ -273,6 +288,12 @@ func Path(path, pathB64 *string) (string, error) {
 // the rules of Path.
 func Name(name, nameB64 *string) (string, error) {
 	return text("name", name, nameB64)
+}
+
+// Bytes returns the raw bytes of any other text a case gives as <field> or
+// <field>_b64, with the rules of Path.
+func Bytes(field string, plain, b64 *string) (string, error) {
+	return text(field, plain, b64)
 }
 
 func text(field string, plain, b64 *string) (string, error) {

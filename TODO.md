@@ -23,9 +23,9 @@ To decide before the solver, the scanner and `atoll names check` need them:
 - **Rules → effective policy** (§11.2, §11.3, §12.2):
   - ordered rules, where the first match wins;
   - `[defaults]` and the `strategy` presets;
-  - the properties of §11.2.
+  - the properties of §11.2, with the pool-wide values of §24.2.
 
-  Needs the configuration schema below.
+  `internal/config` loads the rules and their conditions; the effective policy is what is left. To settle with it: what `tags_mode = "strict"` means for a rule with no `tags`.
 - **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility, NTFS collisions through `names.TargetNames`, and the branch path limit through `names.FitsBranch`), the job plan, the reachable capacity as a dry run of that plan, and property tests.
 - **BLAKE3**: run `conformance/vectors/blake3.json` on real arm64 and AVX-512 hardware, measure throughput there, and move `zeebo/blake3` to a tagged release when one holds the arm64 backends (`docs/research/blake3.md`).
 
@@ -33,13 +33,16 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 Every item here is a **decision**:
 
-- `schema/config.schema.json`: the JSON Schema of the TOML configuration (§24). Unknown keys are errors.
 - `schema/migrations/NNNN_name.sql`: the catalog schema (§9), including `meta.lpath_key_version`.
 - `api/openapi.yaml` and `api/schemas/` for the `--json` outputs.
 - The format of `conformance/scenarios/` and the runner. The runner refuses any scenario today.
 
 ## Phase 1a, not started (specs.md §28)
 
+- Configuration in the shell (§24.3, §10):
+  - reading the file through `internal/fsx`, `--config`, and looking `timezone` up on the machine;
+  - `atoll init` and `atoll rules check`, which shows warnings;
+  - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
 - Disk identity and mounts: FS UUID or NTFS serial, mount-point checks, states.
 - Reading times: creation times (§7) through `statx`, or `system.ntfs_crtime` on ntfs-3g and lowntfs-3g, and `solver.CreationTimeNS`; modification and change times through `solver.TimeNS`; reading the time back in the copy pipeline (§14).
 - `disk add` and `disk remove`.

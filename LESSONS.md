@@ -18,6 +18,8 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - **A bound must cover every construct that costs something.** The first weight rule counted characters and classes only. 989 anchors repeated 1000 times then weighed 1000 and needed three times Rust's limit.
 - **Ask about contracts, with a recommendation and its cost.** The maintainer took the recommended option every time when it came with measured numbers and the side effect stated plainly (for example "`^\pL{10}$` becomes refused"). Facts that follow from an earlier decision do not need a new question. Neither do clarifications of what the code already does.
 - **Commit messages must be exact.** Say what changed and what was verified, never more.
+- **An example is not a contract.** Reading §24 as a schema turned up four keys that contradicted an invariant or served nothing (`chunk_size`, `keep_overwritten`, `move_originals`, `striping`), and work the spec ran "inside the time window" with no key for it. Check every key against the sections that use it.
+- **Break the schema too.** A loader driven by a schema is only as tested as each constraint in it: drop every `pattern`, bound, `enum` value and default in turn, in process, and read what no vector notices.
 
 ## Unicode and normalization
 
@@ -29,6 +31,11 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - Go's `encoding/json` also matches keys without case (even `ſ` for `s`), keeps the last of two equal keys, and decodes `-0` into an integer. Go's base64 skips line breaks even in strict mode. A shared-format loader must check keys, numbers and base64 spelling itself, or Go accepts files that Rust rejects.
 - NFC can change regex syntax: a combining mark after an escape letter or a range endpoint composes with it (`\n` followed by U+0303 becomes `\ñ`). The grammar must apply to the NFC form, and errors must show the typed text.
 - A UTF-16 length is never more than the UTF-8 length of the same valid text. So on NTFS the 255-byte limit always binds before the 255-unit limit.
+
+## TOML
+
+- Both Go TOML libraries match keys without case when decoding into a struct: `Pool_ID` is taken for `pool_id`, nothing reports it, and with both spellings one wins in silence. go-toml also reads `[disk]` as `[[disk]]`. Rust's `toml` refuses all of it. Decode into a generic tree and check the keys first.
+- "TOML 1.0" was false of every current library: go-toml, BurntSushi and Rust's `toml` all accept 1.1 syntax. Run a contract's stated version against a corpus rather than trusting it.
 
 ## Filesystems and Windows
 
@@ -52,7 +59,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
   - `gochecknoglobals` in the pure core: use a `switch`, not a global map;
   - `depguard`: no `math/rand` in the pure core, so use a small deterministic xorshift in tests;
   - `staticcheck` QF1002: a tagged `switch`.
-- Patch files with scripts that assert how many times each old string occurs, so a silent no-op is impossible.
+- Patch files with scripts that assert how many times each old string occurs, so a silent no-op is impossible. Write them with the Write tool: a long Bash heredoc holding quotes can fail before it runs.
 - Go 1.27 runs through `GOTOOLCHAIN=go1.27.0`. golangci-lint is in the session scratchpad's `bin/`.
 
 ## Tooling on the maintainer's Windows machine

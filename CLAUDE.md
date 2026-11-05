@@ -31,7 +31,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 
 ## Stack and commands
 - Go, latest stable release; Linux amd64 and arm64.
-- SQLite: `modernc.org/sqlite` (no cgo). TOML: BurntSushi/toml or go-toml v2. Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
+- SQLite: `modernc.org/sqlite` (no cgo). TOML: `github.com/pelletier/go-toml/v2`, read as a generic tree, never decoded straight into a struct (specs.md §24.3). Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
 - BLAKE3: `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`).
 - cgo and libfuse3 only for the FUSE view (phase 2a).
 
@@ -50,6 +50,7 @@ golangci-lint run ./...
 ```
 cmd/atoll/             CLI and daemon
 internal/catalog/      queries (the schema lives in schema/migrations/)
+internal/config/       loading the configuration: schema check, values, relations (pure)
 internal/disks/        identity, mount checks, states, SMART, remount
 internal/layout/       paths: copies, trash, tmp, links
 internal/rules/        parsing, matching, effective policy (pure)
@@ -96,7 +97,7 @@ docs/research/         research reports behind open design decisions (not contra
 ## Rust-rewrite readiness
 - Persisted and exchanged formats follow specs.md §29.3: SQL migration files, TOML configuration with a JSON Schema, OpenAPI for the local API, JSON schemas for `--json`, documented exit codes. Never `gob` or any other language-specific encoding.
 - Paths are BLOBs in SQLite; times are integer Unix nanoseconds UTC; in JSON, `path` or `path_b64`.
-- Pure core packages (`rules`, `glob`, `names`, `solver`, `value`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.
+- Pure core packages (`config`, `rules`, `glob`, `names`, `solver`, `value`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.
 - Every behavior change adds or updates a conformance vector or scenario before the code.
 - Sort every output explicitly; never depend on map iteration order or random seeds.
 - Reject regexes outside the grammar of specs.md §29.5, the common Go/Rust subset, when the configuration loads; Atoll checks it itself before the engine compiles.

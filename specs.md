@@ -67,7 +67,7 @@ Measurable goals:
 - **Level**: number of wanted replicas, 0 to 2, displayed as x1 to x3 (number of copies).
 - **Merged view**: a single tree that presents each logical path once: mergerfs in phase 1, Atoll's own view from phase 2.
 - **Failure domain**: group of disks likely to fail together (same DAS, same power supply, same controller).
-- **Tag**: free label on a disk (`sata`, `usb`, `ssd`…), used by rules.
+- **Tag**: label on a disk (`sata`, `usb`, `ssd`…), used by rules; an identifier (§29.5).
 - **Residency**: time a file stays on the SSD cache before its transfer to HDD.
 - **File states**: `ok`, `pending` (replicas to create), `degraded` (fewer replicas than wanted), `unprotected` (x1, or manual mode waiting), `unavailable` (no reachable copy), `corrupt`, `conflict`, `name-incompatible`, `name-collision` (§15.7). A file shows one state, the first that applies in this order: `unavailable`, `corrupt`, `conflict`, `name-incompatible`, `name-collision`, `degraded`, `pending`, `unprotected`, `ok`; it is `ok` when no other applies. The state serves display and alerts; placement and job order read the copies, never the state.
 - **Copy states**: `ok`, `pending`, `stale` (does not match the current version), `corrupt`, `unavailable`, `surplus` (beyond the wanted level).
@@ -142,7 +142,7 @@ Measurable goals:
 - When a disk dies, its files stay visible in the merged view through their replicas, with no manual action (in phase 1, Atoll removes the dead disk's branch from the running mergerfs, §21.1).
 - Break glass: mount plain mergerfs over the `media/` folders at the same mount point to get the same view. `atoll mergerfs-config` prints the matching configuration.
 - Atoll never creates a disk's `media/` root, and creates `Atoll/` only after the disk's identity is confirmed (§10). On an unmounted disk the root does not exist, so neither mergerfs nor Atoll can write to the system disk by mistake.
-- The names `media` and `Atoll` are configurable, globally or per disk (`[layout]`).
+- The names `media` and `Atoll` are configurable, globally (`[layout]`) or per disk (`root` and `workdir` on a `[[disk]]`).
 
 ### 6.1 Writes under `media/`
 
@@ -241,7 +241,7 @@ CREATE TABLE files(
   size INTEGER NOT NULL,               -- current version
   mtime_ns INTEGER NOT NULL,           -- the original's (§7)
   blake3 BLOB,                         -- 32 bytes, b3sum-compatible
-  chunk_size INTEGER,                  -- 4 MiB by default
+  chunk_size INTEGER,                  -- 4 MiB (§16)
   chunks BLOB,                         -- concatenated BLAKE3 chunk hashes (32 bytes each)
   replicas_target INTEGER NOT NULL,    -- 0..2
   original_disk TEXT,                  -- cached result of §7
@@ -312,7 +312,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 - `files.lpath_key` and `entries.lpath_key` are indexed: the collision checks of §15.7 look names up by key.
 - Chunk hash volume: 20 TB ÷ 4 MiB × 32 bytes ≈ 150 MB, one BLOB per file.
 - Catalog location: `/var/lib/atoll/catalog.db` (Linux), `%ProgramData%\Atoll\catalog.db` (Windows).
-- Daily catalog backup on the system disk and, if enabled, in each disk's `Atoll/catalog/`, inside the time window (§21.6).
+- Daily catalog backup on the system disk and, with `maintenance.catalog_on_disks`, in each disk's `Atoll/catalog/`, inside `maintenance.window` (§21.6).
 - Rebuild (`atoll catalog rebuild`): from the manifests when present, otherwise through a full rescan with re-hashing. Since every copy sits at the same path, a rescan alone tells which copies belong together. No data is lost, but `first_seen`, recorded conflicts and corruption history are. So copies with different hashes become conflicts, whatever their sizes and modification times, as nothing is left to say which one is current. Copies with the same hash are in sync, each with its own modification time.
 - Schema changes ship as numbered SQL migration files shared by both implementations (§29.3).
 
@@ -331,7 +331,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 - USB resets: the old mount keeps returning I/O errors while the disk reappears under a new device name. Atoll marks the disk `missing` and removes its mergerfs branch. With `health.remount_after_reset = true`, it then unmounts the stale mount and remounts by UUID, except for an NTFS volume marked dirty (§22); otherwise it alerts. The disk rejoins only after reconciliation (§18).
 - Optional marker `Atoll/disk.toml` (visible): `pool_id`, `disk_id`, `fs_uuid`, `format_version`. Disabled with `marker = false`.
 - No automatic adoption: an unknown disk is reported, never added.
-- The configuration file is the source of truth for the disk list; `atoll disk add` and `disk remove` edit it and the catalog together.
+- The configuration file is the source of truth for the disk list; `atoll disk add` and `disk remove` edit it and the catalog together. An edit keeps every other byte of the file, comments included. `disk add` appends its `[[disk]]` at the end of the file, which TOML allows after `[[rule]]`. Atoll re-reads the result before replacing the file, and refuses the edit if anything else changed.
 
 ## 11. Rules
 
@@ -351,7 +351,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 ### 11.3 Semantics
 
-- Ordered list: **the first matching rule wins**. Missing properties come from `[defaults]`, which in turn come from the `strategy` preset.
+- Ordered list: **the first matching rule wins**. A property the rule leaves out takes its pool-wide value (§24.2).
 - Rules apply to files; folders have no rule of their own.
 - `action = "ignore"`: the file stays in `media/` and in the view, but gets no hash and no replica.
 - Matching, with the grammars of §29.5:
@@ -377,15 +377,15 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 ### 12.2 Presets (`strategy`)
 
-A preset sets only the keys listed here; anything set explicitly wins.
+A preset sets only the keys listed here; anything set explicitly wins. `replicas` and `mode` are keys of `[defaults]`; `spread_mode`, `new_files` and `colocate` of `[placement]`.
 
 | Preset | Keys set |
 |---|---|
 | `safety` | replicas = 1, spread_mode = strict, mode = immediate, balance.schedule = immediate |
-| `energy` | replicas = 1, new_files = ordered, colocate = season, mode = scheduled, cache on when a cache disk exists |
+| `energy` | replicas = 1, new_files = ordered, colocate = season, mode = scheduled, cache.enabled = true when a disk has `role = "cache"` |
 | `capacity` | replicas = 0, new_files = most-free |
 
-Until a strategy is implemented (see §28), it falls back to `most-free`, and the mode `immediate` or `scheduled` falls back to `deferred`.
+Until a strategy is implemented (see §28), it falls back to `most-free`, and the mode `immediate` or `scheduled` falls back to `deferred`, with a warning when the configuration loads (§24.4).
 
 ### 12.3 Replication modes
 
@@ -417,7 +417,8 @@ Until a strategy is implemented (see §28), it falls back to `most-free`, and th
 - **Preferences**, in order: the rule's `tags` and `domains` (with `tags_mode = "prefer"`); spreading across domains (`spread`); `colocate`; the `new_files` strategy; a disk that is already spinning.
 - `overflow = "allow"` (default): when the preferred disks are full, another disk is used and a warning is raised. With `deny`, the file stays `degraded`.
 - `colocate`: `none`; `folder` (copies of files from the same folder go to the same disks); `season` (same as `folder`, the usual choice for series); `show` (same grandparent folder).
-- **Originals**: `move_originals = false` by default. The solver optimizes space by moving Atoll copies only. When it cannot reach the wanted level otherwise, it says so and suggests `atoll balance --move-originals`.
+- `spread`: `domain`, or `none` to turn this preference off. `spread = "none"` cannot go with `spread_mode = "strict"`.
+- **Originals**: the solver optimizes space by moving Atoll copies only. When it cannot reach the wanted level otherwise, it says so and suggests `atoll balance --move-originals`. No setting makes this automatic (§6.1, item 9).
 
 ### 12.5 Mapping to DrivePool
 
@@ -432,7 +433,7 @@ Until a strategy is implemented (see §28), it falls back to `most-free`, and th
 | SSD Optimizer | `cache` disk role and transfer (phase 2b) |
 | Scanner integration (evacuation, temperature) | `[health]` (phase 4) |
 | Real-time duplication | `mode` per rule; parallel writes with Atoll's own view (phase 2a) |
-| Read striping | disabled; read classes, SATA before USB |
+| Read striping | none; read classes, SATA before USB |
 | Disk Space Equalizer | `equalize = "off"` by default; `percent` at placement time only |
 | Stacked balancers, All in One | a single solver, hence no conflict between modules |
 
@@ -466,7 +467,7 @@ U(k) = min over j = 0 … k−1 of (S − s1 − … − sj) / (k − j)
 - Pure, deterministic function, covered by property tests; every list it outputs is sorted by a documented key.
 - Hysteresis: rebalancing starts only when the share of bytes correctly placed falls below `[balance].trigger.ratio_below`, or when the bytes to move exceed `or_more_than`.
 - Status indicator: share of files at the wanted level, share of bytes correctly placed (`atoll status`).
-- Reachable capacity, for each k: the solver plans without running anything, with `move_originals = false` and every managed file wanted at k copies. The result is the bytes of the files that reach k copies in that plan, plus the formula of §13.1 applied to the free space that plan leaves, minus `min_free`, on each disk. So it accounts for data outside `media/` and for the trash, and it is what Atoll would really do; there is no second algorithm. It reads the whole catalog and wakes no disk.
+- Reachable capacity, for each k: the solver plans without running anything, moving no user copy, with every managed file wanted at k copies. The result is the bytes of the files that reach k copies in that plan, plus the formula of §13.1 applied to the free space that plan leaves, minus `min_free`, on each disk. So it accounts for data outside `media/` and for the trash, and it is what Atoll would really do; there is no second algorithm. It reads the whole catalog and wakes no disk.
 
 ## 14. Replication
 
@@ -488,7 +489,7 @@ Rules:
 - One copy at a time per target disk (`max_parallel_per_disk`), at low I/O priority, except with `--force`.
 - Resume after a power cut or USB disconnection: the chunks already in the `.part` file are re-verified against their recorded hashes, then the copy resumes at the first missing or wrong chunk. The source is never re-read from the start, since the whole-file hash comes from the verification pass.
 - At startup, `tmp/` keeps the `.part` files that a pending job owns and deletes the others.
-- Processing order: the rule's `priority`, then files that lost a replica before new ones, read from their copies (§4).
+- Processing order: the rule's `priority`, the highest first, then files that lost a replica before new ones, read from their copies (§4).
 - Attributes copied: modification time; POSIX permission bits and ownership where the target supports them; NTFS read-only and archive attributes. No ACLs or extended attributes in v1.
 - Creating, refreshing or moving replicas never triggers a media server notification: the logical tree does not change.
 - A replica is always an independent full copy: hard links are never mirrored.
@@ -503,7 +504,7 @@ Rules:
   - fanotify reports the process behind each event. Operations made by the mergerfs process are view operations: they already reached the copies mergerfs meant to change, so Atoll reconciles them without propagating. inotify gives no process, so grouping (below) handles that case.
 - Windows watcher (phase 4): ReadDirectoryChangesW.
 - An overflow or watcher error triggers a rescan of the affected disk: `IN_Q_OVERFLOW`, `FAN_Q_OVERFLOW`, or a zero-byte result or `ERROR_NOTIFY_ENUM_DIR` from ReadDirectoryChangesW.
-- Rescans: at startup, after an overflow, and periodically inside the time window. Watching does not wake disks; rescans do.
+- Rescans: at startup, after an overflow, and every `maintenance.rescan_every` (7 days by default) inside `maintenance.window`. Watching does not wake disks; rescans do.
 - Events are grouped per logical path over `deletes.debounce` (30 s by default, longer than a USB disk's spin-up) before Atoll decides what happened.
 - File identity: disk, inode or NTFS file ID, size, modification time and change time, confirmed by the hashes of the first and last chunks.
 - Hard links: a file with more than one link (Atoll's own link-guard link excluded) is never treated as renamed; each of its paths is a separate logical file. This covers Sonarr/Radarr links between `Téléchargements/` and a library.
@@ -663,7 +664,7 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 
 | Operation | Command | Effect |
 |---|---|---|
-| Add a disk, empty or full | `atoll disk add /mnt/u2 --domain d4-320 --tags usb [--dry-run]` | checks identity, topology and mount point; adds the disk to the configuration; indexes `media/` in place and hashes inside the time window, moving nothing; files with the same content at the same path become existing copies, each keeping its own modification time, and nothing is written to them; others follow §15.7; appends the branch at the end of the running mergerfs |
+| Add a disk, empty or full | `atoll disk add /mnt/u2 --domain d4-320 --tags usb [--dry-run]` | checks identity, topology and mount point; adds the disk to the configuration; indexes `media/` in place and hashes inside `maintenance.window`, moving nothing; files with the same content at the same path become existing copies, each keeping its own modification time, and nothing is written to them; others follow §15.7; appends the branch at the end of the running mergerfs |
 | Remove | `atoll disk remove u2 --evacuate [--dry-run]` | `draining`: user and Atoll copies re-created elsewhere, then `retired` |
 | Missing disk | automatic | detected within 30 s (`missing`); its mergerfs branch is removed at runtime; its files stay visible through their replicas; x1 files become `unavailable`; alert. After `health.missing_grace` (24 h), the missing replicas are re-created elsewhere when space allows |
 | Declare failed | `atoll disk fail u2 --yes` | re-creates the missing replicas of degraded files at once |
@@ -744,7 +745,7 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 - Partial scan of the changed folder:
   - Plex: `GET /library/sections/<id>/refresh?path=<folder>`;
   - Emby and Jellyfin: `POST /Library/Media/Updated`.
-- `path_map` translates host paths into the paths the server sees (Docker container).
+- `path_map` translates host paths into the paths the server sees (Docker container). The longest key that is a prefix of the path, by whole components, applies.
 - Batching: one notification per folder per 30-second window.
 - A media server's automatic scan sees changes made through the mount on the same host; Atoll notifies the others (changes made on member disks, propagated renames and deletions).
 - The media server's periodic scan can then be disabled.
@@ -755,7 +756,7 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 - Browsing:
   - phase 1: mergerfs lists every branch; its caches reduce wake-ups but do not prevent them;
   - phase 2a: Atoll's view serves listings from the catalog and wakes no disk.
-- Background work wakes disks, so it runs inside the time window: rescans, scrubs, catalog backups to the disks, scheduled replication. SMART polling uses `smartctl -n standby`, which skips sleeping disks.
+- Background work wakes disks, so it runs inside the time windows of the configuration, which all default to `maintenance.window`: rescans, scrubs, catalog backups to the disks, scheduled replication. SMART polling uses `smartctl -n standby`, which skips sleeping disks.
 - What still wakes disks: Windows Explorer thumbnails, antivirus, indexing, Plex analysis tasks (media analysis, chapter thumbnails).
 - Measures:
   - disable thumbnails and indexing on the pool;
@@ -790,7 +791,13 @@ A read-only report of the names to fix. It reads the catalog and the configurati
   - pool more than 90 % full.
 - Prometheus metrics on `/metrics` (phase 2b).
 
-## 24. Configuration example
+## 24. Configuration
+
+One TOML 1.1 file (§29.3). `schema/config.schema.json` is the reference for every key: its type, its allowed values and its default. This section gives what a schema cannot say.
+
+### 24.1 Example
+
+Also in `deploy/atoll.toml`.
 
 ```toml
 # /etc/atoll/atoll.toml — Windows: %ProgramData%\Atoll\atoll.toml
@@ -851,7 +858,6 @@ spread         = "domain"
 spread_mode    = "prefer"               # prefer | strict
 tags_mode      = "prefer"               # prefer | strict
 overflow       = "allow"                # allow | deny (never relaxes strict settings)
-move_originals = false                  # break glass: user copies stay put
 
 [view]
 engine = "mergerfs"                     # mergerfs (phase 1) | atoll (phase 2a)
@@ -860,7 +866,11 @@ mount  = "/srv/pool"
 [read]                                  # Atoll's own view (phase 2a)
 policy   = "oldest"                     # oldest | prefer-spinning
 classes  = ["sata", "usb"]
-striping = false
+
+[maintenance]
+window           = "02:00-06:00"        # rescans, catalog backups; default of the windows below
+rescan_every     = "7d"
+catalog_on_disks = false                # a catalog backup in each disk's Atoll/catalog/
 
 [replication]
 enabled               = true
@@ -879,7 +889,6 @@ budget   = "3h"
 equalize = "off"
 
 [integrity]
-chunk_size   = "4MiB"
 scrub_every  = "30d"
 window       = "02:00-06:00"
 scrub_budget = "4h"
@@ -890,7 +899,6 @@ manifest     = false                    # Atoll/manifest.b3sum
 [trash]
 retention        = "30d"
 max_size         = "5%"                 # of each disk's capacity
-keep_overwritten = true
 link_guard       = false                # phase-1 protection against deletions through mergerfs
 
 [cache]                                 # phase 2b
@@ -916,6 +924,10 @@ token_file = "/etc/atoll/plex.token"
 path_map   = { "/srv/pool" = "/data" }  # paths as seen by the container
 
 [notify.jellyfin]
+url          = ""
+api_key_file = ""
+
+[notify.emby]
 url          = ""
 api_key_file = ""
 
@@ -984,6 +996,55 @@ label    = "downloads: no replica"
 path     = "Téléchargements/**"
 replicas = 0
 ```
+
+### 24.2 Where a value comes from
+
+- **Required keys**: `pool_id` and `view.mount`; on each `[[disk]]`, `id`, `uuid`, `mount` and `fs`; on each `[[rule]]`, `label`, unique in the file (it names the rule in messages and in `files.rule`). `atoll init` writes the first two. A pool may have no disk and no rule.
+- **Any other key left out** takes the value of the `strategy` preset when the preset sets that key (§12.2), then its `default` in the schema. Without `strategy`, no preset applies. So a key set in the file wins over the preset, and the preset wins over the default.
+- **Keys that follow another key**, when neither the file nor the preset sets them:
+  - `replication.window`, `integrity.window` and `balance.schedule` take `maintenance.window`;
+  - a disk's `root` and `workdir` take `layout.root` and `layout.workdir`.
+- **Keys with no value when left out**: `strategy`, `health.avoid_hotter_than`, and a disk's `domain`.
+- `""` means "not set" for `ups.nut`, a `url`, a `token_file`, an `api_key_file` and the keys of `[alerts]`.
+- **A rule property the rule leaves out**:
+
+| Rule property | Pool-wide value |
+|---|---|
+| `replicas`, `mode`, `settle`, `priority` | `[defaults]` |
+| `spread`, `spread_mode`, `tags_mode`, `colocate`, `overflow` | `[placement]` |
+| `cache_min_age` | `cache.min_age` |
+| `action`, `ignore_case`, `cache` | none: `manage`, `true` and `true` |
+| `tags`, `domains` | none: no tag and no domain |
+
+A loaded rule holds what the file sets, plus `action` and `ignore_case`. The rest of this table applies when the rule gives a file its policy (§11.3).
+
+### 24.3 Loading
+
+Loading takes three steps. A `timezone` is then looked up among the time zones of the machine, the only part that depends on it.
+
+1. **Syntax.** One leading UTF-8 byte order mark is ignored, as Windows editors may write one and go-toml alone refuses it (measured); a second one is a syntax error. The rest must be valid UTF-8 and valid TOML 1.1. A syntax error stops here.
+2. **Keys and values.** The tree the parser gives is checked against the schema, with keys compared byte for byte. A `format` starting with `atoll-` applies a grammar of §29.5. TOML types count: `1.0` is a float, so it is no integer, where JSON Schema would take it for one. A value gets one problem at most, and a list with a wrong item is not also checked as a whole: `min_free = ["5"]` gives `placement.min_free[0]`, not `placement.min_free`. A third-party validator ignores `format`, so it can accept a value Atoll refuses, such as `100.5%`, but never the reverse.
+
+   Nothing converts the tree before this check. Measured with go-toml v2.4.3 and BurntSushi v1.6.0, decoding into a typed structure takes `Pool_ID` for `pool_id` with no error, and keeps one of the two when a file holds both; go-toml also reads `[disk]` as `[[disk]]`. Rust's `toml` 1.2.0 with `deny_unknown_fields` refuses all of them.
+3. **Relations.** Only when step 2 found no problem, and after the values of §24.2 are applied:
+   - two disks never have the same `id`, `uuid` or `mount`, and the later one is reported;
+   - a `uuid` is 8-4-4-4-12 lowercase hexadecimal digits on ext4, XFS and btrfs, and 16 uppercase hexadecimal digits on NTFS;
+   - a disk's `mount` is never inside another disk's. `view.mount` is never equal to a disk's `mount`, inside it, or around it. `catalog`, its default included, is never equal to a disk's `mount` or `view.mount`, or inside either. "Inside" compares whole components: `/mnt/ab` is not inside `/mnt/a`. The inner `mount`, `view.mount` or `catalog` is reported;
+   - a disk's `root` and `workdir`, as §24.2 gives them to that disk, are names its `fs` accepts (§15.8), and differ from each other: by their exact bytes, and on NTFS by `lpath_key` too. So a name in `[layout]` is not checked for a disk that sets its own. `layout.root` and `layout.workdir` differ even with no disk. A name is reported at the disk's key when the disk sets it, otherwise at the key in `[layout]`; two names that do not differ are reported at `workdir`, or at `root` when the disk sets only that;
+   - `spread = "none"` never goes with `spread_mode = "strict"`, in `[placement]` (reported at `placement.spread`) and for each rule that sets either (reported at the rule's `spread`, or its `spread_mode` when it sets only that);
+   - `ups.enabled = true` needs `ups.nut`, reported at `ups.nut`;
+   - no two rules have the same `label`, and the later one is reported;
+   - `path`, `filename` and `ext` compile (§11.1, §29.5), reported at that key, `ext` as a whole;
+   - `size_min` is never above `size_max`, compared in bytes after rounding (§29.5), reported at `size_min`;
+   - `action = "ignore"` takes no other property of §11.2, reported at each such property. Conditions and `label` stay allowed.
+
+Each step reports every problem it finds, at most one per key, sorted by key as written, in byte order. A key reads `placement.spread`, `disk[0].uuid` or `rule[2].ext[1]`, with indexes from 0. A part holding anything other than ASCII letters, digits, `_` and `-` is written in double quotes, such as `notify.plex.path_map."/srv/pool"`: `"` and `\` after a backslash, U+0000–U+001F and U+007F as `\uXXXX` in uppercase hexadecimal, and any other character as it is. A syntax error has no key. The wording of messages is not part of the contract.
+
+### 24.4 Warnings
+
+- A setting whose feature arrives in a later phase of §28 is accepted, has no effect yet, and gets a warning when the configuration loads, with the fallback of §12.2 when there is one. Only a value that asks for the feature gets one (`mode = "scheduled"`, `cache.enabled = true`), and only when the file or the preset sets it, never a default. So the schema holds every key from the start, and a configuration written today keeps loading.
+- `view.engine = "atoll"` is the exception: an error until phase 2a, as there would be no merged view at all.
+- A tag or domain that a rule or `read.classes` names and no disk carries gets a warning too, as `disk add` may bring it later. A disk with no `domain` carries none, not even its `id`. The key is that of the item, such as `rule[0].tags[1]`, and warnings are sorted as problems are.
 
 ## 25. Command-line interface
 
@@ -1096,7 +1157,7 @@ atoll daemon [--foreground] [--dry-run]
 |---|---|---|
 | On-disk layout | §6, `disk.toml` | versioned by `format_version` |
 | Catalog schema | `schema/migrations/NNNN_name.sql` | plain SQL, applied in order by both versions; `PRAGMA user_version` holds the schema version; pragmas of §9 |
-| Configuration | §24, `schema/config.schema.json` | TOML 1.0; unknown keys are errors |
+| Configuration | §24, `schema/config.schema.json` | TOML 1.1; unknown keys are errors |
 | Value grammars | §29.5 | durations, sizes, percentages, time windows, globs, regexes |
 | Local API | `api/openapi.yaml` | HTTP/1.1 and JSON over a Unix socket (named pipe on Windows) |
 | CLI | §25, `api/schemas/` | same commands, flags, `--json` outputs and exit codes |
@@ -1113,7 +1174,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
@@ -1129,9 +1190,14 @@ size     = number ( "B" | "KB" | "MB" | "GB" | "TB"                 ; powers of 
 percent  = number "%"                                               ; 0 to 100
 window   = hh ":" mm "-" hh ":" mm                                  ; "02:00-06:00", "23:00-05:00"
 number   = digits [ "." digits ]
+temperature = 1 to 3 digits "C"                                     ; "50C"
+identifier  = ( "a"…"z" | "0"…"9" ) { "a"…"z" | "0"…"9" | "_" | "-" }  ; at most 64 characters: "t1", "d4-320"
 ```
 
-- Each percentage is a share of what its key states: `min_free`, `fill_to` and `trash.max_size` of each disk's capacity; `cache.max_fill` of the cache's capacity; `ratio_below` of the bytes correctly placed.
+- Each percentage is a share of what its key states: `min_free`, `fill_to` and `trash.max_size` of each disk's capacity; `cache.max_fill` of the cache's capacity; `ratio_below` of the bytes correctly placed; `mass_guard.percent` of a disk's copies.
+- A duration must fit in a signed 64-bit count of nanoseconds. A size is computed exactly, then rounded down to whole bytes, and must fit in a signed 64-bit integer. In a window, hours run from 00 to 23 and minutes from 00 to 59 (midnight is `00:00`), and the start differs from the end, which could mean an empty window or the whole day.
+- `pool_id`, a disk's `id`, `domain` and `tags`, a rule's `tags` and `domains`, and `read.classes` are identifiers. They pass through the CLI, JSON and `disk.toml`, and are compared byte for byte, so each has one spelling. NFC and NFD forms of `été` would otherwise be two domains, and `spread_mode = "strict"` would count them as two.
+- An absolute path (`catalog`, a `mount`, a `token_file`, an `api_key_file`, both sides of `path_map`) starts with `/`, is not `/` itself, and has no empty, `.` or `..` component and no NUL. The Windows form comes with phase 4.
 - `min_free` is a list of one or more sizes and percentages; the smallest applies to each disk (§13.1).
 - Time windows use wall-clock time in `timezone` and may wrap past midnight. A window crossing a daylight-saving change is shortened or lengthened accordingly; on a spring-forward night the missing hour is simply skipped.
 - Glob, implemented in-house in both versions (third-party matchers disagree: doublestar's `*` stops at `/`, globset's crosses it), matched against the whole logical path without a leading `/`:
@@ -1195,7 +1261,7 @@ number   = digits [ "." digits ]
 
 ### 29.6 Code structure for the port
 
-- Pure core packages without I/O (`rules`, `glob`, `names`, `solver` with original selection, hashing) map one-to-one to future Rust crates. Dependencies point from the shell (daemon, watch, jobs, view) to the core, never back.
+- Pure core packages without I/O (`config`, `rules`, `glob`, `names`, `solver` with original selection, hashing) map one-to-one to future Rust crates. Dependencies point from the shell (daemon, watch, jobs, view) to the core, never back.
 - `internal/fsx` and the view interface stay thin, so the Rust version can implement them with `std::fs`, `rustix`, fuser and the winfsp crate.
 
 ### 29.7 Planned stacks
@@ -1204,7 +1270,7 @@ number   = digits [ "." digits ]
 |---|---|---|
 | SQLite | `modernc.org/sqlite` | `rusqlite` (bundled SQLite) |
 | BLAKE3 | `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`) | `blake3` (official) |
-| TOML | BurntSushi/toml or go-toml v2 | `toml` with `serde` |
+| TOML | `github.com/pelletier/go-toml/v2`, v2.4.3 or later | `toml`, 1.2.0 or later (TOML 1.1) |
 | Regex | `regexp`, after Atoll's grammar check (§29.5) | `regex`, with `regex-syntax` 0.8.5 or later, after the same check; `size_limit` 10 MiB, `nest_limit` 1000 (§29.5) |
 | Unicode normalization (NFC, NFD) | `golang.org/x/text/unicode/norm`, v0.43.0 or later | `unicode-normalization`, at the Unicode version of the Go toolchain it replaces (0.1.25 for Unicode 17.0) |
 | Case folding | `unicode.SimpleFold`, as `regexp` | `regex-syntax` (`case_fold_simple`), the version `regex` uses |

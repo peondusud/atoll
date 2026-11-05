@@ -1,0 +1,195 @@
+# /etc/atoll/atoll.toml — Windows: %ProgramData%\Atoll\atoll.toml
+pool_id  = "home-media"
+strategy = "energy"                     # safety | energy | capacity
+catalog  = "/var/lib/atoll/catalog.db"
+timezone = "local"                      # time zone of every time window (IANA name or "local")
+
+[layout]
+root    = "media"                       # managed folder inside each disk
+workdir = "Atoll"                       # visible folder: trash/, tmp/
+marker  = true                          # Atoll/disk.toml (optional)
+
+[[disk]]
+id     = "t1"
+uuid   = "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"
+mount  = "/mnt/t1"
+fs     = "ext4"
+domain = "thinknas"
+tags   = ["sata"]
+
+[[disk]]
+id     = "t2"
+uuid   = "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"
+mount  = "/mnt/t2"
+fs     = "ext4"
+domain = "thinknas"
+tags   = ["sata"]
+
+[[disk]]
+id     = "u1"
+uuid   = "01D9F3A2B4C5E6F7"             # 64-bit NTFS serial number
+mount  = "/mnt/u1"
+fs     = "ntfs"
+domain = "d4-320"
+tags   = ["usb"]
+
+[[disk]]                                # phase 2b
+id     = "c1"
+uuid   = "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b"
+mount  = "/mnt/c1"
+fs     = "ext4"
+role   = "cache"
+domain = "thinknas"
+tags   = ["ssd"]
+
+[defaults]
+replicas           = 1                  # 0 to 2 replicas (x1 to x3)
+mode               = "deferred"         # immediate | deferred | scheduled | manual
+settle             = "10m"
+manual_alert_after = "7d"
+
+[placement]
+new_files      = "most-free"            # most-free | ordered | percent
+fill_to        = "90%"                  # of each disk's capacity, for ordered
+min_free       = ["5%", "100GiB"]       # whichever is smaller; also mergerfs minfreespace
+spread         = "domain"
+spread_mode    = "prefer"               # prefer | strict
+tags_mode      = "prefer"               # prefer | strict
+overflow       = "allow"                # allow | deny (never relaxes strict settings)
+
+[view]
+engine = "mergerfs"                     # mergerfs (phase 1) | atoll (phase 2a)
+mount  = "/srv/pool"
+
+[read]                                  # Atoll's own view (phase 2a)
+policy   = "oldest"                     # oldest | prefer-spinning
+classes  = ["sata", "usb"]
+
+[maintenance]
+window           = "02:00-06:00"        # rescans, catalog backups; default of the windows below
+rescan_every     = "7d"
+catalog_on_disks = false                # a catalog backup in each disk's Atoll/catalog/
+
+[replication]
+enabled               = true
+window                = "02:00-06:00"   # may wrap past midnight, e.g. "23:00-05:00"
+max_parallel_per_disk = 1
+
+[deletes]
+direct     = "propagate"                # propagate | restore
+debounce   = "30s"                      # longer than a USB disk's spin-up
+mass_guard = { files = 100, percent = "5%", window = "10m" }
+
+[balance]
+schedule = "02:00-06:00"                # never | immediate | time window
+trigger  = { ratio_below = "90%", or_more_than = "200GiB" }   # share of bytes correctly placed
+budget   = "3h"
+equalize = "off"
+
+[integrity]
+scrub_every  = "30d"
+window       = "02:00-06:00"
+scrub_budget = "4h"
+auto_repair  = true
+repair_mode  = "chunk"                  # chunk | file
+manifest     = false                    # Atoll/manifest.b3sum
+
+[trash]
+retention        = "30d"
+max_size         = "5%"                 # of each disk's capacity
+link_guard       = false                # phase-1 protection against deletions through mergerfs
+
+[cache]                                 # phase 2b
+enabled         = false
+min_age         = "7d"                  # minimum residency on the SSD
+max_fill        = "80%"                 # of the cache's capacity
+mirror          = false
+replicate_early = false
+
+[health]
+missing_grace       = "24h"             # before missing replicas are re-created elsewhere
+remount_after_reset = true              # never for an NTFS volume marked dirty
+evacuate_on         = ["smart_failing", "pending_sectors"]   # phase 4
+avoid_hotter_than   = "50C"                                  # phase 4
+
+[ups]                                   # phase 2b, through NUT
+enabled = false
+nut     = "ups@localhost"
+
+[notify.plex]
+url        = "http://127.0.0.1:32400"
+token_file = "/etc/atoll/plex.token"
+path_map   = { "/srv/pool" = "/data" }  # paths as seen by the container
+
+[notify.jellyfin]
+url          = ""
+api_key_file = ""
+
+[notify.emby]
+url          = ""
+api_key_file = ""
+
+[alerts]
+ntfy   = "https://ntfy.sh/my-secret-topic"
+gotify = ""
+smtp   = ""
+
+# Rules: the first matching rule wins; conditions are combined with AND.
+[[rule]]
+label    = "temporary and system files"
+filename = 're:\.(part|!qb|tmp)$|^(thumbs\.db|\.ds_store|desktop\.ini)$'
+action   = "ignore"
+
+[[rule]]
+label    = "samples"
+filename = "*sample*"
+size_max = "300MiB"
+action   = "ignore"
+
+[[rule]]
+label    = "photos"
+path     = "Photos/**"
+replicas = 2
+mode     = "immediate"
+priority = 100
+
+[[rule]]
+label    = "subtitles and metadata: x3, they are small"
+ext      = ["srt", "ass", "nfo"]
+replicas = 2
+mode     = "immediate"
+
+[[rule]]
+label    = "artwork"
+filename = "{poster,fanart,folder,banner}.{jpg,png}"
+replicas = 2
+mode     = "immediate"
+
+[[rule]]
+label         = "large movies: leave the SSD cache first"
+path          = "Films/**"
+size_min      = "40GiB"
+spread_mode   = "strict"                # one copy on the ThinkNAS, one on the D4-320
+cache_min_age = "0s"                    # size is known only once the file is written
+
+[[rule]]
+label         = "movies"
+path          = "Films/**"
+spread_mode   = "strict"
+cache_min_age = "14d"                   # leaves time for release upgrades
+
+[[rule]]
+label    = "series"
+path     = "Séries/**"
+mode     = "scheduled"
+colocate = "season"
+
+[[rule]]
+label = "archives: replicate on demand"
+path  = 're:^Archives/'
+mode  = "manual"
+
+[[rule]]
+label    = "downloads: no replica"
+path     = "Téléchargements/**"
+replicas = 0

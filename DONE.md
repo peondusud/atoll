@@ -2,6 +2,25 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Configuration schema and loader (specs.md §24)
+
+Commit "Define the configuration schema and load it", on `main`.
+
+- Report: [docs/research/toml.md](docs/research/toml.md). go-toml v2.4.3 and Rust's `toml` 1.2.0 agree on all 746 files of the official corpus; BurntSushi v1.6.0 accepts 16 invalid files they refuse. All three accept TOML 1.1 syntax.
+- The maintainer's decisions:
+  - `github.com/pelletier/go-toml/v2`, and TOML 1.1 in the contract;
+  - `integrity.chunk_size`, `trash.keep_overwritten`, `placement.move_originals` and `read.striping` removed: each contradicted the spec or served nothing;
+  - a setting of a later phase is accepted with a warning, and `view.engine = "atoll"` is an error until phase 2a;
+  - a `[maintenance]` table for the window, the rescans and the catalog backups, which the other windows follow;
+  - rule properties keep their sections of §24, in the order rule, section, preset, default;
+  - identifiers in lowercase ASCII, and a required, unique `label` on each rule;
+  - `0s` and `0%` refused where they would remove a protection or stop a task.
+- `schema/config.schema.json` is the one list of keys, types, allowed values and defaults: `internal/config` reads it at load time. Decoding into a struct cannot tell `Pool_ID` from `pool_id` in either Go library, so the loader checks the generic tree first.
+- Vectors: `config.json`. `deploy/atoll.toml` is the example of §24.1, byte for byte.
+- A port written in Rust from the spec alone, without the Go code, passes the same vectors. It found the sentences that did not settle a case (a second byte order mark, the case of `\uXXXX`, `catalog` equal to a mount, and others), which were then fixed.
+
+Effective policy, and everything that reads the file from disk, is still open: [TODO.md](TODO.md).
+
 ## BLAKE3 library and hashes (specs.md §16, §29.7)
 
 Commit "Hash files and chunks with zeebo/blake3", on `main`.
