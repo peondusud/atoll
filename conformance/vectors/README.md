@@ -26,6 +26,7 @@ One JSON file per function. Every file has this envelope:
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
 - Integers are exact JSON integers within the signed 64-bit range; they are never written as strings or floats.
 - Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding). A case has exactly one of the two.
+- A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
 - Cases are written one per line, so a change shows up as a one-line diff.
 
 ## Files
@@ -108,6 +109,17 @@ A case has exactly one of `value` and `values`. An `error` case has no path and 
 | `error` | boolean | `true` when the grammar rejects `pattern`, the length or weight is over its limit, or the text holds more than 30 non-starters in a row |
 
 Every accepted pattern comes with one path that shows its meaning, the same in Go `regexp` and Rust `regex`. Every accepted pattern, with and without `(?i)`, compiles in Rust with `size_limit` 10 MiB and `nest_limit` 1000, on a thread with at least 8 MiB of stack (§29.5).
+
+### `name_compat.json` — name compatibility of whole paths (§15.8)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path`, `path_b64` | string | the logical path |
+| `fs` | string | the target filesystem: `ext4`, `xfs`, `btrfs` or `ntfs` |
+| `problems` | array | the failing components, in path order: each is `{ "component": <index from 0>, "reasons": [<reasons>] }`, with the reasons of the name corpus. An empty array means the path can be written there. |
+| `error` | boolean | `true` when `path` is not a well-formed logical path: empty, with a leading or trailing `/`, an empty, `.` or `..` component, or a NUL byte |
+
+The rules for a single name are pinned by the name corpus, `conformance/corpus/names/names.json`; these vectors pin how a path is split and that folders are checked too.
 
 ### `lpath_key.json` — collision keys (§15.7, §15.8)
 

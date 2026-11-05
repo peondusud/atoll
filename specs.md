@@ -313,7 +313,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 - Identifier: the filesystem UUID (ext4, XFS, btrfs) or the 64-bit NTFS serial number, readable on every system that can mount the filesystem, without writing anything to the disk.
 - Two disks with the same identifier (clones): both are refused until one identifier is regenerated (`tune2fs -U`, `xfs_admin -U`, `btrfstune -u`, `ntfslabel --new-serial`).
 - Never identify a disk by `/dev/sdX`, drive letter, Windows volume GUID (specific to each machine) or USB serial number (often fake behind a bridge).
-- `disk add` checks the block-device topology and refuses two pool filesystems on the same physical disk (R-06).
+- `disk add` checks the block-device topology and refuses two pool filesystems on the same physical disk (R-06). It also refuses the variants that change name rules (§15.8): ext4 with the `casefold` feature, XFS with `ascii-ci`, and NTFS mounted with `nocase`.
 - Before any write, Atoll confirms in the same session that the mount path is a mount point of the expected filesystem (device and identifier). It then works through a directory handle opened on the verified root (`openat`-style calls) and re-checks the device id before each job. It writes nothing to an unconfirmed disk.
 - I/O errors (EIO, ENOTCONN, ENODEV) mean "disk unknown", never "file absent". Missing files count as deletions only after the disk's identity has been confirmed in the same scan; an empty mount point after a failed mount is a missing disk, never a mass deletion.
 - Recommended Linux setup:
@@ -537,17 +537,24 @@ Each copy is compared with the recorded current version:
   - Characters above U+FFFF are left unchanged, as ntfs-3g, ntfs3 and Samba compare them exactly (and, as the on-disk format implies, Windows).
   - The key depends on the normalization library and its Unicode version: on a name with a run of more than 30 non-starters, Go's inserts U+034F and Rust's does not (§29.5). Two releases of one library may also normalize differently, with the same Unicode version. The catalog records what computed the keys (`meta.lpath_key_version`, §9: the language, the library, its release and its Unicode version); when it is missing or differs in any way from the running version, Atoll recomputes every key before it looks for collisions. So the first run after an upgrade of the library, and the first Rust run on a catalog written by Go, recompute them, and keys from two implementations or two releases are never compared.
   - So `ς` and `σ` share a key, while `ß`, `ẞ` and `ss`, or `ſ` and `s`, do not. The key serves collisions only; `ignore_case` matching follows Unicode simple case folding (§11.3).
-- A replica must keep the exact name, so compatibility is checked before every copy to a target filesystem:
-  - ext4, XFS, btrfs: at most 255 bytes per path component;
-  - NTFS: at most 255 UTF-16 code units per component;
-  - NTFS used under Windows: characters 1–31 and `\ / : * ? " < > |` forbidden; reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `COM¹`–`COM³`, `LPT1`–`LPT9`, `LPT¹`–`LPT³`) forbidden, also when followed by an extension (`NUL.txt`); no trailing dot or space;
-  - NTFS under Windows is case-insensitive: `Film.mkv` and `film.mkv` in the same folder collide;
-  - Linux names that are not valid UTF-8 cannot be written to NTFS.
+- A replica must keep the exact name, so compatibility is checked before every copy to a target filesystem. The check is a pure function of the logical path and the target's `fs`, the same table in both versions; it never asks the operating system, whose answer depends on its version and on mount options:
+  - every component of the logical path is checked, folders included, whether the folder already exists on the target or not;
+  - lengths are counted on the exact bytes, or on their exact UTF-16 conversion, never on a normalized form: 100 × `é` is 200 bytes in NFC and 300 in NFD;
+  - ext4, XFS, btrfs: at most 255 bytes per component; every other byte is allowed;
+  - NTFS: every NTFS disk follows the Windows rules, so that Windows and both Linux drivers can read everything Atoll writes there. A component must:
+    - be valid UTF-8, so it holds no encoded surrogate (ntfs3 refuses one, and ntfs-3g stores it, or silently rewrites a CESU-8 pair);
+    - hold at most 255 UTF-16 code units, a character above U+FFFF counting 2, and at most 255 bytes, since `lowntfs-3g` refuses longer names and cannot be told apart from `ntfs-3g`;
+    - hold none of U+0001–U+001F and none of `" * : < > ? \ |` (U+007F is allowed). On Linux 7.3, ntfs3 even reads `a:b` as a stream of the file `a`;
+    - not end with U+0020 or U+002E, which also rules out `...` and ` `; other spaces and dots, such as U+00A0, are allowed;
+    - not be a reserved name, as Windows 10 reads it: take the component up to its first `.`, remove its trailing U+0020, and compare it, ignoring the case of ASCII letters only, with `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1`–`COM9`, `LPT1`–`LPT9`, and `COM` or `LPT` followed by `¹`, `²` or `³` (U+00B9, U+00B2, U+00B3). So `CON.txt`, `NUL.tar.gz` and `CON .txt` are reserved, as on Windows 10 (Windows 11 reserves bare names only). `COM0`, `LPT0`, `NULL`, `CLOCK$`, `CONERR$`, ` CON` (leading space) and `ＣＯＮ` (fullwidth) are not;
+  - a component that fails gets one or more reasons, from a closed list (§29.3), reported in this order: `too-long`, `invalid-utf8`, `control-character`, `forbidden-character`, `trailing-dot-or-space`, `reserved-name`. On ext4, XFS and btrfs, only `too-long` applies. Every rule reads bytes, except the UTF-16 length, so a name that is not valid UTF-8 still gets its other reasons;
+  - NTFS is case-insensitive: `Film.mkv` and `film.mkv` in the same folder collide (§15.7);
+  - variants that change these rules are refused when a disk is added (§10): ext4 with the `casefold` feature, XFS with `ascii-ci`, and NTFS mounted with `nocase`. A case-insensitive folder found later under `<root>/` (`FS_CASEFOLD_FL`) makes that disk name-incompatible for every path below it.
 - Incompatible name: the solver picks a compatible disk. Failing that, `name-incompatible` state and an alert. Never an automatic rename.
-- Recommended: mount NTFS disks on Linux with `windows_names`, so applications cannot create names Windows rejects.
+- Recommended: mount NTFS disks on Linux with `windows_names` (Linux 6.2 or later for ntfs3), so applications cannot create most names Windows rejects. It enforces only part of the rules above: both drivers accept `CON .txt`, `COM¹`, `CONIN$` and U+007F with it.
 - Recommended: let Sonarr and Radarr replace `\ / : * ? " < > |` when they import a file (`Replace Illegal Characters`, `Colon Replacement`). Atoll never changes a file name on its own initiative (R-11): it only propagates renames the user made (§6.1, item 3). `atoll names check` lists the names to fix.
 - Long paths: `\\?\` prefix on Windows; relative operations (`openat`) on Linux for deep trees.
-- The name corpus of §29.4 records a verdict per filesystem for each name.
+- The name corpus of §29.4 records, for each name, its reasons on each of `ext4`, `xfs`, `btrfs` and `ntfs`; the vectors pin the check on whole paths.
 
 ## 16. Integrity
 
@@ -1023,7 +1030,7 @@ atoll daemon [--foreground] [--dry-run]
 | Local API | `api/openapi.yaml` | HTTP/1.1 and JSON over a Unix socket (named pipe on Windows) |
 | CLI | §25, `api/schemas/` | same commands, flags, `--json` outputs and exit codes |
 | Hashes | §16 | BLAKE3-256 of the file; BLAKE3-256 of each 4 MiB chunk, concatenated |
-| States, job kinds, operation kinds, event kinds | §4, §9 | closed lists of lowercase strings |
+| States, job kinds, operation kinds, event kinds, name-compatibility reasons | §4, §9, §15.8 | closed lists of lowercase strings |
 
 - Nothing persisted or exchanged uses a language-specific encoding (no Go `gob`, no Rust `bincode`).
 - Times: integer Unix nanoseconds UTC in the catalog; RFC 3339 with offset in JSON.
@@ -1035,9 +1042,9 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility per filesystem, NTFS collisions, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
-  - `corpus/names/`: the name corpus of §15.8, with a verdict per filesystem for each name.
+  - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
 - A runner drives any `atoll` binary through its CLI and the filesystem only; it imports nothing from the implementation.
 - Every behavior change first adds or updates a vector or scenario.
@@ -1152,3 +1159,11 @@ number   = digits [ "." digits ]
 - Single-copy windows: `immediate` mode before Atoll's own view, and SSD residency.
 - Rust rewrite: cost of a second implementation and of keeping both in sync until the switch; maturity of the `winfsp` crate to check before phase 4.
 - Windows arrives after the rewrite; until then, Windows PCs use the SMB share.
+- Names (research in `docs/research/name-compatibility.md`), to decide before the solver, the scanner and `atoll names check`:
+  - case collisions on NTFS targets: a hard constraint checked against the target's existing and planned siblings, or a report only; and folders, since the whole-path `lpath_key` misses `Films/a.mkv` against `films/b.mkv`;
+  - a user rename to a name that another copy's filesystem refuses (§15.3, §6.1): what happens to the copy left at the old name;
+  - the trash layout `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17);
+  - total path length: mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes; Windows applications without long-path support stop at 259 UTF-16 units;
+  - the output of `atoll names check` (JSON schema, sort key, exit code) and the precedence between `name-incompatible` and `degraded`;
+  - on NTFS, 8.3 short names: both Linux drivers refuse to create a name equal to another file's short name, and ntfs-3g's `stat` returns that other file, so existence must never be decided by `stat` alone;
+  - mount checks: ntfs3 must use `iocharset=utf8`, and its `ads` option (on by default from Linux 7.3) reads `a:b` as a stream; a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file.
