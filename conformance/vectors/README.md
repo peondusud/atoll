@@ -97,6 +97,16 @@ These vectors pin the matcher alone, which compares characters exactly. The NFC 
 
 An `error` case has no path and no `match`.
 
+### `lpath_key.json` — collision keys (§15.7, §15.8)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path`, `path_b64` | string | the logical path |
+| `key` | string | its `lpath_key` |
+| `no_key` | boolean | `true` when the path has no key (NULL in the catalog), because it is not valid UTF-8 |
+
+A case has exactly one of `key` and `no_key`. Paths that collide have the same key.
+
 ## Unicode versions
 
-The Go and Rust libraries do not use the same Unicode version (`specs.md` §29.5). Vectors that involve Unicode data (`nfc.json`, `match.json`) only use characters assigned in Unicode 16.0 whose case folding, properties and normalization have not changed since, and no run of more than 30 combining marks.
+The Go and Rust libraries do not use the same Unicode version (`specs.md` §29.5). Vectors that involve Unicode data (`nfc.json`, `match.json`, `lpath_key.json`) only use characters assigned in Unicode 16.0 whose case folding, properties and normalization have not changed since, and no run of more than 30 combining marks.
