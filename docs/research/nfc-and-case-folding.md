@@ -42,7 +42,7 @@ References to §11.1, §11.3, §15.7, §15.8 and §29.x point to `specs.md`; eve
 - NTFS semantics cannot be obtained through `(?i)`. Upper-casing the pattern text breaks it: some escapes become errors (`\x{e9}` → `\X{E9}`), and some classes are silently inverted (`\p{Ll}` → `\P{LL}`).
 - With NTFS for globs and `ext`, the same `ignore_case = true` would mean two different things. Realistic paths show it: Greek final sigma, capital ẞ, Georgian Mtavruli titles, µ against μ.
 - NTFS upcase equivalence is strictly contained in simple folding. Two characters that any of the three known Windows tables (XP, Vista, 6.1) or Samba treats as one are always treated alike by an `ignore_case` rule. This holds per character: two whole names that Windows treats as one can still get different verdicts when one of them is not in NFC (§5.1).
-- "The NTFS upcase table" is not one table. Three default tables are known (XP/2003, Vista, and 6.1 for Windows 7 to 10); each volume carries the one it was formatted with, and all cover only the Basic Multilingual Plane (BMP, U+0000 to U+FFFF). No Windows 11 volume was examined.
+- "The NTFS upcase table" is not one table. Three default tables are known (XP/2003, Vista, and 6.1 for Windows 7 to 10); each volume carries the one it was formatted with, and all cover only the Basic Multilingual Plane (BMP, U+0000 to U+FFFF). No Windows 11 volume was examined during the research; the maintainer checked one afterwards, and it holds the 6.1 table (§14.3).
 - The reason §15.8 gave ("so `ß` and `ss` stay distinct") does not tell NTFS from simple folding. Only full folding merges `ß` and `ss`.
 
 Whatever the answers, the spec has to fix a few points the current wording leaves open (§10):
@@ -274,7 +274,7 @@ Volumes formatted by real systems confirm two of them:
 - Server 2003 wrote the XP table and no `$Info`.
 - Windows 10 builds 17134, 18894 and 18898 wrote the 6.1 table byte for byte, with `$Info` CRC64 `dadc7e776b1b690c`. ntfs-3g's `mkntfs` writes the same table and CRC, with the version fields set to zero.
 
-No Windows 11 or Windows 7/8 volume was examined (§12). The only hint about current Windows is indirect: `mkntfs.c` (line 5019) notes that with a correct CRC `chkdsk` does not warn about an obsolete table, which suggests the 6.1 table is still accepted. That Windows 11 writes the 6.1 table is therefore an inference, not a measurement. Going from XP to 6.1 changes 339 entries, and from Vista to 6.1 changes 109. One visible change: XP and Vista map ς to Σ, while 6.1 maps ς to itself.
+No Windows 11 or Windows 7/8 volume was examined (§12). The only hint about current Windows is indirect: `mkntfs.c` (line 5019) notes that with a correct CRC `chkdsk` does not warn about an obsolete table, which suggests the 6.1 table is still accepted. That Windows 11 writes the 6.1 table was therefore an inference, not a measurement. The maintainer has since read `$UpCase` from a volume formatted by Windows 11: same size, SHA-256 and MD5 as the 6.1 table (§14.3). Going from XP to 6.1 changes 339 entries, and from Vista to 6.1 changes 109. One visible change: XP and Vista map ς to Σ, while 6.1 maps ς to itself.
 
 **The 6.1 table can be regenerated exactly from public data.** Take Unicode 5.1.0 simple uppercase (UnicodeData field 12) on the BMP, and keep c → U only when the simple lowercase of U is c. This round-trip rule gives 0 differences from the real table: 973 characters change, and the SHA-256 of the whole table (65,536 little-endian 16-bit entries, 131,072 bytes) is `41c26bc7a12bdaeb26025c93118697c7e3ef81ee048b00fe5cce2a472e0e0742`. `internal/names` now generates the table this way and its test checks this SHA-256 and the MD5 above. Without the round-trip filter, 18 entries differ (U+00B5, U+0131, U+017F, U+01C5, U+0345, U+03C2, U+1FBE…). "BMP simple uppercase of current Unicode" is a poor approximation: Unicode 18 differs in 229 entries.
 
@@ -593,7 +593,7 @@ These were spec changes or ambiguities that needed the maintainer's decision (CL
 
 - **The Unicode standard text itself.** The stability policy, UAX #15 and definition D145 were quoted from mirrors and secondary sources (a UAX #15 mirror, `rust-caseless`, W3C charmod-norm), because www.unicode.org was unreachable.
 - **The FSF license list** was read from a mirror of its data, because gnu.org was unreachable.
-- **Windows tables.** No Windows 11, Server 2022, Server 2025, Windows 7 or Windows 8 volume was examined. That Windows 7 and 8 write the 6.1 table rests on ntfs-3g's comment and builder. Whether Windows or `chkdsk` ever rewrites an old table on an existing volume was not checked.
+- **Windows tables.** No Windows 11, Server 2022, Server 2025, Windows 7 or Windows 8 volume was examined during the research (the maintainer has since checked a Windows 11 one, §14.3). That Windows 7 and 8 write the 6.1 table rests on ntfs-3g's comment and builder. Whether Windows or `chkdsk` ever rewrites an old table on an existing volume was not checked.
 - **The Windows NTFS driver** is closed source: comparison per UTF-16 code unit through the volume table is inferred from the on-disk format and the open drivers.
 - **Copyright.** Whether a 973-entry mapping table is copyrightable is a legal question that was not settled.
 - **Upstream timing.** When `regex-syntax` will move to Unicode 17 or 18, and when Go and `x/text` will move to Unicode 18, is unknown.
@@ -643,7 +643,7 @@ On 2026-11-05 the maintainer chose the options this report recommends, and decid
 | Regex text (§10, point 4) | NFC applies to it; the `é?` effect is documented | §11.3 |
 | Invalid UTF-8 in `re:` (§10, point 5) | each invalid byte is one U+FFFD character, as in Go `regexp`; the Rust version decodes the same way | §11.3 |
 | Unicode versions (§10, points 6 and 7) | the vectors only use characters assigned in Unicode 16.0 and unchanged since, and no run of more than 30 combining marks | §11.3, §29.5 |
-| `lpath_key` (§10, point 8) | NFD, then the 6.1 table plus ς → Σ, then NFC; the table is generated from Unicode 5.1 data; the table Windows 11 writes is still to be checked | §15.8, §30; `lpath_key.json` |
+| `lpath_key` (§10, point 8) | NFD, then the 6.1 table plus ς → Σ, then NFC; the table is generated from Unicode 5.1 data | §15.8; `lpath_key.json` |
 | `ext` (§10, point 9) | `ext = ["x"]` holds exactly when `filename = "*.x"` would | §11.1, §11.3 |
 | Escapes (§10, point 10) | `\D`, `\W`, `\S` and `\B` are rejected too | §29.5 |
 
@@ -679,3 +679,23 @@ The decision is recorded in §15.8 and §25:
 - `names.NFC` and `names.NFD` split the input into valid runs. When a test bypassed that split, the `x/text` F0–F7 defect of §3.4 showed up at once in Atoll's own `nfc.json` vectors.
 - The NTFS table that `internal/names/upcase_gen.go` generates from Unicode 5.1.0 data has the SHA-256 of the tables read from Windows 10 volumes and the MD5 ntfs-3g records for the Windows 7–10 table (§4.3). A test checks both.
 - A test compares the case-insensitive glob with Go `regexp` `(?i)` on 529,200 pattern and path pairs built from the characters of §4.7, with no disagreement. Another checks that `ext` entries agree with the equivalent `*.x` glob.
+
+### 14.3 After the cross-check
+
+A second review then checked the decisions and their implementation. A Rust implementation, written from `specs.md` alone, replayed every vector, alongside an audit of the vectors, a Unicode-version check, a code review and a spec review. The Rust replay passed all 298 cases of `nfc.json`, `glob.json` and `match.json`. Differential runs against Rust found no bug in NFC, case folding, `ext` or `lpath_key`.
+
+**Windows 11.** The maintainer read `$UpCase` from an NTFS volume formatted by Windows 11, on Linux, with `ntfscat -i 10`. It is 131,072 bytes, with SHA-256 `41c26bc7…0742` and MD5 `7ff498a4…92f2`: byte for byte the 6.1 table that Windows 7 to 10 write. `specs.md` §15.8 records it, and the open question in §30 is closed.
+
+**Further decisions.** The review found that the old list of rejected regex escapes was not a common subset. Some constructs mean different things in the two engines: `\<` and `\>`, and `&&`, `--`, `~~` or `[` inside a class. Others are accepted by one engine only: octal escapes, `a{,3}`, unescaped braces such as `{tmdb-123}`, `(?x)`, and loose property names. The maintainer chose:
+
+| Point | Decision | Recorded in |
+|---|---|---|
+| Regex subset | a positive grammar that Atoll checks itself in both versions. It allows only constructs both engines read the same way, at most 1000 bytes long, with Go's nested repeat rule; everything else is rejected when the configuration loads. | §29.5; `regex.json` |
+| `lpath_key` and Unicode versions | the catalog records the Unicode version that computed the keys (`meta.unicode_version`) and recomputes them when it changes; the Rust version uses the same Unicode version as Go | §9, §15.8, §29.7 |
+| Runs of more than 30 non-starters | an allowed Go/Rust difference, stated in Go's own terms (the canonical decomposition, Hangul jamo, and the ccc 0 characters x/text counts); the vectors stay below the bound, and a test checks it | §11.3, §29.5 |
+| Glob details | NFC once, before brace expansion; a `-` between two characters is a range (`[--a]`); `^` is reserved only right after `[`; the 1024 limit counts the product of the alternatives; the syntax errors are listed in the spec | §11.3, §29.5; `glob.json`, `match.json` |
+| `filename` and `ext` | a `filename` glob never holds `/`; `ext` holds when one of its entries does, an empty list is rejected, and entries are literals | §11.1, §11.3; `match.json` |
+| Empty regex | `re:` alone, and empty alternatives such as `a|` or `()`, are rejected | §29.5; `regex.json` |
+| CLAUDE.md invariant 15 | NFC, NFD and case folding serve only collision detection and rule matching, never naming or identifying a file | CLAUDE.md |
+
+Fuzzing the new regex check against Go `regexp` found that the check, used on its own, accepted text that is not valid UTF-8. `rules.Compile` already rejected such text before calling the check, so no configuration was affected. The check now rejects it too.
