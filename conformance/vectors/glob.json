@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §29.5",
-  "description": "In-house glob matcher, matched against a whole logical path without a leading /, or against a file name. Braces are expanded first; the product of the numbers of alternatives is at most 1024, and the pattern matches when one of its expansions matches. A character is a Unicode scalar value encoded in valid UTF-8; each byte that is not part of a valid UTF-8 sequence counts as one character, which only ?, * and negated classes match. Characters are compared exactly: NFC and case folding (§11.3) belong to the rule matcher.",
+  "description": "In-house glob matcher, matched against a whole logical path without a leading /, or against a file name. Classes are read first, and a class ends at its first ], so a , or } in a class is literal; braces are then expanded, the product of the numbers of alternatives is at most 1024, every other rule (** and empty components included) applies to each expansion, and the pattern matches when one of its expansions matches. A character is a Unicode scalar value encoded in valid UTF-8; each byte that is not part of a valid UTF-8 sequence counts as one character, which only ?, * and negated classes match. Characters are compared exactly: NFC and case folding (§11.3) belong to the rule matcher.",
   "cases": [
     { "pattern": "Films/**", "path": "Films/Avatar (2009)/Avatar.mkv", "match": true },
     { "pattern": "Films/**", "path": "Films/a.mkv", "match": true },
@@ -129,6 +129,9 @@
     { "pattern": "[--a]", "path": "b", "match": false },
     { "pattern": "[!^a]", "path": "^", "match": false, "note": "^ is reserved only right after [" },
     { "pattern": "[!^a]", "path": "b", "match": true },
+    { "pattern": "{[,],x}", "path": ",", "match": true, "note": "classes are read before braces: the , in [,] is literal" },
+    { "pattern": "{[,}],x}", "path": "}", "match": true, "note": "classes are read before braces: the } in [,}] is literal" },
+    { "pattern": "{*,x}*", "path": "p/q", "match": true, "note": "the expansion ** is a whole component, so it matches across /" },
     { "pattern": "", "error": true, "note": "empty pattern" },
     { "pattern": "/Films/**", "error": true, "note": "logical paths have no leading /" },
     { "pattern": "Films/", "error": true, "note": "empty component" },

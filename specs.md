@@ -329,7 +329,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 | Key | Example | Effect |
 |---|---|---|
 | `path` | `"Films/**"` or `'re:^Films/'` | glob or regex (§29.5) on the logical path |
-| `filename` | `"*sample*"` | glob or regex (§29.5) on the file name: the last `/`-separated component of the logical path, which never ends with `/`; a `filename` glob never holds `/` |
+| `filename` | `"*sample*"` | glob or regex (§29.5) on the file name: the last `/`-separated component of the logical path, which never ends with `/`; a `filename` glob that contains `/` is rejected when the configuration loads (use `path`) |
 | `ext` | `["mkv", "mp4"]` | extensions, without the dot; holds when one of them does (§11.3) |
 | `size_min`, `size_max` | `"100MiB"`, `"40GiB"` | inclusive bounds; size grammar in §29.5 |
 | `ignore_case` | `true` (default) | case ignored for `path`, `filename` and `ext` |
@@ -344,7 +344,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 - Rules apply to files; folders have no rule of their own.
 - `action = "ignore"`: the file stays in `media/` and in the view, but gets no hash and no replica.
 - Matching, with the grammars of §29.5:
-  - the path and every pattern (glob, regex text, extension) are put in NFC form, so a pattern typed in NFC matches a name stored in NFD. A glob is normalized once, before its braces are expanded. A name that is not valid UTF-8 is normalized run by run: each maximal valid UTF-8 run is put in NFC form, and the other bytes are kept as they are. NFC also applies to a regex's text, which changes its meaning when the text holds combining marks: `e` followed by U+0301 and `?` becomes `é?`, where `?` applies to the whole character;
+  - the path and every pattern (glob, regex text, extension) are put in NFC form, so a pattern typed in NFC matches a name stored in NFD. A glob is normalized once, before its braces are expanded. A name that is not valid UTF-8 is normalized run by run: each maximal valid UTF-8 run is put in NFC form, and the other bytes are kept as they are. NFC also applies to a regex's text, before its grammar is checked (§29.5), which changes its meaning when the text holds combining marks: `e` followed by U+0301 and `?` becomes `é?`, where `?` applies to the whole character. A mark typed right after an escape letter or a range endpoint composes with it too: `\n` followed by U+0303 becomes `\ñ`, which is rejected, and `[a-z` followed by U+0301 and `]` becomes `[a-ź]`, which holds `é`. Write such marks as `\x{…}`, which NFC leaves alone. An error quotes the text as typed and its NFC form;
   - with `ignore_case`, two characters are equal when Unicode simple case folding (CaseFolding.txt, statuses C and S) puts them in the same class, exactly as regex `(?i)` compares them: `ß` matches `ẞ` but never `ss`; `ς`, `σ` and `Σ` match each other; `İ` and `ı` match only themselves. A class `[…]` matches a character when one of its case variants is in the class, and `[!…]` matches the others. Folding never rewrites the text: a regex only gets `(?i)` added, so `(?-i:…)` keeps its meaning;
   - nothing is normalized again after folding, in globs as in regexes: `J` followed by U+030C, which has no precomposed form, does not match `ǰ` (U+01F0, which decomposes to `j` followed by U+030C);
   - in a glob, each byte that is not part of a valid UTF-8 sequence is one character, matched only by `?`, `*` and negated classes; in a regex, it is one U+FFFD character, as in Go `regexp`;
@@ -1055,12 +1055,12 @@ number   = digits [ "." digits ]
 - Glob, implemented in-house in both versions (third-party matchers disagree: doublestar's `*` stops at `/`, globset's crosses it), matched against the whole logical path without a leading `/`:
   - `*` matches any run of characters except `/`; `?` one character except `/`;
   - `**` as a whole path component matches zero or more components;
-  - `[abc]`, `[a-z]`, `[!a]` character classes. A `-` between two characters marks a range, so `[--a]` is the range from `-` to `a`; any other `-` must come first or last. `[^` is reserved: negation is written `[!`. `/` is never a character or a range endpoint in a class; a range may span it, but never matches `/`;
-  - `{a,b}` alternatives, not nested; the product of the numbers of alternatives is at most 1024;
+  - `[abc]`, `[a-z]`, `[!a]` character classes. A class ends at its first `]`, so `[]a]` is rejected as an empty class. A `-` between two characters marks a range, so `[--a]` is the range from `-` to `a`; any other `-` must come first or last. `[^` is reserved: negation is written `[!`. `/` is never a character or a range endpoint in a class; a range may span it, but never matches `/`;
+  - `{a,b}` alternatives, not nested; the product of the numbers of alternatives is at most 1024. Classes are read first, so a `,` or `}` in a class is literal (`{[,],x}` matches `,`); braces are then expanded, every other rule (`**` and empty components included) applies to each expansion, and the pattern matches when one expansion does (`{*,x}*` expands to `**`, which matches `p/q`);
   - names starting with a dot match like any other name;
-  - rejected: an empty pattern; an unterminated or empty class; a backslash, reserved for a future escape syntax; `**` inside a component; braces that are nested, unbalanced, or with an empty or single alternative; an empty component (a leading or trailing `/`, or `//`); more than 1024 expansions;
+  - rejected: an empty pattern; an unterminated or empty class; `[^`; `/` as a class character or range endpoint; a reversed range; a `-` in a class that is neither first, last nor between two characters; a backslash, reserved for a future escape syntax; `**` inside a component; braces that are nested, unbalanced, or with an empty or single alternative; an empty component (a leading or trailing `/`, or `//`); more than 1024 expansions;
   - NFC and case folding as in §11.3.
-- Regex: `re:` prefix. A regex must follow the grammar below, a common subset of Go `regexp` and Rust `regex` (RE2 semantics: no backreferences, no lookaround) where both engines give the same meaning. Atoll checks it itself, in both versions, before the engine compiles it, and rejects anything else when the configuration loads. Unanchored unless the pattern uses `^`, `$`, `\A` or `\z`; `ignore_case` adds `(?i)`.
+- Regex: `re:` prefix. A regex must follow the grammar below, a common subset of Go `regexp` and Rust `regex` (RE2 semantics: no backreferences, no lookaround) where both engines give the same meaning. Atoll checks it itself, in both versions, on the text in NFC form (§11.3), before the engine compiles it, and rejects anything else when the configuration loads. Unanchored unless the pattern uses `^`, `$`, `\A` or `\z`; `ignore_case` adds `(?i)`.
 
   ```
   regex    = branch { "|" branch }
@@ -1069,22 +1069,27 @@ number   = digits [ "." digits ]
   anchor   = "^" | "$" | "\A" | "\z"
   repeat   = ( "*" | "+" | "?" | "{" n "}" | "{" n ",}" | "{" n "," n "}" ) [ "?" ]
   n        = "0" | nonzero { digit }              ; at most 1000; in {n,m}, n <= m
+  digit    = "0" … "9"
+  nonzero  = "1" … "9"
+  hex      = digit | "a" … "f" | "A" … "F"
   atom     = char | "." | class | "(" regex ")" | "(?:" regex ")" | "(?" flags ":" regex ")"
-  flags    = letters [ "-" letters ] | "-" letters ; letters among i, m, s, U, each at most once
+  flags    = letters [ "-" letters ] | "-" letters ; letters among i, m, s, U; each letter
+                                                  ; at most once in the whole group, on
+                                                  ; either side of "-": "(?i-i)" is rejected
   char     = any character except  \ . + * ? ( ) | [ ] { } ^ $
            | escape | property
   escape   = "\" one of  \ . + * ? ( ) | [ ] { } ^ $ -
            | "\a" | "\f" | "\t" | "\n" | "\r" | "\v"
            | "\x" hex hex | "\x{" 1 to 6 hex "}"   ; a Unicode scalar value
   property = ( "\p" | "\P" ) ( major | "{" name "}" )
-  class    = "[" [ "^" ] item { item } "]"
-  item     = cchar [ "-" cchar ] | property
-  cchar    = any character except  \ [ ]  | escape
+  class    = "[" [ "^" ] item { item } "]"       ; a "^" right after "[" always negates
+  item     = cchar [ "-" cchar ] | property | "-" ; a "-" item only first or last
+  cchar    = any character except  \ [ ] -  | escape
   ```
 
   - The text, in NFC form, is at most 1000 bytes long.
   - A repeat applies to an atom: `a**`, `a{2}{3}`, `^*` and `(?i)*` are rejected. Nested counted repeats multiply to at most 1000, as Go requires: along any chain of counted repeats nested in one another, the product of their counts is at most 1000. The count of `{n}` is n, of `{n,m}` m, of `{n,}` n (1 when n is 0); a repeat with an upper bound of 0 ends the chain.
-  - In a class: an empty class is rejected (write `\]` for a `]`); a `-` marks a range between two `cchar`s in order, and is otherwise allowed only first or last; `--`, `&&` and `~~` are rejected, since Rust reads them as set operations.
+  - In a class: an empty class is rejected, and a `]` is never a class character, even first (write `\]`); a `-` marks a range between two `cchar`s in order, and is otherwise allowed only first or last; two unescaped `-`, `&` or `~` in a row are rejected wherever they stand: Rust reads such a pair as a set operation (`[a--b]`, `[a&&b]`), and right after a range end, where Rust reads a literal (`[!-&&]`), the pair is rejected all the same, so the rule needs no parsing. A class never needs one of these characters twice: `[!-&&]` is `[!-&]`, and `[!---]` is `[!-\-]`.
   - `major` is one of `C L M N P S Z`. `name` is a general category (`C Cc Cf Co L Ll Lm Lo Lt Lu M Mc Me Mn N Nd Nl No P Pc Pd Pe Pf Pi Po Ps S Sc Sk Sm So Z Zl Zp Zs`) or a script of Unicode 16.0 spelled as in its `Scripts.txt` (`Latin`, `Greek`, `Old_Italic`, `Common`, `Inherited`…).
   - So, among others: `\d \D \w \W \s \S \b \B`, which mean different things in Go and Rust (write `[0-9]` or `\p{L}`), `\<` and `\>`, octal and back-references (`\0`, `\101`), `\Q…\E`, `{` or `}` outside a repeat (write `\{` and `\}`, as in `\{tmdb-[0-9]+\}`), POSIX classes, nested classes, other flags, and loose or prefixed property names (`\p{greek}`, `\p{^Lu}`, `\p{sc=Greek}`) are rejected.
   - The Rust version raises its regex size and nesting limits so that every accepted regex compiles; with the length limit above, Go's own limits are never reached.
