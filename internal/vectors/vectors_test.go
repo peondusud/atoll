@@ -108,6 +108,8 @@ func TestCheckFlags(t *testing.T) {
 		{`{"cases": [{"input": "a", "error": "true"}]}`, false},
 		{`{"cases": [{"path": "a", "key": "A", "no_key": false}]}`, false},
 		{`{"cases": [{"path": "a", "no_key": null}]}`, false},
+		{`{"cases": [{"seconds": 0, "absent": true}]}`, true},
+		{`{"cases": [{"seconds": 1, "ns": 1, "absent": false}]}`, false},
 	} {
 		if err := checkFlags([]byte(tc.data)); (err == nil) != tc.ok {
 			t.Errorf("checkFlags(%s) = %v, want ok %v", tc.data, err, tc.ok)

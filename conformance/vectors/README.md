@@ -24,7 +24,7 @@ One JSON file per function. Every file has this envelope:
 - Every case may carry a `note`: a short explanation for reviewers, never read by the tests.
 - Unknown fields are errors, so a typo cannot silently disable a check. Keys are lowercase ASCII and match a field exactly, and no key appears twice in one object: Go's decoder would otherwise match `Name` or `NAME` to `name`, and keep the last of two equal keys, where Rust's fails.
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
-- A flag (`error`, `no_key`) is `true` or absent, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
+- A flag (`error`, `no_key`, `absent`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
 - Integers are exact JSON integers within the signed 64-bit range, without a fraction, an exponent or `-0`; they are never written as strings or floats.
 - Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding), written exactly as the standard encoder writes it: no line break, no other spelling. A case has exactly one of the two.
 - A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
@@ -181,6 +181,25 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `applies` | array of strings | the states that apply to the file, in any order |
 | `state` | string | the one it shows |
 | `error` | boolean | `true` when a state is unknown |
+
+### `original.json` — the original of a file (§7)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `copies` | array of objects | the copies, in any order: `disk`, `position`, `state`, `disk_state` and `first_seen_ns`, all required, and `creation_ns`, left out when the creation time is absent |
+| `previous` | string | optional: the previous original, given for a file in conflict only |
+| `original` | string | the disk of the original; empty when no copy is eligible |
+| `error` | boolean | `true` when a state is unknown, a disk has no name, or a disk or position appears twice |
+
+### `creation_time.json` — a creation time into `btime_ns` (§7)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `seconds` | integer | seconds since the Unix epoch |
+| `nanoseconds` | integer | nanoseconds counted forward from those seconds, also before the epoch |
+| `ns` | integer | the value of `btime_ns` |
+| `absent` | boolean | `true` when the time is absent: exactly 0, or out of range |
+| `error` | boolean | `true` when `nanoseconds` is outside 0 to 999999999 |
 
 ### `capacity.json` — capacity of a pool (§13.1)
 

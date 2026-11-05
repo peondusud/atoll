@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §7",
+  "description": "A creation time as read from the filesystem, in seconds and nanoseconds since the Unix epoch, into btime_ns. It is absent when it is exactly 0 or does not fit in a signed 64-bit count of nanoseconds. The nanoseconds run from 0 to 999999999, also before the epoch.",
+  "cases": [
+    { "seconds": 1609430400, "nanoseconds": 123456700, "ns": 1609430400123456700, "note": "read by ntfs3 from a FILETIME" },
+    { "seconds": 1793900000, "nanoseconds": 87403623, "ns": 1793900000087403623 },
+    { "seconds": 0, "nanoseconds": 0, "absent": true, "note": "exactly 0: ext4 reports a crtime of 0 like this" },
+    { "seconds": 0, "nanoseconds": 1, "ns": 1, "note": "not exactly 0" },
+    { "seconds": 1, "nanoseconds": 0, "ns": 1000000000 },
+    { "seconds": -1, "nanoseconds": 0, "ns": -1000000000, "note": "before the epoch" },
+    { "seconds": -1, "nanoseconds": 999999999, "ns": -1, "note": "the nanoseconds still count forward" },
+    { "seconds": -315673600, "nanoseconds": 0, "ns": -315673600000000000, "note": "a FILETIME of 1959, in range" },
+    { "seconds": -8520336000, "nanoseconds": 0, "ns": -8520336000000000000, "note": "a FILETIME of 1700, in range" },
+    { "seconds": -11644473600, "nanoseconds": 0, "absent": true, "note": "a FILETIME of 0: ntfs3 reports 1601" },
+    { "seconds": -9279273600, "nanoseconds": 0, "absent": true, "note": "a FILETIME of 1675, out of range" },
+    { "seconds": 10413835200, "nanoseconds": 0, "absent": true, "note": "a FILETIME of 2300, out of range" },
+    { "seconds": 9223372036, "nanoseconds": 854775807, "ns": 9223372036854775807, "note": "the last time that fits" },
+    { "seconds": 9223372036, "nanoseconds": 854775808, "absent": true, "note": "one nanosecond more" },
+    { "seconds": 9223372037, "nanoseconds": 0, "absent": true },
+    { "seconds": -9223372037, "nanoseconds": 145224192, "ns": -9223372036854775808, "note": "the first time that fits" },
+    { "seconds": -9223372037, "nanoseconds": 145224191, "absent": true, "note": "one nanosecond before" },
+    { "seconds": -9223372038, "nanoseconds": 999999999, "absent": true },
+    { "seconds": 9223372036854775807, "nanoseconds": 0, "absent": true, "note": "a product that would wrap" },
+    { "seconds": -9223372036854775808, "nanoseconds": 0, "absent": true, "note": "a product that would wrap" },
+    { "seconds": 1, "nanoseconds": -1, "error": true, "note": "nanoseconds below their range" },
+    { "seconds": 1, "nanoseconds": 1000000000, "error": true, "note": "nanoseconds above their range" },
+    { "seconds": 0, "nanoseconds": 1000000000, "error": true, "note": "checked before the test for 0" }
+  ]
+}

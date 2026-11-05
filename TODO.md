@@ -21,10 +21,6 @@ To decide before the solver, the scanner and `atoll names check` need them:
 ## Pure core still without vectors (specs.md §29.4)
 
 - **Capacity** (§13): the formula is done. Still open: what s_i is (raw capacity or minus `min_free`), the capacity with strict domains, and the capacity reachable without moving originals.
-- **decision**: **original selection** (§7). Open points:
-  - comparing creation times at the coarser precision, and its rounding;
-  - whether surplus copies, and copies on standby, readonly or draining disks, are eligible;
-  - a "previous original" input for conflicts.
 - **Rules → effective policy** (§11.2, §11.3, §12.2):
   - ordered rules, where the first match wins;
   - `[defaults]` and the `strategy` presets;
@@ -38,6 +34,7 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 Every item here is a **decision**:
 
+- Modification and change times that do not fit in a signed 64-bit count of nanoseconds (§9, §30). ntfs3 reports a FILETIME of 0 as 1601, Go's `UnixNano` wraps without saying so, and a replica must keep the modification time, so these cannot simply count as absent, as creation times do (§7).
 - `schema/config.schema.json`: the JSON Schema of the TOML configuration (§24). Unknown keys are errors.
 - `schema/migrations/NNNN_name.sql`: the catalog schema (§9), including `meta.lpath_key_version`.
 - `api/openapi.yaml` and `api/schemas/` for the `--json` outputs.
@@ -46,6 +43,7 @@ Every item here is a **decision**:
 ## Phase 1a, not started (specs.md §28)
 
 - Disk identity and mounts: FS UUID or NTFS serial, mount-point checks, states.
+- Reading creation times (§7): `statx`, or `system.ntfs_crtime` on ntfs-3g and lowntfs-3g, through `solver.CreationTimeNS`.
 - `disk add` and `disk remove`.
 - Scan.
 - File and chunk hashes.

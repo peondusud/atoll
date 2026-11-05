@@ -194,7 +194,7 @@ func checkTokens(data []byte) error {
 	}
 }
 
-// checkFlags rejects a case whose "error" or "no_key" is anything but true. A
+// checkFlags rejects a case whose "error", "no_key" or "absent" is anything but true. A
 // flag is true or absent, so each case has one spelling. Go's decoder would read
 // null as false where Rust's fails, and a test written only to look for the key
 // would read "error": false as an error case. Checking here covers every test,
@@ -207,7 +207,7 @@ func checkFlags(data []byte) error {
 		return fmt.Errorf("decode: %w", err)
 	}
 	for i, c := range f.Cases {
-		for _, flag := range []string{"error", "no_key"} {
+		for _, flag := range []string{"error", "no_key", "absent"} {
 			if v, ok := c[flag]; ok && string(v) != "true" {
 				return fmt.Errorf("case %d: %q is %s: write true, or leave the field out", i, flag, v)
 			}

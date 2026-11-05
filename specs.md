@@ -164,15 +164,18 @@ Removal rules: `prune`, rebalancing and evacuation remove Atoll copies first and
 ## 7. Choosing the original
 
 - The original is the in-sync copy with the oldest creation time:
-  - Linux: `statx` birth time (ext4 with 256-byte inodes, XFS, btrfs, ntfs3); with ntfs-3g, the `system.ntfs_crtime` extended attribute;
+  - Linux: `statx` birth time (ext4 with 256-byte inodes, XFS, btrfs, ntfs3); ntfs-3g and lowntfs-3g expose none through `statx`, so their `system.ntfs_crtime` extended attribute is read instead: 8 little-endian bytes, a FILETIME (100 ns units since 1601-01-01 UTC);
   - Windows: NTFS creation time.
-- Where a filesystem or driver exposes no creation time, `first_seen` stands in for it. Ties: earliest `first_seen`, then disk order in the configuration.
+- A creation time is absent, `copies.btime_ns` is NULL and `first_seen` stands in for it, when the filesystem or driver exposes none (ext4 with 128-byte inodes), when it is exactly 0, or when it does not fit in a signed 64-bit count of nanoseconds, from -2^63 to 2^63-1 (before 1677-09-21 or after 2262-04-11). Such dates are not real, and the oldest would always win: ext4 reports a crtime of 0 as 1970-01-01, and ntfs3 a FILETIME of 0 as 1601-01-01.
+- Eligible copies: copy state `ok` or `surplus`, on a disk `online`, `standby`, `readonly` or `draining`. These hold the same bytes and can be read, so the original does not change when a disk sleeps; it changes when a draining disk leaves.
+- Each copy's creation time, or its `first_seen` where that is absent, is compared in exact nanoseconds, not at the coarser precision of §9, which serves times that must match. Here nothing has to match: creation times are never copied, and the choice is among identical copies. Ties: earliest `first_seen`, then disk order in the configuration (`disks.position`).
+- A file in `conflict` (§15.7) keeps its previous original (`files.original_disk`) as long as that copy is eligible, so adding a disk with an older version of different content does not change what is presented. Otherwise, or after `catalog rebuild` has lost it, the rule above applies. Outside a conflict the previous original is ignored.
 - Stale, corrupt or unavailable copies are never presented by Atoll's own view, even when they are older.
 - Atoll preserves a replica's modification time but never its creation time, so a replica is younger than its source. On Windows, NTFS "tunneling" can give a file re-created under the same name within 15 seconds its predecessor's creation time; the Windows version therefore sets the creation time explicitly after the final rename.
 - The view returns the original's metadata (size, times, attributes). It reads data from the original by default; with `read.policy = "prefer-spinning"`, it may read any in-sync copy on a disk that is already spinning (identical content).
 - If the original's disk goes missing, the oldest remaining in-sync copy is presented. When the disk returns in sync, its copy becomes the original again.
 - A refresh or a `file` repair gives a copy a new creation time, so the original may move to another disk; a `chunk` repair keeps it (§16). Protection decisions never depend on the original (§6.1).
-- Phase 1 (mergerfs, `category.search=ff`): the copy on the first branch holding the file is presented, not necessarily the oldest. Atoll keeps stale and corrupt copies out of `media/` as soon as it finds them (§15.4, §16), so mergerfs serves current content; only the displayed creation time may differ.
+- Phase 1 (mergerfs, `category.search=ff`): the copy on the first branch holding the file is presented, not necessarily the oldest. Atoll keeps stale and corrupt copies out of `media/` as soon as it finds them (§15.4, §16), so mergerfs serves current content. mergerfs exposes no creation time through its view (measured), so Atoll reads it on the disks.
 
 ## 8. Architecture
 
@@ -252,7 +255,7 @@ CREATE TABLE copies(
   nlink INTEGER,                       -- hard links, Atoll's own link-guard link excluded
   size INTEGER, mtime_ns INTEGER,
   ctime_ns INTEGER,                    -- change time, recorded after each Atoll operation
-  btime_ns INTEGER,                    -- creation time; NULL if not exposed
+  btime_ns INTEGER,                    -- creation time; NULL if absent (§7)
   created_by TEXT NOT NULL,            -- user | atoll
   first_seen_ns INTEGER NOT NULL,
   verified_ns INTEGER,
@@ -303,7 +306,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
   --   or "rust unicode-normalization 0.1.25 17.0.0"; compared for equality only
 ```
 
-- All INTEGER times are Unix nanoseconds, UTC. Times are compared at the coarser precision of the filesystems involved (`time_precision_ns`), so an ext4 → NTFS replica still matches.
+- All INTEGER times are Unix nanoseconds, UTC. Times are compared at the coarser precision of the filesystems involved (`time_precision_ns`), so an ext4 → NTFS replica still matches. Creation times are never copied, so §7 compares them exactly.
 - `files.lpath_key` and `entries.lpath_key` are indexed: the collision checks of §15.7 look names up by key.
 - Chunk hash volume: 20 TB ÷ 4 MiB × 32 bytes ≈ 150 MB, one BLOB per file.
 - Catalog location: `/var/lib/atoll/catalog.db` (Linux), `%ProgramData%\Atoll\catalog.db` (Windows).
@@ -765,7 +768,7 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 - A pool can mix filesystems; the solver checks name compatibility (§15.8) and compares times at the coarser precision (§9).
 - A pool used directly under Windows can contain NTFS disks only.
 - NTFS after an unclean USB drop: the volume is marked dirty, ntfs3 refuses to mount it without `force`, and Linux has no full equivalent of chkdsk. Atoll never forces such a mount; it alerts, and the volume is repaired with chkdsk on Windows. This is a reason to prefer ext4 for USB disks that Windows never reads.
-- The creation time must be readable for §7; support per driver is verified by tests (§30).
+- §7 reads the creation time where a driver exposes it, and uses `first_seen` elsewhere. Measured per driver in `docs/research/creation-time.md`.
 
 ## 23. Monitoring and alerts
 
@@ -1102,7 +1105,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection and creation times, capacity formula, solver plans, BLAKE3 file and chunk hashes;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
@@ -1206,7 +1209,7 @@ number   = digits [ "." digits ]
 ## 30. Risks and open questions
 
 - How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)?
-- Creation-time support per driver (ntfs3, ntfs-3g, XFS, btrfs), needed for §7: to verify in tests.
+- Modification and change times that do not fit in a signed 64-bit count of nanoseconds (§9): to decide. NTFS can hold them, as §7 found for creation times.
 - fanotify on ntfs-3g and ntfs3: file-handle support for create, delete and rename events; fallback to inotify.
 - mergerfs behavior with a failing branch before Atoll removes it (I/O errors or fallback to the next branch): to verify with a USB drop simulation.
 - Phase 1 limits: deletions through mergerfs bypass the trash unless the link guard is on; mergerfs presents the first branch's copy, not the oldest one.

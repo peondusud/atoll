@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Choosing the original (specs.md §7)
+
+Commit "Define the choice of the original", on `main`.
+
+- Measured per driver, on Linux 6.12.115 and 7.3.1: report in [docs/research/creation-time.md](docs/research/creation-time.md). ext4 reports a crtime of 0 as 1970, and ntfs3 a FILETIME of 0 as 1601, which does not fit in `btime_ns`.
+- The maintainer's decisions:
+  - creation times are compared in exact nanoseconds;
+  - a date of exactly 0, or out of range, counts as absent;
+  - every copy that is in sync and can be read is eligible, `surplus` and `draining` included;
+  - a file in conflict keeps its previous original while that copy is eligible.
+- Contract: `conformance/vectors/original.json` holds 37 cases, and `creation_time.json` 23. `absent` joins the vector flags.
+- Code: `solver.SelectOriginal` and `solver.CreationTimeNS`. Disks and the catalog do not exist yet, so nothing calls them outside their tests.
+- Left open: modification and change times out of range, in `TODO.md`.
+
 ## The name report and the state a file shows (specs.md §4, §15.9)
 
 Commit "Define the name report and the state a file shows", on `main`.
