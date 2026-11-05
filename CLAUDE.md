@@ -70,6 +70,7 @@ schema/                migrations/NNNN_name.sql, config.schema.json
 conformance/           vectors/, scenarios/, corpus/names/, runner/ (language-neutral)
 test/                  integration, faults, break glass
 deploy/                systemd units, sample configuration
+docs/research/         research reports behind open design decisions (not contracts)
 ```
 
 ## Non-negotiable invariants
