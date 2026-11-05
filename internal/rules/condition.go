@@ -76,7 +76,7 @@ func Compile(field Field, value string, ignoreCase bool) (*Condition, error) {
 		return nil, fmt.Errorf("%s %q: not valid UTF-8", field, value)
 	}
 	if err := checkNonStarters(value); err != nil {
-		return nil, fmt.Errorf("%s %q: %w", field, value, err)
+		return nil, fmt.Errorf("%s %+q: %w", field, value, err)
 	}
 	// Errors quote the pattern in NFC form, which the grammars apply to; when
 	// that differs from the text as typed, the context quotes the typed text
@@ -125,7 +125,7 @@ func CompileExt(entries []string, ignoreCase bool) (*Condition, error) {
 			return nil, fmt.Errorf("ext %q: an extension never holds /", e)
 		}
 		if err := checkNonStarters(e); err != nil {
-			return nil, fmt.Errorf("ext %q: %w", e, err)
+			return nil, fmt.Errorf("ext %+q: %w", e, err)
 		}
 		c.exts = append(c.exts, []rune("."+names.NFC(e)))
 	}
@@ -137,7 +137,7 @@ func CompileExt(entries []string, ignoreCase bool) (*Condition, error) {
 // Rust's would not, so the two versions would read the pattern differently.
 func checkNonStarters(pattern string) error {
 	if n := names.NonStarterRun(pattern); n > names.MaxNonStarters {
-		return fmt.Errorf("%d characters in a row that combine with the one before (non-starters, such as accents or Hangul jamo), more than %d", n, names.MaxNonStarters)
+		return fmt.Errorf("%d non-starters in a row, more than %d: characters, such as accents and Hangul jamo, that normalization may combine with what precedes them, counted in their compatibility decomposition (NFKD)", n, names.MaxNonStarters)
 	}
 	return nil
 }

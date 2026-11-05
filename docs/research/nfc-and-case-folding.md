@@ -725,7 +725,7 @@ The engines never disagreed on an accepted regex, except on characters whose Uni
 |---|---|---|
 | Rust compile size | a weight limit of 1000: a character, `.` or class item weighs 1, a property 100, times the counts of the repeats around it. Rust keeps its default `size_limit` of 10 MiB and sets `nest_limit` to 1000. §14.5 extends the weights to anchors, groups and repeats. | §29.5, §29.7; `regex.json` |
 | Patterns with long non-starter runs | rejected when the configuration loads (globs, regexes and `ext` entries), so U+034F is never inserted into a pattern. Names keep the allowed difference. | §11.3, §29.5; `match.json`, `regex.json` |
-| `lpath_key` version | `meta.lpath_key_version` names the language, the library and its Unicode version, such as `go golang.org/x/text 17.0.0`. Any difference recomputes every key, so keys from two implementations are never compared. | §9, §15.8 |
+| `lpath_key` version | `meta.lpath_key_version` names the language, the library and its Unicode version, such as `go golang.org/x/text 17.0.0`. Any difference recomputes every key, so keys from two implementations are never compared. Superseded: §14.5 adds the release (`go golang.org/x/text v0.43.0 17.0.0`), and a missing value recomputes every key. | §9, §15.8 |
 
 **Clarified without a decision, since the spec text already implied them:**
 
@@ -747,7 +747,7 @@ A fourth review checked these decisions. It had three parts: a Rust port written
 **What the review found:**
 - Anchors, capturing groups, flag groups and the `*`, `+`, `?` repeats weighed nothing, yet Rust builds automaton states for each copy of them. So `(?:` followed by 989 `^`, then `a){1000}`, weighed 1000 and passed Go's check, but needed three times Rust's 10 MiB limit. Go kept 43 MB for it.
 - The 2.8 MB the spec quoted was the size of the finished automaton. `size_limit` bounds the memory used while it is built, and a costlier class exists: `(?i)[^\x{1141}-\x{34CF}]{999}` needs 4.2 MB.
-- Nesting reaches 750 levels, not 700.
+- Nesting reaches 749 levels, 750 with the `(?i)` that `ignore_case` adds, not 700.
 - Two releases of `x/text` with the same Unicode version normalize differently (v0.41.0 and v0.43.0), so the key version must name the release.
 - The spec did not say that runs are counted before braces are expanded.
 
@@ -756,7 +756,12 @@ A fourth review checked these decisions. It had three parts: a Rust port written
 - a capturing group weighs 1 more than what it holds;
 - `*`, `+`, `?`, `{n,}` and `{n,m}` with n < m add 1.
 
-`(?:…)` and an exact `{n}` still add nothing. The costliest regex found then needs 0.40 of Rust's limit. Anchors, groups and repeats, at the full weight, need less than 0.01 of it. `^\pL{10}$` now weighs 1002 and is rejected; `\pL{10}` alone still passes.
+`(?:…)` and an exact `{n}` still add nothing. A fifth review, with a new spec-only port and a new search, found no regex within the bounds that Rust cannot build. The costliest, `(?i)[^\x{1141}-\x{34CF}]{0,998}`, needs 0.41 of Rust's limit. Anchors, groups and repeats, at the full weight, need about 0.01 of it (about 120 bytes per unit). It also found:
+
+- that the weight does not bound compile time: under `ignore_case`, case folding walks every character of each class range, up to about 0.7 s for a 1000-byte regex;
+- that an unoptimized Rust build needs up to 5 MiB of stack for the deepest regexes, more than a default 2 MiB thread.
+
+`specs.md` §29.5 states both. It also states that the length and the weight leave out the `(?i)` that `ignore_case` adds, and that a lazy `?` adds nothing. `^\pL{10}$` now weighs 1002 and is rejected; `\pL{10}` alone still passes.
 
 **Changed without a decision, since they follow from the earlier ones:**
 - `meta.lpath_key_version` names the library release: `go golang.org/x/text v0.43.0 17.0.0`.

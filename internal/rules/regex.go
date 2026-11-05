@@ -57,7 +57,7 @@ func checkRegex(text string) error {
 	}
 	if sz.weight > MaxRegexWeight {
 		return p.fail(0, "weighs more than %d: each character, escape, ., anchor, flag group and class item weighs 1 and each property %d; "+
-			"a capturing group and each *, +, ?, {n,} or {n,m} add 1; repeats multiply what they repeat",
+			"a capturing group, *, +, ?, {n,} and {n,m} with n < m add 1; repeats multiply what they repeat",
 			MaxRegexWeight, propertyWeight)
 	}
 	return nil
