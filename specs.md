@@ -30,7 +30,7 @@ Measurable goals:
 | D6 | 0 to 2 replicas per file (x1 to x3). |
 | D7 | Mirror layout: a replica keeps the same relative path and name under `media/` on its own disk. |
 | D8 | The merged view presents the in-sync copy with the oldest creation time. |
-| D9 | File and folder renames and moves are handled without re-copying, including extended names. |
+| D9 | File and folder renames and moves are handled without re-copying, including extended names, except on a disk that refuses the new name (§15.3). |
 | D10 | No automatic disk adoption. |
 | D11 | Ordered rules on path, file name, extension (glob or regex) and minimum or maximum size. |
 | D12 | BLAKE3 hash of the whole file and of each chunk; duplicate report based on hashes. |
@@ -86,7 +86,7 @@ Measurable goals:
 | R-07 | Disks of different sizes and filesystems in one pool | MUST | 1a |
 | R-08 | Explicit addition of an already filled disk, with no move or reformat; identical files at the same path are adopted as existing copies | MUST | 1a |
 | R-09 | No automatic disk adoption | MUST | 1a |
-| R-10 | File and folder renames and moves propagated to all copies without re-copying | MUST | 1a |
+| R-10 | File and folder renames and moves propagated to all copies without re-copying, except on a disk that refuses the new name (§15.3) | MUST | 1a |
 | R-11 | Extended names (Unicode, long names, special characters) handled without silent alteration | MUST | 1a |
 | R-12 | BLAKE3 hash of the whole file and of each 4 MiB chunk (§16) | MUST | 1a |
 | R-13 | Scheduled scrub with corruption detection | MUST | 1a |
@@ -150,7 +150,7 @@ Atoll performs only these writes under a disk's `media/`, each journaled in `ops
 1. Create a replica and its missing parent folders (§14).
 2. Refresh a stale copy: the stale copy goes to the trash, then a new copy is created (§15.4).
 3. Propagate a detected rename or move of a file or folder (§15.3).
-4. Move a copy to the trash: propagated deletion, surplus (`prune`), rebalancing, quarantine of a corrupt copy (§15.5, §16, §17).
+4. Move a copy to the trash: propagated deletion, a copy left at the old name by a rename its disk refuses, surplus (`prune`), rebalancing, quarantine of a corrupt copy (§15.3, §15.5, §16, §17).
 5. Repair a corrupt copy in place, chunk by chunk, or replace it (§16).
 6. Restore a file from the trash (`trash restore`).
 7. Apply a metadata-only change (modification time, permissions) made on one copy to the others (§15.4).
@@ -158,7 +158,7 @@ Atoll performs only these writes under a disk's `media/`, each journaled in `ops
 9. On explicit commands only: `disk remove --evacuate`, `disk replace`, `balance --move-originals`, `conflicts resolve`.
 10. From phase 2: writes through Atoll's own view (new files, deletions to the trash) and SSD-cache transfers. From phase 4: health evacuation.
 
-Removal rules: `prune`, rebalancing and evacuation remove Atoll copies first and never remove the last user copy of a file. Removing any user copy requires an explicit command and goes to the trash.
+Removal rules: `prune`, rebalancing and evacuation remove Atoll copies first and never remove the last user copy of a file. Removing any user copy requires an explicit command and goes to the trash; a deletion or a rename the user made on another copy counts as one (§15.3, §15.5).
 
 ## 7. Choosing the original
 
@@ -283,7 +283,7 @@ CREATE TABLE trash(
   trash_path BLOB NOT NULL,            -- location inside Atoll/trash/
   op_id INTEGER NOT NULL REFERENCES ops(id),
   size INTEGER, blake3 BLOB,
-  reason TEXT NOT NULL,                -- deleted | overwritten | repaired | quarantined | surplus | rebalance
+  reason TEXT NOT NULL,                -- deleted | overwritten | repaired | quarantined | surplus | rebalance | renamed
   deleted_ns INTEGER NOT NULL, expires_ns INTEGER NOT NULL);
 
 CREATE TABLE jobs(
@@ -499,12 +499,22 @@ Rules:
 ### 15.2 Through the merged view (mergerfs)
 
 - Renames and deletions reach every copy at once (`category.action=epall`). Metadata changes (`utimens`, `chmod`, path-based `truncate`, `setxattr`) also reach every copy; `open` and writes reach only the copy on the first branch (`category.search=ff`).
+- A rename does not reach a copy whose filesystem refuses the new name (§15.8). If at least one branch accepts it, the application gets success and mergerfs removes the source from each branch that refused, with no error and no trash; its documentation names no option that turns this off. So a file loses its copy on that branch. A folder that is not empty cannot be removed: it stays at the old name with everything below it, and the merged view shows both folders. If every branch refuses, the application gets the error and nothing changes. Measured with mergerfs 2.40.2 and ntfs-3g; the mergerfs documentation states the same rule. The link guard keeps a removed copy's data (§17). Atoll handles the result as in §15.3.
 - An atomic save (`rename(tmp, file)`) renames only on the branch holding `tmp`; mergerfs then removes `file` from the other branches. Atoll sees "replaced on one disk, deleted on the others" and treats it as a modification (§15.4), never as a deletion.
 - Phase 1 limit: a deletion through mergerfs removes every copy immediately. Mitigations: the optional link guard (§17), Samba's `recycle` module with a visible repository at the pool root outside the library folders (`recycle:repository = Recycle`), and the Sonarr/Radarr recycling bins.
 
 ### 15.3 Renames directly on one disk
 
 - The other copies are renamed the same way (instant, same filesystem), with no re-copy. A folder rename takes one rename per disk.
+- A disk that refuses the new name does not get the rename: Atoll never writes a name that is incompatible with that disk (§15.8) or that collides on it (§15.7). The copy left at the old name cannot stay in `media/`, or the merged view would show both names. Once the renamed copy's identity is confirmed (§15.1):
+  - a copy unchanged since it was last in sync goes to the trash at once (`reason = renamed`), and the file then lacks a replica. Another compatible disk gets a new copy. Failing that, the file keeps fewer replicas than wanted, is reported as `name-incompatible` or `name-collision`, and an alert is raised. Never an automatic rename;
+  - a copy changed meanwhile is a modification and stays where it is: `conflict` (§15.7), every version kept;
+  - the renamed copy counts as a user copy from then on, so the trashed copy is never the last user copy of the file;
+  - the mass-deletion guard counts these copies (§15.6). A large folder renamed to a refused name waits for confirmation, and until then the merged view shows both folders. If the user meanwhile renames it to a name the disk accepts, the rename reaches those copies with no re-copy;
+  - an old folder left empty is removed only if Atoll created it (§6.1, item 8).
+- Correcting the name later renames the remaining copies. A copy already in the trash is not brought back, so the new replica is a full copy.
+- A copy that mergerfs removed (§15.2) has the same outcome: the file lacks a replica. A folder mergerfs left behind, and a disk that was away during the rename (§18), follow the rules above.
+- A copy already at the new name on such a disk, put there by the user, an application or mergerfs, stays a normal copy and is only reported: Atoll does not touch a name it did not write (§15.7).
 
 ### 15.4 Modifications
 
@@ -524,7 +534,7 @@ Each copy is compared with the recorded current version:
 
 ### 15.6 Safety guards
 
-- Mass-deletion guard: if more than `deletes.mass_guard.files` copies, or more than `percent` of a disk's copies, disappear within `window`, propagation pauses and an alert asks for confirmation (`atoll guard confirm` or `reject`).
+- Mass-deletion guard: if more than `deletes.mass_guard.files` copies, or more than `percent` of a disk's copies, disappear within `window`, propagation pauses and an alert asks for confirmation (`atoll guard confirm` or `reject`). Copies that a refused rename would send to the trash count too (§15.3).
 - An absence is interpreted only after the disk's identity has been confirmed in the same scan (§10).
 - Every propagated deletion goes to the trash; nothing is deleted immediately.
 - In phase 1, the guard can only stop propagation: deletions made through mergerfs have already reached every copy.
@@ -541,8 +551,8 @@ Each copy is compared with the recorded current version:
   - a path never collides with itself, and a case-only rename does not collide with its own old name;
   - a name without a key, which is not valid UTF-8, never collides; it cannot go to NTFS anyway (§15.8);
   - `lpath_key` is wider than NTFS: the check also refuses an NFC/NFD pair that NTFS could hold, and `ς` against `σ`. Such pairs are rare and are reported anyway.
-- A colliding copy goes to another disk. Failing that, the file keeps fewer replicas than wanted, is reported as `name-collision`, and an alert is raised. So a folder `films/` against `Films/` blocks everything below it on that disk until the user renames one of them. Never an automatic rename.
-- Names already side by side on an NTFS disk, created outside Atoll, are only reported: Atoll does not touch them.
+- A colliding copy goes to another disk. Failing that, the file keeps fewer replicas than wanted, is reported as `name-collision`, and an alert is raised. So a folder `films/` against `Films/` blocks everything below it on that disk until the user renames one of them. Never an automatic rename. A rename to a colliding name follows §15.3.
+- Names already side by side on an NTFS disk, created outside Atoll, are only reported: Atoll does not touch them. mergerfs can create them too: on ntfs-3g, a rename to `OTHER.MKV` beside `Other.mkv` succeeds (measured).
 
 ### 15.8 Extended names
 
@@ -565,8 +575,8 @@ Each copy is compared with the recorded current version:
   - a component that fails gets one or more reasons, from a closed list (§29.3), reported in this order: `too-long`, `invalid-utf8`, `control-character`, `forbidden-character`, `trailing-dot-or-space`, `reserved-name`. On ext4, XFS and btrfs, only `too-long` applies. Every rule reads bytes, except the UTF-16 length, so a name that is not valid UTF-8 still gets its other reasons;
   - NTFS is case-insensitive: `Film.mkv` and `film.mkv` in the same folder collide, and so do the folders `Films` and `films`. Atoll never writes a colliding name there (§15.7);
   - variants that change these rules are refused when a disk is added (§10): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase` or with lowntfs-3g `ignore_case`. A case-insensitive folder found later under `<root>/` (`FS_CASEFOLD_FL`) makes that disk name-incompatible for every path below it.
-- Incompatible name: the solver picks a compatible disk. Failing that, `name-incompatible` state and an alert. Never an automatic rename.
-- Recommended: mount NTFS disks on Linux with `windows_names` (Linux 6.2 or later for ntfs3), so applications cannot create most names Windows rejects. It enforces only part of the rules above: both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$` with it.
+- Incompatible name: the solver picks a compatible disk. Failing that, `name-incompatible` state and an alert. Never an automatic rename. A rename to an incompatible name follows §15.3.
+- Recommended: mount NTFS disks on Linux with `windows_names` (Linux 6.2 or later for ntfs3), so applications cannot create most names Windows rejects. It enforces only part of the rules above: both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$` with it. It has one cost, measured on ntfs-3g: a rename through mergerfs to a name it refuses removes the copy on that disk (§15.2), where without `windows_names` the copy stays under a name Windows cannot open. A name that is not valid UTF-8 is refused either way. The recommendation stands: applications creating such names are the common case, and such a rename is rare.
 - Recommended: let Sonarr and Radarr replace `\ / : * ? " < > |` when they import a file (`Replace Illegal Characters`, `Colon Replacement`). Atoll never changes a file name on its own initiative (R-11): it only propagates renames the user made (§6.1, item 3). `atoll names check` lists the names to fix.
 - Long paths: `\\?\` prefix on Windows; relative operations (`openat`) on Linux for deep trees.
 - The name corpus of §29.4 records, for each name, its reasons on each of `ext4`, `xfs`, `btrfs` and `ntfs`; the vectors pin the check on whole paths.
@@ -600,8 +610,9 @@ Each copy is compared with the recorded current version:
   - stale copies before their refresh (`overwritten`);
   - corrupt copies set aside (`quarantined`), and the chunks a repair overwrites, as `<logical path>.chunks/<index>` (`repaired`);
   - surplus replicas removed by `prune` (`surplus`) and replicas removed by rebalancing (`rebalance`);
+  - copies left at the old name by a rename their disk refuses (`renamed`, §15.3);
   - every copy of a file deleted through Atoll's own view (phase 2a).
-- Retention `[trash].retention` (30 days by default). `max_size` is a share of each disk's capacity; when it is reached, purging goes in this order: surplus and rebalance, then overwritten, repaired and quarantined, then deleted files. Deleted files are never purged before their retention ends: Atoll raises an alert instead.
+- Retention `[trash].retention` (30 days by default). `max_size` is a share of each disk's capacity; when it is reached, purging goes in this order: surplus and rebalance, then overwritten, repaired and quarantined, then deleted and renamed files. Deleted and renamed files are never purged before their retention ends, since a renamed copy may be the file's only other copy: Atoll raises an alert instead.
 - Commands: `atoll trash list`, `restore <path> [--to <disk>]`, `purge [--older-than <duration>]`.
 - Link guard (optional, `trash.link_guard = true`): Atoll keeps one hard link per managed copy in `Atoll/links/<file id>`. A deletion or replacement through mergerfs then leaves the data in place, and Atoll moves it to the trash; this closes the phase-1 gap of §15.2. Cost: every managed file shows two links, which misleads tools that count links (some torrent and *arr helpers). Off by default.
 - Limits: without the link guard, deletions through mergerfs bypass the trash in phase 1. An x1 file deleted directly on its disk has no other copy to keep. A trashed path that is also hard-linked elsewhere frees no space until its last link goes.
@@ -652,7 +663,7 @@ Each copy is compared with the recorded current version:
 - `atoll mergerfs-config` prints the configuration: an fstab line, or the matching settings for the openmediavault mergerfs plugin. Atoll never edits `/etc/fstab` itself.
   - branches: the `media/` folders of the data disks, in configuration order; new disks are appended at the end, so the copy `ff` presents does not change; cache disks are left out until phase 2b;
   - `category.search=ff`;
-  - `category.action=epall`, so renames and deletions reach every copy;
+  - `category.action=epall`, so renames and deletions reach every copy, except where a branch refuses a rename (§15.2);
   - `category.create` from `placement.new_files`: `mfs` for `most-free`, `ff` with branches in fill order for `ordered`, `pfrd` for `percent`; Atoll then replicates;
   - a per-branch `minfreespace` taken from `placement.min_free`, larger than the largest expected file;
   - `moveonenospc=false`, and `rename-exdev` and `link-exdev` pinned to `passthrough`, so mergerfs never moves data or creates links on its own;
@@ -732,7 +743,7 @@ Each copy is compared with the recorded current version:
   - missing disk, degrading SMART, NTFS volume marked dirty;
   - `corrupt`, `conflict`, `unavailable`, `name-incompatible` or `name-collision` file;
   - mass-deletion guard triggered;
-  - trash full before deleted files reach their retention;
+  - trash full before deleted or renamed files reach their retention;
   - files waiting in `manual` mode for too long;
   - pool more than 90 % full.
 - Prometheus metrics on `/metrics` (phase 2b).
@@ -989,6 +1000,7 @@ atoll daemon [--foreground] [--dry-run]
   - metadata-only change (`touch`): no copy;
   - in-place edit that keeps size and modification time: a modification, never a repair;
   - bursts of renames (Sonarr-like) and folder renames during a replication;
+  - rename to a name another copy's filesystem refuses or holds as a collision: directly on one disk, and through mergerfs for a file and for a folder; a copy changed meanwhile survives; the guard pauses a large folder;
   - hard-linked paths never mistaken for renames.
 - Guards: mass-deletion guard; propagation limited to copies unchanged since the last sync.
 - Names: NFC/NFD and case collisions reported as `name-collision`, folders included; no colliding name ever written to an NTFS target; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not).
@@ -1175,7 +1187,8 @@ number   = digits [ "." digits ]
 - Rust rewrite: cost of a second implementation and of keeping both in sync until the switch; maturity of the `winfsp` crate to check before phase 4.
 - Windows arrives after the rewrite; until then, Windows PCs use the SMB share.
 - Names (research in `docs/research/name-compatibility.md`), to decide before the solver, the scanner and `atoll names check`:
-  - a user rename to a name that another copy's filesystem refuses (§15.3, §6.1): what happens to the copy left at the old name;
+  - Atoll's own view (phase 2a): should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
+  - a rename through mergerfs on ntfs3 is not measured: with `ads` (on by default from Linux 7.3), a direct rename onto `m:n` replaces the file `m`;
   - the trash layout `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17);
   - total path length: mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes; Windows applications without long-path support stop at 259 UTF-16 units;
   - the output of `atoll names check` (JSON schema, sort key, exit code) and the precedence between `name-incompatible`, `name-collision` and `degraded`;

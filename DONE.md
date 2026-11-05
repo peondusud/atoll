@@ -2,6 +2,21 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Renames to a name a disk refuses (specs.md §15.2, §15.3)
+
+Commit "Decide what happens on a rename a disk refuses", on `main`.
+
+- Measured: when one branch refuses a rename and another accepts it, mergerfs returns success and removes the source from the branch that refused. A file loses that copy, with no trash. A folder that is not empty stays at the old name, and the merged view shows both folders. §15.2 said that renames reach every copy; it now states this.
+- The maintainer's decisions:
+  - the copy left at the old name goes to the trash, with the new reason `renamed`, and the solver looks for another compatible disk;
+  - `windows_names` stays recommended, with its cost stated in §15.8.
+- Also stated in §15.3 and §6.1:
+  - a copy changed meanwhile stays, as a `conflict`;
+  - the renamed copy counts as a user copy, and the user's rename counts as the command that removes a user copy;
+  - the mass-deletion guard counts these copies;
+  - `renamed` is purged as late as `deleted`.
+- No code: the check already exists (`names.CheckPath`, `names.TargetNames`), and propagation is not written yet. The scenario is listed in §27, and the scenario format is still to be defined.
+
 ## Name collisions on NTFS targets (specs.md §15.7)
 
 Commit "Refuse name collisions on NTFS targets", on `main`.

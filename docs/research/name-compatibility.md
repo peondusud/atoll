@@ -30,6 +30,8 @@ The maintainer chose (§15.8):
 | Variants (ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase`, lowntfs-3g `ignore_case`) | Refused at `disk add`; a case-insensitive folder found later makes the disk name-incompatible below it. On NTFS, at most 255 bytes per component as well, for lowntfs-3g. |
 | Verdicts and corpus | Every component is checked, folders included. Reasons form a closed list: `too-long`, `invalid-utf8`, `control-character`, `forbidden-character`, `trailing-dot-or-space`, `reserved-name`. The corpus is one JSON file in the vector format. |
 | Case collisions on NTFS targets (§15.7) | A hard constraint of the solver, checked with `lpath_key` at every component against the target's existing and planned names. `entries` gets an `lpath_key` column, so folders are looked up the same way as files. |
+| Renames to a name a disk refuses (§15.3) | The copy left at the old name goes to the trash with the reason `renamed`, which is purged as late as `deleted`. A copy changed meanwhile stays, as a `conflict`. The solver looks for another compatible disk; failing that, `name-incompatible` or `name-collision` and an alert. The mass-deletion guard counts these copies. |
+| `windows_names` | Still recommended, with its cost stated in §15.8. |
 
 ## Linux filesystems
 
@@ -47,6 +49,26 @@ Measured on the sandbox kernel 6.18 with loop images (ext4, XFS, btrfs) and FUSE
 `FS_IOC_GETFLAGS` reports `FS_CASEFOLD_FL` for ext4 `casefold` folders and for ntfs3 `nocase`. It does so for XFS `ascii-ci` only from Linux 7.2. Before that, `xfs_info` shows `ascii-ci=1`.
 
 ntfs-3g 2022.10.3, with and without `windows_names`, holds `Film.mkv` beside `film.mkv` and `Films/` beside `films/`, and renames a third file to `FILM.MKV` beside them. So the driver does not protect against case collisions, and `windows_names` does not either. Measured on an image file in a container (Linux 6.6, WSL2). ntfs3 was not measured for this, as that kernel does not have it.
+
+## mergerfs
+
+What happens when one branch refuses a rename? Measured with mergerfs 2.40.2-5 (Debian 13), ntfs-3g 2022.10.3 and ext4, on image files in a container (Linux 6.6, WSL2), with the settings of §21.1. Each case ran with the ext4 branch first and with the NTFS branch first; the order changed nothing.
+
+| Rename through the merged view | `windows_names` | The application sees | ext4 branch | NTFS branch | Merged view |
+|---|---|---|---|---|---|
+| File on both, to `f:x.mkv` | yes | success | new name | **copy removed** | new name |
+| File on both, to `f:x.mkv` | no | success | new name | new name, which Windows cannot open | new name |
+| File on both, to a name with the byte 0xFF | yes and no | success | new name | **copy removed** | new name |
+| Folder on both, to `D:x` | yes | success | new name | old folder, with its files | **both folders** |
+| Folder on both, to `D:x` | no | success | new name | new name | new name |
+| File only on NTFS, to `f:x.mkv` | yes | `EINVAL` | no file | unchanged | old name |
+| File only on NTFS, to `f:x.mkv` | no | success | no file | new name | new name |
+| File on both, to `OTHER.MKV`, with `Other.mkv` only on NTFS | yes and no | success | new name | both names | both names |
+| Control: file on both, to a name both accept | yes and no | success | new name | new name | new name |
+
+The [mergerfs documentation](https://github.com/trapexit/mergerfs/blob/master/mkdocs/docs/config/rename_and_link.md), read from its main branch, states the rule: one successful rename makes the whole rename a success, the source is then removed from the branches that failed, and a removal that fails does so silently. So a folder that is not empty stays. The page mentions no option that changes this.
+
+So the last copy of a file is not lost in these cases: when every branch refuses, nothing changes. But a replica can vanish with no trash and no error to the application. Not measured: ntfs3, which that kernel does not have, and newer mergerfs releases.
 
 ## Windows
 
@@ -86,7 +108,8 @@ The rule Atoll keeps (§15.8) is the Windows 10 superset, as a fixed table. The 
 
 These are listed in `specs.md` §30:
 
-- **Renames to an incompatible name.** A user may rename a file to a name that another copy's filesystem refuses (§15.3, §6.1). What happens to the copy left at the old name?
+- **Renames through Atoll's own view (phase 2a).** Should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
+- **Renames through mergerfs on ntfs3.** Not measured. With `ads`, on by default from Linux 7.3, a direct rename onto `m:n` replaces the file `m`.
 - **Trash layout.** `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17).
 - **Total path length.** mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes. Windows applications without long-path support stop at 259 units.
 - **Output of `atoll names check`.** Its JSON schema, sort key and exit code are not defined, nor the precedence between `name-incompatible`, `name-collision` and `degraded`.

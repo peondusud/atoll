@@ -34,6 +34,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - Windows 10 and 11 differ on device names with an extension. Microsoft's list changed in 2022, 2023 and 2025. Follow the strictest version as a table; never call `RtlIsDosDeviceName_U`.
 - ntfs-3g gives `EINVAL` for `RENAME_NOREPLACE`, and its `stat` of an 8.3 short name returns another file.
 - lowntfs-3g limits names to 255 bytes, and mount information cannot tell it apart from ntfs-3g. Its `-o ignore_case` lists every name in lowercase, and is invisible too.
+- mergerfs treats a rename as a success when one branch accepts it, and removes the source from the branches that refused. So `windows_names`, which makes ntfs-3g refuse a name, turns a rename through mergerfs into the silent loss of that replica. Measure what the layer on top does with a refusal, not only the refusal itself.
 - A real-filesystem test must give each name a fresh folder and must test every driver variant: one driver hid the 255-byte rule, and a leftover name made a later one fail.
 
 ## Tooling in this environment
