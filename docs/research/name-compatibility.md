@@ -8,12 +8,12 @@ Atoll copies a file to another disk at the same relative path, byte for byte, an
 
 - ext4, XFS and btrfs hold any component of 1 to 255 bytes, except `/` and NUL. Invalid UTF-8, control characters, `:`, a trailing dot and `CON` all work. Measured on Linux 6.18 with loop images.
 - The Linux NTFS drivers hold almost anything, but Windows does not. Without `windows_names`, ntfs3 and ntfs-3g accept `:`, `*`, control characters, a trailing dot and `CON`, and Windows cannot open such names. Even with `windows_names`, both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$`.
-- ntfs3 on Linux 7.3 reads `a:b` as the stream `b` of the file `a`, through its new `ads` option, which is on by default. Measured:
-  - creating `a:b` when `a` exists writes into `a`;
-  - a rename onto `m:n` replaces the file `m`;
-  - `windows_names` stops none of this.
+- ntfs3 on Linux 7.3 reads `a:b` as the stream `b` of the file `a`, through its new `ads` option, which is on by default. Measured on 7.3.1, re-reading after dropping the caches:
+  - creating `a:b` when `a` exists adds the stream; the content of `a` stays;
+  - a rename onto `m:n` replaces the content of the file `m`, also through mergerfs, where it reaches a file with no other copy;
+  - `windows_names` stops none of this, and `ads=0` stops all of it.
 
-  So Atoll must never write a `:` to NTFS.
+  So Atoll must never write a `:` to NTFS, and it refuses `ads`.
 - Windows 10 reserves device names even with an extension (`CON.txt`, `NUL.tar.gz`, `CON .txt`). Windows 11 no longer reserves a device name followed by an extension, according to Microsoft's .NET documentation; its exact rule is not established, and secondary sources report that Explorer and the SMB client still refuse some bare names. Microsoft removed `COM0` and `LPT0` from its list in April 2025. The superscripts `¹ ² ³` count as port digits.
 - Names that are not valid UTF-8 cannot go to NTFS safely: ntfs3 refuses encoded surrogates, ntfs-3g stores them, and ntfs-3g silently rewrites a CESU-8 pair, which changes the name.
 - lowntfs-3g refuses components of more than 255 bytes, and mount information cannot tell it apart from ntfs-3g.
@@ -32,6 +32,8 @@ The maintainer chose (§15.8):
 | Case collisions on NTFS targets (§15.7) | A hard constraint of the solver, checked with `lpath_key` at every component against the target's existing and planned names. `entries` gets an `lpath_key` column, so folders are looked up the same way as files. |
 | Renames to a name a disk refuses (§15.3) | The copy left at the old name goes to the trash with the reason `renamed`, which is purged as late as `deleted`. A copy changed meanwhile stays, as a `conflict`. The solver looks for another compatible disk; failing that, `name-incompatible` or `name-collision` and an alert. The mass-deletion guard counts these copies. |
 | `windows_names` | Still recommended, with its cost stated in §15.8. |
+| ntfs3 `ads` (§10) | Refused at `disk add`. Found later at a mount check, the disk becomes `readonly`, with an alert. The user mounts with `ads=0`. |
+| Chunks in the trash (§17) | `Atoll/trash/<date>/<op-id>.chunks/<logical path>/<index>`, with the index in decimal, from 0, with at least 8 digits. |
 
 ## Linux filesystems
 
@@ -42,17 +44,17 @@ Measured on the sandbox kernel 6.18 with loop images (ext4, XFS, btrfs) and FUSE
 | ext4 | 255 bytes (`EXT4_NAME_LEN`, `fs/ext4/ext4.h`) | `/`, NUL | `casefold` folders compare after NFD, full case folding and removal of default-ignorable code points (Unicode 12.1). A variant name opens the other file, and a case-only rename does nothing. |
 | XFS | 255 bytes (`MAXNAMELEN` 256 with the NUL, `fs/xfs/libxfs/xfs_types.h`) | `/`, NUL | `ascii-ci` folds ASCII and Latin-1 bytes only. It is deprecated: off by default from September 2025, to be removed in 2030. |
 | btrfs | 255 bytes (`BTRFS_NAME_LEN`) | `/`, NUL | A directory item full of names with the same crc32c gives `EOVERFLOW` (source only): a transient write error, not a name verdict. |
-| ntfs3 | 255 UTF-16 units | invalid UTF-8 (with `iocharset=utf8`) | `windows_names` (Linux 6.2 and later) refuses control characters, `\ / : * ? " < > \|`, a trailing dot or space, and `CON PRN AUX NUL COM1-9 LPT1-9` alone or before a `.` (`fs/ntfs3/fsntfs.c`). `nocase` folds through `$UpCase`. `ads` (7.3) splits names at `:`. |
+| ntfs3 | 255 UTF-16 units | invalid UTF-8 (with `iocharset=utf8`) | `windows_names` (Linux 6.2 and later) refuses control characters, `\ / : * ? " < > \|`, a trailing dot or space, and `CON PRN AUX NUL COM1-9 LPT1-9` alone or before a `.` (`fs/ntfs3/fsntfs.c`). `nocase` folds through `$UpCase`. `ads` (7.3) splits names at `:`; it shows in `/proc/mounts` when on, and `ads=0` or `ads=no` turns it off (`ads=off` and `noads` are refused, and Linux 6.12 refuses `ads` in any form). |
 | ntfs-3g | 255 UTF-16 units | invalid UTF-8, except encoded surrogates | `windows_names` refuses the same set as ntfs3 (man page `ntfs-3g.8`). A CESU-8 pair is stored as one supplementary character. `RENAME_NOREPLACE` gives `EINVAL`, so the final rename uses `link` and `unlink`. |
 | lowntfs-3g | 255 bytes and 255 UTF-16 units | as ntfs-3g | `strlen(name) < 256` in `src/lowntfs-3g.c`. |
 
 `FS_IOC_GETFLAGS` reports `FS_CASEFOLD_FL` for ext4 `casefold` folders and for ntfs3 `nocase`. It does so for XFS `ascii-ci` only from Linux 7.2. Before that, `xfs_info` shows `ascii-ci=1`.
 
-ntfs-3g 2022.10.3, with and without `windows_names`, holds `Film.mkv` beside `film.mkv` and `Films/` beside `films/`, and renames a third file to `FILM.MKV` beside them. So the driver does not protect against case collisions, and `windows_names` does not either. Measured on an image file in a container (Linux 6.6, WSL2). ntfs3 was not measured for this, as that kernel does not have it.
+ntfs-3g 2022.10.3, with and without `windows_names`, holds `Film.mkv` beside `film.mkv` and `Films/` beside `films/`, and renames a third file to `FILM.MKV` beside them. So the driver does not protect against case collisions, and `windows_names` does not either. Measured on an image file in a container (Linux 6.6, WSL2). ntfs3 does the same, with and without `windows_names`, on Linux 6.12.115 and 7.3.1, measured in qemu.
 
 ## mergerfs
 
-What happens when one branch refuses a rename? Measured with mergerfs 2.40.2-5 (Debian 13), ntfs-3g 2022.10.3 and ext4, on image files in a container (Linux 6.6, WSL2), with the settings of §21.1. Each case ran with the ext4 branch first and with the NTFS branch first; the order changed nothing.
+What happens when one branch refuses a rename? Measured with mergerfs 2.40.2-5 (Debian 13), ntfs-3g 2022.10.3 and ext4, on image files in a container (Linux 6.6, WSL2), with the settings of §21.1. Each case ran with the ext4 branch first and with the NTFS branch first; the order changed nothing. ntfs3 on Linux 6.12.115 (Debian 13), and on 7.3.1 with `ads=0`, gave the same results in qemu.
 
 | Rename through the merged view | `windows_names` | The application sees | ext4 branch | NTFS branch | Merged view |
 |---|---|---|---|---|---|
@@ -68,7 +70,37 @@ What happens when one branch refuses a rename? Measured with mergerfs 2.40.2-5 (
 
 The [mergerfs documentation](https://github.com/trapexit/mergerfs/blob/master/mkdocs/docs/config/rename_and_link.md), read from its main branch, states the rule: one successful rename makes the whole rename a success, the source is then removed from the branches that failed, and a removal that fails does so silently. So a folder that is not empty stays. The page mentions no option that changes this.
 
-So the last copy of a file is not lost in these cases: when every branch refuses, nothing changes. But a replica can vanish with no trash and no error to the application. Not measured: ntfs3, which that kernel does not have, and newer mergerfs releases.
+So the last copy of a file is not lost in these cases: when every branch refuses, nothing changes. But a replica can vanish with no trash and no error to the application. Not measured: newer mergerfs releases.
+
+### ntfs3 with `ads`
+
+`ads` is worse, because the driver accepts the name. Measured in qemu on Ubuntu's mainline Linux 7.3.1, with `ads` on by default, and the same with and without `windows_names`. Each read below came after `drop_caches`.
+
+| Rename | The application sees | NTFS branch afterwards | Merged view |
+|---|---|---|---|
+| Through the view: `x.mkv` on both, to `m1:n`, where `m1` is another file with its only copy on NTFS | success | `m1` holds the content of `x.mkv`; **its own content is gone** | `m1`, with the wrong content, and `m1:n` |
+| Through the view: `y.mkv` on both, to `m2:n`, where `m2` is another file on both | success | `m2` holds the content of `y.mkv`, with a new inode and a new change time; the ext4 copy is intact | `m2` and `m2:n` |
+| Through the view: `f.mkv` on both, to `f:x.mkv`, with no file `f` | success | a file `f`, with the content | `f` and `f:x.mkv` |
+| Through the view: `g.mkv` only on NTFS, to `g:x.mkv`, with no file `g` | success | a file `g`, with the content | `g` |
+
+- A plain read straight after the rename still shows the old content of `m`: it comes from the page cache. The first run of this measurement read that and wrongly found `m` intact. The damage shows after `drop_caches` or a remount.
+- The second row is a trap for §15.4: a copy with new content and a moved change time looks like a user's modification, which would send the good copies to the trash and refresh them from the bad one. This is deduced from the spec; there is no code to test yet.
+- A real name `a:b.mkv` written by ntfs-3g is listed, but `stat` and `rename` give `ENOENT` under `ads`.
+- With `ads=0`, Linux 7.3.1 behaves as 6.12: `m` stays intact in all these cases, and the table above applies.
+
+Method: a Debian 13 container with no KVM boots each kernel in qemu, from an initramfs built from the container's own files, on image files in the guest's RAM. A container alone cannot do this, as it shares Docker Desktop's kernel (Linux 6.6, WSL2), which has no ntfs3.
+
+## The trash and long or refused names
+
+Measured on ext4, ntfs3 (Linux 6.12.115 and 7.3.1) and ntfs-3g, with `windows_names` on NTFS:
+
+| Layout for overwritten chunks | Name of 248 bytes | Name of 249 bytes | ASCII name of 255 bytes | 127 × `é` + 1 letter (255 bytes) |
+|---|---|---|---|---|
+| `<op-id>/<logical path>.chunks/<index>` | works | `ENAMETOOLONG` | not possible | not possible |
+| `<op-id>/<logical path>/<index>` | not run | not run | works | not run |
+| `<op-id>.chunks/<logical path>/<index>` | not run | not run | works | works |
+
+A copy under a name its driver refuses cannot reach the trash under that name. With `a:b.mkv` written before the disk was mounted with `windows_names`, the file can still be listed and read, but `rename` into `Atoll/trash/` and `mkdir` under that name give `EINVAL` on ntfs-3g and on ntfs3 (6.12, and 7.3.1 with `ads=0`). Without `windows_names`, the rename works.
 
 ## Windows
 
@@ -109,11 +141,9 @@ The rule Atoll keeps (§15.8) is the Windows 10 superset, as a fixed table. The 
 These are listed in `specs.md` §30:
 
 - **Renames through Atoll's own view (phase 2a).** Should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
-- **Renames through mergerfs on ntfs3.** Not measured. With `ads`, on by default from Linux 7.3, a direct rename onto `m:n` replaces the file `m`.
-- **Trash layout.** `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17).
 - **Total path length.** mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes. Windows applications without long-path support stop at 259 units.
 - **Output of `atoll names check`.** Its JSON schema, sort key and exit code are not defined, nor the precedence between `name-incompatible`, `name-collision` and `degraded`.
 - **8.3 short names.** Both Linux drivers refuse to create a name equal to another file's short name. ntfs-3g's `stat` of that name returns the other file. So existence on NTFS must never be decided by `stat` alone.
 - **Mount checks.**
-  - ntfs3 must run with `iocharset=utf8`, and its `ads` option should be reported.
+  - ntfs3 must run with `iocharset=utf8`.
   - A listed entry whose `lstat` fails is a name the driver cannot read: ntfs3 drops unpaired surrogates written by Windows or ntfs-3g. It must never count as a missing file.

@@ -35,6 +35,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - ntfs-3g gives `EINVAL` for `RENAME_NOREPLACE`, and its `stat` of an 8.3 short name returns another file.
 - lowntfs-3g limits names to 255 bytes, and mount information cannot tell it apart from ntfs-3g. Its `-o ignore_case` lists every name in lowercase, and is invisible too.
 - mergerfs treats a rename as a success when one branch accepts it, and removes the source from the branches that refused. So `windows_names`, which makes ntfs-3g refuse a name, turns a rename through mergerfs into the silent loss of that replica. Measure what the layer on top does with a refusal, not only the refusal itself.
+- Re-read through a cold cache before concluding that a file survived. After a rename onto `m:n` under ntfs3 `ads`, `cat m` still shows the old content from the page cache; `drop_caches` or a remount shows it is gone. A first run read the cache and wrongly contradicted an earlier, correct measurement.
 - A real-filesystem test must give each name a fresh folder and must test every driver variant: one driver hid the 255-byte rule, and a leftover name made a later one fail.
 
 ## Tooling in this environment
@@ -58,5 +59,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
   - `docker desktop stop` sometimes leaves these empty Unix sockets behind, and each failed start recreates the ones before it, so removing one socket at a time never ends.
   - From a tool, Windows refuses to open them, even through the reparse point: `Remove-Item`, `del` and the recycle bin all give error 1920. Git Bash `rm -f` returns 0 and removes nothing, so check with `dir /a`.
   - With Docker stopped, renaming both parent folders and creating them again empty works, since a rename never opens the children. The cause in Windows or Docker is not established.
+- A container uses Docker Desktop's kernel (Linux 6.6, WSL2), which has no ntfs3, and no package can add it. That is no reason to stop: a Debian container boots any kernel in qemu in under a minute, even without KVM, from an initramfs built from its own files with `rdinit=/init`. Extract a mainline `.deb` into a separate folder: over `/`, tar could replace the `/lib` symlink.
+- Kernel boolean mount options take `0`, `1`, `no`, `yes`, `false` or `true`: `ads=off` is a bad value.
 - The Write tool, too, can turn `\u` escapes into raw characters. In a vector file, check the bytes: NFC and NFD forms look the same once raw.
 - In PowerShell, `@{}` ignores case and `-cne` compares by culture, so `é` equals `e` followed by U+0301. Use a `Dictionary` with `StringComparer.Ordinal` and `[string]::CompareOrdinal` to check names. A control that injects a known error shows whether such a check can fail at all.

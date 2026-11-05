@@ -6,7 +6,6 @@ Open work, in a suggested order. Finished work is in [DONE.md](DONE.md), lessons
 
 To decide before the solver, the scanner and `atoll names check` need them:
 
-- **decision**: the trash layout `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17).
 - **decision**: total path length:
   - mergerfs opens `<branch>/<path>` as one string of at most 4096 bytes;
   - Windows applications without long-path support stop at 259 UTF-16 units.
@@ -17,17 +16,15 @@ To decide before the solver, the scanner and `atoll names check` need them:
   - which paths and filesystems it covers;
   - the precedence between `name-incompatible`, `name-collision` and `degraded`.
 - **decision**, before phase 2a: should Atoll's own view refuse, with an error, a rename that a copy's filesystem refuses, instead of following §15.3?
-- Measure on ntfs3, in `test/loopdev`:
-  - whether it holds names that differ only by case, as ntfs-3g does;
-  - what a rename through mergerfs does, with and without `windows_names` and `ads`.
-- Pin in `test/loopdev` what mergerfs does when a branch refuses a rename (`docs/research/name-compatibility.md`), so that a release that changes it fails a test.
+- Pin in `test/loopdev` what mergerfs and ntfs3 do with a refused name or an `ads` stream (`docs/research/name-compatibility.md`), re-reading through a cold cache, so that a release that changes it fails a test. The measurements so far were throwaway scripts in qemu.
 - NTFS 8.3 short names: never decide that a file exists with `stat` alone, and treat an `EEXIST` without a visible exact entry as name-incompatible.
 - Mount checks:
   - how to detect lowntfs-3g `-o ignore_case`, which mount information does not show (the FUSE daemon's command line?);
   - ntfs3 must use `iocharset=utf8`;
-  - report its `ads` option (on by default from Linux 7.3), as a rename through mergerfs could reach it, and `nocase`;
+  - a disk already in the pool that shows `ads` in `/proc/mounts` becomes `readonly`, with an alert (§10);
+  - report `nocase`;
   - a listed entry whose `lstat` fails is a name the driver cannot read, never a missing file.
-- `disk add`: refuse ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase` and lowntfs-3g `ignore_case`. Watch `FS_CASEFOLD_FL` on folders under `<root>/`.
+- `disk add`: refuse ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase`, ntfs3 `ads` and lowntfs-3g `ignore_case`. Watch `FS_CASEFOLD_FL` on folders under `<root>/`.
 
 ## Pure core still without vectors (specs.md §29.4)
 
@@ -62,7 +59,7 @@ Every item here is a **decision**:
 - File and chunk hashes.
 - `deferred` and `manual` modes, with `--now` and `--force`.
 - Propagation of renames, deletions and modifications, with grouping and the mass-deletion guard, including renames to a name a disk refuses (§15.3).
-- Trash.
+- Trash, including the `.chunks` folders and copies whose name the driver refuses (§17).
 - Detection-only scrub.
 - `mergerfs-config` and runtime branches.
 - `status`.

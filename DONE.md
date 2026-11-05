@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## ntfs3 `ads` and chunks in the trash (specs.md §10, §15.2, §17)
+
+Commit "Refuse ntfs3 ads and fix the chunk layout in the trash", on `main`.
+
+- Measured in qemu on ntfs3, on Linux 6.12.115 and 7.3.1, re-reading after dropping the caches:
+  - on 7.3.1, with `ads` on by default and with or without `windows_names`, a rename through mergerfs onto `m:n` succeeds and replaces the content of the file `m`, even when that was its only copy;
+  - `ads=0` stops it, and 7.3.1 then behaves as 6.12, which behaves as ntfs-3g;
+  - ntfs3 holds names that differ only by case.
+- The maintainer's decisions:
+  - ntfs3 with `ads` is refused at `disk add`, and a disk found with it later becomes `readonly`, with an alert;
+  - overwritten chunks go to `Atoll/trash/<date>/<op-id>.chunks/<logical path>/<index>`, which holds a file name of 255 bytes.
+- Also stated in §17: the index format, and a copy whose name the driver refuses, which cannot reach the trash: it stays, is reported, and is never refreshed or repaired.
+- No code: the trash and `disk add` are not written yet. The tests to write are listed in §27.
+
 ## Renames to a name a disk refuses (specs.md §15.2, §15.3)
 
 Commit "Decide what happens on a rename a disk refuses", on `main`.
@@ -34,7 +48,7 @@ Commit "Refuse name collisions on NTFS targets", on `main`.
   - the cases were checked outside Go, in PowerShell with .NET normalization and an upcase built from the rule of §15.8;
   - a property test compares it with a pairwise comparison, on names mixing case, NFC and NFD forms and invalid UTF-8;
   - 11 code mutations each make a vector fail, and 11 mutations of the vector shape each make the test fail.
-- Measured: ntfs-3g holds both names, so the driver does not protect against collisions. Not measured: ntfs3, and what Windows does with such names.
+- Measured: ntfs-3g and, in a later measurement, ntfs3 hold both names, so the drivers do not protect against collisions. Not measured: what Windows does with such names.
 
 ## Capacity formula (specs.md §13.1)
 

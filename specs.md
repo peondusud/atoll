@@ -122,6 +122,7 @@ Measurable goals:
 │   └── Séries/The Expanse/S01/…                    replicas (originals on u1)
 ├── Atoll/                             visible work folder, outside media/
 │   ├── trash/2026-10-26/4812/Films/…               deleted or overwritten copies
+│   ├── trash/2026-10-26/4813.chunks/Films/…        chunks a repair overwrote
 │   ├── tmp/                                        copies in progress
 │   ├── links/                                      optional link guard (§17)
 │   ├── disk.toml                                   identity (optional)
@@ -315,8 +316,9 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 - Identifier: the filesystem UUID (ext4, XFS, btrfs) or the 64-bit NTFS serial number, readable on every system that can mount the filesystem, without writing anything to the disk.
 - Two disks with the same identifier (clones): both are refused until one identifier is regenerated (`tune2fs -U`, `xfs_admin -U`, `btrfstune -u`, `ntfslabel --new-serial`).
 - Never identify a disk by `/dev/sdX`, drive letter, Windows volume GUID (specific to each machine) or USB serial number (often fake behind a bridge).
-- `disk add` checks the block-device topology and refuses two pool filesystems on the same physical disk (R-06). It also refuses the variants that change name rules (§15.8): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase` or with lowntfs-3g `ignore_case`.
+- `disk add` checks the block-device topology and refuses two pool filesystems on the same physical disk (R-06). It also refuses the variants that change name rules (§15.8): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase` or with lowntfs-3g `ignore_case`. And it refuses NTFS mounted with ntfs3 `ads`, which can destroy another file (§15.2).
 - Before any write, Atoll confirms in the same session that the mount path is a mount point of the expected filesystem (device and identifier). It then works through a directory handle opened on the verified root (`openat`-style calls) and re-checks the device id before each job. It writes nothing to an unconfirmed disk.
+- ntfs3 `ads` is on by default from Linux 7.3 and shows in `/proc/mounts`. Mount with `ads=0`; Linux 6.12 does not know that option and refuses the mount, so add it when moving to a kernel that has `ads`. If a mount check finds `ads` on a disk already in the pool, the disk becomes `readonly`, so Atoll writes nothing to it, and an alert is raised. mergerfs keeps its branch, so the risk stays until the disk is remounted with `ads=0`.
 - I/O errors (EIO, ENOTCONN, ENODEV) mean "disk unknown", never "file absent". Missing files count as deletions only after the disk's identity has been confirmed in the same scan; an empty mount point after a failed mount is a missing disk, never a mass deletion.
 - Recommended Linux setup:
   - fstab by UUID with `nofail` and a short device timeout, on a stable mount point (`/mnt/<id>`, or `/srv/dev-disk-by-uuid-…` under openmediavault);
@@ -499,7 +501,8 @@ Rules:
 ### 15.2 Through the merged view (mergerfs)
 
 - Renames and deletions reach every copy at once (`category.action=epall`). Metadata changes (`utimens`, `chmod`, path-based `truncate`, `setxattr`) also reach every copy; `open` and writes reach only the copy on the first branch (`category.search=ff`).
-- A rename does not reach a copy whose filesystem refuses the new name (§15.8). If at least one branch accepts it, the application gets success and mergerfs removes the source from each branch that refused, with no error and no trash; its documentation names no option that turns this off. So a file loses its copy on that branch. A folder that is not empty cannot be removed: it stays at the old name with everything below it, and the merged view shows both folders. If every branch refuses, the application gets the error and nothing changes. Measured with mergerfs 2.40.2 and ntfs-3g; the mergerfs documentation states the same rule. The link guard keeps a removed copy's data (§17). Atoll handles the result as in §15.3.
+- A rename does not reach a copy whose filesystem refuses the new name (§15.8). If at least one branch accepts it, the application gets success and mergerfs removes the source from each branch that refused, with no error and no trash; its documentation names no option that turns this off. So a file loses its copy on that branch. A folder that is not empty cannot be removed: it stays at the old name with everything below it, and the merged view shows both folders. If every branch refuses, the application gets the error and nothing changes. Measured with mergerfs 2.40.2, on ntfs-3g and on ntfs3 (Linux 6.12, and 7.3.1 with `ads=0`); the mergerfs documentation states the same rule. The link guard keeps a removed copy's data (§17). Atoll handles the result as in §15.3.
+- ntfs3 with `ads` does not refuse a name with `:`, even under `windows_names`: it reads `m:n` as the stream `n` of the file `m`. Through the merged view, a rename onto `m:n` succeeds and replaces the content of the file `m` on that branch, even when that was the only copy of an unrelated file. With no file `m`, the copy becomes a file `m` there, and the merged view shows it too. The page cache hides the damage until the cache is dropped or the disk remounted. Measured on Linux 7.3.1. Atoll cannot stop mergerfs from doing this, so it refuses `ads` (§10).
 - An atomic save (`rename(tmp, file)`) renames only on the branch holding `tmp`; mergerfs then removes `file` from the other branches. Atoll sees "replaced on one disk, deleted on the others" and treats it as a modification (§15.4), never as a deletion.
 - Phase 1 limit: a deletion through mergerfs removes every copy immediately. Mitigations: the optional link guard (§17), Samba's `recycle` module with a visible repository at the pool root outside the library folders (`recycle:repository = Recycle`), and the Sonarr/Radarr recycling bins.
 
@@ -574,9 +577,9 @@ Each copy is compared with the recorded current version:
     - not be a reserved name, as Windows 10 reads it (which also cuts at a `:`, forbidden anyway): take the component up to its first `.`, remove every trailing U+0020 (`CON  .txt` reads as `CON`), and compare it, ignoring the case of ASCII letters only, with `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1`–`COM9`, `LPT1`–`LPT9`, and `COM` or `LPT` followed by `¹`, `²` or `³` (U+00B9, U+00B2, U+00B3). So `CON.txt`, `NUL.tar.gz` and `CON .txt` are reserved, as on Windows 10. Windows 11 no longer reserves a device name followed by an extension, according to Microsoft's .NET documentation; its exact rule is not established. `COM0`, `LPT0`, `NULL`, `CLOCK$`, `CONERR$`, ` CON` (leading space) and `ＣＯＮ` (fullwidth) are not;
   - a component that fails gets one or more reasons, from a closed list (§29.3), reported in this order: `too-long`, `invalid-utf8`, `control-character`, `forbidden-character`, `trailing-dot-or-space`, `reserved-name`. On ext4, XFS and btrfs, only `too-long` applies. Every rule reads bytes, except the UTF-16 length, so a name that is not valid UTF-8 still gets its other reasons;
   - NTFS is case-insensitive: `Film.mkv` and `film.mkv` in the same folder collide, and so do the folders `Films` and `films`. Atoll never writes a colliding name there (§15.7);
-  - variants that change these rules are refused when a disk is added (§10): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase` or with lowntfs-3g `ignore_case`. A case-insensitive folder found later under `<root>/` (`FS_CASEFOLD_FL`) makes that disk name-incompatible for every path below it.
+  - variants that change these rules are refused when a disk is added (§10): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase`, ntfs3 `ads` or lowntfs-3g `ignore_case`. A case-insensitive folder found later under `<root>/` (`FS_CASEFOLD_FL`) makes that disk name-incompatible for every path below it.
 - Incompatible name: the solver picks a compatible disk. Failing that, `name-incompatible` state and an alert. Never an automatic rename. A rename to an incompatible name follows §15.3.
-- Recommended: mount NTFS disks on Linux with `windows_names` (Linux 6.2 or later for ntfs3), so applications cannot create most names Windows rejects. It enforces only part of the rules above: both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$` with it. It has one cost, measured on ntfs-3g: a rename through mergerfs to a name it refuses removes the copy on that disk (§15.2), where without `windows_names` the copy stays under a name Windows cannot open. A name that is not valid UTF-8 is refused either way. The recommendation stands: applications creating such names are the common case, and such a rename is rare.
+- Recommended: mount NTFS disks on Linux with `windows_names` (Linux 6.2 or later for ntfs3), so applications cannot create most names Windows rejects. It enforces only part of the rules above: both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$` with it. It has one cost, measured on ntfs-3g and ntfs3: a rename through mergerfs to a name it refuses removes the copy on that disk (§15.2), where without `windows_names` the copy stays under a name Windows cannot open. A name that is not valid UTF-8 is refused either way. The recommendation stands: applications creating such names are the common case, and such a rename is rare. From Linux 7.3, ntfs3 also needs `ads=0` (§10).
 - Recommended: let Sonarr and Radarr replace `\ / : * ? " < > |` when they import a file (`Replace Illegal Characters`, `Colon Replacement`). Atoll never changes a file name on its own initiative (R-11): it only propagates renames the user made (§6.1, item 3). `atoll names check` lists the names to fix.
 - Long paths: `\\?\` prefix on Windows; relative operations (`openat`) on Linux for deep trees.
 - The name corpus of §29.4 records, for each name, its reasons on each of `ext4`, `xfs`, `btrfs` and `ntfs`; the vectors pin the check on whole paths.
@@ -605,16 +608,18 @@ Each copy is compared with the recorded current version:
 ## 17. Trash
 
 - Location: `Atoll/trash/<YYYY-MM-DD>/<op-id>/<logical path>` on each disk (UTC date; operation id from `ops`). Sending a copy to the trash is a rename within the same filesystem. Paths never collide and names are never changed.
+- Chunks a repair overwrites: `Atoll/trash/<YYYY-MM-DD>/<op-id>.chunks/<logical path>/<index>`. The logical path ends in a folder with the file's own name, holding one file per chunk. `<index>` is the chunk's number in decimal, from 0, with at least 8 digits (`00000012`). The suffix sits on the operation's folder, so a file name of up to 255 bytes still fits.
 - What goes in:
   - copies removed by a propagated deletion (`deleted`);
   - stale copies before their refresh (`overwritten`);
-  - corrupt copies set aside (`quarantined`), and the chunks a repair overwrites, as `<logical path>.chunks/<index>` (`repaired`);
+  - corrupt copies set aside (`quarantined`), and the chunks a repair overwrites (`repaired`);
   - surplus replicas removed by `prune` (`surplus`) and replicas removed by rebalancing (`rebalance`);
   - copies left at the old name by a rename their disk refuses (`renamed`, §15.3);
   - every copy of a file deleted through Atoll's own view (phase 2a).
 - Retention `[trash].retention` (30 days by default). `max_size` is a share of each disk's capacity; when it is reached, purging goes in this order: surplus and rebalance, then overwritten, repaired and quarantined, then deleted and renamed files. Deleted and renamed files are never purged before their retention ends, since a renamed copy may be the file's only other copy: Atoll raises an alert instead.
 - Commands: `atoll trash list`, `restore <path> [--to <disk>]`, `purge [--older-than <duration>]`.
 - Link guard (optional, `trash.link_guard = true`): Atoll keeps one hard link per managed copy in `Atoll/links/<file id>`. A deletion or replacement through mergerfs then leaves the data in place, and Atoll moves it to the trash; this closes the phase-1 gap of §15.2. Cost: every managed file shows two links, which misleads tools that count links (some torrent and *arr helpers). Off by default.
+- A copy whose name its driver refuses cannot go to the trash: `a:b.mkv`, written before the disk was mounted with `windows_names`, gives `EINVAL` on ntfs-3g and ntfs3 (measured). The copy stays where it is, is reported as `name-incompatible`, and an alert is raised. Atoll never removes it another way, and never refreshes or repairs it, as what those overwrite must reach the trash first. Until the user renames it, mergerfs may present it even when it is stale.
 - Limits: without the link guard, deletions through mergerfs bypass the trash in phase 1. An x1 file deleted directly on its disk has no other copy to keep. A trashed path that is also hard-linked elsewhere frees no space until its last link goes.
 
 ## 18. Disk lifecycle
@@ -726,7 +731,7 @@ Each copy is compared with the recorded current version:
 | Filesystem | Linux | Windows | Notes |
 |---|---|---|---|
 | ext4 | native | no | recommended for disks Windows never reads; 256-byte inodes needed for nanosecond times and creation time |
-| NTFS | ntfs3 (kernel) or ntfs-3g | native | the only format shared by both systems; ntfs3 less proven than ext4; mount with `windows_names` |
+| NTFS | ntfs3 (kernel) or ntfs-3g | native | the only format shared by both systems; ntfs3 less proven than ext4; mount with `windows_names` and, for ntfs3 from Linux 7.3, `ads=0` |
 | XFS | native | no | optional (phase 4) |
 | btrfs | native | no | optional (phase 4); snapshots possible later |
 
@@ -1003,7 +1008,8 @@ atoll daemon [--foreground] [--dry-run]
   - rename to a name another copy's filesystem refuses or holds as a collision: directly on one disk, and through mergerfs for a file and for a folder; a copy changed meanwhile survives; the guard pauses a large folder;
   - hard-linked paths never mistaken for renames.
 - Guards: mass-deletion guard; propagation limited to copies unchanged since the last sync.
-- Names: NFC/NFD and case collisions reported as `name-collision`, folders included; no colliding name ever written to an NTFS target; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not).
+- Names: NFC/NFD and case collisions reported as `name-collision`, folders included; no colliding name ever written to an NTFS target; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not); ntfs3 `ads` refused at `disk add`, and `readonly` when found later; a copy whose name the driver refuses stays in place and raises an alert.
+- Trash: a chunk repair of a file with a 255-byte name, on every filesystem. Tests of what a filesystem did re-read through a cold cache.
 - mergerfs with a dying branch: files stay readable through their replicas once the branch is removed; behavior before removal recorded.
 - Disk sleep: SMART polling does not wake a sleeping disk; no background work outside the windows.
 - **Break-glass test**, in CI, on a pool with no stale copy and no conflict: daemon stopped then uninstalled, plain mergerfs mounted from `mergerfs-config` at the same mount point: identical listing and content, no hidden file, test library unchanged.
@@ -1188,9 +1194,7 @@ number   = digits [ "." digits ]
 - Windows arrives after the rewrite; until then, Windows PCs use the SMB share.
 - Names (research in `docs/research/name-compatibility.md`), to decide before the solver, the scanner and `atoll names check`:
   - Atoll's own view (phase 2a): should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
-  - a rename through mergerfs on ntfs3 is not measured: with `ads` (on by default from Linux 7.3), a direct rename onto `m:n` replaces the file `m`;
-  - the trash layout `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17);
   - total path length: mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes; Windows applications without long-path support stop at 259 UTF-16 units;
   - the output of `atoll names check` (JSON schema, sort key, exit code) and the precedence between `name-incompatible`, `name-collision` and `degraded`;
   - on NTFS, 8.3 short names: both Linux drivers refuse to create a name equal to another file's short name, and ntfs-3g's `stat` returns that other file, so existence must never be decided by `stat` alone;
-  - mount checks: how to detect lowntfs-3g `ignore_case`, which mount information does not show (the FUSE daemon's command line?); ntfs3 must use `iocharset=utf8`, and its `ads` option (on by default from Linux 7.3) reads `a:b` as a stream; a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file.
+  - mount checks: how to detect lowntfs-3g `ignore_case`, which mount information does not show (the FUSE daemon's command line?); ntfs3 must use `iocharset=utf8`; a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file (measured: under `ads`, a real name `a:b.mkv` is listed and `stat` gives `ENOENT`).
