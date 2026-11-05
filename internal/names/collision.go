@@ -1,7 +1,6 @@
 package names
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -71,12 +70,10 @@ type keyedPrefix struct{ prefix, key string }
 // the first one without a key: a longer prefix holds the same invalid bytes, so
 // it has no key either, and a name without a key never collides.
 func keyedPrefixes(path string) ([]keyedPrefix, error) {
-	components := strings.Split(path, "/")
-	for _, c := range components {
-		if err := checkComponent(c); err != nil {
-			return nil, fmt.Errorf("logical path %q: %w", path, err)
-		}
+	if err := checkLogicalPath(path); err != nil {
+		return nil, err
 	}
+	components := strings.Split(path, "/")
 	prefixes := make([]keyedPrefix, 0, len(components))
 	end := -1
 	for _, c := range components {

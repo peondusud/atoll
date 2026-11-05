@@ -403,6 +403,7 @@ Until a strategy is implemented (see §28), it falls back to `most-free`, and th
   - disk `online` or `standby`, and not `draining`, `failed` or `readonly`;
   - name compatible with the target filesystem (§15.8);
   - on an NTFS target, no name collision with the names on that disk (§15.7);
+  - the path within the limit of that disk's mergerfs branch (§15.8);
   - the target path is free.
 - **Strict settings**, which `overflow` never relaxes:
   - `spread_mode = "strict"`: at least one copy in each failure domain, as long as the number of copies allows it;
@@ -509,7 +510,7 @@ Rules:
 ### 15.3 Renames directly on one disk
 
 - The other copies are renamed the same way (instant, same filesystem), with no re-copy. A folder rename takes one rename per disk.
-- A disk that refuses the new name does not get the rename: Atoll never writes a name that is incompatible with that disk (§15.8) or that collides on it (§15.7). The copy left at the old name cannot stay in `media/`, or the merged view would show both names. Once the renamed copy's identity is confirmed (§15.1):
+- A disk that refuses the new name does not get the rename: Atoll never writes a name that is incompatible with that disk (§15.8) or that collides on it (§15.7), or a path past the limit of its branch (§15.8). The copy left at the old name cannot stay in `media/`, or the merged view would show both names. Once the renamed copy's identity is confirmed (§15.1):
   - a copy unchanged since it was last in sync goes to the trash at once (`reason = renamed`), and the file then lacks a replica. Another compatible disk gets a new copy. Failing that, the file keeps fewer replicas than wanted, is reported as `name-incompatible` or `name-collision`, and an alert is raised. Never an automatic rename;
   - a copy changed meanwhile is a modification and stays where it is: `conflict` (§15.7), every version kept;
   - the renamed copy counts as a user copy from then on, so the trashed copy is never the last user copy of the file;
@@ -581,7 +582,9 @@ Each copy is compared with the recorded current version:
 - Incompatible name: the solver picks a compatible disk. Failing that, `name-incompatible` state and an alert. Never an automatic rename. A rename to an incompatible name follows §15.3.
 - Recommended: mount NTFS disks on Linux with `windows_names` (Linux 6.2 or later for ntfs3), so applications cannot create most names Windows rejects. It enforces only part of the rules above: both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$` with it. It has one cost, measured on ntfs-3g and ntfs3: a rename through mergerfs to a name it refuses removes the copy on that disk (§15.2), where without `windows_names` the copy stays under a name Windows cannot open. A name that is not valid UTF-8 is refused either way. The recommendation stands: applications creating such names are the common case, and such a rename is rare. From Linux 7.3, ntfs3 also needs `ads=0` (§10).
 - Recommended: let Sonarr and Radarr replace `\ / : * ? " < > |` when they import a file (`Replace Illegal Characters`, `Colon Replacement`). Atoll never changes a file name on its own initiative (R-11): it only propagates renames the user made (§6.1, item 3). `atoll names check` lists the names to fix.
-- Long paths: `\\?\` prefix on Windows; relative operations (`openat`) on Linux for deep trees.
+- Total path length. Atoll itself works through relative operations (`openat`) on Linux and the `\\?\` prefix on Windows, so neither limit below binds it, and its trash needs no check: mergerfs never goes there. The limits bind what reads the disks. Both checks are pure functions, counted on the exact path, never a normalized form:
+  - mergerfs opens `<mount>/<root>/<logical path>` as one string, of at most 4095 bytes (`PATH_MAX`, 4096 with its NUL). Past that, the copy is still listed, but `stat` gives `ENOENT`, and a deletion or a rename through the view leaves it behind (measured with mergerfs 2.40.2). Such a copy protects nothing: if the other disk dies, the file stays listed and unreadable. So Atoll never writes a copy past this limit on a disk: this is a hard constraint of the solver (§12.4), and a path can fit on one disk and not on another, as `mount` differs. Another disk gets the copy. Failing that, the file keeps fewer replicas than wanted, is reported as `name-incompatible`, and an alert is raised. A copy already past the limit, which Atoll did not write, or past it after a mount path changed, is only reported;
+  - Windows programs without long-path support stop at 259 UTF-16 code units (`MAX_PATH`, 260 with its NUL), whatever `LongPathsEnabled` says. Measured on Windows 11 with that setting on: `attrib`, `findstr`, `certutil`, `fc`, `xcopy` and `Scripting.FileSystemObject` work at 259 and fail at 260, while `cmd /c type` and PowerShell work at 300. As the limit depends on the program, it is only reported: `atoll names check` lists the paths where `D:\<root>\<logical path>` is past 259 units, with no state, no alert and no effect on placement. A path that is not valid UTF-8 has no UTF-16 length, so it gets no verdict.
 - The name corpus of §29.4 records, for each name, its reasons on each of `ext4`, `xfs`, `btrfs` and `ntfs`; the vectors pin the check on whole paths.
 
 ## 16. Integrity
@@ -963,7 +966,7 @@ atoll repair <path> [--mode chunk|file]
 atoll dupes [--path <path>] [--min-size <size>]
 atoll trash list | restore <path> [--to <disk>] | purge [--older-than <duration>]
 atoll conflicts list | resolve <path> --keep <disk>
-atoll names check [--path <path>]        read-only: names not in NFC, not valid UTF-8, incompatible with a filesystem, or colliding (§15.7, §15.8)
+atoll names check [--path <path>]        read-only: names not in NFC, not valid UTF-8, incompatible with a filesystem, or colliding, and paths past a length limit (§15.7, §15.8)
 atoll guard list | confirm | reject
 atoll prune [--dry-run]
 atoll balance [--dry-run] [--move-originals]
@@ -1008,7 +1011,7 @@ atoll daemon [--foreground] [--dry-run]
   - rename to a name another copy's filesystem refuses or holds as a collision: directly on one disk, and through mergerfs for a file and for a folder; a copy changed meanwhile survives; the guard pauses a large folder;
   - hard-linked paths never mistaken for renames.
 - Guards: mass-deletion guard; propagation limited to copies unchanged since the last sync.
-- Names: NFC/NFD and case collisions reported as `name-collision`, folders included; no colliding name ever written to an NTFS target; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not); ntfs3 `ads` refused at `disk add`, and `readonly` when found later; a copy whose name the driver refuses stays in place and raises an alert.
+- Names: NFC/NFD and case collisions reported as `name-collision`, folders included; no colliding name ever written to an NTFS target; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not); ntfs3 `ads` refused at `disk add`, and `readonly` when found later; a copy whose name the driver refuses stays in place and raises an alert; no copy written past the limit of its mergerfs branch.
 - Trash: a chunk repair of a file with a 255-byte name, on every filesystem. Tests of what a filesystem did re-read through a cold cache.
 - mergerfs with a dying branch: files stay readable through their replicas once the branch is removed; behavior before removal recorded.
 - Disk sleep: SMART polling does not wake a sleeping disk; no background work outside the windows.
@@ -1075,7 +1078,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
@@ -1194,7 +1197,6 @@ number   = digits [ "." digits ]
 - Windows arrives after the rewrite; until then, Windows PCs use the SMB share.
 - Names (research in `docs/research/name-compatibility.md`), to decide before the solver, the scanner and `atoll names check`:
   - Atoll's own view (phase 2a): should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
-  - total path length: mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes; Windows applications without long-path support stop at 259 UTF-16 units;
   - the output of `atoll names check` (JSON schema, sort key, exit code) and the precedence between `name-incompatible`, `name-collision` and `degraded`;
   - on NTFS, 8.3 short names: both Linux drivers refuse to create a name equal to another file's short name, and ntfs-3g's `stat` returns that other file, so existence must never be decided by `stat` alone;
   - mount checks: how to detect lowntfs-3g `ignore_case`, which mount information does not show (the FUSE daemon's command line?); ntfs3 must use `iocharset=utf8`; a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file (measured: under `ads`, a real name `a:b.mkv` is listed and `stat` gives `ENOENT`).

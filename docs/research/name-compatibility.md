@@ -34,6 +34,8 @@ The maintainer chose (§15.8):
 | `windows_names` | Still recommended, with its cost stated in §15.8. |
 | ntfs3 `ads` (§10) | Refused at `disk add`. Found later at a mount check, the disk becomes `readonly`, with an alert. The user mounts with `ads=0`. |
 | Chunks in the trash (§17) | `Atoll/trash/<date>/<op-id>.chunks/<logical path>/<index>`, with the index in decimal, from 0, with at least 8 digits. |
+| Path past the limit of a mergerfs branch (§15.8) | A hard constraint of the solver: Atoll never writes such a copy. Another disk, failing that `name-incompatible` and an alert. A copy already past the limit is only reported. |
+| Path past 259 UTF-16 units (§15.8) | Only listed by `atoll names check`: no state, no alert, no effect on placement. |
 
 ## Linux filesystems
 
@@ -90,6 +92,39 @@ So the last copy of a file is not lost in these cases: when every branch refuses
 
 Method: a Debian 13 container with no KVM boots each kernel in qemu, from an initramfs built from the container's own files, on image files in the guest's RAM. A container alone cannot do this, as it shares Docker Desktop's kernel (Linux 6.6, WSL2), which has no ntfs3.
 
+## Total path length
+
+### mergerfs
+
+Measured with mergerfs 2.40.2-5 and ext4, on image files in a container (Linux 6.6, WSL2), with the settings of §21.1. The path was walked one folder at a time, so `PATH_MAX` never applied to the caller. Disk A has a prefix of 11 bytes, and disk B of 212. The file fits on A and not on B.
+
+| `<mount>/<root>/<path>` | Result through the view |
+|---|---|
+| 4095 bytes, only copy on A | listed, `stat` and read work |
+| 4096 bytes, only copy on A | listed, `stat` gives `ENOENT` |
+
+| Copies, past the limit on B only | Result through the view |
+|---|---|
+| On both, A first | served from A |
+| On both, B first | served from A: mergerfs moves on to the next branch |
+| Only on B, as when A has died | listed, `stat` gives `ENOENT` |
+| Only on B, with its folder past the limit too | the folder cannot be entered: `ENOENT` |
+| On both, `unlink` | succeeds, removes A's copy, leaves B's. The file stays listed, and `stat` gives `ENOENT` |
+| On both, `rename` | succeeds, renames A's copy, leaves B's. The view lists both names |
+
+The error is `ENOENT`, not `ENAMETOOLONG`, so through the view nothing distinguishes such a copy from a missing file. An application has its own limit on `<view mount>/<path>`, also 4095 bytes in one string; Atoll does not check that one.
+
+### Windows
+
+Measured on Windows 11, build 26300, with `LongPathsEnabled` = 1, in a temporary folder on the system disk, on files with an exact full-path length:
+
+| Program | 259 units | 260 units | 300 units |
+|---|---|---|---|
+| `attrib`, `findstr`, `certutil -hashfile`, `fc`, `xcopy`, `Scripting.FileSystemObject` | works | fails | fails |
+| `cmd /c type`, `cmd /c more <`, PowerShell 5.1 and 7, through `[IO.File]` | works | works | works |
+
+So 259 is exact, and `LongPathsEnabled` does not lift the limit for programs that do not declare long-path support. Not measured: Explorer, a mapped network drive, and a machine with the setting off.
+
 ## The trash and long or refused names
 
 Measured on ext4, ntfs3 (Linux 6.12.115 and 7.3.1) and ntfs-3g, with `windows_names` on NTFS:
@@ -111,7 +146,7 @@ Sources:
 - ReactOS `sdk/lib/rtl/path.c`;
 - Go's `internal/filepathlite/path_windows.go` and CPython's `ntpath.py`.
 
-No real Windows machine was available.
+No real Windows machine was available for these rules. The maintainer's machine has since been used for the path lengths, under "Total path length".
 
 - Forbidden in names: U+0000–U+001F and `< > : " / \ | ? *`. U+007F is allowed.
 - A name must not end with a space or a period: Win32 path parsing strips them. Names made only of dots or spaces cannot be opened through Win32.
@@ -141,7 +176,6 @@ The rule Atoll keeps (§15.8) is the Windows 10 superset, as a fixed table. The 
 These are listed in `specs.md` §30:
 
 - **Renames through Atoll's own view (phase 2a).** Should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
-- **Total path length.** mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes. Windows applications without long-path support stop at 259 units.
 - **Output of `atoll names check`.** Its JSON schema, sort key and exit code are not defined, nor the precedence between `name-incompatible`, `name-collision` and `degraded`.
 - **8.3 short names.** Both Linux drivers refuse to create a name equal to another file's short name. ntfs-3g's `stat` of that name returns the other file. So existence on NTFS must never be decided by `stat` alone.
 - **Mount checks.**

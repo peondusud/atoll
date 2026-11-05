@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Total path length (specs.md §12.4, §15.8)
+
+Commit "Limit the total path length on mergerfs branches", on `main`.
+
+- Measured:
+  - with mergerfs 2.40.2, a copy past 4095 bytes on its branch is listed and `stat` gives `ENOENT`, so it protects nothing, and a deletion or a rename through the view leaves it behind;
+  - on Windows 11 with `LongPathsEnabled` = 1, six built-in tools work at 259 UTF-16 units and fail at 260, while `cmd /c type` and PowerShell work at 300.
+- The maintainer's decisions:
+  - a path past the branch limit is a hard constraint of the solver;
+  - a path past the Windows limit is only listed by `atoll names check`.
+- Contract: `conformance/vectors/branch_path.json` holds 24 cases, and `windows_path.json` 22.
+- Code: `names.FitsBranch` and `names.FitsWindows`. The solver and `atoll names check` do not exist yet, so nothing calls them outside their tests.
+- Tests:
+  - the cases were generated and checked outside Go, in PowerShell with .NET byte and UTF-16 counts;
+  - 24 code mutations each make a vector fail, and 14 mutations of the vector shape each make the test fail.
+
 ## ntfs3 `ads` and chunks in the trash (specs.md §10, §15.2, §17)
 
 Commit "Refuse ntfs3 ads and fix the chunk layout in the trash", on `main`.

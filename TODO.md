@@ -6,17 +6,13 @@ Open work, in a suggested order. Finished work is in [DONE.md](DONE.md), lessons
 
 To decide before the solver, the scanner and `atoll names check` need them:
 
-- **decision**: total path length:
-  - mergerfs opens `<branch>/<path>` as one string of at most 4096 bytes;
-  - Windows applications without long-path support stop at 259 UTF-16 units.
-
-  Should either be a refusal or a warning?
 - **decision**: the output of `atoll names check`:
   - JSON schema, sort key, exit code;
-  - which paths and filesystems it covers;
+  - which paths and filesystems it covers, and how it shows the two path limits (§15.8), which are not reasons of a component;
   - the precedence between `name-incompatible`, `name-collision` and `degraded`.
 - **decision**, before phase 2a: should Atoll's own view refuse, with an error, a rename that a copy's filesystem refuses, instead of following §15.3?
 - Pin in `test/loopdev` what mergerfs and ntfs3 do with a refused name or an `ads` stream (`docs/research/name-compatibility.md`), re-reading through a cold cache, so that a release that changes it fails a test. The measurements so far were throwaway scripts in qemu.
+- Measure on the maintainer's Windows machine, with their go-ahead, what a report says is not established: which reserved names Windows 11 still refuses, and what Windows does with `Film.mkv` beside `film.mkv` on an NTFS volume (a VHD).
 - NTFS 8.3 short names: never decide that a file exists with `stat` alone, and treat an `EEXIST` without a visible exact entry as name-incompatible.
 - Mount checks:
   - how to detect lowntfs-3g `-o ignore_case`, which mount information does not show (the FUSE daemon's command line?);
@@ -39,7 +35,7 @@ To decide before the solver, the scanner and `atoll names check` need them:
   - the properties of §11.2.
 
   Needs the configuration schema below.
-- **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility and NTFS collisions included, the latter through `names.TargetNames`), the job plan, and property tests.
+- **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility, NTFS collisions through `names.TargetNames`, and the branch path limit through `names.FitsBranch`), the job plan, and property tests.
 - **decision**: **BLAKE3** (§16): choose a Go implementation with SIMD after a throughput benchmark. It is a new dependency, and its license must be compatible with GPL-3.0-or-later.
 
 ## Contracts not yet defined (specs.md §29.3)

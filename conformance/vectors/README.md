@@ -143,6 +143,25 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `with` | array of strings | the exact names on the target that the path collides with at that component, in byte order; an empty array means no collision |
 | `error` | boolean | `true` when `path` or a name on the target is not a well-formed logical path |
 
+### `branch_path.json` — the path limit of a mergerfs branch (§15.8)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `mount` | string | the disk's mount path |
+| `root` | string | the disk's managed root |
+| `path`, `path_b64` | string | the logical path |
+| `fits` | boolean | whether `<mount>/<root>/<path>` holds at most 4095 bytes |
+| `error` | boolean | `true` when `path` is not a well-formed logical path, or `mount` or `root` is empty |
+
+### `windows_path.json` — the path limit of Windows programs (§15.8)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `root` | string | the disk's managed root |
+| `path`, `path_b64` | string | the logical path |
+| `fits` | boolean | whether `D:\<root>\<path>` holds at most 259 UTF-16 code units; `true` for a path that is not valid UTF-8, which gets no verdict |
+| `error` | boolean | `true` when `path` is not a well-formed logical path, or `root` is empty |
+
 ### `capacity.json` — capacity of a pool (§13.1)
 
 | Field | Type | Meaning |
