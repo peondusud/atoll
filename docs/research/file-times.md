@@ -61,9 +61,7 @@ The maintainer chose:
 | Conflicts (§7) | The previous original stays as long as its copy is eligible. Otherwise the normal rule applies. |
 | A target that cannot hold a modification time (§14) | The copy is made with the time the filesystem keeps, which is recorded per copy. It stays in sync, and the difference is never applied to the other copies. |
 | Modification and change times out of range (§9) | Stored at the nearest limit. Atoll sets times from a copy's `stat`, never from the catalog. |
+| Same content, different modification times, at `disk add` or `catalog rebuild` (§9, §18) | In sync, each copy keeping its own time, and nothing is written to them. `files.mtime_ns` holds the original's. Only a later change is applied to the others. |
+| Different content at `catalog rebuild` (§9) | `conflict`, whatever the times: nothing is left to say which one is current, and a time alone must not decide (invariant 9). |
 
 Comparing at the coarser precision was rejected for what it would cost, as it would have changed nothing in practice: a difference under 100 ns between copies written at different times does not arise. And pairwise it is not transitive: with `a` = 1000001 ns on ext4, `b` = 1000000 ns on NTFS and `c` = 1000099 ns on ext4, `a` ties with `b` and `b` with `c`, while `a` is older than `c`.
-
-## Open
-
-Copies with the same content and different modification times, when a disk is added or the catalog rebuilt: which time is the current version's, and do they count as in sync (`specs.md` §30)?

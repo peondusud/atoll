@@ -2,6 +2,17 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Copies that differ at `disk add` and `catalog rebuild` (specs.md §4, §9, §15.7, §18)
+
+Commit "Define copies that differ when a disk is added or the catalog rebuilt", on `main`.
+
+- The maintainer's decisions:
+  - copies with the same content and different modification times are in sync, each keeps its own time, and nothing is written to them;
+  - `files.mtime_ns` holds the original's time;
+  - at `catalog rebuild`, different content is a `conflict`, whatever the times.
+- Only a later change is applied to the other copies, which makes the times equal again.
+- No code and no vector: this lives in the scan and the catalog, which do not exist yet. The scenario is listed in §27, and the scenario format is still to be defined.
+
 ## Modification and change times (specs.md §9, §14)
 
 Commit "Define what happens to times a disk or the catalog cannot hold", on `main`.
@@ -14,7 +25,6 @@ Commit "Define what happens to times a disk or the catalog cannot hold", on `mai
   - a time out of range is stored at the nearest limit, and Atoll sets times from a copy's `stat`, never from the catalog.
 - Contract: `conformance/vectors/time_ns.json` holds 26 cases.
 - Code: `solver.TimeNS`, with `CreationTimeNS`, in `times.go`. Nothing calls them outside their tests yet.
-- Left open: copies with the same content and different times at `disk add` or `catalog rebuild`.
 
 ## Choosing the original (specs.md §7)
 

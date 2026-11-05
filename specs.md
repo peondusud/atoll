@@ -60,7 +60,7 @@ Measurable goals:
 - **Logical path**: exact path relative to the root, `/` separator, kept byte for byte on Linux and as WTF-8 on Windows, never normalized (e.g. `Films/Avatar (2009)/Avatar.mkv`, §15.8). It is well-formed when it has no empty component, no `.` or `..` component and no NUL byte.
 - **Copy**: an instance of a logical path on one disk, at `<disk>/media/<logical path>`.
 - **User copy** / **Atoll copy**: a copy that existed before Atoll indexed it, or that a user or an application wrote or modified, is a user copy; a copy Atoll created (replica, refresh, transfer) is an Atoll copy. Stored as `created_by`. Protection decisions rely on it (§6.1).
-- **Current version**: the size, modification time and hash that every copy of a file must match. A copy's modification time may differ where its filesystem cannot hold that time (§14).
+- **Current version**: the size and hash that every copy of a file must match, and the modification time of its original (§7). A copy's own modification time may differ: where its filesystem cannot hold that time (§14), or where it already differed when Atoll first saw the copy (§18).
 - **In-sync copy**: a copy that matches the current version.
 - **Original**: the in-sync copy with the oldest creation time. The merged view presents it (§7). It drives presentation only, never protection.
 - **Replica**: any other in-sync copy.
@@ -84,7 +84,7 @@ Measurable goals:
 | R-05 | A replica has exactly the same relative path and name as its source | MUST | 1a |
 | R-06 | Never two copies of a file on the same physical disk | MUST | 1a |
 | R-07 | Disks of different sizes and filesystems in one pool | MUST | 1a |
-| R-08 | Explicit addition of an already filled disk, with no move or reformat; identical files at the same path are adopted as existing copies | MUST | 1a |
+| R-08 | Explicit addition of an already filled disk, with no move or reformat; files with the same content at the same path are adopted as existing copies | MUST | 1a |
 | R-09 | No automatic disk adoption | MUST | 1a |
 | R-10 | File and folder renames and moves propagated to all copies without re-copying, except on a disk that refuses the new name (§15.3) | MUST | 1a |
 | R-11 | Extended names (Unicode, long names, special characters) handled without silent alteration | MUST | 1a |
@@ -172,6 +172,7 @@ Removal rules: `prune`, rebalancing and evacuation remove Atoll copies first and
 - A file in `conflict` (§15.7) keeps its previous original (`files.original_disk`) as long as that copy is eligible, so adding a disk with an older version of different content does not change what is presented. Otherwise, or after `catalog rebuild` has lost it, the rule above applies. Outside a conflict the previous original is ignored.
 - Stale, corrupt or unavailable copies are never presented by Atoll's own view, even when they are older.
 - Atoll preserves a replica's modification time, as far as its filesystem can hold it (§14), but never its creation time, so a replica is younger than its source. On Windows, NTFS "tunneling" can give a file re-created under the same name within 15 seconds its predecessor's creation time; the Windows version therefore sets the creation time explicitly after the final rename.
+- `files.mtime_ns` holds the original's modification time, so it follows the original to another disk. It needs no history, and `catalog rebuild` finds the same value.
 - The view returns the original's metadata (size, times, attributes). It reads data from the original by default; with `read.policy = "prefer-spinning"`, it may read any in-sync copy on a disk that is already spinning (identical content).
 - If the original's disk goes missing, the oldest remaining in-sync copy is presented. When the disk returns in sync, its copy becomes the original again.
 - A refresh or a `file` repair gives a copy a new creation time, so the original may move to another disk; a `chunk` repair keeps it (§16). Protection decisions never depend on the original (§6.1).
@@ -238,7 +239,7 @@ CREATE TABLE files(
   lpath BLOB UNIQUE NOT NULL,          -- exact logical path (bytes; WTF-8 on Windows)
   lpath_key TEXT,                      -- NFD, NTFS upcase, NFC (§15.8); collisions only; NULL if not UTF-8
   size INTEGER NOT NULL,               -- current version
-  mtime_ns INTEGER NOT NULL,
+  mtime_ns INTEGER NOT NULL,           -- the original's (§7)
   blake3 BLOB,                         -- 32 bytes, b3sum-compatible
   chunk_size INTEGER,                  -- 4 MiB by default
   chunks BLOB,                         -- concatenated BLAKE3 chunk hashes (32 bytes each)
@@ -312,7 +313,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 - Chunk hash volume: 20 TB ÷ 4 MiB × 32 bytes ≈ 150 MB, one BLOB per file.
 - Catalog location: `/var/lib/atoll/catalog.db` (Linux), `%ProgramData%\Atoll\catalog.db` (Windows).
 - Daily catalog backup on the system disk and, if enabled, in each disk's `Atoll/catalog/`, inside the time window (§21.6).
-- Rebuild (`atoll catalog rebuild`): from the manifests when present, otherwise through a full rescan with re-hashing. Since every copy sits at the same path, a rescan alone tells which copies belong together. No data is lost, but `first_seen`, recorded conflicts and corruption history are: copies with the same size and modification time but different hashes become conflicts.
+- Rebuild (`atoll catalog rebuild`): from the manifests when present, otherwise through a full rescan with re-hashing. Since every copy sits at the same path, a rescan alone tells which copies belong together. No data is lost, but `first_seen`, recorded conflicts and corruption history are. So copies with different hashes become conflicts, whatever their sizes and modification times, as nothing is left to say which one is current. Copies with the same hash are in sync, each with its own modification time.
 - Schema changes ship as numbered SQL migration files shared by both implementations (§29.3).
 
 ## 10. Disk identity and mounts
@@ -531,7 +532,7 @@ Each copy is compared with the recorded current version:
 
 - **One copy changed** (content differs from the recorded hash and its change time moved): it becomes the current version, whatever its modification time, and a user copy. The other copies become `stale`.
 - **Several copies changed, with different content**: `conflict` (§15.7); nothing is overwritten.
-- **Only metadata changed** (modification time or permissions; same content after re-hashing): the recorded metadata is updated and applied to the other copies. A `touch`, or Radarr/Sonarr's "change file date", costs one re-hash and no copy. A copy's modification time is compared with its own record (`copies.mtime_ns`), so one that its filesystem clamped (§14) is no change, and is never applied to the others.
+- **Only metadata changed** (modification time or permissions; same content after re-hashing): the recorded metadata is updated and applied to the other copies. A `touch`, or Radarr/Sonarr's "change file date", costs one re-hash and no copy. A copy's modification time is compared with its own record (`copies.mtime_ns`), so a difference that was already there is no change, and is never applied to the others: a time its filesystem clamped (§14), or one found when a disk was added (§18). Only a change is applied, and the times are then equal again.
 - **Replacement** (a copy replaced on one disk and removed from the others within the grouping window, typically through mergerfs): a modification of the surviving copy.
 - **Stale copies** are moved to the trash at once (`reason = overwritten`), so mergerfs never presents them, then refreshed first, whatever the mode.
 
@@ -550,7 +551,7 @@ Each copy is compared with the recorded current version:
 
 ### 15.7 Conflicts and name collisions
 
-- Same logical path with different content on two disks, at adoption or after concurrent changes: `conflict` state, every version kept.
+- Same logical path with different content on two disks, at adoption, after concurrent changes or after `catalog rebuild` (§9): `conflict` state, every version kept.
 - Atoll's own view keeps presenting the copy it presented before; for a conflict found when adding a disk, the copy already in the pool. With mergerfs, the first branch's copy is shown.
 - Resolution: `atoll conflicts resolve <path> --keep <disk>`, with confirmation; the other versions go to the trash.
 - Paths with the same `lpath_key` (§15.8), which differ only by NFC/NFD form, by case as NTFS and Samba compare it, or by both, are reported as `name-collision`: the merged view shows both, and Windows or macOS clients may treat them as one name. Folders count too: `Films/a.mkv` and `films/b.mkv` are reported, because `Films` and `films` have the same key. Nothing is changed automatically.
@@ -658,7 +659,7 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 
 | Operation | Command | Effect |
 |---|---|---|
-| Add a disk, empty or full | `atoll disk add /mnt/u2 --domain d4-320 --tags usb [--dry-run]` | checks identity, topology and mount point; adds the disk to the configuration; indexes `media/` in place and hashes inside the time window, moving nothing; identical files at the same path become existing copies, others follow §15.7; appends the branch at the end of the running mergerfs |
+| Add a disk, empty or full | `atoll disk add /mnt/u2 --domain d4-320 --tags usb [--dry-run]` | checks identity, topology and mount point; adds the disk to the configuration; indexes `media/` in place and hashes inside the time window, moving nothing; files with the same content at the same path become existing copies, each keeping its own modification time, and nothing is written to them; others follow §15.7; appends the branch at the end of the running mergerfs |
 | Remove | `atoll disk remove u2 --evacuate [--dry-run]` | `draining`: user and Atoll copies re-created elsewhere, then `retired` |
 | Missing disk | automatic | detected within 30 s (`missing`); its mergerfs branch is removed at runtime; its files stay visible through their replicas; x1 files become `unavailable`; alert. After `health.missing_grace` (24 h), the missing replicas are re-created elsewhere when space allows |
 | Declare failed | `atoll disk fail u2 --yes` | re-creates the missing replicas of degraded files at once |
@@ -1038,7 +1039,8 @@ atoll daemon [--foreground] [--dry-run]
   - in-place edit that keeps size and modification time: a modification, never a repair;
   - bursts of renames (Sonarr-like) and folder renames during a replication;
   - rename to a name another copy's filesystem refuses or holds as a collision: directly on one disk, and through mergerfs for a file and for a folder; a copy changed meanwhile survives; the guard pauses a large folder;
-  - hard-linked paths never mistaken for renames.
+  - hard-linked paths never mistaken for renames;
+  - adding a disk or rebuilding the catalog: copies with the same content and different modification times are in sync and nothing is written to them; different content is a `conflict`, whatever the times.
 - Guards: mass-deletion guard; propagation limited to copies unchanged since the last sync.
 - Names: NFC/NFD and case collisions reported as `name-collision`, folders included; no colliding name ever written to an NTFS target; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not); ntfs3 `ads` refused at `disk add`, and `readonly` when found later; a copy whose name the driver refuses stays in place and raises an alert; no copy written past the limit of its mergerfs branch.
 - Trash: a chunk repair of a file with a 255-byte name, on every filesystem. Tests of what a filesystem did re-read through a cold cache.
@@ -1211,7 +1213,6 @@ number   = digits [ "." digits ]
 ## 30. Risks and open questions
 
 - How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)?
-- Copies with the same content and different modification times, when a disk is added or the catalog rebuilt (R-08, §9): which time is the current version's, and do they count as in sync? To decide.
 - fanotify on ntfs-3g and ntfs3: file-handle support for create, delete and rename events; fallback to inotify.
 - mergerfs behavior with a failing branch before Atoll removes it (I/O errors or fallback to the next branch): to verify with a USB drop simulation.
 - Phase 1 limits: deletions through mergerfs bypass the trash unless the link guard is on; mergerfs presents the first branch's copy, not the oldest one.

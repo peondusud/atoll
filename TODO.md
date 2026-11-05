@@ -34,7 +34,6 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 Every item here is a **decision**:
 
-- Copies with the same content and different modification times, when a disk is added or the catalog rebuilt (R-08, §9, §30): which time is the current version's, and do they count as in sync? Such copies are common: the same film copied by hand without keeping its date.
 - `schema/config.schema.json`: the JSON Schema of the TOML configuration (§24). Unknown keys are errors.
 - `schema/migrations/NNNN_name.sql`: the catalog schema (§9), including `meta.lpath_key_version`.
 - `api/openapi.yaml` and `api/schemas/` for the `--json` outputs.
