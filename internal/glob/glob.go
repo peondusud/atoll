@@ -25,9 +25,11 @@ const MaxExpansions = 1024
 //     for [!…]. A class ends at its first ], cannot be empty and never holds /.
 //     A - first or last in a class is literal; anywhere else it marks a range.
 //     [^ is reserved; negation is written [!…];
-//   - {a,b} are alternatives: at least two, none empty, not nested. Braces are
-//     expanded first, and the pattern matches when one of its expansions does.
-//     An alternative may contain / and classes;
+//   - {a,b} are alternatives: at least two, none empty, not nested. Classes
+//     are read first, so a , or } in a class is literal; braces are then
+//     expanded, every other rule applies to each expansion ({*,x}* expands to
+//     **, a whole component), and the pattern matches when one of its
+//     expansions does. An alternative may contain / and classes;
 //   - the backslash is reserved for a future escape syntax and is an error;
 //   - every other character is literal, including ! ] and - outside a class
 //     and , outside braces;

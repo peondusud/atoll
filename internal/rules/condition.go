@@ -75,12 +75,18 @@ func Compile(field Field, value string, ignoreCase bool) (*Condition, error) {
 	if !utf8.ValidString(value) {
 		return nil, fmt.Errorf("%s %q: not valid UTF-8", field, value)
 	}
-	value = names.NFC(value)
+	// Errors quote the pattern in NFC form, which the grammars apply to; when
+	// that differs from the text as typed, the context quotes both.
+	context := field.String()
+	if nfc := names.NFC(value); nfc != value {
+		context = fmt.Sprintf("%s %q, in NFC form", field, value)
+		value = nfc
+	}
 	c := &Condition{field: field, fold: ignoreCase}
 	if text, ok := strings.CutPrefix(value, RegexPrefix); ok {
 		re, err := compileRegex(text, ignoreCase)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", field, err)
+			return nil, fmt.Errorf("%s: %w", context, err)
 		}
 		c.re = re
 		return c, nil
@@ -90,7 +96,7 @@ func Compile(field Field, value string, ignoreCase bool) (*Condition, error) {
 	}
 	g, err := glob.CompileWith(value, glob.Options{IgnoreCase: ignoreCase})
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", field, err)
+		return nil, fmt.Errorf("%s: %w", context, err)
 	}
 	c.glob = g
 	return c, nil

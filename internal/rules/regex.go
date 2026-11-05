@@ -524,6 +524,13 @@ func (p *regexParser) classChar() (r rune, prop bool, err error) {
 		return 0, false, p.fail(p.i, `a [ in a class must be written \[: nested and POSIX classes are not supported`)
 	case '\\':
 		return p.escape(true)
+	case '-', '&', '~':
+		// Two of them in a row are rejected wherever they stand, even after a
+		// range end ([!-&&]), so the rule needs no parsing to apply.
+		if at := p.i; strings.HasPrefix(p.s[at+1:], string(c)) {
+			return 0, false, p.fail(at, "%c%c in a class is a set operation in Rust", c, c)
+		}
+		return p.next(), false, nil
 	default:
 		return p.next(), false, nil
 	}

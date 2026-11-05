@@ -15,7 +15,7 @@ import (
 // little-endian 16-bit entries. The MD5 is the one ntfs-3g records for it
 // (libntfs-3g/unistr.c); both sums were checked on volumes formatted by
 // Windows 10 and Windows 11 (docs/research/nfc-and-case-folding.md §4.3, §14).
-func TestUpcaseTableIsWindows7To10(t *testing.T) {
+func TestUpcaseTableIsWindows7To11(t *testing.T) {
 	const (
 		wantSHA256 = "41c26bc7a12bdaeb26025c93118697c7e3ef81ee048b00fe5cce2a472e0e0742"
 		wantMD5    = "7ff498a44e45e77374cc7c962b1b92f2"

@@ -3,6 +3,7 @@ package rules
 import (
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -61,6 +62,20 @@ func TestRegexError(t *testing.T) {
 	// The message quotes the user's text, never the (?i) that ignore_case adds.
 	if strings.Contains(err.Error(), "(?i)") {
 		t.Errorf("Error() = %q mentions (?i)", err.Error())
+	}
+
+	// The grammar applies to the NFC form: n and U+0301 compose into ń. The
+	// message quotes the text as typed, then the NFC form it checked.
+	typed := "re:\\n\u0301"
+	_, err = Compile(FieldPath, typed, false)
+	if !errors.As(err, &re) {
+		t.Fatalf("Compile(%q): %v, want a *RegexError", typed, err)
+	}
+	if want := strconv.Quote(typed); !strings.Contains(err.Error(), want) {
+		t.Errorf("Error() = %q, want it to quote the typed text %s", err.Error(), want)
+	}
+	if re.Regex != "\\\u0144" || re.Offset != 0 {
+		t.Errorf("RegexError = %q at %d, want %q at 0", re.Regex, re.Offset, "\\\u0144")
 	}
 }
 
