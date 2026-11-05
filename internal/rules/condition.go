@@ -75,6 +75,9 @@ func Compile(field Field, value string, ignoreCase bool) (*Condition, error) {
 	if !utf8.ValidString(value) {
 		return nil, fmt.Errorf("%s %q: not valid UTF-8", field, value)
 	}
+	if err := checkNonStarters(value); err != nil {
+		return nil, fmt.Errorf("%s %q: %w", field, value, err)
+	}
 	// Errors quote the pattern in NFC form, which the grammars apply to; when
 	// that differs from the text as typed, the context quotes both.
 	context := field.String()
@@ -120,9 +123,22 @@ func CompileExt(entries []string, ignoreCase bool) (*Condition, error) {
 		case strings.Contains(e, "/"):
 			return nil, fmt.Errorf("ext %q: an extension never holds /", e)
 		}
+		if err := checkNonStarters(e); err != nil {
+			return nil, fmt.Errorf("ext %q: %w", e, err)
+		}
 		c.exts = append(c.exts, []rune("."+names.NFC(e)))
 	}
 	return c, nil
+}
+
+// checkNonStarters rejects a pattern with a run of more than 30 non-starters
+// (specs.md §29.5): Go's normalization would insert U+034F into it, and
+// Rust's would not, so the two versions would read the pattern differently.
+func checkNonStarters(pattern string) error {
+	if n := names.NonStarterRun(pattern); n > names.MaxNonStarters {
+		return fmt.Errorf("%d non-starters (combining marks) in a row, more than %d", n, names.MaxNonStarters)
+	}
+	return nil
 }
 
 // Match reports whether the condition holds for a file.

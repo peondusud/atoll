@@ -9,9 +9,50 @@ import (
 )
 
 // UnicodeVersion is the Unicode version of NFC and NFD, and so of CollisionKey.
-// The catalog records it with the keys (meta.unicode_version, specs.md §15.8):
-// keys computed under another version are recomputed, never compared.
 const UnicodeVersion = norm.Version
+
+// CollisionKeyVersion names what computes CollisionKey: the language, the
+// normalization library and its Unicode version. The catalog records it with
+// the keys (meta.lpath_key_version, specs.md §15.8): keys computed by any other
+// version are recomputed, never compared. It names the implementation too, as
+// Go's normalization inserts U+034F after 30 non-starters and Rust's does not.
+const CollisionKeyVersion = "go golang.org/x/text " + UnicodeVersion
+
+// MaxNonStarters is the longest run of non-starters a pattern may hold
+// (specs.md §29.5). After it, Go's normalization inserts U+034F, following the
+// UAX #15 stream-safe format, and Rust's does not.
+const MaxNonStarters = 30
+
+// NonStarterRun returns the length of the longest run of non-starters in s,
+// counted as Go's normalization counts them before it inserts U+034F: in the
+// compatibility decomposition (NFKD) of each character, a non-starter has a
+// nonzero canonical combining class, or NFC may compose it with the character
+// before it (NFC_Quick_Check Maybe: the conjoining jamo V and T, U+09BE…). A
+// byte that is not part of a valid UTF-8 sequence ends a run, as it ends a
+// normalization run (NFC).
+func NonStarterRun(s string) int {
+	run, longest := 0, 0
+	for i := 0; i < len(s); {
+		c, w := utf8.DecodeRuneInString(s[i:])
+		i += w
+		if c == utf8.RuneError && w == 1 {
+			run = 0
+			continue
+		}
+		// One character never decomposes into more than 30 non-starters, so
+		// norm inserts no U+034F here.
+		for _, r := range norm.NFKD.String(string(c)) {
+			p := norm.NFC.PropertiesString(string(r))
+			if p.CCC() == 0 && p.BoundaryBefore() {
+				run = 0
+				continue
+			}
+			run++
+			longest = max(longest, run)
+		}
+	}
+	return longest
+}
 
 // NFC returns the NFC form of s, run by run (specs.md §11.3): each maximal run
 // of valid UTF-8 is normalized, and every byte that is not part of a valid

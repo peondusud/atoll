@@ -14,6 +14,16 @@ const MaxRegexBytes = 1000
 // maxRepeat bounds each repeat count, and the product of nested counts.
 const maxRepeat = 1000
 
+// MaxRegexWeight bounds the weight of a regex (specs.md §29.5): a character,
+// escape, . or class item weighs 1, a property 100, each times the counts of
+// the counted repeats around it. It keeps the automaton Rust builds within the
+// regex crate's default size limit, which the length limit alone does not.
+const MaxRegexWeight = 1000
+
+// propertyWeight is the weight of \p or \P, in a class or not: Rust compiles
+// a property to thousands of automaton states.
+const propertyWeight = 100
+
 // RegexError reports a regex outside the grammar of specs.md §29.5.
 type RegexError struct {
 	Regex  string // the regex text, without re:
@@ -36,14 +46,29 @@ func checkRegex(text string) error {
 	if len(text) > MaxRegexBytes {
 		return p.fail(MaxRegexBytes, "longer than %d bytes", MaxRegexBytes)
 	}
-	if _, err := p.regex(); err != nil {
+	sz, err := p.regex()
+	if err != nil {
 		return err
 	}
 	if p.i < len(p.s) {
 		return p.fail(p.i, ") without (")
 	}
+	if sz.weight > MaxRegexWeight {
+		return p.fail(0, "weighs more than %d: a character, escape, . or class item weighs 1 and a property %d, times the counts of the repeats around it",
+			MaxRegexWeight, propertyWeight)
+	}
 	return nil
 }
+
+// size is what a parse function measured in the text it parsed (specs.md
+// §29.5): prod is the largest product of nested counted repeats, the "chain
+// product", and weight the weight, capped at MaxRegexWeight+1.
+type size struct{ prod, weight int }
+
+// capWeight caps a weight just above MaxRegexWeight. A sum of two capped
+// weights, or a capped weight times a count of at most maxRepeat, never
+// overflows.
+func capWeight(w int) int { return min(w, MaxRegexWeight+1) }
 
 type regexParser struct {
 	s string
@@ -69,90 +94,90 @@ func (p *regexParser) next() rune {
 	return r
 }
 
-// The parse functions return the largest product of nested counted repeats
-// in what they parsed, the "chain product" of specs.md §29.5.
+// The parse functions return the size of what they parsed. Every branch of
+// an alternation weighs in, as Rust compiles them all.
 
 // regex = branch { "|" branch }
-func (p *regexParser) regex() (int, error) {
-	prod := 1
+func (p *regexParser) regex() (size, error) {
+	sz := size{prod: 1}
 	for {
-		n, err := p.branch()
+		b, err := p.branch()
 		if err != nil {
-			return 0, err
+			return size{}, err
 		}
-		prod = max(prod, n)
+		sz = size{max(sz.prod, b.prod), capWeight(sz.weight + b.weight)}
 		if p.peek() != '|' {
-			return prod, nil
+			return sz, nil
 		}
 		p.i++
 	}
 }
 
 // branch = piece { piece }
-func (p *regexParser) branch() (int, error) {
-	start, prod := p.i, 1
+func (p *regexParser) branch() (size, error) {
+	start, sz := p.i, size{prod: 1}
 	for {
 		if r := p.peek(); r == -1 || r == '|' || r == ')' {
 			break
 		}
-		n, err := p.piece()
+		pc, err := p.piece()
 		if err != nil {
-			return 0, err
+			return size{}, err
 		}
-		prod = max(prod, n)
+		sz = size{max(sz.prod, pc.prod), capWeight(sz.weight + pc.weight)}
 	}
 	if p.i == start {
-		return 0, p.fail(start, `empty alternative: "", "a|" and "()" are not allowed`)
+		return size{}, p.fail(start, `empty alternative: "", "a|" and "()" are not allowed`)
 	}
-	return prod, nil
+	return sz, nil
 }
 
 // piece = atom [ repeat ] | anchor | "(?" flags ")"
-func (p *regexParser) piece() (int, error) {
+func (p *regexParser) piece() (size, error) {
 	start := p.i
 	rest := p.s[p.i:]
 	switch {
 	case rest[0] == '^' || rest[0] == '$':
 		p.i++
-		return 1, p.noRepeat(start)
+		return size{prod: 1}, p.noRepeat(start) // no weight
 	case strings.HasPrefix(rest, `\A`) || strings.HasPrefix(rest, `\z`):
 		p.i += 2
-		return 1, p.noRepeat(start)
+		return size{prod: 1}, p.noRepeat(start) // no weight
 	case strings.HasPrefix(rest, "(?") && !strings.HasPrefix(rest, "(?:"):
 		p.i += 2
 		if err := p.flags(start); err != nil {
-			return 0, err
+			return size{}, err
 		}
 		switch p.peek() {
 		case ')':
 			p.i++
-			return 1, p.noRepeat(start)
+			return size{prod: 1}, p.noRepeat(start) // no weight
 		case ':':
 			p.i++
 			inner, err := p.group(start)
 			if err != nil {
-				return 0, err
+				return size{}, err
 			}
 			return p.repeat(inner)
 		default:
-			return 0, p.fail(start, "only (?:…), (?flags) and (?flags:…) groups are allowed")
+			return size{}, p.fail(start, "only (?:…), (?flags) and (?flags:…) groups are allowed")
 		}
 	}
 	inner, err := p.atom()
 	if err != nil {
-		return 0, err
+		return size{}, err
 	}
 	return p.repeat(inner)
 }
 
 // group parses a regex and its closing ), the opening part being consumed.
-func (p *regexParser) group(start int) (int, error) {
+func (p *regexParser) group(start int) (size, error) {
 	inner, err := p.regex()
 	if err != nil {
-		return 0, err
+		return size{}, err
 	}
 	if p.peek() != ')' {
-		return 0, p.fail(start, "( without )")
+		return size{}, p.fail(start, "( without )")
 	}
 	p.i++
 	return inner, nil
@@ -209,14 +234,15 @@ func (p *regexParser) flags(start int) error {
 }
 
 // atom = char | "." | class | "(" regex ")" | "(?:" regex ")"
-func (p *regexParser) atom() (int, error) {
+func (p *regexParser) atom() (size, error) {
 	start := p.i
 	switch r := p.peek(); r {
 	case '.':
 		p.i++
-		return 1, nil
+		return size{1, 1}, nil
 	case '[':
-		return 1, p.class()
+		w, err := p.class()
+		return size{1, w}, err
 	case '(':
 		if strings.HasPrefix(p.s[p.i:], "(?:") {
 			p.i += 3
@@ -225,26 +251,29 @@ func (p *regexParser) atom() (int, error) {
 		}
 		return p.group(start)
 	case '\\':
-		_, _, err := p.escape(false)
-		return 1, err
+		_, prop, err := p.escape(false)
+		if prop {
+			return size{1, propertyWeight}, err
+		}
+		return size{1, 1}, err
 	case '*', '+', '?':
-		return 0, p.fail(start, "nothing to repeat")
+		return size{}, p.fail(start, "nothing to repeat")
 	case '{', '}':
-		return 0, p.fail(start, `a %c outside a repeat must be written \%c`, r, r)
+		return size{}, p.fail(start, `a %c outside a repeat must be written \%c`, r, r)
 	case ']':
-		return 0, p.fail(start, `a ] outside a class must be written \]`)
+		return size{}, p.fail(start, `a ] outside a class must be written \]`)
 	default:
 		p.next()
-		return 1, nil
+		return size{1, 1}, nil
 	}
 }
 
 // repeat = ( "*" | "+" | "?" | "{" n "}" | "{" n ",}" | "{" n "," n "}" ) [ "?" ]
-// It returns the chain product of the repeated atom, whose own product is
-// inner.
-func (p *regexParser) repeat(inner int) (int, error) {
+// It returns the size of the repeated atom, whose own size is inner: the
+// count of the repeat multiplies the chain product and the weight.
+func (p *regexParser) repeat(inner size) (size, error) {
 	start := p.i
-	count := 1
+	count, weight := 1, inner.weight
 	switch p.peek() {
 	case '*', '+', '?':
 		p.i++
@@ -252,7 +281,7 @@ func (p *regexParser) repeat(inner int) (int, error) {
 		p.i++
 		lo, ok := p.number()
 		if !ok {
-			return 0, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
+			return size{}, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
 		}
 		hi := lo
 		if p.peek() == ',' {
@@ -260,22 +289,23 @@ func (p *regexParser) repeat(inner int) (int, error) {
 			hi = -1
 			if p.peek() != '}' {
 				if hi, ok = p.number(); !ok {
-					return 0, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
+					return size{}, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
 				}
 			}
 		}
 		if p.peek() != '}' {
-			return 0, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
+			return size{}, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
 		}
 		p.i++
 		switch {
 		case lo > maxRepeat || hi > maxRepeat:
-			return 0, p.fail(start, "a repeat count is at most %d", maxRepeat)
+			return size{}, p.fail(start, "a repeat count is at most %d", maxRepeat)
 		case hi >= 0 && lo > hi:
-			return 0, p.fail(start, "in {n,m}, n must not exceed m")
+			return size{}, p.fail(start, "in {n,m}, n must not exceed m")
 		case hi == 0:
-			// An upper bound of 0 ends every chain through this repeat.
-			inner, count = 1, 1
+			// An upper bound of 0 ends every chain through this repeat, and
+			// the repeated atom weighs nothing.
+			inner.prod, count, weight = 1, 1, 0
 		case hi > 0:
 			count = hi
 		case lo > 0:
@@ -289,12 +319,13 @@ func (p *regexParser) repeat(inner int) (int, error) {
 	}
 	switch p.peek() {
 	case '*', '+', '?', '{':
-		return 0, p.fail(p.i, "a repeat applies to an atom: write (?:…) around a repeated part")
+		return size{}, p.fail(p.i, "a repeat applies to an atom: write (?:…) around a repeated part")
 	}
-	if prod := inner * count; prod <= maxRepeat {
-		return prod, nil
+	prod := inner.prod * count
+	if prod > maxRepeat {
+		return size{}, p.fail(start, "nested repeats multiply to more than %d", maxRepeat)
 	}
-	return 0, p.fail(start, "nested repeats multiply to more than %d", maxRepeat)
+	return size{prod, capWeight(weight * count)}, nil
 }
 
 // number = "0" | nonzero { digit }, read at most up to 4 digits.
@@ -456,46 +487,50 @@ func (p *regexParser) property(start int) error {
 }
 
 // class = "[" [ "^" ] item { item } "]"
-func (p *regexParser) class() error {
+// It returns the weight of the class: 1 per character or range, and
+// propertyWeight per property.
+func (p *regexParser) class() (int, error) {
 	start := p.i
 	p.i++
 	if p.peek() == '^' {
 		p.i++
 	}
-	items := 0
+	items, weight := 0, 0
 	for {
 		if p.i >= len(p.s) {
-			return p.fail(start, "[ without ]")
+			return 0, p.fail(start, "[ without ]")
 		}
 		rest := p.s[p.i:]
 		switch {
 		case rest[0] == ']':
 			if items == 0 {
-				return p.fail(start, `empty class: write \] for a ]`)
+				return 0, p.fail(start, `empty class: write \] for a ]`)
 			}
 			p.i++
-			return nil
+			return capWeight(weight), nil
 		case strings.HasPrefix(rest, "--") || strings.HasPrefix(rest, "&&") || strings.HasPrefix(rest, "~~"):
-			return p.fail(p.i, "%s in a class is a set operation in Rust", rest[:2])
+			return 0, p.fail(p.i, "%s in a class is a set operation in Rust", rest[:2])
 		case rest[0] == '-':
 			if items > 0 && !strings.HasPrefix(rest, "-]") {
-				return p.fail(p.i, "a - in a class must mark a range between two characters, or come first or last")
+				return 0, p.fail(p.i, "a - in a class must mark a range between two characters, or come first or last")
 			}
 			p.i++
-			items++
+			items, weight = items+1, weight+1
 			continue
 		}
 		lo, prop, err := p.classChar()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		items++
 		if prop {
+			weight += propertyWeight
 			continue
 		}
+		weight++
 		rest = p.s[p.i:]
 		if strings.HasPrefix(rest, "--") {
-			return p.fail(p.i, "-- in a class is a set operation in Rust")
+			return 0, p.fail(p.i, "-- in a class is a set operation in Rust")
 		}
 		if !strings.HasPrefix(rest, "-") || strings.HasPrefix(rest, "-]") {
 			continue
@@ -504,13 +539,13 @@ func (p *regexParser) class() error {
 		p.i++
 		hi, prop, err := p.classChar()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if prop {
-			return p.fail(at, "a range ends with a character, not a property")
+			return 0, p.fail(at, "a range ends with a character, not a property")
 		}
 		if hi < lo {
-			return p.fail(at, "reversed range")
+			return 0, p.fail(at, "reversed range")
 		}
 	}
 }

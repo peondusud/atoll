@@ -7,6 +7,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
@@ -122,6 +124,81 @@ func TestVectorsAvoidStreamSafeInsertion(t *testing.T) {
 			t.Fatal(err)
 		}
 		check("lpath_key.json", in)
+	}
+}
+
+// NonStarterRun counts exactly what Go's normalization counts: a string has a
+// run of more than MaxNonStarters exactly when NFC inserts U+034F in it.
+func TestNonStarterRun(t *testing.T) {
+	for _, c := range []struct {
+		s    string
+		want int
+	}{
+		{"", 0},
+		{"abc", 0},
+		{"e\u0301", 1},
+		{"\u00e9", 1}, // é decomposes to e and U+0301
+		{"\u0344", 2}, // U+0308 U+0301
+		{"\uac00", 1}, // 가: jamo L, then V
+		{"\uac01", 2}, // 각: jamo L, V, then T
+		{"\u3133", 1}, // compatibility jamo: NFKD gives a T
+		{"\u09be", 1}, // class 0, but composes backwards
+		{"a" + strings.Repeat("\u0301", 31), 31},
+		{"a" + strings.Repeat("\u0301", 15) + "\xff" + strings.Repeat("\u0301", 15), 15},
+	} {
+		if got := NonStarterRun(c.s); got != c.want {
+			t.Errorf("NonStarterRun(%+q) = %d, want %d", c.s, got, c.want)
+		}
+	}
+
+	// Random strings of non-starters, characters whose NFKD mixes starters
+	// and non-starters, and a few starters.
+	var ns, mixed []rune
+	for c := rune(0x80); c <= 0x10FFFF; c++ {
+		if c >= 0xD800 && c <= 0xDFFF || c == 0x034F {
+			continue
+		}
+		n := NonStarterRun(string(c))
+		switch d := utf8.RuneCountInString(norm.NFKD.String(string(c))); n {
+		case 0:
+		case d:
+			ns = append(ns, c)
+		default:
+			mixed = append(mixed, c)
+		}
+	}
+	starters := []rune("aZ\u00e9\ud55c\uac00\u1100\u30a2")
+	// A xorshift generator: the strings are the same on every run.
+	x := uint64(1)
+	intn := func(n int) int {
+		x ^= x << 13
+		x ^= x >> 7
+		x ^= x << 17
+		return int(x % uint64(n))
+	}
+	for i := 0; i < 20000; i++ {
+		var b strings.Builder
+		for n := 1 + intn(80); n > 0; n-- {
+			switch k := intn(20); {
+			case k == 0:
+				b.WriteRune(starters[intn(len(starters))])
+			case k < 4:
+				b.WriteRune(mixed[intn(len(mixed))])
+			default:
+				b.WriteRune(ns[intn(len(ns))])
+			}
+		}
+		s := b.String()
+		inserts := strings.Contains(norm.NFC.String(s), "\u034f")
+		if long := NonStarterRun(s) > MaxNonStarters; long != inserts {
+			t.Fatalf("%+q: NonStarterRun %d, but NFC inserts U+034F: %v", s, NonStarterRun(s), inserts)
+		}
+	}
+}
+
+func TestCollisionKeyVersion(t *testing.T) {
+	if want := "go golang.org/x/text " + norm.Version; CollisionKeyVersion != want {
+		t.Errorf("CollisionKeyVersion = %q, want %q", CollisionKeyVersion, want)
 	}
 }
 

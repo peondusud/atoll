@@ -182,7 +182,8 @@ func TestSubject(t *testing.T) {
 }
 
 // No vector may hold a run long enough for x/text to insert U+034F, where Go
-// and Rust differ (specs.md §29.5).
+// and Rust differ (specs.md §29.5). A rejected pattern may: both versions
+// reject a pattern with such a run before they normalize it.
 func TestVectorsAvoidStreamSafeInsertion(t *testing.T) {
 	check := func(file, s string) {
 		if strings.Count(names.NFC(s), "\u034f") != strings.Count(s, "\u034f") {
@@ -190,6 +191,9 @@ func TestVectorsAvoidStreamSafeInsertion(t *testing.T) {
 		}
 	}
 	for _, v := range vectors.Load[matchVector](t, "match.json") {
+		if v.Error {
+			continue
+		}
 		if v.Value != nil {
 			check("match.json", *v.Value)
 		}
@@ -203,6 +207,9 @@ func TestVectorsAvoidStreamSafeInsertion(t *testing.T) {
 		}
 	}
 	for _, v := range vectors.Load[regexVector](t, "regex.json") {
+		if v.Error {
+			continue
+		}
 		check("regex.json", v.Pattern)
 		if path, err := vectors.Path(v.Path, v.PathB64); err == nil {
 			check("regex.json", path)
