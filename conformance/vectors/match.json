@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §11.1, §11.3, §29.5",
-  "description": "Rule conditions: path and filename (glob, or regex after re:) and one ext entry, matched against a logical path. The path and the value are put in NFC form run by run; ignore_case uses Unicode simple case folding, as regex (?i). Only characters assigned in Unicode 16.0 and unchanged since.",
+  "description": "Rule conditions: path and filename (glob, or regex after re:) and ext (one entry in value, or a list in values), matched against a logical path. The path and the value are put in NFC form run by run; ignore_case uses Unicode simple case folding, as regex (?i). Only characters assigned in Unicode 16.0, with results that no later Unicode data changes.",
   "cases": [
     { "condition": "path", "value": "Films/**", "ignore_case": false, "path": "Films/Avatar (2009)/Avatar.mkv", "match": true },
     { "condition": "path", "value": "Films/**", "ignore_case": false, "path": "Séries/Films/a.mkv", "match": false, "note": "a glob matches the whole path" },
@@ -95,6 +95,20 @@
     { "condition": "ext", "value": "e\u0301", "ignore_case": false, "path": "Films/a.é", "match": true, "note": "the entry is put in NFC form too" },
     { "condition": "ext", "value": "*", "ignore_case": false, "path": "Films/a.mkv", "match": false, "note": "an entry is a literal" },
     { "condition": "ext", "value": "*", "ignore_case": false, "path": "Films/a.*", "match": true },
+    { "condition": "path", "value": "{a,e}\u0301", "ignore_case": false, "path": "é", "match": false, "note": "NFC applies once, before braces are expanded: the expansion e followed by U+0301 never meets an NFC path" },
+    { "condition": "path", "value": "re:^a...b\\.mkv$", "ignore_case": false, "path_b64": "Ye2ggGIubWt2", "match": true, "note": "a WTF-8 lone surrogate is three invalid bytes: three characters" },
+    { "condition": "path", "value": "a???b.mkv", "ignore_case": false, "path_b64": "Ye2ggGIubWt2", "match": true },
+    { "condition": "filename", "value": "[!a]*", "ignore_case": true, "path_b64": "RmlsbXMv6XTpLm1rdg==", "match": true },
+    { "condition": "path", "value": "re:(?-i)^Films/", "ignore_case": true, "path": "films/a.mkv", "match": false, "note": "(?-i) at the start undoes ignore_case" },
+    { "condition": "path", "value": "films/**", "ignore_case": true, "path": "Films", "match": true, "note": "** matches zero components, under ignore_case too" },
+    { "condition": "filename", "value": "re:\\{tmdb-[0-9]+\\}", "ignore_case": true, "path": "Films/Avatar {tmdb-19995}.mkv", "match": true },
+    { "condition": "ext", "value": "ß", "ignore_case": true, "path": "Films/a.ẞ", "match": true },
+    { "condition": "ext", "value": "σ", "ignore_case": true, "path": "Films/a.ς", "match": true },
+    { "condition": "ext", "value": "TAR.GZ", "ignore_case": true, "path": "Archives/x.tar.gz", "match": true },
+    { "condition": "ext", "value": "\ufffd", "ignore_case": false, "path_b64": "RmlsbXMvYS7/", "match": false, "note": "an invalid byte never equals U+FFFD" },
+    { "condition": "ext", "value": "\ufffd", "ignore_case": false, "path": "Films/a.\ufffd", "match": true },
+    { "condition": "ext", "values": ["mkv", "mp4"], "ignore_case": false, "path": "Films/a.mp4", "match": true, "note": "ext holds when one of its entries does" },
+    { "condition": "ext", "values": ["mkv", "mp4"], "ignore_case": false, "path": "Films/a.avi", "match": false },
     { "condition": "path", "value": "", "ignore_case": true, "error": true, "note": "empty glob" },
     { "condition": "path", "value": "Films/[a", "ignore_case": true, "error": true, "note": "invalid glob" },
     { "condition": "filename", "value": "re:(", "ignore_case": true, "error": true, "note": "invalid regex" },
@@ -111,6 +125,13 @@
     { "condition": "path", "value": "re:\\Qa\\E", "ignore_case": true, "error": true, "note": "outside the common Go/Rust subset (§29.5)" },
     { "condition": "ext", "value": "", "ignore_case": true, "error": true, "note": "empty extension" },
     { "condition": "ext", "value": ".mkv", "ignore_case": true, "error": true, "note": "an extension is written without the dot" },
-    { "condition": "ext", "value": "a/b", "ignore_case": true, "error": true, "note": "an extension never holds /" }
+    { "condition": "ext", "value": "a/b", "ignore_case": true, "error": true, "note": "an extension never holds /" },
+    { "condition": "filename", "value": "Films/*.mkv", "ignore_case": true, "error": true, "note": "a file name never holds /: use path" },
+    { "condition": "filename", "value": "**/a.mkv", "ignore_case": true, "error": true, "note": "a file name never holds /" },
+    { "condition": "path", "value": "re:", "ignore_case": true, "error": true, "note": "an empty regex" },
+    { "condition": "filename", "value": "re:{tmdb-[0-9]+}", "ignore_case": true, "error": true, "note": "write \\{ and \\}" },
+    { "condition": "path", "value": "re:\\\\\\d", "ignore_case": true, "error": true, "note": "an escaped backslash, then \\d" },
+    { "condition": "ext", "values": [], "ignore_case": true, "error": true, "note": "an empty list" },
+    { "condition": "ext", "values": ["mkv", ".mp4"], "ignore_case": true, "error": true, "note": "each entry is checked" }
   ]
 }

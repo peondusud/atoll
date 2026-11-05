@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §15.7, §15.8",
-  "description": "lpath_key, the collision key of a logical path: its NFD form, then the NTFS upcase table of Windows 7 to 10 plus ς → Σ applied to each BMP character, then the NFC form. Characters above U+FFFF are unchanged. A path that is not valid UTF-8 has no key (NULL in the catalog). Only characters assigned in Unicode 16.0 and unchanged since.",
+  "description": "lpath_key, the collision key of a logical path: its NFD form, then the NTFS upcase table of Windows 7 to 11 plus ς → Σ applied to each BMP character, then the NFC form. Characters above U+FFFF are unchanged. A path that is not valid UTF-8 has no key (NULL in the catalog). Only characters assigned in Unicode 16.0.",
   "cases": [
     { "path": "Film.mkv", "key": "FILM.MKV", "note": "Film.mkv and film.mkv collide" },
     { "path": "film.mkv", "key": "FILM.MKV" },

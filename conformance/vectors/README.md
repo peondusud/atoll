@@ -89,13 +89,25 @@ These vectors pin the matcher alone, which compares characters exactly. The NFC 
 | Field | Type | Meaning |
 |---|---|---|
 | `condition` | string | `path`, `filename` or `ext` |
-| `value` | string | for `path` and `filename`, a glob, or a regex after `re:`, as written in the configuration; for `ext`, one entry of the list |
+| `value` | string | for `path` and `filename`, a glob, or a regex after `re:`, as written in the configuration; for `ext`, a list of one entry |
+| `values` | array of strings | for `ext` only, instead of `value`: the whole list |
 | `ignore_case` | boolean | the rule's `ignore_case` |
 | `path`, `path_b64` | string | the logical path of the file; `filename` and `ext` look at its last component |
 | `match` | boolean | whether the condition holds for the file |
 | `error` | boolean | `true` when `value` is rejected when the configuration loads |
 
-An `error` case has no path and no `match`.
+A case has exactly one of `value` and `values`. An `error` case has no path and no `match`.
+
+### `regex.json` — the regex grammar (§29.5)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `pattern` | string | the regex, without the `re:` prefix |
+| `path`, `path_b64` | string | a logical path, matched by the regex as a `path` condition without `ignore_case` |
+| `match` | boolean | whether the regex matches the path |
+| `error` | boolean | `true` when the grammar rejects `pattern` |
+
+Every accepted pattern comes with one path that shows its meaning, the same in Go `regexp` and Rust `regex`.
 
 ### `lpath_key.json` — collision keys (§15.7, §15.8)
 
@@ -109,4 +121,4 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 
 ## Unicode versions
 
-The Go and Rust libraries do not use the same Unicode version (`specs.md` §29.5). Vectors that involve Unicode data (`nfc.json`, `match.json`, `lpath_key.json`) only use characters assigned in Unicode 16.0 whose case folding, properties and normalization have not changed since, and no run of more than 30 combining marks.
+The Go and Rust libraries do not use the same Unicode version (`specs.md` §29.5). Vectors that involve Unicode data (`nfc.json`, `match.json`, `regex.json`, `lpath_key.json`) only use characters assigned in Unicode 16.0, with expected results that no later version of the libraries' data changes. No vector holds a run of non-starters long enough for Go's normalization to insert U+034F (`specs.md` §29.5); the Go tests check it.

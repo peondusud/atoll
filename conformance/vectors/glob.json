@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §29.5",
-  "description": "In-house glob matcher, matched against a whole logical path without a leading /, or against a file name. Braces are expanded first, into at most 1024 patterns; the pattern matches when one of its expansions matches. A character is a Unicode scalar value encoded in valid UTF-8; each byte that is not part of a valid UTF-8 sequence counts as one character, which only ?, * and negated classes match. Characters are compared exactly: NFC and case folding (§11.3) belong to the rule matcher.",
+  "description": "In-house glob matcher, matched against a whole logical path without a leading /, or against a file name. Braces are expanded first; the product of the numbers of alternatives is at most 1024, and the pattern matches when one of its expansions matches. A character is a Unicode scalar value encoded in valid UTF-8; each byte that is not part of a valid UTF-8 sequence counts as one character, which only ?, * and negated classes match. Characters are compared exactly: NFC and case folding (§11.3) belong to the rule matcher.",
   "cases": [
     { "pattern": "Films/**", "path": "Films/Avatar (2009)/Avatar.mkv", "match": true },
     { "pattern": "Films/**", "path": "Films/a.mkv", "match": true },
@@ -125,6 +125,10 @@
     { "pattern": "[\u0000-￿]", "path_b64": "/w==", "match": false },
     { "pattern": "�", "path_b64": "/w==", "match": false, "note": "U+FFFD matches only its own valid encoding" },
     { "pattern": "�", "path": "�", "match": true },
+    { "pattern": "[--a]", "path": "0", "match": true, "note": "a - between two characters marks a range: here from - to a" },
+    { "pattern": "[--a]", "path": "b", "match": false },
+    { "pattern": "[!^a]", "path": "^", "match": false, "note": "^ is reserved only right after [" },
+    { "pattern": "[!^a]", "path": "b", "match": true },
     { "pattern": "", "error": true, "note": "empty pattern" },
     { "pattern": "/Films/**", "error": true, "note": "logical paths have no leading /" },
     { "pattern": "Films/", "error": true, "note": "empty component" },
@@ -144,7 +148,7 @@
     { "pattern": "[a-c-e]", "error": true, "note": "a - inside a class is a range or comes first or last" },
     { "pattern": "[a--]", "error": true, "note": "reversed range from a to -" },
     { "pattern": "[^a]", "error": true, "note": "^ is reserved at the start of a class: negation is written [!a]" },
-    { "pattern": "[a/b]", "error": true, "note": "a class never holds /" },
+    { "pattern": "[a/b]", "error": true, "note": "/ is never a character or a range endpoint in a class" },
     { "pattern": "{a,b", "error": true, "note": "unterminated braces" },
     { "pattern": "a}", "error": true, "note": "unmatched }" },
     { "pattern": "{a,{b,c}}", "error": true, "note": "braces do not nest" },
@@ -156,6 +160,7 @@
     { "pattern": "\\*", "error": true, "note": "the backslash is reserved for a future escape syntax" },
     { "pattern": "a\\b", "error": true, "note": "the backslash is reserved for a future escape syntax" },
     { "pattern": "[\\]", "error": true, "note": "the backslash is reserved, inside classes too" },
-    { "pattern": "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}", "error": true, "note": "2048 expansions: more than 1024" }
+    { "pattern": "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}", "error": true, "note": "2048 expansions: more than 1024" },
+    { "pattern": "{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}", "error": true, "note": "the limit counts the product of the numbers of alternatives (2048), not the distinct expansions (1)" }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §11.3, §29.5",
-  "description": "NFC form of a path, run by run: each maximal run of valid UTF-8 is put in NFC form and every other byte is kept as it is. Only characters assigned in Unicode 16.0 and unchanged since, and runs of at most 30 combining marks.",
+  "description": "NFC form of a path, run by run: each maximal run of valid UTF-8 is put in NFC form and every other byte is kept as it is. Only characters assigned in Unicode 16.0, and no run of non-starters long enough for Go to insert U+034F.",
   "cases": [
     { "path": "Films/Avatar (2009)/Avatar.mkv", "nfc": "Films/Avatar (2009)/Avatar.mkv", "note": "ASCII is unchanged" },
     { "path": "", "nfc": "" },
