@@ -109,6 +109,8 @@
     { "condition": "ext", "value": "\ufffd", "ignore_case": false, "path": "Films/a.\ufffd", "match": true },
     { "condition": "ext", "values": ["mkv", "mp4"], "ignore_case": false, "path": "Films/a.mp4", "match": true, "note": "ext holds when one of its entries does" },
     { "condition": "ext", "values": ["mkv", "mp4"], "ignore_case": false, "path": "Films/a.avi", "match": false },
+    { "condition": "filename", "value": "a\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301", "ignore_case": false, "path": "Films/a\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301", "match": true, "note": "30 non-starters in a row, the most a pattern may hold (\u00a729.5)" },
+    { "condition": "filename", "value": "\uac01\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301", "ignore_case": false, "path": "Films/\uac01\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301", "match": true, "note": "\uac01 ends with two non-starters, the jamo V and T: 30 in all" },
     { "condition": "path", "value": "", "ignore_case": true, "error": true, "note": "empty glob" },
     { "condition": "path", "value": "Films/[a", "ignore_case": true, "error": true, "note": "invalid glob" },
     { "condition": "filename", "value": "re:(", "ignore_case": true, "error": true, "note": "invalid regex" },
@@ -132,6 +134,11 @@
     { "condition": "filename", "value": "re:{tmdb-[0-9]+}", "ignore_case": true, "error": true, "note": "write \\{ and \\}" },
     { "condition": "path", "value": "re:\\\\\\d", "ignore_case": true, "error": true, "note": "an escaped backslash, then \\d" },
     { "condition": "ext", "values": [], "ignore_case": true, "error": true, "note": "an empty list" },
-    { "condition": "ext", "values": ["mkv", ".mp4"], "ignore_case": true, "error": true, "note": "each entry is checked" }
+    { "condition": "ext", "values": ["mkv", ".mp4"], "ignore_case": true, "error": true, "note": "each entry is checked" },
+    { "condition": "filename", "value": "a\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301", "ignore_case": false, "error": true, "note": "31 non-starters in a row: Go would insert U+034F (\u00a729.5)" },
+    { "condition": "path", "value": "re:^a\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301$", "ignore_case": false, "error": true, "note": "a regex is checked too" },
+    { "condition": "ext", "values": ["mkv", "a\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301"], "ignore_case": false, "error": true, "note": "an ext entry is checked too" },
+    { "condition": "filename", "value": "\uac01\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301\u0301", "ignore_case": false, "error": true, "note": "\uac01 ends with two non-starters: 31 in all" },
+    { "condition": "filename", "value": "\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133\u3133", "ignore_case": false, "error": true, "note": "under NFKD, U+3133 is the jamo T U+11AA, a non-starter: 31 in a row" }
   ]
 }
