@@ -2,6 +2,21 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Capacity: `min_free`, strict domains, reachable (specs.md §12.4, §13)
+
+Commit "Define the capacity with min_free and strict domains", on `main`.
+
+- The maintainer's decisions:
+  - a disk's size in the formula is its capacity minus `min_free`, for the disks the solver can write to;
+  - with fewer copies than domains, each copy goes to a different domain, and a disk with no `domain` forms its own;
+  - the reachable capacity is a dry run of the solver, plus the formula on the space left. It waits for the solver.
+- Derived: with strict domains, the formula applies to the domains' sizes when k < m; otherwise the capacity is the smaller of the formula and the smallest domain.
+- Contract: `conformance/vectors/min_free.json` holds 23 cases, and `capacity_strict.json` 28. `capacity.json` gains the three §13.2 cases with `min_free`.
+- Code: `value.MinFree` and `solver.StrictCapacity`. Nothing calls them outside their tests yet.
+- Tests:
+  - a property test places one-byte files by trying every choice on small pools, and compares with the formula;
+  - the cases were recomputed outside Go, in Python with exact integers, from what the numbers mean.
+
 ## Copies that differ at `disk add` and `catalog rebuild` (specs.md §4, §9, §15.7, §18)
 
 Commit "Define copies that differ when a disk is added or the catalog rebuilt", on `main`.

@@ -20,14 +20,13 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 ## Pure core still without vectors (specs.md §29.4)
 
-- **Capacity** (§13): the formula is done. Still open: what s_i is (raw capacity or minus `min_free`), the capacity with strict domains, and the capacity reachable without moving originals.
 - **Rules → effective policy** (§11.2, §11.3, §12.2):
   - ordered rules, where the first match wins;
   - `[defaults]` and the `strategy` presets;
   - the properties of §11.2.
 
   Needs the configuration schema below.
-- **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility, NTFS collisions through `names.TargetNames`, and the branch path limit through `names.FitsBranch`), the job plan, and property tests.
+- **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility, NTFS collisions through `names.TargetNames`, and the branch path limit through `names.FitsBranch`), the job plan, the reachable capacity as a dry run of that plan, and property tests.
 - **decision**: **BLAKE3** (§16): choose a Go implementation with SIMD after a throughput benchmark. It is a new dependency, and its license must be compatible with GPL-3.0-or-later.
 
 ## Contracts not yet defined (specs.md §29.3)

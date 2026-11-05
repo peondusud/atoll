@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §13.1, §29.5",
+  "description": "What min_free reserves on a disk, and what the solver may fill. The smallest of the values applies; a percentage is of the disk's capacity, computed exactly and rounded down. What may be filled is the capacity minus the reserve, or 0 if the reserve is larger.",
+  "cases": [
+    { "min_free": ["5%", "100GiB"], "capacity": 4000000000000, "reserved": 107374182400, "usable": 3892625817600, "note": "§13.2: 5% is 200 GB, so 100 GiB is smaller" },
+    { "min_free": ["5%", "100GiB"], "capacity": 1000000000000, "reserved": 50000000000, "usable": 950000000000, "note": "5% is 50 GB, the smaller here" },
+    { "min_free": ["100GiB", "5%"], "capacity": 1000000000000, "reserved": 50000000000, "usable": 950000000000, "note": "the order of the values does not matter" },
+    { "min_free": ["5%", "100GiB"], "capacity": 2147483648000, "reserved": 107374182400, "usable": 2040109465600, "note": "both equal" },
+    { "min_free": ["5%", "100GiB", "1GB"], "capacity": 4000000000000, "reserved": 1000000000, "usable": 3999000000000, "note": "any number of values" },
+    { "min_free": ["5%"], "capacity": 4000000000000, "reserved": 200000000000, "usable": 3800000000000, "note": "a percentage alone" },
+    { "min_free": ["100GiB"], "capacity": 4000000000000, "reserved": 107374182400, "usable": 3892625817600, "note": "a size alone" },
+    { "min_free": ["5%"], "capacity": 99, "reserved": 4, "usable": 95, "note": "4.95 bytes: rounded down" },
+    { "min_free": ["2.5%"], "capacity": 1000, "reserved": 25, "usable": 975, "note": "a fraction of a percent" },
+    { "min_free": ["100GiB"], "capacity": 1000, "reserved": 107374182400, "usable": 0, "note": "a reserve larger than the disk: nothing to fill" },
+    { "min_free": ["1000B"], "capacity": 1000, "reserved": 1000, "usable": 0, "note": "exactly the disk" },
+    { "min_free": ["999B"], "capacity": 1000, "reserved": 999, "usable": 1 },
+    { "min_free": ["0%"], "capacity": 1000, "reserved": 0, "usable": 1000 },
+    { "min_free": ["0B"], "capacity": 1000, "reserved": 0, "usable": 1000 },
+    { "min_free": ["100%"], "capacity": 1000, "reserved": 1000, "usable": 0 },
+    { "min_free": ["5%", "100GiB"], "capacity": 0, "reserved": 0, "usable": 0, "note": "an empty disk size" },
+    { "min_free": ["5%"], "capacity": 9223372036854775807, "reserved": 461168601842738790, "usable": 8762203435012037017, "note": "the largest size: no overflow" },
+    { "min_free": [], "capacity": 1000, "error": true, "note": "at least one value" },
+    { "min_free": ["5"], "capacity": 1000, "error": true, "note": "neither a size nor a percentage" },
+    { "min_free": ["5 %"], "capacity": 1000, "error": true, "note": "no space in the grammar" },
+    { "min_free": ["101%"], "capacity": 1000, "error": true, "note": "above 100%" },
+    { "min_free": ["5%", "abc"], "capacity": 1000, "error": true, "note": "one bad value is enough" },
+    { "min_free": ["5%"], "capacity": -1, "error": true, "note": "a negative capacity" }
+  ]
+}

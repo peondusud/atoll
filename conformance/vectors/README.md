@@ -210,6 +210,25 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `ns` | integer | the value stored; the nearest limit when the time is out of range |
 | `error` | boolean | `true` when `nanoseconds` is outside 0 to 999999999 |
 
+### `min_free.json` — what `min_free` leaves to fill (§13.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `min_free` | array of strings | the setting: sizes and percentages |
+| `capacity` | integer | the disk's capacity in bytes |
+| `reserved` | integer | what stays free: the smallest of the values |
+| `usable` | integer | what the solver may fill: `capacity` minus `reserved`, or 0 |
+| `error` | boolean | `true` when a value is refused, the list is empty, or `capacity` is negative |
+
+### `capacity_strict.json` — capacity with strict domains (§13.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `domains` | array of arrays of integers | the sizes of each domain's disks, in any order |
+| `k` | integer | the copies per file: `replicas` + 1 |
+| `capacity` | integer | the capacity in bytes, rounded down |
+| `error` | boolean | `true` when `capacity.json` would refuse the input, or a domain has no disk |
+
 ### `capacity.json` — capacity of a pool (§13.1)
 
 | Field | Type | Meaning |

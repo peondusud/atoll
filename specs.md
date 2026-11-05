@@ -411,7 +411,7 @@ Until a strategy is implemented (see §28), it falls back to `most-free`, and th
   - the path within the limit of that disk's mergerfs branch (§15.8);
   - the target path is free.
 - **Strict settings**, which `overflow` never relaxes:
-  - `spread_mode = "strict"`: at least one copy in each failure domain, as long as the number of copies allows it;
+  - `spread_mode = "strict"`: at least one copy in each failure domain, as long as the number of copies allows it; with fewer copies than domains, each copy in a different domain. A disk with no `domain` forms its own domain;
   - `tags_mode = "strict"`: only disks carrying one of the rule's `tags` (the equivalent of DrivePool's hard file-placement limit).
   When they cannot be met, the file stays `degraded` and the status says so.
 - **Preferences**, in order: the rule's `tags` and `domains` (with `tags_mode = "prefer"`); spreading across domains (`spread`); `colocate`; the `new_files` strategy; a disk that is already spinning.
@@ -449,12 +449,15 @@ U(k) = min over j = 0 … k−1 of (S − s1 − … − sj) / (k − j)
 - The result is computed exactly, then rounded down to whole bytes.
 - With more copies than disks (k > n) the capacity is 0: no file can have k copies on k different disks. The formula gives the same result when the missing disks count as size 0.
 - k is at least 1, no size is negative, and S fits in a signed 64-bit integer; any other input is an error. No real pool comes near that total: the limit keeps the two versions from overflowing differently.
+- A size s is what the solver may fill on that disk: its capacity minus `min_free`, or 0 if `min_free` is larger. `min_free` is the smallest of its values, each a size or a percentage of the disk's capacity, rounded down. Only the disks the solver can write to count: role `data`, state `online` or `standby` (§12.4). So the result does not move as disks fill, and it does not account for data outside `media/` or for the trash; the reachable capacity does (§13.3).
+- With `spread_mode = "strict"` (§12.4) and m failure domains, a domain's size is the sum of its disks' sizes. With fewer copies than domains (k < m), each copy goes to a different domain, so the formula applies to the domains' sizes. Otherwise (k ≥ m), every domain holds a copy of every file, so the capacity is the smaller of U(k) over the disks and the smallest domain's size. A domain with no disk is an error.
 
 ### 13.2 Example: 4 + 6 + 8 + 12 TB
 
-- x1: 30 TB; x2: 15 TB; x3: 9 TB.
-- With `spread_mode = "strict"` and two domains A and B, x2 capacity is capped at min(A, B).
-- Since user copies do not move, the real capacity can be lower than U(k). `atoll capacity` shows both the theoretical capacity and the capacity reachable without moving originals.
+- Before `min_free`: x1: 30 TB; x2: 15 TB; x3: 9 TB.
+- With `min_free = ["5%", "100GiB"]`, each of these disks gives up 100 GiB, the smaller value: x1: 29.57 TB; x2: 14.79 TB; x3: 8.84 TB.
+- With `spread_mode = "strict"` and two domains A = 4 + 6 and B = 8 + 12, before `min_free`: x2: 10 TB, the smallest domain; x3: 9 TB, as U(3) is below it.
+- Since user copies do not move, the real capacity can be lower than U(k). `atoll capacity` shows both the theoretical capacity and the capacity reachable without moving originals (§13.3).
 
 ### 13.3 Solver
 
@@ -463,6 +466,7 @@ U(k) = min over j = 0 … k−1 of (S − s1 − … − sj) / (k − j)
 - Pure, deterministic function, covered by property tests; every list it outputs is sorted by a documented key.
 - Hysteresis: rebalancing starts only when the share of bytes correctly placed falls below `[balance].trigger.ratio_below`, or when the bytes to move exceed `or_more_than`.
 - Status indicator: share of files at the wanted level, share of bytes correctly placed (`atoll status`).
+- Reachable capacity, for each k: the solver plans without running anything, with `move_originals = false` and every managed file wanted at k copies. The result is the bytes of the files that reach k copies in that plan, plus the formula of §13.1 applied to the free space that plan leaves, minus `min_free`, on each disk. So it accounts for data outside `media/` and for the trash, and it is what Atoll would really do; there is no second algorithm. It reads the whole catalog and wakes no disk.
 
 ## 14. Replication
 
@@ -1109,7 +1113,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula, solver plans, BLAKE3 file and chunk hashes;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
@@ -1128,6 +1132,7 @@ number   = digits [ "." digits ]
 ```
 
 - Each percentage is a share of what its key states: `min_free`, `fill_to` and `trash.max_size` of each disk's capacity; `cache.max_fill` of the cache's capacity; `ratio_below` of the bytes correctly placed.
+- `min_free` is a list of one or more sizes and percentages; the smallest applies to each disk (§13.1).
 - Time windows use wall-clock time in `timezone` and may wrap past midnight. A window crossing a daylight-saving change is shortened or lengthened accordingly; on a spring-forward night the missing hour is simply skipped.
 - Glob, implemented in-house in both versions (third-party matchers disagree: doublestar's `*` stops at `/`, globset's crosses it), matched against the whole logical path without a leading `/`:
   - `*` matches any run of characters except `/`; `?` one character except `/`;
