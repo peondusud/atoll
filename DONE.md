@@ -2,6 +2,21 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Capacity formula (specs.md §13.1)
+
+Commit "Add the capacity formula and its vectors", on `main`.
+
+- The maintainer's decisions:
+  - the result is rounded down to whole bytes;
+  - with more copies than disks, the capacity is 0.
+- Also stated in §13.1: k is at least 1, no size is negative, and the total fits in a signed 64-bit integer. Any other input is an error.
+- Contract: `conformance/vectors/capacity.json` holds 42 cases.
+- Code: `solver.Capacity`, with integers only.
+- Tests:
+  - the values were checked outside Go, in PowerShell with exact integers, against the formula and against the largest x such that k copies of x bytes fit;
+  - a property test compares the function with that second definition on 20,000 small pools;
+  - of 20 code mutations, 19 make a vector fail. The last, a function that sorts its own input, makes the property test fail.
+
 ## One spelling for vector flags (specs.md §29.4)
 
 Commit "Refuse vector flags other than true", on `main`.

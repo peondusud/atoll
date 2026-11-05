@@ -132,6 +132,15 @@ The rules for a single name are pinned by the name corpus, `conformance/corpus/n
 
 A case has exactly one of `key` and `no_key`. Paths that collide have the same key.
 
+### `capacity.json` — capacity of a pool (§13.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `sizes` | array of integers | the size of each disk in bytes, in any order |
+| `k` | integer | the copies per file: `replicas` + 1 |
+| `capacity` | integer | `U(k)` in bytes, computed exactly, then rounded down; 0 with more copies than disks |
+| `error` | boolean | `true` when the input is rejected: `k` below 1, a negative size, or a total that does not fit in a signed 64-bit integer |
+
 ## Unicode versions
 
 The Go and Rust libraries do not use the same Unicode version (`specs.md` §29.5). Vectors that involve Unicode data (`nfc.json`, `match.json`, `regex.json`, `lpath_key.json`) only use characters assigned in Unicode 16.0, with expected results that no later version of the libraries' data changes. No accepted pattern and no path holds a run of non-starters long enough for Go's normalization to insert U+034F (`specs.md` §29.5); the Go tests check it. Rejected patterns may: both versions reject them before they normalize them.

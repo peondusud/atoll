@@ -435,6 +435,10 @@ For n disks of sizes s1 ≥ s2 ≥ … ≥ sn, total S, and k copies per file (k
 U(k) = min over j = 0 … k−1 of (S − s1 − … − sj) / (k − j)
 ```
 
+- The result is computed exactly, then rounded down to whole bytes.
+- With more copies than disks (k > n) the capacity is 0: no file can have k copies on k different disks. The formula gives the same result when the missing disks count as size 0.
+- k is at least 1, no size is negative, and S fits in a signed 64-bit integer; any other input is an error. No real pool comes near that total: the limit keeps the two versions from overflowing differently.
+
 ### 13.2 Example: 4 + 6 + 8 + 12 TB
 
 - x1: 30 TB; x2: 15 TB; x3: 9 TB.

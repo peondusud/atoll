@@ -30,11 +30,7 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 ## Pure core still without vectors (specs.md §29.4)
 
-- **Capacity formula** (§13.1): `capacity.json` can be written now. Decide two points first:
-  - rounding to whole bytes (floor);
-  - k greater than the number of disks (capacity 0).
-
-  Later: what s_i is (raw capacity or minus `min_free`), the capacity with strict domains, and the capacity reachable without moving originals.
+- **Capacity** (§13): the formula is done. Still open: what s_i is (raw capacity or minus `min_free`), the capacity with strict domains, and the capacity reachable without moving originals.
 - **decision**: **original selection** (§7). Open points:
   - comparing creation times at the coarser precision, and its rounding;
   - whether surplus copies, and copies on standby, readonly or draining disks, are eligible;
