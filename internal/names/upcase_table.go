@@ -6,7 +6,7 @@ package names
 const upcaseEntries = 973
 
 // ntfsUpcase maps a BMP character through the NTFS upcase table that Windows 7
-// to 10 and mkntfs write. Every other character is returned unchanged.
+// to 11 and mkntfs write. Every other character is returned unchanged.
 func ntfsUpcase(r rune) rune {
 	switch {
 	case 0x0061 <= r && r <= 0x007A:

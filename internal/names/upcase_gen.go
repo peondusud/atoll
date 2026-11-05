@@ -1,7 +1,7 @@
 //go:build ignore
 
 // upcase_gen writes upcase_table.go: the NTFS upcase table that Windows 7 to
-// 10 and mkntfs write (specs.md §15.8), derived from Unicode 5.1.0 data.
+// 11 and mkntfs write (specs.md §15.8), derived from Unicode 5.1.0 data.
 //
 // The rule: for each BMP character c whose simple uppercase (UnicodeData
 // field 12) is U, keep c → U only when the simple lowercase of U (field 13)
@@ -101,7 +101,7 @@ func main() {
 	fmt.Fprintf(&b, "// upcaseEntries is the number of characters ntfsUpcase changes.\n")
 	fmt.Fprintf(&b, "const upcaseEntries = %d\n\n", len(entries))
 	fmt.Fprintf(&b, "// ntfsUpcase maps a BMP character through the NTFS upcase table that Windows 7\n")
-	fmt.Fprintf(&b, "// to 10 and mkntfs write. Every other character is returned unchanged.\n")
+	fmt.Fprintf(&b, "// to 11 and mkntfs write. Every other character is returned unchanged.\n")
 	fmt.Fprintf(&b, "func ntfsUpcase(r rune) rune {\n\tswitch {\n")
 	for _, r := range runs {
 		switch {

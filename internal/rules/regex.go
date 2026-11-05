@@ -1,0 +1,530 @@
+package rules
+
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
+
+// MaxRegexBytes is the longest regex text the grammar of specs.md §29.5
+// accepts, in NFC form. It keeps Go's own size and nesting limits out of
+// reach, so both versions reject exactly the same regexes.
+const MaxRegexBytes = 1000
+
+// maxRepeat bounds each repeat count, and the product of nested counts.
+const maxRepeat = 1000
+
+// RegexError reports a regex outside the grammar of specs.md §29.5.
+type RegexError struct {
+	Regex  string // the regex text, without re:
+	Offset int    // byte offset of the error in Regex
+	Msg    string
+}
+
+func (e *RegexError) Error() string {
+	return fmt.Sprintf("regex %q: %s, at byte %d", e.Regex, e.Msg, e.Offset)
+}
+
+// checkRegex reports whether text, in NFC form, follows the regex grammar of
+// specs.md §29.5: the common subset of Go regexp and Rust regex in which both
+// engines give the same meaning.
+func checkRegex(text string) error {
+	p := &regexParser{s: text}
+	if !utf8.ValidString(text) {
+		return p.fail(0, "not valid UTF-8")
+	}
+	if len(text) > MaxRegexBytes {
+		return p.fail(MaxRegexBytes, "longer than %d bytes", MaxRegexBytes)
+	}
+	if _, err := p.regex(); err != nil {
+		return err
+	}
+	if p.i < len(p.s) {
+		return p.fail(p.i, ") without (")
+	}
+	return nil
+}
+
+type regexParser struct {
+	s string
+	i int
+}
+
+func (p *regexParser) fail(at int, format string, args ...any) error {
+	return &RegexError{Regex: p.s, Offset: at, Msg: fmt.Sprintf(format, args...)}
+}
+
+// peek returns the next character, or -1 at the end.
+func (p *regexParser) peek() rune {
+	if p.i >= len(p.s) {
+		return -1
+	}
+	r, _ := utf8.DecodeRuneInString(p.s[p.i:])
+	return r
+}
+
+func (p *regexParser) next() rune {
+	r, w := utf8.DecodeRuneInString(p.s[p.i:])
+	p.i += w
+	return r
+}
+
+// The parse functions return the largest product of nested counted repeats
+// in what they parsed, the "chain product" of specs.md §29.5.
+
+// regex = branch { "|" branch }
+func (p *regexParser) regex() (int, error) {
+	prod := 1
+	for {
+		n, err := p.branch()
+		if err != nil {
+			return 0, err
+		}
+		prod = max(prod, n)
+		if p.peek() != '|' {
+			return prod, nil
+		}
+		p.i++
+	}
+}
+
+// branch = piece { piece }
+func (p *regexParser) branch() (int, error) {
+	start, prod := p.i, 1
+	for {
+		if r := p.peek(); r == -1 || r == '|' || r == ')' {
+			break
+		}
+		n, err := p.piece()
+		if err != nil {
+			return 0, err
+		}
+		prod = max(prod, n)
+	}
+	if p.i == start {
+		return 0, p.fail(start, `empty alternative: "", "a|" and "()" are not allowed`)
+	}
+	return prod, nil
+}
+
+// piece = atom [ repeat ] | anchor | "(?" flags ")"
+func (p *regexParser) piece() (int, error) {
+	start := p.i
+	rest := p.s[p.i:]
+	switch {
+	case rest[0] == '^' || rest[0] == '$':
+		p.i++
+		return 1, p.noRepeat(start)
+	case strings.HasPrefix(rest, `\A`) || strings.HasPrefix(rest, `\z`):
+		p.i += 2
+		return 1, p.noRepeat(start)
+	case strings.HasPrefix(rest, "(?") && !strings.HasPrefix(rest, "(?:"):
+		p.i += 2
+		if err := p.flags(start); err != nil {
+			return 0, err
+		}
+		switch p.peek() {
+		case ')':
+			p.i++
+			return 1, p.noRepeat(start)
+		case ':':
+			p.i++
+			inner, err := p.group(start)
+			if err != nil {
+				return 0, err
+			}
+			return p.repeat(inner)
+		default:
+			return 0, p.fail(start, "only (?:…), (?flags) and (?flags:…) groups are allowed")
+		}
+	}
+	inner, err := p.atom()
+	if err != nil {
+		return 0, err
+	}
+	return p.repeat(inner)
+}
+
+// group parses a regex and its closing ), the opening part being consumed.
+func (p *regexParser) group(start int) (int, error) {
+	inner, err := p.regex()
+	if err != nil {
+		return 0, err
+	}
+	if p.peek() != ')' {
+		return 0, p.fail(start, "( without )")
+	}
+	p.i++
+	return inner, nil
+}
+
+// noRepeat rejects a repeat after something that is not an atom.
+func (p *regexParser) noRepeat(start int) error {
+	switch p.peek() {
+	case '*', '+', '?', '{':
+		return p.fail(start, "nothing to repeat")
+	}
+	return nil
+}
+
+// flags = letters [ "-" letters ] | "-" letters, letters among i, m, s, U,
+// each at most once.
+func (p *regexParser) flags(start int) error {
+	seen := map[rune]bool{}
+	letters := func() int {
+		n := 0
+		for {
+			switch r := p.peek(); r {
+			case 'i', 'm', 's', 'U':
+				if seen[r] {
+					return -1
+				}
+				seen[r] = true
+				p.i++
+				n++
+			default:
+				return n
+			}
+		}
+	}
+	n := letters()
+	if n < 0 {
+		return p.fail(start, "a flag appears twice")
+	}
+	if p.peek() == '-' {
+		p.i++
+		m := letters()
+		if m < 0 {
+			return p.fail(start, "a flag appears twice")
+		}
+		if m == 0 {
+			return p.fail(start, "a - in flags must be followed by flags")
+		}
+		return nil
+	}
+	if n == 0 {
+		return p.fail(start, "unknown group: only the flags i, m, s and U are allowed")
+	}
+	return nil
+}
+
+// atom = char | "." | class | "(" regex ")" | "(?:" regex ")"
+func (p *regexParser) atom() (int, error) {
+	start := p.i
+	switch r := p.peek(); r {
+	case '.':
+		p.i++
+		return 1, nil
+	case '[':
+		return 1, p.class()
+	case '(':
+		if strings.HasPrefix(p.s[p.i:], "(?:") {
+			p.i += 3
+		} else {
+			p.i++
+		}
+		return p.group(start)
+	case '\\':
+		_, _, err := p.escape(false)
+		return 1, err
+	case '*', '+', '?':
+		return 0, p.fail(start, "nothing to repeat")
+	case '{', '}':
+		return 0, p.fail(start, `a %c outside a repeat must be written \%c`, r, r)
+	case ']':
+		return 0, p.fail(start, `a ] outside a class must be written \]`)
+	default:
+		p.next()
+		return 1, nil
+	}
+}
+
+// repeat = ( "*" | "+" | "?" | "{" n "}" | "{" n ",}" | "{" n "," n "}" ) [ "?" ]
+// It returns the chain product of the repeated atom, whose own product is
+// inner.
+func (p *regexParser) repeat(inner int) (int, error) {
+	start := p.i
+	count := 1
+	switch p.peek() {
+	case '*', '+', '?':
+		p.i++
+	case '{':
+		p.i++
+		lo, ok := p.number()
+		if !ok {
+			return 0, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
+		}
+		hi := lo
+		if p.peek() == ',' {
+			p.i++
+			hi = -1
+			if p.peek() != '}' {
+				if hi, ok = p.number(); !ok {
+					return 0, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
+				}
+			}
+		}
+		if p.peek() != '}' {
+			return 0, p.fail(start, `a { must start a repeat {n}, {n,} or {n,m}; write \{ for a {`)
+		}
+		p.i++
+		switch {
+		case lo > maxRepeat || hi > maxRepeat:
+			return 0, p.fail(start, "a repeat count is at most %d", maxRepeat)
+		case hi >= 0 && lo > hi:
+			return 0, p.fail(start, "in {n,m}, n must not exceed m")
+		case hi == 0:
+			// An upper bound of 0 ends every chain through this repeat.
+			inner, count = 1, 1
+		case hi > 0:
+			count = hi
+		case lo > 0:
+			count = lo
+		}
+	default:
+		return inner, nil
+	}
+	if p.peek() == '?' {
+		p.i++ // lazy
+	}
+	switch p.peek() {
+	case '*', '+', '?', '{':
+		return 0, p.fail(p.i, "a repeat applies to an atom: write (?:…) around a repeated part")
+	}
+	if prod := inner * count; prod <= maxRepeat {
+		return prod, nil
+	}
+	return 0, p.fail(start, "nested repeats multiply to more than %d", maxRepeat)
+}
+
+// number = "0" | nonzero { digit }, read at most up to 4 digits.
+func (p *regexParser) number() (int, bool) {
+	start := p.i
+	for p.i < len(p.s) && '0' <= p.s[p.i] && p.s[p.i] <= '9' {
+		p.i++
+	}
+	digits := p.s[start:p.i]
+	switch {
+	case digits == "" || len(digits) > 4:
+		return 0, false
+	case len(digits) > 1 && digits[0] == '0':
+		return 0, false
+	}
+	n := 0
+	for _, d := range digits {
+		n = 10*n + int(d-'0')
+	}
+	return n, true
+}
+
+// escapable are the characters a backslash makes literal.
+const escapable = `\.+*?()|[]{}^$-`
+
+// escape parses an escape: a literal escape, a control escape, a hex escape
+// or a property. It returns the character, or prop true for a property.
+func (p *regexParser) escape(inClass bool) (r rune, prop bool, err error) {
+	start := p.i
+	p.i++ // the backslash
+	if p.i >= len(p.s) {
+		return 0, false, p.fail(start, "a trailing backslash")
+	}
+	c := p.s[p.i]
+	switch c {
+	case 'a', 'f', 't', 'n', 'r', 'v':
+		p.i++
+		return controlEscape(c), false, nil
+	case 'x':
+		p.i++
+		r, err := p.hex(start)
+		return r, false, err
+	case 'p', 'P':
+		p.i++
+		return 0, true, p.property(start)
+	case 'd', 'D':
+		return 0, false, p.fail(start, `\%c means different things in Go and Rust: write [0-9] or [^0-9]`, c)
+	case 'w', 'W':
+		return 0, false, p.fail(start, `\%c means different things in Go and Rust: write [0-9A-Za-z_] or [\p{L}\p{N}_]`, c)
+	case 's', 'S':
+		return 0, false, p.fail(start, `\%c means different things in Go and Rust: write a class such as [ \t]`, c)
+	case 'b', 'B':
+		return 0, false, p.fail(start, `\%c means different things in Go and Rust, and the common subset has no word boundary`, c)
+	case 'Q', 'E':
+		return 0, false, p.fail(start, `\Q…\E exists in Go only: escape each character with \`)
+	case '<', '>':
+		return 0, false, p.fail(start, `\%c is a word boundary in Rust and a literal %c in Go: write %c`, c, c, c)
+	case 'A', 'z':
+		if inClass {
+			return 0, false, p.fail(start, `\%c is not allowed in a class`, c)
+		}
+	}
+	if '0' <= c && c <= '9' {
+		return 0, false, p.fail(start, `back-references and octal escapes are not supported: write \x{…}`)
+	}
+	if strings.IndexByte(escapable, c) >= 0 {
+		p.i++
+		return rune(c), false, nil
+	}
+	r, _ = utf8.DecodeRuneInString(p.s[p.i:])
+	return 0, false, p.fail(start, `\%c is not an allowed escape`, r)
+}
+
+// controlEscape returns the character of \a, \f, \t, \n, \r or \v.
+func controlEscape(c byte) rune {
+	switch c {
+	case 'a':
+		return '\a'
+	case 'f':
+		return '\f'
+	case 't':
+		return '\t'
+	case 'n':
+		return '\n'
+	case 'r':
+		return '\r'
+	default:
+		return '\v'
+	}
+}
+
+// hex parses the digits of \xHH or \x{H…}, the \x being consumed.
+func (p *regexParser) hex(start int) (rune, error) {
+	isHex := func(c byte) bool {
+		return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+	}
+	digits := ""
+	if p.peek() == '{' {
+		end := strings.IndexByte(p.s[p.i:], '}')
+		if end < 0 {
+			return 0, p.fail(start, `\x{ without }`)
+		}
+		digits = p.s[p.i+1 : p.i+end]
+		p.i += end + 1
+		if digits == "" || len(digits) > 6 {
+			return 0, p.fail(start, `\x{…} holds 1 to 6 hexadecimal digits`)
+		}
+	} else {
+		if p.i+2 > len(p.s) {
+			return 0, p.fail(start, `\x is followed by two hexadecimal digits`)
+		}
+		digits = p.s[p.i : p.i+2]
+		p.i += 2
+	}
+	v := rune(0)
+	for i := 0; i < len(digits); i++ {
+		c := digits[i]
+		if !isHex(c) {
+			return 0, p.fail(start, `\x takes hexadecimal digits`)
+		}
+		switch {
+		case c <= '9':
+			v = 16*v + rune(c-'0')
+		case c >= 'a':
+			v = 16*v + rune(c-'a'+10)
+		default:
+			v = 16*v + rune(c-'A'+10)
+		}
+	}
+	if !utf8.ValidRune(v) {
+		return 0, p.fail(start, `\x{%X} is not a Unicode scalar value`, v)
+	}
+	return v, nil
+}
+
+// property parses the name of \p or \P, the letter being consumed.
+func (p *regexParser) property(start int) error {
+	if p.i >= len(p.s) {
+		return p.fail(start, `\p and \P need a name`)
+	}
+	if p.s[p.i] != '{' {
+		switch p.s[p.i] {
+		case 'C', 'L', 'M', 'N', 'P', 'S', 'Z':
+			p.i++
+			return nil
+		}
+		return p.fail(start, `\p and \P take one of C L M N P S Z, or a name in braces`)
+	}
+	end := strings.IndexByte(p.s[p.i:], '}')
+	if end < 0 {
+		return p.fail(start, `\p{ without }`)
+	}
+	name := p.s[p.i+1 : p.i+end]
+	p.i += end + 1
+	if !isCategory(name) && !isScript(name) {
+		return p.fail(start, "%q is neither a general category nor a script of Unicode 16.0, spelled exactly", name)
+	}
+	return nil
+}
+
+// class = "[" [ "^" ] item { item } "]"
+func (p *regexParser) class() error {
+	start := p.i
+	p.i++
+	if p.peek() == '^' {
+		p.i++
+	}
+	items := 0
+	for {
+		if p.i >= len(p.s) {
+			return p.fail(start, "[ without ]")
+		}
+		rest := p.s[p.i:]
+		switch {
+		case rest[0] == ']':
+			if items == 0 {
+				return p.fail(start, `empty class: write \] for a ]`)
+			}
+			p.i++
+			return nil
+		case strings.HasPrefix(rest, "--") || strings.HasPrefix(rest, "&&") || strings.HasPrefix(rest, "~~"):
+			return p.fail(p.i, "%s in a class is a set operation in Rust", rest[:2])
+		case rest[0] == '-':
+			if items > 0 && !strings.HasPrefix(rest, "-]") {
+				return p.fail(p.i, "a - in a class must mark a range between two characters, or come first or last")
+			}
+			p.i++
+			items++
+			continue
+		}
+		lo, prop, err := p.classChar()
+		if err != nil {
+			return err
+		}
+		items++
+		if prop {
+			continue
+		}
+		rest = p.s[p.i:]
+		if strings.HasPrefix(rest, "--") {
+			return p.fail(p.i, "-- in a class is a set operation in Rust")
+		}
+		if !strings.HasPrefix(rest, "-") || strings.HasPrefix(rest, "-]") {
+			continue
+		}
+		at := p.i
+		p.i++
+		hi, prop, err := p.classChar()
+		if err != nil {
+			return err
+		}
+		if prop {
+			return p.fail(at, "a range ends with a character, not a property")
+		}
+		if hi < lo {
+			return p.fail(at, "reversed range")
+		}
+	}
+}
+
+// classChar parses one character or property of a class.
+func (p *regexParser) classChar() (r rune, prop bool, err error) {
+	switch c := p.peek(); c {
+	case -1:
+		return 0, false, p.fail(p.i, "[ without ]")
+	case '[':
+		return 0, false, p.fail(p.i, `a [ in a class must be written \[: nested and POSIX classes are not supported`)
+	case '\\':
+		return p.escape(true)
+	default:
+		return p.next(), false, nil
+	}
+}

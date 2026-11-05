@@ -2,7 +2,9 @@ package names
 
 import (
 	"regexp"
+	"strings"
 	"testing"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/peondusud/atoll/internal/vectors"
@@ -96,5 +98,39 @@ func TestFoldAny(t *testing.T) {
 	}
 	if FoldAny('k', isS) {
 		t.Error("FoldAny(k, is s) = true, want false")
+	}
+}
+
+// No vector may hold a run long enough for x/text to insert U+034F, where Go
+// and Rust differ (specs.md §29.5).
+func TestVectorsAvoidStreamSafeInsertion(t *testing.T) {
+	check := func(file, s string) {
+		if strings.Count(NFC(s), "\u034f") != strings.Count(s, "\u034f") {
+			t.Errorf("%s: NFC(%q) inserts U+034F", file, s)
+		}
+	}
+	for _, v := range vectors.Load[nfcVector](t, "nfc.json") {
+		in, err := vectors.Path(v.Path, v.PathB64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("nfc.json", in)
+	}
+	for _, v := range vectors.Load[keyVector](t, "lpath_key.json") {
+		in, err := vectors.Path(v.Path, v.PathB64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("lpath_key.json", in)
+	}
+}
+
+// UnicodeVersion follows the toolchain: with Go 1.27, both are 17.0.0.
+func TestUnicodeVersion(t *testing.T) {
+	if UnicodeVersion != unicode.Version {
+		t.Logf("normalization uses Unicode %s, case folding %s", UnicodeVersion, unicode.Version)
+	}
+	if UnicodeVersion == "" {
+		t.Error("UnicodeVersion is empty")
 	}
 }

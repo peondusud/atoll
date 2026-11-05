@@ -58,49 +58,65 @@ type Condition struct {
 	field Field
 	glob  *glob.Pattern
 	re    *regexp.Regexp
-	ext   []rune // for FieldExt: "." followed by the entry, in NFC form
+	exts  [][]rune // for FieldExt: "." followed by each entry, in NFC form
 	fold  bool
 }
 
-// Compile compiles one condition. value is a glob, or a regex after re:, for
-// FieldPath and FieldFilename, and one entry of the ext list for FieldExt.
-// ignoreCase is the rule's ignore_case.
+// Compile compiles a path or filename condition: value is a glob, or a regex
+// after re:. For FieldExt, value is a single entry, as CompileExt with one
+// entry. ignoreCase is the rule's ignore_case.
 func Compile(field Field, value string, ignoreCase bool) (*Condition, error) {
+	if field == FieldExt {
+		return CompileExt([]string{value}, ignoreCase)
+	}
+	if field != FieldPath && field != FieldFilename {
+		return nil, fmt.Errorf("unknown condition field %d", uint8(field))
+	}
 	if !utf8.ValidString(value) {
 		return nil, fmt.Errorf("%s %q: not valid UTF-8", field, value)
 	}
 	value = names.NFC(value)
 	c := &Condition{field: field, fold: ignoreCase}
-	switch field {
-	case FieldPath, FieldFilename:
-		if text, ok := strings.CutPrefix(value, RegexPrefix); ok {
-			re, err := compileRegex(text, ignoreCase)
-			if err != nil {
-				return nil, fmt.Errorf("%s %q: %w", field, value, err)
-			}
-			c.re = re
-			return c, nil
-		}
-		g, err := glob.CompileWith(value, glob.Options{IgnoreCase: ignoreCase})
+	if text, ok := strings.CutPrefix(value, RegexPrefix); ok {
+		re, err := compileRegex(text, ignoreCase)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", field, err)
 		}
-		c.glob = g
+		c.re = re
 		return c, nil
-	case FieldExt:
-		switch {
-		case value == "":
-			return nil, fmt.Errorf("ext %q: empty extension", value)
-		case strings.HasPrefix(value, "."):
-			return nil, fmt.Errorf("ext %q: write the extension without the dot", value)
-		case strings.Contains(value, "/"):
-			return nil, fmt.Errorf("ext %q: an extension never holds /", value)
-		}
-		c.ext = []rune("." + value)
-		return c, nil
-	default:
-		return nil, fmt.Errorf("unknown condition field %d", uint8(field))
 	}
+	if field == FieldFilename && strings.Contains(value, "/") {
+		return nil, fmt.Errorf("filename %q: a file name never holds /: use path", value)
+	}
+	g, err := glob.CompileWith(value, glob.Options{IgnoreCase: ignoreCase})
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", field, err)
+	}
+	c.glob = g
+	return c, nil
+}
+
+// CompileExt compiles an ext condition, which holds when the file name ends
+// with "." followed by one of the entries (specs.md §11.3).
+func CompileExt(entries []string, ignoreCase bool) (*Condition, error) {
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("ext: empty list")
+	}
+	c := &Condition{field: FieldExt, fold: ignoreCase, exts: make([][]rune, 0, len(entries))}
+	for _, e := range entries {
+		switch {
+		case !utf8.ValidString(e):
+			return nil, fmt.Errorf("ext %q: not valid UTF-8", e)
+		case e == "":
+			return nil, fmt.Errorf("ext %q: empty extension", e)
+		case strings.HasPrefix(e, "."):
+			return nil, fmt.Errorf("ext %q: write the extension without the dot", e)
+		case strings.Contains(e, "/"):
+			return nil, fmt.Errorf("ext %q: an extension never holds /", e)
+		}
+		c.exts = append(c.exts, []rune("."+names.NFC(e)))
+	}
+	return c, nil
 }
 
 // Match reports whether the condition holds for a file.
@@ -111,7 +127,12 @@ func (c *Condition) Match(s Subject) bool {
 	case FieldFilename:
 		return c.matchPattern(s.name)
 	case FieldExt:
-		return c.matchExt(s.name)
+		for _, ext := range c.exts {
+			if c.endsWith(s.name, ext) {
+				return true
+			}
+		}
+		return false
 	default:
 		return false
 	}
@@ -126,25 +147,25 @@ func (c *Condition) matchPattern(s string) bool {
 	return c.glob.Match(s)
 }
 
-// matchExt reports whether name ends with "." and the entry, exactly as the
-// glob "*." followed by the entry would: characters are decoded from the
-// start, as the glob matcher does, and a byte that is not valid UTF-8 never
-// equals a character of the entry.
-func (c *Condition) matchExt(name string) bool {
+// endsWith reports whether name ends with the characters of suffix, compared
+// as the glob "*" followed by the same literal characters would compare them:
+// characters are decoded from the start, as the glob matcher does, and a byte
+// that is not valid UTF-8 never equals a character of the suffix.
+func (c *Condition) endsWith(name string, suffix []rune) bool {
 	total := 0
 	for i := 0; i < len(name); total++ {
 		_, _, w := decode(name[i:])
 		i += w
 	}
-	if total < len(c.ext) {
+	if total < len(suffix) {
 		return false
 	}
 	i := 0
-	for range total - len(c.ext) {
+	for range total - len(suffix) {
 		_, _, w := decode(name[i:])
 		i += w
 	}
-	for _, want := range c.ext {
+	for _, want := range suffix {
 		r, valid, w := decode(name[i:])
 		same := r == want || c.fold && names.FoldEqual(r, want)
 		if !valid || !same {
@@ -165,39 +186,26 @@ func decode(s string) (r rune, valid bool, size int) {
 	return r, true, size
 }
 
-// compileRegex compiles the text of a re: value, after checking that it stays
-// within the common subset of Go regexp and Rust regex (specs.md §29.5).
-// ignore_case only adds (?i): neither the pattern nor the subject is ever
-// case-folded, so (?-i:…) keeps its meaning.
+// compileRegex compiles the text of a re: value, in NFC form, after checking
+// that it follows the grammar of specs.md §29.5. ignore_case only adds (?i):
+// neither the pattern nor the subject is ever case-folded, so (?-i:…) keeps
+// its meaning.
 func compileRegex(text string, ignoreCase bool) (*regexp.Regexp, error) {
-	if err := checkRegexSubset(text); err != nil {
+	if err := checkRegex(text); err != nil {
 		return nil, err
 	}
-	if ignoreCase {
-		text = "(?i)" + text
-	}
+	// The grammar keeps to what regexp accepts; compiling the text as written
+	// first keeps any error message about the user's own text.
 	re, err := regexp.Compile(text)
 	if err != nil {
-		return nil, fmt.Errorf("invalid regex: %w", err)
+		return nil, fmt.Errorf("regex %q: %w", text, err)
+	}
+	if !ignoreCase {
+		return re, nil
+	}
+	re, err = regexp.Compile("(?i)" + text)
+	if err != nil {
+		return nil, fmt.Errorf("regex %q: %w", text, err)
 	}
 	return re, nil
-}
-
-// checkRegexSubset rejects the escapes whose meaning differs between Go and
-// Rust: \d, \w, \s and \b are ASCII-only in Go and Unicode in Rust, and so
-// are their negations; \Q…\E exists in Go only.
-func checkRegexSubset(text string) error {
-	for i := 0; i < len(text); i++ {
-		if text[i] != '\\' || i+1 == len(text) {
-			continue
-		}
-		i++
-		switch c := text[i]; c {
-		case 'd', 'D', 'w', 'W', 's', 'S', 'b', 'B':
-			return fmt.Errorf(`\%c is not allowed: it means different things in Go and Rust (write [0-9] or \p{L} instead)`, c)
-		case 'Q', 'E':
-			return fmt.Errorf(`\%c is not allowed: \Q…\E exists in Go only`, c)
-		}
-	}
-	return nil
 }

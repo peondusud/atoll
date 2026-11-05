@@ -10,10 +10,11 @@ import (
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
-// The generated table (upcase_table.go, from upcase_gen.go) must be the $UpCase that Windows 7 to 10 and mkntfs
-// write, byte for byte: 65536 little-endian 16-bit entries. The MD5 is the one
-// ntfs-3g records for it (libntfs-3g/unistr.c); both sums were checked on
-// volumes formatted by Windows 10 (docs/research/nfc-and-case-folding.md §4.3).
+// The generated table (upcase_table.go, from upcase_gen.go) must be the
+// $UpCase that Windows 7 to 11 and mkntfs write, byte for byte: 65536
+// little-endian 16-bit entries. The MD5 is the one ntfs-3g records for it
+// (libntfs-3g/unistr.c); both sums were checked on volumes formatted by
+// Windows 10 and Windows 11 (docs/research/nfc-and-case-folding.md §4.3, §14).
 func TestUpcaseTableIsWindows7To10(t *testing.T) {
 	const (
 		wantSHA256 = "41c26bc7a12bdaeb26025c93118697c7e3ef81ee048b00fe5cce2a472e0e0742"

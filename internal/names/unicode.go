@@ -8,6 +8,11 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+// UnicodeVersion is the Unicode version of NFC and NFD, and so of CollisionKey.
+// The catalog records it with the keys (meta.unicode_version, specs.md §15.8):
+// keys computed under another version are recomputed, never compared.
+const UnicodeVersion = norm.Version
+
 // NFC returns the NFC form of s, run by run (specs.md §11.3): each maximal run
 // of valid UTF-8 is normalized, and every byte that is not part of a valid
 // UTF-8 sequence is kept as it is and never composes with its neighbors.

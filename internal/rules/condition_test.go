@@ -6,19 +6,22 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/peondusud/atoll/internal/names"
+
 	"github.com/peondusud/atoll/internal/glob"
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
 type matchVector struct {
-	Condition  string  `json:"condition"`
-	Value      string  `json:"value"`
-	IgnoreCase *bool   `json:"ignore_case"`
-	Path       *string `json:"path"`
-	PathB64    *string `json:"path_b64"`
-	Match      *bool   `json:"match"`
-	Error      bool    `json:"error"`
-	Note       string  `json:"note"`
+	Condition  string    `json:"condition"`
+	Value      *string   `json:"value"`
+	Values     *[]string `json:"values"`
+	IgnoreCase *bool     `json:"ignore_case"`
+	Path       *string   `json:"path"`
+	PathB64    *string   `json:"path_b64"`
+	Match      *bool     `json:"match"`
+	Error      bool      `json:"error"`
+	Note       string    `json:"note"`
 }
 
 func parseField(s string) (Field, error) {
@@ -30,42 +33,61 @@ func parseField(s string) (Field, error) {
 	return 0, fmt.Errorf("unknown condition %q", s)
 }
 
+// compileVector compiles the condition of a vector: value for one pattern or
+// ext entry, values for an ext list. It returns a label for messages.
+func compileVector(v matchVector) (*Condition, string, error, error) {
+	field, err := parseField(v.Condition)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if v.IgnoreCase == nil {
+		return nil, "", nil, fmt.Errorf("ignore_case is required")
+	}
+	switch {
+	case v.Values != nil && v.Value == nil && field == FieldExt:
+		label := fmt.Sprintf("ext %q", *v.Values)
+		c, cerr := CompileExt(*v.Values, *v.IgnoreCase)
+		return c, label, cerr, nil
+	case v.Value != nil && v.Values == nil:
+		label := fmt.Sprintf("%s %q", v.Condition, *v.Value)
+		c, cerr := Compile(field, *v.Value, *v.IgnoreCase)
+		return c, label, cerr, nil
+	default:
+		return nil, "", nil, fmt.Errorf("want value, or values for ext")
+	}
+}
+
 func TestMatchVectors(t *testing.T) {
-	for _, v := range vectors.Load[matchVector](t, "match.json") {
-		field, err := parseField(v.Condition)
-		if err != nil {
-			t.Errorf("vector %q: %v", v.Value, err)
+	for i, v := range vectors.Load[matchVector](t, "match.json") {
+		c, label, err, verr := compileVector(v)
+		if verr != nil {
+			t.Errorf("vector %d: %v", i, verr)
 			continue
 		}
-		if v.IgnoreCase == nil {
-			t.Errorf("vector %s %q: ignore_case is required", v.Condition, v.Value)
-			continue
-		}
-		c, err := Compile(field, v.Value, *v.IgnoreCase)
 		if v.Error {
 			if v.Match != nil || v.Path != nil || v.PathB64 != nil {
-				t.Errorf("vector %s %q: an error case has no path and no match", v.Condition, v.Value)
+				t.Errorf("vector %s: an error case has no path and no match", label)
 			}
 			if err == nil {
-				t.Errorf("Compile(%s, %q) succeeded, want an error", v.Condition, v.Value)
+				t.Errorf("%s accepted, want an error", label)
 			}
 			continue
 		}
 		if v.Match == nil {
-			t.Errorf("vector %s %q: want match or error", v.Condition, v.Value)
+			t.Errorf("vector %s: want match or error", label)
 			continue
 		}
 		path, perr := vectors.Path(v.Path, v.PathB64)
 		if perr != nil {
-			t.Errorf("vector %s %q: %v", v.Condition, v.Value, perr)
+			t.Errorf("vector %s: %v", label, perr)
 			continue
 		}
 		if err != nil {
-			t.Errorf("Compile(%s, %q, %v): %v", v.Condition, v.Value, *v.IgnoreCase, err)
+			t.Errorf("%s (ignore_case %v): %v", label, *v.IgnoreCase, err)
 			continue
 		}
 		if got := c.Match(NewSubject(path)); got != *v.Match {
-			t.Errorf("%s %q (ignore_case %v) on %q = %v, want %v", v.Condition, v.Value, *v.IgnoreCase, path, got, *v.Match)
+			t.Errorf("%s (ignore_case %v) on %q = %v, want %v", label, *v.IgnoreCase, path, got, *v.Match)
 		}
 	}
 }
@@ -156,5 +178,34 @@ func TestSubject(t *testing.T) {
 	}
 	if s := NewSubject("a.mkv"); s.name != "a.mkv" {
 		t.Errorf("NewSubject(a.mkv).name = %q", s.name)
+	}
+}
+
+// No vector may hold a run long enough for x/text to insert U+034F, where Go
+// and Rust differ (specs.md §29.5).
+func TestVectorsAvoidStreamSafeInsertion(t *testing.T) {
+	check := func(file, s string) {
+		if strings.Count(names.NFC(s), "\u034f") != strings.Count(s, "\u034f") {
+			t.Errorf("%s: NFC(%q) inserts U+034F", file, s)
+		}
+	}
+	for _, v := range vectors.Load[matchVector](t, "match.json") {
+		if v.Value != nil {
+			check("match.json", *v.Value)
+		}
+		if v.Values != nil {
+			for _, e := range *v.Values {
+				check("match.json", e)
+			}
+		}
+		if path, err := vectors.Path(v.Path, v.PathB64); err == nil {
+			check("match.json", path)
+		}
+	}
+	for _, v := range vectors.Load[regexVector](t, "regex.json") {
+		check("regex.json", v.Pattern)
+		if path, err := vectors.Path(v.Path, v.PathB64); err == nil {
+			check("regex.json", path)
+		}
 	}
 }
