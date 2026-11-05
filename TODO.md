@@ -30,7 +30,6 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 ## Pure core still without vectors (specs.md §29.4)
 
-- Vector tests: the other vector files share the loose case shape that `name_compat.json` no longer accepts (an error case that also carries an expected result). Require exactly one of the expected output and `"error": true` in every vector test.
 - **Capacity formula** (§13.1): `capacity.json` can be written now. Decide two points first:
   - rounding to whole bytes (floor);
   - k greater than the number of disks (capacity 0).
@@ -73,7 +72,3 @@ Every item here is a **decision**:
 - ntfy alerts.
 - The operation journal (`ops`) and crash recovery, with fault injection.
 - The break-glass test and the failed-mount test in CI.
-
-## Questions for the maintainer
-
-- Should Claude watch pull request #2 (reviews and CI)?

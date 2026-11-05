@@ -1,8 +1,8 @@
 // Package vectors loads the conformance vectors of conformance/vectors/, and
 // the name corpus of conformance/corpus/, for unit tests (specs.md §29.4). It
 // decodes strictly: an unknown field, another format_version, a file that is
-// not valid UTF-8 or a surrogate escape fails the test, so a typo cannot
-// silently disable a check. The file format is described in
+// not valid UTF-8, a surrogate escape or a flag that is not true fails the test,
+// so a typo cannot silently disable a check. The file format is described in
 // conformance/vectors/README.md.
 package vectors
 
@@ -61,10 +61,18 @@ func load[C any](folder, name string) ([]C, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read: %w", err)
 	}
+	return parse[C](data)
+}
+
+// parse checks and decodes the content of a vector file.
+func parse[C any](data []byte) ([]C, error) {
 	if err := checkText(data); err != nil {
 		return nil, err
 	}
 	if err := checkTokens(data); err != nil {
+		return nil, err
+	}
+	if err := checkFlags(data); err != nil {
 		return nil, err
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -184,6 +192,28 @@ func checkTokens(data []byte) error {
 			valueDone()
 		}
 	}
+}
+
+// checkFlags rejects a case whose "error" or "no_key" is anything but true. A
+// flag is true or absent, so each case has one spelling. Go's decoder would read
+// null as false where Rust's fails, and a test written only to look for the key
+// would read "error": false as an error case. Checking here covers every test,
+// including those of files still to come.
+func checkFlags(data []byte) error {
+	var f struct {
+		Cases []map[string]json.RawMessage `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+	for i, c := range f.Cases {
+		for _, flag := range []string{"error", "no_key"} {
+			if v, ok := c[flag]; ok && string(v) != "true" {
+				return fmt.Errorf("case %d: %q is %s: write true, or leave the field out", i, flag, v)
+			}
+		}
+	}
+	return nil
 }
 
 func lowercaseKey(k string) bool {

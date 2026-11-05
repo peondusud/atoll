@@ -1,6 +1,15 @@
 # Done
 
-Finished work, newest first. Each item names its commits on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
+Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
+
+## One spelling for vector flags (specs.md §29.4)
+
+Commit "Refuse vector flags other than true", on `main`.
+
+- `internal/vectors` refuses `error` and `no_key` with any value but `true`, in every vector file and in the corpus. Only `name_compat.json` refused `"error": false` before.
+- `window.json`: an error case can no longer carry `"at": ""`.
+- No vector file changed: none used a refused spelling.
+- Mutation checks on all nine vector files that have a flag: a flag written as false, an error case with an expected result, and a case with neither. Each test fails on each mutation.
 
 ## Name compatibility per filesystem (specs.md §15.8)
 

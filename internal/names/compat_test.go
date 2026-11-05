@@ -56,7 +56,7 @@ type compatVector struct {
 		Component int      `json:"component"`
 		Reasons   []Reason `json:"reasons"`
 	} `json:"problems"`
-	Error *bool  `json:"error"`
+	Error bool   `json:"error"`
 	Note  string `json:"note"`
 }
 
@@ -67,11 +67,11 @@ func TestNameCompatVectors(t *testing.T) {
 			t.Fatal(err)
 		}
 		// A case has exactly one of problems and "error": true.
-		if (v.Problems == nil) == (v.Error == nil) || v.Error != nil && !*v.Error {
+		if (v.Problems != nil) == v.Error {
 			t.Fatalf("%+q: a case has exactly one of problems and \"error\": true", path)
 		}
 		got, err := CheckPath(path, Filesystem(v.FS))
-		if v.Error != nil {
+		if v.Error {
 			if err == nil {
 				t.Errorf("CheckPath(%+q, %s) = %v, want an error", path, v.FS, got)
 			}

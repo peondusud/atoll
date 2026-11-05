@@ -81,29 +81,29 @@ func TestPercentVectors(t *testing.T) {
 
 func TestWindowVectors(t *testing.T) {
 	type vector struct {
-		Input  string `json:"input"`
-		At     string `json:"at"`
-		Inside *bool  `json:"inside"`
-		Error  bool   `json:"error"`
-		Note   string `json:"note"`
+		Input  string  `json:"input"`
+		At     *string `json:"at"`
+		Inside *bool   `json:"inside"`
+		Error  bool    `json:"error"`
+		Note   string  `json:"note"`
 	}
 	for _, v := range vectors.Load[vector](t, "window.json") {
 		w, err := ParseWindow(v.Input)
 		switch {
-		case v.Error == (v.Inside != nil) || (v.At == "") != (v.Inside == nil):
+		case v.Error == (v.Inside != nil) || (v.At == nil) != (v.Inside == nil):
 			t.Errorf("vector %q: want at and inside, or error", v.Input)
 		case v.Error && err == nil:
 			t.Errorf("ParseWindow(%q) = %v, want an error", v.Input, w)
 		case !v.Error && err != nil:
 			t.Errorf("ParseWindow(%q): %v", v.Input, err)
 		case !v.Error:
-			at, err := time.Parse(time.RFC3339Nano, v.At)
+			at, err := time.Parse(time.RFC3339Nano, *v.At)
 			if err != nil {
 				t.Errorf("vector %q: at: %v", v.Input, err)
 				continue
 			}
 			if got := w.Contains(at); got != *v.Inside {
-				t.Errorf("ParseWindow(%q).Contains(%s) = %v, want %v", v.Input, v.At, got, *v.Inside)
+				t.Errorf("ParseWindow(%q).Contains(%s) = %v, want %v", v.Input, *v.At, got, *v.Inside)
 			}
 			if w.String() != v.Input {
 				t.Errorf("ParseWindow(%q).String() = %q", v.Input, w.String())

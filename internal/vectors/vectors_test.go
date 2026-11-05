@@ -59,7 +59,8 @@ func TestCheckText(t *testing.T) {
 	}
 }
 
-// Every vector file and the corpus follow the text and token rules.
+// Every vector file and the corpus follow the text, token and flag rules, even
+// a file that no test loads yet.
 func TestFilesFollowTextRules(t *testing.T) {
 	root, err := conformanceDir()
 	if err != nil {
@@ -84,6 +85,70 @@ func TestFilesFollowTextRules(t *testing.T) {
 			if err := checkTokens(data); err != nil {
 				t.Errorf("%s: %v", f, err)
 			}
+			if err := checkFlags(data); err != nil {
+				t.Errorf("%s: %v", f, err)
+			}
+		}
+	}
+}
+
+func TestCheckFlags(t *testing.T) {
+	for _, tc := range []struct {
+		data string
+		ok   bool
+	}{
+		{`{"cases": [{"input": "a", "n": 1}]}`, true},
+		{`{"cases": [{"input": "a", "error": true}, {"input": "b", "n": 1}]}`, true},
+		{`{"cases": [{"path": "a", "no_key": true}, {"path": "b", "key": "B"}]}`, true},
+		{`{"cases": [{"match": false, "inside": false}]}`, true},
+		{`{"cases": [{"input": "a", "n": 1, "error": false}]}`, false},
+		{`{"cases": [{"input": "a", "error": true}, {"input": "b", "error": false}]}`, false},
+		{`{"cases": [{"input": "a", "error": null}]}`, false},
+		{`{"cases": [{"input": "a", "error": 1}]}`, false},
+		{`{"cases": [{"input": "a", "error": "true"}]}`, false},
+		{`{"cases": [{"path": "a", "key": "A", "no_key": false}]}`, false},
+		{`{"cases": [{"path": "a", "no_key": null}]}`, false},
+	} {
+		if err := checkFlags([]byte(tc.data)); (err == nil) != tc.ok {
+			t.Errorf("checkFlags(%s) = %v, want ok %v", tc.data, err, tc.ok)
+		}
+	}
+}
+
+// parse applies every rule, whatever the type of the case: the vector tests
+// declare error as a plain bool, which would read false and null as absent.
+func TestParse(t *testing.T) {
+	type vector struct {
+		Input string `json:"input"`
+		N     *int64 `json:"n"`
+		Error bool   `json:"error"`
+	}
+	file := func(version, cases string) string {
+		return `{"format_version": ` + version + `, "spec": "s", "description": "d", "cases": [` + cases + `]}`
+	}
+	for _, tc := range []struct {
+		name, data string
+		want       int
+	}{
+		{"valid", file("1", `{"input": "a", "n": 1}, {"input": "b", "error": true}`), 2},
+		{"flag false", file("1", `{"input": "a", "n": 1, "error": false}`), -1},
+		{"flag null", file("1", `{"input": "a", "n": 1, "error": null}`), -1},
+		{"another version", file("2", `{"input": "a", "n": 1}`), -1},
+		{"no cases", file("1", ``), -1},
+		{"unknown field", file("1", `{"input": "a", "m": 1}`), -1},
+		{"uppercase key", file("1", `{"INPUT": "a"}`), -1},
+		{"not a plain integer", file("1", `{"input": "a", "n": 1.0}`), -1},
+		{"invalid UTF-8", file("1", "{\"input\": \"\xff\"}"), -1},
+		{"trailing data", file("1", `{"input": "a"}`) + `{}`, -1},
+	} {
+		got, err := parse[vector]([]byte(tc.data))
+		switch {
+		case tc.want < 0 && err == nil:
+			t.Errorf("%s: parse = %v, want an error", tc.name, got)
+		case tc.want >= 0 && err != nil:
+			t.Errorf("%s: %v", tc.name, err)
+		case tc.want >= 0 && len(got) != tc.want:
+			t.Errorf("%s: %d cases, want %d", tc.name, len(got), tc.want)
 		}
 	}
 }
