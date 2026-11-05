@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## BLAKE3 library and hashes (specs.md §16, §29.7)
+
+Commit "Hash files and chunks with zeebo/blake3", on `main`.
+
+- Report: [docs/research/blake3.md](docs/research/blake3.md). On one core, zeebo is 36% to 42% faster than lukechampine, with 2 allocations against 10,756 per 64 MiB.
+- The maintainer's decisions:
+  - `github.com/zeebo/blake3`, main branch, pinned to commit `28a397d`, for its NEON and SVE2 backends;
+  - an empty file has no chunks.
+- Contract: `conformance/vectors/blake3.json` holds 17 cases, whose hashes come from the official `b3sum`, 10 lengths also checked against the official test vectors.
+- Code: `integrity.Hasher`, one read feeding both hashes, with no I/O. Nothing calls it outside its tests yet.
+- Not measured: AVX-512, and throughput on real arm64.
+
 ## Capacity: `min_free`, strict domains, reachable (specs.md §12.4, §13)
 
 Commit "Define the capacity with min_free and strict domains", on `main`.

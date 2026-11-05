@@ -624,7 +624,7 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 ## 16. Integrity
 
 - Hashes:
-  - each 4 MiB chunk: a standalone BLAKE3-256 hash (the last chunk may be shorter);
+  - each 4 MiB chunk: a standalone BLAKE3-256 hash (the last chunk may be shorter). A file has as many chunks as it takes to hold its bytes: none when it is empty, and no empty chunk after a size that is an exact multiple;
   - whole file: standard BLAKE3-256, b3sum-compatible.
   When indexing an existing file, one read feeds both. When copying, chunk hashes come from the source read and the whole-file hash from the verification pass (§14).
 - Scrub: every `scrub_every` (30 days by default), inside `[integrity].window`, within a nightly budget, one disk at a time to limit wake-ups, resumable at chunk level.
@@ -1203,7 +1203,7 @@ number   = digits [ "." digits ]
 | Need | Go (phases 1–2) | Rust (phase 3 onward, to confirm) |
 |---|---|---|
 | SQLite | `modernc.org/sqlite` | `rusqlite` (bundled SQLite) |
-| BLAKE3 | Go implementation with SIMD, chosen after a benchmark | `blake3` (official) |
+| BLAKE3 | `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`) | `blake3` (official) |
 | TOML | BurntSushi/toml or go-toml v2 | `toml` with `serde` |
 | Regex | `regexp`, after Atoll's grammar check (§29.5) | `regex`, with `regex-syntax` 0.8.5 or later, after the same check; `size_limit` 10 MiB, `nest_limit` 1000 (§29.5) |
 | Unicode normalization (NFC, NFD) | `golang.org/x/text/unicode/norm`, v0.43.0 or later | `unicode-normalization`, at the Unicode version of the Go toolchain it replaces (0.1.25 for Unicode 17.0) |

@@ -229,6 +229,18 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `capacity` | integer | the capacity in bytes, rounded down |
 | `error` | boolean | `true` when `capacity.json` would refuse the input, or a domain has no disk |
 
+### `blake3.json` — file and chunk hashes (§16, §29.3)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `length` | integer | the file's size: that many bytes cycling through 0 to 250, as in the official BLAKE3 test vectors |
+| `chunk_size` | integer | the size of a chunk in bytes |
+| `file` | string | the whole-file hash, in lowercase hexadecimal |
+| `chunks` | array of strings | the hash of each chunk, in order; empty for an empty file |
+| `error` | boolean | `true` when `chunk_size` is not positive |
+
+The hashes come from the official `b3sum`, never from an implementation under test.
+
 ### `capacity.json` — capacity of a pool (§13.1)
 
 | Field | Type | Meaning |

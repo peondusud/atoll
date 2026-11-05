@@ -32,7 +32,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 ## Stack and commands
 - Go, latest stable release; Linux amd64 and arm64.
 - SQLite: `modernc.org/sqlite` (no cgo). TOML: BurntSushi/toml or go-toml v2. Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
-- BLAKE3: a Go implementation with SIMD, chosen after a throughput benchmark.
+- BLAKE3: `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`).
 - cgo and libfuse3 only for the FUSE view (phase 2a).
 
 ```bash

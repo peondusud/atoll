@@ -27,7 +27,7 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
   Needs the configuration schema below.
 - **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility, NTFS collisions through `names.TargetNames`, and the branch path limit through `names.FitsBranch`), the job plan, the reachable capacity as a dry run of that plan, and property tests.
-- **decision**: **BLAKE3** (§16): choose a Go implementation with SIMD after a throughput benchmark. It is a new dependency, and its license must be compatible with GPL-3.0-or-later.
+- **BLAKE3**: run `conformance/vectors/blake3.json` on real arm64 and AVX-512 hardware, measure throughput there, and move `zeebo/blake3` to a tagged release when one holds the arm64 backends (`docs/research/blake3.md`).
 
 ## Contracts not yet defined (specs.md §29.3)
 

@@ -1,0 +1,24 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §16, §29.3",
+  "description": "A file's whole-file hash and the hash of each chunk, from one read. The input is length bytes cycling through 0 to 250, as in the official BLAKE3 test vectors. Hashes are BLAKE3-256 in lowercase hexadecimal, from the official b3sum. A file has as many chunks as it takes to hold its bytes, so an empty file has none.",
+  "cases": [
+    {"length": 0, "chunk_size": 4194304, "file": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262", "chunks": [], "note": "an empty file has no chunks"},
+    {"length": 1, "chunk_size": 4194304, "file": "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213", "chunks": ["2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213"], "note": "one byte: one short chunk"},
+    {"length": 1024, "chunk_size": 4194304, "file": "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7", "chunks": ["42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7"], "note": "one BLAKE3 chunk"},
+    {"length": 1025, "chunk_size": 4194304, "file": "d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444", "chunks": ["d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444"], "note": "two BLAKE3 chunks, one Atoll chunk"},
+    {"length": 4194303, "chunk_size": 4194304, "file": "6ee7f30ae33570aae744290e3f678050511e72f37e594d7620a9191c7d353dd9", "chunks": ["6ee7f30ae33570aae744290e3f678050511e72f37e594d7620a9191c7d353dd9"], "note": "one byte short of a chunk"},
+    {"length": 4194304, "chunk_size": 4194304, "file": "4e94e6f582581a0f3855f3ce504b153e951e65036fe9e2f010b7e25473c54f98", "chunks": ["4e94e6f582581a0f3855f3ce504b153e951e65036fe9e2f010b7e25473c54f98"], "note": "exactly one chunk, and no empty chunk after it"},
+    {"length": 4194305, "chunk_size": 4194304, "file": "0460893a0170917e0d568bb27c0287984d4f7e9d59eafb95e6fb3c01ec611eab", "chunks": ["4e94e6f582581a0f3855f3ce504b153e951e65036fe9e2f010b7e25473c54f98", "684200d461e94e063925de567369dd89b8c1959b6f94ec8e740edf4c2bd21396"], "note": "a second chunk of one byte"},
+    {"length": 8388608, "chunk_size": 4194304, "file": "1adedad9735f565ac6e22dab203db63b960c27098f2c0f0fda9adf9238d4c0c9", "chunks": ["4e94e6f582581a0f3855f3ce504b153e951e65036fe9e2f010b7e25473c54f98", "046f90301fa8a38b2bcfc87db934d243f2cbccb1c66021255697277ac6b956b8"], "note": "exactly two chunks"},
+    {"length": 12583035, "chunk_size": 4194304, "file": "87f57866cf8fb753fd64ae94fed376ca8e7c20b13909595e409c0cafaefba4a0", "chunks": ["4e94e6f582581a0f3855f3ce504b153e951e65036fe9e2f010b7e25473c54f98", "046f90301fa8a38b2bcfc87db934d243f2cbccb1c66021255697277ac6b956b8", "09b5860b0c337413f27f2ac5ddf8656be6fc84147228ff6942b7f82a4e39dd36", "3305e7557d6a626f50989d64830524d495c551cc1187b4e5648a53a5f23f721d"], "note": "three chunks and a short one"},
+    {"length": 0, "chunk_size": 1024, "file": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262", "chunks": [], "note": "another chunk size: empty"},
+    {"length": 1, "chunk_size": 1024, "file": "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213", "chunks": ["2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213"], "note": "another chunk size: one byte"},
+    {"length": 1024, "chunk_size": 1024, "file": "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7", "chunks": ["42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7"], "note": "another chunk size: exactly one chunk"},
+    {"length": 1025, "chunk_size": 1024, "file": "d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444", "chunks": ["42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7", "ca9fba296cab1ffbd9597311a1d79a06dfaf0909995a00a98a7e361fb67158e9"], "note": "another chunk size: two chunks"},
+    {"length": 3072, "chunk_size": 1024, "file": "b98cb0ff3623be03326b373de6b9095218513e64f1ee2edd2525c7ad1e5cffd2", "chunks": ["42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7", "f82d9b29da6db93924de1475c47b8e14c74132389534f5ef3c1ee20185edc245", "cfec53ee42495dae4e7aafadff886b6e57996d8aa9237b2e1b23b9201f4d73b1"], "note": "another chunk size: exactly three chunks"},
+    {"length": 3, "chunk_size": 1, "file": "e1be4d7a8ab5560aa4199eea339849ba8e293d55ca0a81006726d184519e647f", "chunks": ["2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213", "48fc721fbbc172e0925fa27af1671de225ba927134802998b10a1568a188652b", "ab13bedf42e84bae0f7c62c7dd6a8ada571e8829bed6ea558217f0361b5e25d0"], "note": "chunks of one byte"},
+    {"length": 1, "chunk_size": 0, "error": true, "note": "a chunk size of 0"},
+    {"length": 1, "chunk_size": -1, "error": true, "note": "a negative chunk size"}
+  ]
+}
