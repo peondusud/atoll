@@ -699,3 +699,38 @@ A second review then checked the decisions and their implementation. A Rust impl
 | CLAUDE.md invariant 15 | NFC, NFD and case folding serve only collision detection and rule matching, never naming or identifying a file | CLAUDE.md |
 
 Fuzzing the new regex check against Go `regexp` found that the check, used on its own, accepted text that is not valid UTF-8. `rules.Compile` already rejected such text before calling the check, so no configuration was affected. The check now rejects it too.
+
+### 14.4 After the regex grammar check
+
+A third review checked the regex grammar of §29.5 on its own. It had three parts:
+
+- A Rust validator written from `specs.md` alone, compared with Go's on 1.38 million inputs.
+- A differential run of Go `regexp` against Rust `regex` 1.13.1, on 4.48 million pattern and subject pairs generated from the grammar.
+- A review of the spec text.
+
+The engines never disagreed on an accepted regex, except on characters whose Unicode data differs between 16.0 and 17.0.
+
+**What the review found:**
+
+- Go's check accepted `[!-&&]` and `[a-~~]`, which the spec text rejects. These were all 380 of the validator disagreements; none remain.
+- The grammar applies to the NFC form of the text, which the spec did not say. A combining mark composes with an escape letter or a range endpoint: `\n` followed by U+0303 becomes `\ñ`.
+- The length limit and the product rule do not bound what Rust builds. 111 copies of `\pL{1000}` fit in 999 bytes. Go compiles them in 45 ms; Rust needs more than 9 GB.
+- Go's normalization also inserts U+034F into a pattern's text. The Go and Rust versions then disagree on whether a pattern fits in 1000 bytes, and on what it matches.
+- Go and Rust compute different `lpath_key` for a name with such a run, although both report Unicode 17.0.0. So `meta.unicode_version` alone would let keys from the two versions be compared.
+- The spec said Go counts non-starters in the canonical decomposition. It counts them in the compatibility decomposition, NFKD: the Hangul compatibility jamo, such as U+3133, count too. On one million random strings, a run of more than 30 non-starters in the NFKD of each character predicts exactly where Go inserts U+034F. A non-starter there is a character with a nonzero combining class, or with NFC_Quick_Check = Maybe.
+
+**The maintainer chose:**
+
+| Point | Decision | Recorded in |
+|---|---|---|
+| Rust compile size | a weight limit of 1000: a character, `.` or class item weighs 1, a property 100, times the counts of the repeats around it. Rust keeps its default `size_limit` of 10 MiB and sets `nest_limit` to 1000. The costliest regex found within the bounds, a negated range under `(?i)` repeated 1000 times, takes 2.8 MB. | §29.5, §29.7; `regex.json` |
+| Patterns with long non-starter runs | rejected when the configuration loads (globs, regexes and `ext` entries), so U+034F is never inserted into a pattern. Names keep the allowed difference. | §11.3, §29.5; `match.json`, `regex.json` |
+| `lpath_key` version | `meta.lpath_key_version` names the language, the library and its Unicode version, such as `go golang.org/x/text 17.0.0`. Any difference recomputes every key, so keys from two implementations are never compared. | §9, §15.8 |
+
+**Clarified without a decision, since the spec text already implied them:**
+
+- In a class, two unescaped `-`, `&` or `~` in a row are rejected wherever they stand.
+- `digit`, `nonzero` and `hex` are defined, and a flag appears at most once in a whole group.
+- In a glob, classes are read before braces.
+- A `filename` glob that contains `/` is rejected when the configuration loads.
+- An error quotes the pattern as typed, and then its NFC form.
