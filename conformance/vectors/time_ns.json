@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §9",
+  "description": "A modification or change time as read from the filesystem, in seconds and nanoseconds since the Unix epoch, into the catalog's nanoseconds. A time out of range is stored at the nearest limit of a signed 64-bit count of nanoseconds. The nanoseconds run from 0 to 999999999, also before the epoch.",
+  "cases": [
+    { "seconds": 1609430400, "nanoseconds": 123456700, "ns": 1609430400123456700, "note": "an ordinary time" },
+    { "seconds": 0, "nanoseconds": 0, "ns": 0, "note": "0 is a real time here, unlike a creation time" },
+    { "seconds": 0, "nanoseconds": 1, "ns": 1 },
+    { "seconds": -1, "nanoseconds": 0, "ns": -1000000000, "note": "before the epoch" },
+    { "seconds": -1, "nanoseconds": 999999999, "ns": -1, "note": "the nanoseconds still count forward" },
+    { "seconds": -2147483648, "nanoseconds": 0, "ns": -2147483648000000000, "note": "where ext4 and XFS stop below: 1901" },
+    { "seconds": 2147483647, "nanoseconds": 0, "ns": 2147483647000000000, "note": "where the older formats stop above: 2038" },
+    { "seconds": -8520336000, "nanoseconds": 0, "ns": -8520336000000000000, "note": "1700: in range" },
+    { "seconds": -11644473600, "nanoseconds": 0, "ns": -9223372036854775808, "note": "1601, a FILETIME of 0: the lower limit" },
+    { "seconds": -9279273600, "nanoseconds": 0, "ns": -9223372036854775808, "note": "1675: the lower limit" },
+    { "seconds": 10413835200, "nanoseconds": 0, "ns": 9223372036854775807, "note": "2300: the upper limit" },
+    { "seconds": 15032385535, "nanoseconds": 0, "ns": 9223372036854775807, "note": "where ext4 stops above: the upper limit" },
+    { "seconds": 253402300799, "nanoseconds": 0, "ns": 9223372036854775807, "note": "9999, which NTFS holds: the upper limit" },
+    { "seconds": 9223372036, "nanoseconds": 854775807, "ns": 9223372036854775807, "note": "the last time that fits" },
+    { "seconds": 9223372036, "nanoseconds": 854775806, "ns": 9223372036854775806, "note": "one before it" },
+    { "seconds": 9223372036, "nanoseconds": 854775808, "ns": 9223372036854775807, "note": "one nanosecond more" },
+    { "seconds": 9223372037, "nanoseconds": 0, "ns": 9223372036854775807 },
+    { "seconds": -9223372037, "nanoseconds": 145224192, "ns": -9223372036854775808, "note": "the first time that fits" },
+    { "seconds": -9223372037, "nanoseconds": 145224193, "ns": -9223372036854775807, "note": "one after it" },
+    { "seconds": -9223372037, "nanoseconds": 145224191, "ns": -9223372036854775808, "note": "one nanosecond before" },
+    { "seconds": -9223372038, "nanoseconds": 999999999, "ns": -9223372036854775808 },
+    { "seconds": 9223372036854775807, "nanoseconds": 999999999, "ns": 9223372036854775807, "note": "a product that would wrap" },
+    { "seconds": -9223372036854775808, "nanoseconds": 0, "ns": -9223372036854775808, "note": "a product that would wrap" },
+    { "seconds": 1, "nanoseconds": -1, "error": true, "note": "nanoseconds below their range" },
+    { "seconds": 1, "nanoseconds": 1000000000, "error": true, "note": "nanoseconds above their range" },
+    { "seconds": 10413835200, "nanoseconds": 1000000000, "error": true, "note": "also out of range: the nanoseconds are checked first" }
+  ]
+}

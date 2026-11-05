@@ -37,6 +37,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - lowntfs-3g limits names to 255 bytes, and mount information cannot tell it apart from ntfs-3g. Its `-o ignore_case` lists every name in lowercase, and is invisible too.
 - mergerfs treats a rename as a success when one branch accepts it, and removes the source from the branches that refused. So `windows_names`, which makes ntfs-3g refuse a name, turns a rename through mergerfs into the silent loss of that replica. Measure what the layer on top does with a refusal, not only the refusal itself.
 - Re-read through a cold cache before concluding that a file survived. After a rename onto `m:n` under ntfs3 `ads`, `cat m` still shows the old content from the page cache; `drop_caches` or a remount shows it is gone. A first run read the cache and wrongly contradicted an earlier, correct measurement.
+- A filesystem can change a time without an error: ext4 and XFS clamp a modification time to what they can hold, and `utimensat` still returns 0. Read a time back after setting it. Go's `UnixNano` wraps outside its range, too.
 - A real-filesystem test must give each name a fresh folder and must test every driver variant: one driver hid the 255-byte rule, and a leftover name made a later one fail.
 
 ## Tooling in this environment

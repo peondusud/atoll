@@ -201,6 +201,15 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `absent` | boolean | `true` when the time is absent: exactly 0, or out of range |
 | `error` | boolean | `true` when `nanoseconds` is outside 0 to 999999999 |
 
+### `time_ns.json` — a modification or change time into the catalog (§9)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `seconds` | integer | seconds since the Unix epoch |
+| `nanoseconds` | integer | nanoseconds counted forward from those seconds, also before the epoch |
+| `ns` | integer | the value stored; the nearest limit when the time is out of range |
+| `error` | boolean | `true` when `nanoseconds` is outside 0 to 999999999 |
+
 ### `capacity.json` — capacity of a pool (§13.1)
 
 | Field | Type | Meaning |

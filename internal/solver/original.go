@@ -122,32 +122,3 @@ func effectiveTime(c *Candidate) int64 {
 	}
 	return c.FirstSeenNS
 }
-
-// The limits of a signed 64-bit count of nanoseconds, in seconds and nanoseconds
-// that run forward from the second (specs.md §7).
-const (
-	minCreationSeconds     = -9223372037
-	minCreationNanoseconds = 145224192
-	maxCreationSeconds     = 9223372036
-	maxCreationNanoseconds = 854775807
-)
-
-// CreationTimeNS converts a creation time, as a filesystem reports it, into
-// btime_ns. ok is false when the time is absent: exactly 0, or outside the range
-// of a signed 64-bit count of nanoseconds (specs.md §7). The range is checked
-// here because Go's time.Time.UnixNano is undefined outside it and does not say
-// so. An error means that nanoseconds is outside 0 to 999999999.
-func CreationTimeNS(seconds, nanoseconds int64) (ns int64, ok bool, err error) {
-	if nanoseconds < 0 || nanoseconds > 999999999 {
-		return 0, false, fmt.Errorf("creation time: %d nanoseconds", nanoseconds)
-	}
-	switch {
-	case seconds == 0 && nanoseconds == 0,
-		seconds < minCreationSeconds,
-		seconds > maxCreationSeconds,
-		seconds == minCreationSeconds && nanoseconds < minCreationNanoseconds,
-		seconds == maxCreationSeconds && nanoseconds > maxCreationNanoseconds:
-		return 0, false, nil
-	}
-	return seconds*1000000000 + nanoseconds, true, nil
-}

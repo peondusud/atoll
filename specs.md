@@ -60,7 +60,7 @@ Measurable goals:
 - **Logical path**: exact path relative to the root, `/` separator, kept byte for byte on Linux and as WTF-8 on Windows, never normalized (e.g. `Films/Avatar (2009)/Avatar.mkv`, §15.8). It is well-formed when it has no empty component, no `.` or `..` component and no NUL byte.
 - **Copy**: an instance of a logical path on one disk, at `<disk>/media/<logical path>`.
 - **User copy** / **Atoll copy**: a copy that existed before Atoll indexed it, or that a user or an application wrote or modified, is a user copy; a copy Atoll created (replica, refresh, transfer) is an Atoll copy. Stored as `created_by`. Protection decisions rely on it (§6.1).
-- **Current version**: the size, modification time and hash that every copy of a file must match.
+- **Current version**: the size, modification time and hash that every copy of a file must match. A copy's modification time may differ where its filesystem cannot hold that time (§14).
 - **In-sync copy**: a copy that matches the current version.
 - **Original**: the in-sync copy with the oldest creation time. The merged view presents it (§7). It drives presentation only, never protection.
 - **Replica**: any other in-sync copy.
@@ -171,7 +171,7 @@ Removal rules: `prune`, rebalancing and evacuation remove Atoll copies first and
 - Each copy's creation time, or its `first_seen` where that is absent, is compared in exact nanoseconds, not at the coarser precision of §9, which serves times that must match. Here nothing has to match: creation times are never copied, and the choice is among identical copies. Ties: earliest `first_seen`, then disk order in the configuration (`disks.position`).
 - A file in `conflict` (§15.7) keeps its previous original (`files.original_disk`) as long as that copy is eligible, so adding a disk with an older version of different content does not change what is presented. Otherwise, or after `catalog rebuild` has lost it, the rule above applies. Outside a conflict the previous original is ignored.
 - Stale, corrupt or unavailable copies are never presented by Atoll's own view, even when they are older.
-- Atoll preserves a replica's modification time but never its creation time, so a replica is younger than its source. On Windows, NTFS "tunneling" can give a file re-created under the same name within 15 seconds its predecessor's creation time; the Windows version therefore sets the creation time explicitly after the final rename.
+- Atoll preserves a replica's modification time, as far as its filesystem can hold it (§14), but never its creation time, so a replica is younger than its source. On Windows, NTFS "tunneling" can give a file re-created under the same name within 15 seconds its predecessor's creation time; the Windows version therefore sets the creation time explicitly after the final rename.
 - The view returns the original's metadata (size, times, attributes). It reads data from the original by default; with `read.policy = "prefer-spinning"`, it may read any in-sync copy on a disk that is already spinning (identical content).
 - If the original's disk goes missing, the oldest remaining in-sync copy is presented. When the disk returns in sync, its copy becomes the original again.
 - A refresh or a `file` repair gives a copy a new creation time, so the original may move to another disk; a `chunk` repair keeps it (§16). Protection decisions never depend on the original (§6.1).
@@ -253,7 +253,7 @@ CREATE TABLE copies(
   disk_id TEXT NOT NULL REFERENCES disks(id),
   file_key TEXT,                       -- inode (Linux) or NTFS file ID
   nlink INTEGER,                       -- hard links, Atoll's own link-guard link excluded
-  size INTEGER, mtime_ns INTEGER,
+  size INTEGER, mtime_ns INTEGER,      -- as this disk holds them (§14)
   ctime_ns INTEGER,                    -- change time, recorded after each Atoll operation
   btime_ns INTEGER,                    -- creation time; NULL if absent (§7)
   created_by TEXT NOT NULL,            -- user | atoll
@@ -307,6 +307,7 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
 
 - All INTEGER times are Unix nanoseconds, UTC. Times are compared at the coarser precision of the filesystems involved (`time_precision_ns`), so an ext4 → NTFS replica still matches. Creation times are never copied, so §7 compares them exactly.
+- A modification or change time outside the range of a signed 64-bit count of nanoseconds, from -2^63 to 2^63-1 (before 1677-09-21 or after 2262-04-11), is stored at the nearest limit, the same way in both versions. Reading it again gives the same value, so it is never taken for a change. A creation time is absent instead (§7). Atoll sets a time from a copy's `stat`, never from the catalog, so a stored limit never reaches a disk.
 - `files.lpath_key` and `entries.lpath_key` are indexed: the collision checks of §15.7 look names up by key.
 - Chunk hash volume: 20 TB ÷ 4 MiB × 32 bytes ≈ 150 MB, one BLOB per file.
 - Catalog location: `/var/lib/atoll/catalog.db` (Linux), `%ProgramData%\Atoll\catalog.db` (Windows).
@@ -469,7 +470,7 @@ Copy pipeline:
 1. End of write detected through close events (`IN_CLOSE_WRITE`, `FAN_CLOSE_WRITE`) or, failing that, through a stable size and modification time during `settle`.
 2. The per-path lock is taken (shared by the watcher and every job) and the operation is journaled in `ops`.
 3. The source is copied to `<target>/Atoll/tmp/<op-id>.part`; the hash of each 4 MiB chunk is computed during the read and recorded in the job.
-4. Modification time and attributes restored on the temporary file (never the creation time); fsync.
+4. Modification time and attributes restored on the temporary file (never the creation time), from the source's `stat`; the time is read back; fsync.
 5. The temporary file is re-read without cache: each chunk is checked against the recorded hashes, and the whole-file hash is computed during this pass.
 6. The destination is resolved at commit time, since the file may have been renamed meanwhile. Missing parent folders are created with the source's attributes. The temporary file is renamed without replacing anything (`renameat2` with `RENAME_NOREPLACE`, or `link` then `unlink` where that flag is unsupported; on Windows, `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`, with `MOVEFILE_WRITE_THROUGH`). The folder is fsynced and the parent folders' modification times restored. On Windows, the creation time is then set explicitly (§7).
 7. Catalog commit, recording the new copy's change time. A replica exists only after these steps.
@@ -478,6 +479,7 @@ Rules:
 
 - If the destination path appeared meanwhile, the rename fails and the case becomes a `conflict`; nothing is overwritten.
 - If the source changes during the copy, the copy is abandoned and retried after `settle`.
+- A filesystem that cannot hold a modification time clamps it, without an error. Measured: ext4 and XFS stop at 1901-12-13 below, and above at 2446 (ext4), 2486 (XFS) or 2038 (ext4 with 128-byte inodes, XFS with `bigtime=0`); NTFS and btrfs kept every date tried, from 1601 to 9999. The copy is still made, `copies.mtime_ns` records what the disk holds, and the copy stays in sync. `atoll status` shows both dates, with no alert.
 - One copy at a time per target disk (`max_parallel_per_disk`), at low I/O priority, except with `--force`.
 - Resume after a power cut or USB disconnection: the chunks already in the `.part` file are re-verified against their recorded hashes, then the copy resumes at the first missing or wrong chunk. The source is never re-read from the start, since the whole-file hash comes from the verification pass.
 - At startup, `tmp/` keeps the `.part` files that a pending job owns and deletes the others.
@@ -529,7 +531,7 @@ Each copy is compared with the recorded current version:
 
 - **One copy changed** (content differs from the recorded hash and its change time moved): it becomes the current version, whatever its modification time, and a user copy. The other copies become `stale`.
 - **Several copies changed, with different content**: `conflict` (§15.7); nothing is overwritten.
-- **Only metadata changed** (modification time or permissions; same content after re-hashing): the recorded metadata is updated and applied to the other copies. A `touch`, or Radarr/Sonarr's "change file date", costs one re-hash and no copy.
+- **Only metadata changed** (modification time or permissions; same content after re-hashing): the recorded metadata is updated and applied to the other copies. A `touch`, or Radarr/Sonarr's "change file date", costs one re-hash and no copy. A copy's modification time is compared with its own record (`copies.mtime_ns`), so one that its filesystem clamped (§14) is no change, and is never applied to the others.
 - **Replacement** (a copy replaced on one disk and removed from the others within the grouping window, typically through mergerfs): a modification of the surviving copy.
 - **Stale copies** are moved to the trash at once (`reason = overwritten`), so mergerfs never presents them, then refreshed first, whatever the mode.
 
@@ -768,7 +770,7 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 - A pool can mix filesystems; the solver checks name compatibility (§15.8) and compares times at the coarser precision (§9).
 - A pool used directly under Windows can contain NTFS disks only.
 - NTFS after an unclean USB drop: the volume is marked dirty, ntfs3 refuses to mount it without `force`, and Linux has no full equivalent of chkdsk. Atoll never forces such a mount; it alerts, and the volume is repaired with chkdsk on Windows. This is a reason to prefer ext4 for USB disks that Windows never reads.
-- §7 reads the creation time where a driver exposes it, and uses `first_seen` elsewhere. Measured per driver in `docs/research/creation-time.md`.
+- §7 reads the creation time where a driver exposes it, and uses `first_seen` elsewhere. Measured per driver in `docs/research/file-times.md`.
 
 ## 23. Monitoring and alerts
 
@@ -1026,7 +1028,7 @@ atoll daemon [--foreground] [--dry-run]
 - Loop devices (Linux, root): ext4 (128- and 256-byte inodes), NTFS (ntfs3 and ntfs-3g), XFS, btrfs; disk really full.
 - USB drop simulation with dm-error, dm-flakey or `scsi_debug`: the mount stays live and returns EIO, as with a real USB drop; I/O errors are never read as deletions.
 - Mount guards: a failed mount leaving an empty mount point yields `missing`, never deletions, and nothing is written there.
-- Mirror layout: replica path and name identical; modification time preserved and compared at the coarser precision (ext4 → NTFS); creation time newer than the source.
+- Mirror layout: replica path and name identical; modification time preserved and compared at the coarser precision (ext4 → NTFS); a time the target cannot hold is clamped, recorded and never applied to the other copies; creation time newer than the source.
 - Copy pipeline: kill -9 and simulated power cuts at every step; `RENAME_NOREPLACE` race (a file appearing at the destination); rename of the source during a copy; resume without re-reading the source.
 - Changes:
   - rename, deletion and modification made directly on one disk;
@@ -1096,7 +1098,7 @@ atoll daemon [--foreground] [--dry-run]
 | States, job kinds, operation kinds, event kinds, name-compatibility reasons | §4, §9, §15.8 | closed lists of lowercase strings |
 
 - Nothing persisted or exchanged uses a language-specific encoding (no Go `gob`, no Rust `bincode`).
-- Times: integer Unix nanoseconds UTC in the catalog; RFC 3339 with offset in JSON.
+- Times: integer Unix nanoseconds UTC in the catalog, out-of-range values as §7 and §9 state; RFC 3339 with offset in JSON.
 - Sizes: integer bytes everywhere except in the configuration file.
 - Paths: SQLite BLOBs (never TEXT, which a Rust `String` cannot read when the bytes are not UTF-8). In JSON, a `path` string when the path is valid UTF-8; otherwise `path_b64` with the raw bytes in base64.
 - Determinism: every list the solver or the CLI outputs is sorted by a documented key; no dependence on map iteration order or random seeds.
@@ -1105,7 +1107,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection and creation times, capacity formula, solver plans, BLAKE3 file and chunk hashes;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula, solver plans, BLAKE3 file and chunk hashes;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
@@ -1209,7 +1211,7 @@ number   = digits [ "." digits ]
 ## 30. Risks and open questions
 
 - How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)?
-- Modification and change times that do not fit in a signed 64-bit count of nanoseconds (§9): to decide. NTFS can hold them, as §7 found for creation times.
+- Copies with the same content and different modification times, when a disk is added or the catalog rebuilt (R-08, §9): which time is the current version's, and do they count as in sync? To decide.
 - fanotify on ntfs-3g and ntfs3: file-handle support for create, delete and rename events; fallback to inotify.
 - mergerfs behavior with a failing branch before Atoll removes it (I/O errors or fallback to the next branch): to verify with a USB drop simulation.
 - Phase 1 limits: deletions through mergerfs bypass the trash unless the link guard is on; mergerfs presents the first branch's copy, not the oldest one.

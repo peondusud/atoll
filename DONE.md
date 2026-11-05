@@ -2,11 +2,25 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Modification and change times (specs.md §9, §14)
+
+Commit "Define what happens to times a disk or the catalog cannot hold", on `main`.
+
+- Measured on Linux 6.12.115 and 7.3.1:
+  - ext4 and XFS clamp a time without an error: a copy to ext4 of an NTFS file dated 1601 holds 1901, and `cp` exits 0;
+  - Go's `UnixNano` wraps: 1601 becomes a date in 2185.
+- The maintainer's decisions:
+  - the copy is made with the time the disk keeps, which is recorded per copy; it stays in sync and the difference is never applied to the other copies. Invariant 6 now says so;
+  - a time out of range is stored at the nearest limit, and Atoll sets times from a copy's `stat`, never from the catalog.
+- Contract: `conformance/vectors/time_ns.json` holds 26 cases.
+- Code: `solver.TimeNS`, with `CreationTimeNS`, in `times.go`. Nothing calls them outside their tests yet.
+- Left open: copies with the same content and different times at `disk add` or `catalog rebuild`.
+
 ## Choosing the original (specs.md §7)
 
 Commit "Define the choice of the original", on `main`.
 
-- Measured per driver, on Linux 6.12.115 and 7.3.1: report in [docs/research/creation-time.md](docs/research/creation-time.md). ext4 reports a crtime of 0 as 1970, and ntfs3 a FILETIME of 0 as 1601, which does not fit in `btime_ns`.
+- Measured per driver, on Linux 6.12.115 and 7.3.1: report in [docs/research/file-times.md](docs/research/file-times.md). ext4 reports a crtime of 0 as 1970, and ntfs3 a FILETIME of 0 as 1601, which does not fit in `btime_ns`.
 - The maintainer's decisions:
   - creation times are compared in exact nanoseconds;
   - a date of exactly 0, or out of range, counts as absent;

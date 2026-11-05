@@ -34,7 +34,7 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 Every item here is a **decision**:
 
-- Modification and change times that do not fit in a signed 64-bit count of nanoseconds (§9, §30). ntfs3 reports a FILETIME of 0 as 1601, Go's `UnixNano` wraps without saying so, and a replica must keep the modification time, so these cannot simply count as absent, as creation times do (§7).
+- Copies with the same content and different modification times, when a disk is added or the catalog rebuilt (R-08, §9, §30): which time is the current version's, and do they count as in sync? Such copies are common: the same film copied by hand without keeping its date.
 - `schema/config.schema.json`: the JSON Schema of the TOML configuration (§24). Unknown keys are errors.
 - `schema/migrations/NNNN_name.sql`: the catalog schema (§9), including `meta.lpath_key_version`.
 - `api/openapi.yaml` and `api/schemas/` for the `--json` outputs.
@@ -43,7 +43,7 @@ Every item here is a **decision**:
 ## Phase 1a, not started (specs.md §28)
 
 - Disk identity and mounts: FS UUID or NTFS serial, mount-point checks, states.
-- Reading creation times (§7): `statx`, or `system.ntfs_crtime` on ntfs-3g and lowntfs-3g, through `solver.CreationTimeNS`.
+- Reading times: creation times (§7) through `statx`, or `system.ntfs_crtime` on ntfs-3g and lowntfs-3g, and `solver.CreationTimeNS`; modification and change times through `solver.TimeNS`; reading the time back in the copy pipeline (§14).
 - `disk add` and `disk remove`.
 - Scan.
 - File and chunk hashes.
