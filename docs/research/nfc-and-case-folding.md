@@ -145,7 +145,7 @@ The Go side must therefore split the input into maximal valid UTF-8 runs itself 
 - A precomposed `é` followed by 30 × U+0301 also gets one, because the count runs on the decomposition.
 - `IsNormalString` of 35 × U+0316 is false in Go, while Rust's `is_nfc` says true.
 
-Rust's `.nfc()` never inserts a CGJ. `.stream_safe().nfc()` matches Go only when the run involves no Hangul and none of about 51 other ccc = 0 code points that Go counts as non-starters. No Hangul means no jamo inside the run and no precomposed syllable just before it, whose trailing jamo Go also counts: U+AC00 + 30 × U+0316 gets a CGJ in Go and none in Rust. The 51 are mostly vowel signs and length marks that combine backwards, such as U+0B3E and U+0CD5. Reproducing Go exactly would mean copying its counting rule. Runs of more than 30 non-starters are not expected in real file names (this was not measured), so the simplest course is to keep such runs out of the vectors, or to define the behavior explicitly.
+Rust's `.nfc()` never inserts a CGJ. `.stream_safe().nfc()` matches Go only when the run involves no Hangul and none of about 51 other ccc = 0 code points that Go counts as non-starters. No Hangul means no jamo inside the run and no precomposed syllable just before it, whose trailing jamo Go also counts: U+AC00 + 30 × U+0316 gets a CGJ in Go and none in Rust. The 51 are mostly vowel signs and length marks that combine backwards, such as U+0B3E and U+0CD5. Reproducing Go exactly would mean copying its counting rule. Runs of more than 30 non-starters are not expected in real file names (this was not measured), so the simplest course is to keep such runs out of the vectors, or to define the behavior explicitly. (§14.4 corrects the counting rule: Go counts non-starters in the NFKD of each character, so the Hangul compatibility and halfwidth jamo count too.)
 
 **Parity.** On valid text made of characters assigned in the Unicode versions of both libraries, with runs of at most 30 non-starters, Go `x/text` v0.43.0 and Rust `unicode-normalization` agree exactly:
 
@@ -186,7 +186,7 @@ This recommendation assumes the spec accepts the Unicode-version clause of §7 (
 Import `unicode/norm` only, never `x/text/cases` (§9). The spec and vectors then need:
 
 - a vector for the per-run rule, for example `\xf3` U+0344 → `\xf3` U+0308 U+0301;
-- runs of more than 30 non-starters, counted as Go counts them (on the decomposition, including Hangul V/T jamo, the trailing jamo of precomposed syllables and the ~51 ccc = 0 code points above), kept out of the vectors, or the CGJ behavior defined;
+- runs of more than 30 non-starters, counted as Go counts them (on the decomposition, including Hangul V/T jamo, the trailing jamo of precomposed syllables and the ~51 ccc = 0 code points above; §14.4 corrects this to the NFKD of each character), kept out of the vectors, or the CGJ behavior defined;
 - vectors limited to characters assigned in Unicode 16.0 whose case folding, properties and normalization have not changed since; 16.0 is the oldest version among the libraries in use (§7). Being assigned is not enough: U+0295, assigned in 16.0, moved from Ll to Lo in Unicode 17, so `(?i)\p{Ll}` matches it in Rust only;
 - on the Rust side, `unicode-normalization` =0.1.25 (Unicode 17.0.0, the version Go 1.27 uses) on `utf8_chunks` pieces, with the Unicode version recorded. Version 0.1.26 is already at Unicode 18.0.0 and differs from Go on the 34 code points of §3.4.
 
@@ -690,9 +690,9 @@ A second review then checked the decisions and their implementation. A Rust impl
 
 | Point | Decision | Recorded in |
 |---|---|---|
-| Regex subset | a positive grammar that Atoll checks itself in both versions. It allows only constructs both engines read the same way, at most 1000 bytes long, with Go's nested repeat rule; everything else is rejected when the configuration loads. | §29.5; `regex.json` |
-| `lpath_key` and Unicode versions | the catalog records the Unicode version that computed the keys (`meta.unicode_version`) and recomputes them when it changes; the Rust version uses the same Unicode version as Go | §9, §15.8, §29.7 |
-| Runs of more than 30 non-starters | an allowed Go/Rust difference, stated in Go's own terms (the canonical decomposition, Hangul jamo, and the ccc 0 characters x/text counts); the vectors stay below the bound, and a test checks it | §11.3, §29.5 |
+| Regex subset | a positive grammar that Atoll checks itself in both versions. It allows only constructs both engines read the same way, at most 1000 bytes long, with Go's nested repeat rule; everything else is rejected when the configuration loads. §14.4 adds a weight limit. | §29.5; `regex.json` |
+| `lpath_key` and Unicode versions | the catalog records the Unicode version that computed the keys (`meta.unicode_version`) and recomputes them when it changes; the Rust version uses the same Unicode version as Go. Superseded by `meta.lpath_key_version` (§14.4). | §9, §15.8, §29.7 |
+| Runs of more than 30 non-starters | an allowed Go/Rust difference, stated in Go's own terms (the canonical decomposition, Hangul jamo, and the ccc 0 characters x/text counts); the vectors stay below the bound, and a test checks it. §14.4 corrects the count to NFKD and rejects such patterns; names keep the difference. | §11.3, §29.5 |
 | Glob details | NFC once, before brace expansion; a `-` between two characters is a range (`[--a]`); `^` is reserved only right after `[`; the 1024 limit counts the product of the alternatives; the syntax errors are listed in the spec | §11.3, §29.5; `glob.json`, `match.json` |
 | `filename` and `ext` | a `filename` glob never holds `/`; `ext` holds when one of its entries does, an empty list is rejected, and entries are literals | §11.1, §11.3; `match.json` |
 | Empty regex | `re:` alone, and empty alternatives such as `a|` or `()`, are rejected | §29.5; `regex.json` |
@@ -717,13 +717,13 @@ The engines never disagreed on an accepted regex, except on characters whose Uni
 - The length limit and the product rule do not bound what Rust builds. 111 copies of `\pL{1000}` fit in 999 bytes. Go compiles them in 45 ms; Rust needs more than 9 GB.
 - Go's normalization also inserts U+034F into a pattern's text. The Go and Rust versions then disagree on whether a pattern fits in 1000 bytes, and on what it matches.
 - Go and Rust compute different `lpath_key` for a name with such a run, although both report Unicode 17.0.0. So `meta.unicode_version` alone would let keys from the two versions be compared.
-- The spec said Go counts non-starters in the canonical decomposition. It counts them in the compatibility decomposition, NFKD: the Hangul compatibility jamo, such as U+3133, count too. On one million random strings, a run of more than 30 non-starters in the NFKD of each character predicts exactly where Go inserts U+034F. A non-starter there is a character with a nonzero combining class, or with NFC_Quick_Check = Maybe.
+- The spec said Go counts non-starters in the canonical decomposition. It counts them in the compatibility decomposition, NFKD: the Hangul compatibility jamo, such as U+3133, count too. On one million random strings, a run of more than 30 non-starters in the NFKD of each character predicts exactly whether Go inserts U+034F. A non-starter there is a character with a nonzero combining class, or with NFC_Quick_Check = Maybe.
 
 **The maintainer chose:**
 
 | Point | Decision | Recorded in |
 |---|---|---|
-| Rust compile size | a weight limit of 1000: a character, `.` or class item weighs 1, a property 100, times the counts of the repeats around it. Rust keeps its default `size_limit` of 10 MiB and sets `nest_limit` to 1000. The costliest regex found within the bounds, a negated range under `(?i)` repeated 1000 times, takes 2.8 MB. | §29.5, §29.7; `regex.json` |
+| Rust compile size | a weight limit of 1000: a character, `.` or class item weighs 1, a property 100, times the counts of the repeats around it. Rust keeps its default `size_limit` of 10 MiB and sets `nest_limit` to 1000. §14.5 extends the weights to anchors, groups and repeats. | §29.5, §29.7; `regex.json` |
 | Patterns with long non-starter runs | rejected when the configuration loads (globs, regexes and `ext` entries), so U+034F is never inserted into a pattern. Names keep the allowed difference. | §11.3, §29.5; `match.json`, `regex.json` |
 | `lpath_key` version | `meta.lpath_key_version` names the language, the library and its Unicode version, such as `go golang.org/x/text 17.0.0`. Any difference recomputes every key, so keys from two implementations are never compared. | §9, §15.8 |
 
@@ -734,3 +734,31 @@ The engines never disagreed on an accepted regex, except on characters whose Uni
 - In a glob, classes are read before braces.
 - A `filename` glob that contains `/` is rejected when the configuration loads.
 - An error quotes the pattern as typed, and then its NFC form.
+
+### 14.5 After the weight check
+
+A fourth review checked these decisions. It had three parts: a Rust port written from `specs.md` alone, a search for the regexes that cost Rust the most, and a review of the spec text.
+
+**What held:**
+- The port and Go agreed on all 1.2 million regexes for the weight, and on all 3.5 million strings for the non-starter runs.
+- The run rule predicts exactly whether Go's NFC inserts U+034F.
+- Every vector passed in Rust.
+
+**What the review found:**
+- Anchors, capturing groups, flag groups and the `*`, `+`, `?` repeats weighed nothing, yet Rust builds automaton states for each copy of them. So `(?:` followed by 989 `^`, then `a){1000}`, weighed 1000 and passed Go's check, but needed three times Rust's 10 MiB limit. Go kept 43 MB for it.
+- The 2.8 MB the spec quoted was the size of the finished automaton. `size_limit` bounds the memory used while it is built, and a costlier class exists: `(?i)[^\x{1141}-\x{34CF}]{999}` needs 4.2 MB.
+- Nesting reaches 750 levels, not 700.
+- Two releases of `x/text` with the same Unicode version normalize differently (v0.41.0 and v0.43.0), so the key version must name the release.
+- The spec did not say that runs are counted before braces are expanded.
+
+**The maintainer chose** that every element that adds to the automaton weighs at least 1 per copy:
+- anchors and flag groups weigh 1;
+- a capturing group weighs 1 more than what it holds;
+- `*`, `+`, `?`, `{n,}` and `{n,m}` with n < m add 1.
+
+`(?:…)` and an exact `{n}` still add nothing. The costliest regex found then needs 0.40 of Rust's limit. Anchors, groups and repeats, at the full weight, need less than 0.01 of it. `^\pL{10}$` now weighs 1002 and is rejected; `\pL{10}` alone still passes.
+
+**Changed without a decision, since they follow from the earlier ones:**
+- `meta.lpath_key_version` names the library release: `go golang.org/x/text v0.43.0 17.0.0`.
+- A missing value recomputes every key.
+- The run is counted on each pattern as written, before NFC and before braces are expanded, and on each `ext` entry on its own.
