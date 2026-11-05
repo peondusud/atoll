@@ -88,7 +88,7 @@ docs/research/         research reports behind open design decisions (not contra
 12. Catalog: SQLite WAL with `synchronous=FULL`; a filesystem operation never runs before its `ops` row is committed.
 13. Never two copies of a file on the same physical disk.
 14. Atoll's own view presents the in-sync copy with the oldest creation time, never a stale, corrupt or unavailable copy. With mergerfs, move stale and corrupt copies out of `<root>/` (to the trash) as soon as they are found.
-15. Never alter a file name. A name incompatible with a target filesystem → another disk, or the `name-incompatible` state. The logical key is the exact path; NFC and NTFS-style case folding only detect collisions.
+15. Never alter a file name. A name incompatible with a target filesystem → another disk, or the `name-incompatible` state. The logical key is the exact path, never normalized; NFC/NFD and case folding serve only to detect collisions (`lpath_key`) and to match rules (specs.md §11.3), never to name or identify a file.
 16. No automatic disk adoption.
 17. Every operation that moves or deletes offers `--dry-run` and asks for confirmation (`--yes`).
 18. Only the `solver` decides placement. No other module moves files on its own initiative.
@@ -99,7 +99,7 @@ docs/research/         research reports behind open design decisions (not contra
 - Pure core packages (`rules`, `glob`, `names`, `solver`, `value`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.
 - Every behavior change adds or updates a conformance vector or scenario before the code.
 - Sort every output explicitly; never depend on map iteration order or random seeds.
-- Reject regex constructs outside the common Go/Rust subset when the configuration loads (`\d`, `\w`, `\s`, `\b`, `\Q…\E`).
+- Reject regexes outside the grammar of specs.md §29.5, the common Go/Rust subset, when the configuration loads; Atoll checks it itself before the engine compiles.
 - The conformance runner talks to the binary only through the CLI and the filesystem; it imports nothing from `internal/`.
 
 ## Cross-platform rules (Linux now, Windows in the Rust version)
