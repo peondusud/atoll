@@ -22,10 +22,10 @@ One JSON file per function. Every file has this envelope:
 - `spec`: the sections of `specs.md` the vectors pin.
 - `cases`: the test cases, in the order a reader would follow. The fields of a case depend on the file, below.
 - Every case may carry a `note`: a short explanation for reviewers, never read by the tests.
-- Unknown fields are errors, so a typo cannot silently disable a check.
+- Unknown fields are errors, so a typo cannot silently disable a check. Keys are lowercase ASCII and match a field exactly, and no key appears twice in one object: Go's decoder would otherwise match `Name` or `NAME` to `name`, and keep the last of two equal keys, where Rust's fails.
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
-- Integers are exact JSON integers within the signed 64-bit range; they are never written as strings or floats.
-- Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding). A case has exactly one of the two.
+- Integers are exact JSON integers within the signed 64-bit range, without a fraction, an exponent or `-0`; they are never written as strings or floats.
+- Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding), written exactly as the standard encoder writes it: no line break, no other spelling. A case has exactly one of the two.
 - A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
 - Cases are written one per line, so a change shows up as a one-line diff.
 

@@ -84,6 +84,25 @@
     { "name": "a:b ", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["forbidden-character", "trailing-dot-or-space"] },
     { "name": "a\u0001:", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["control-character", "forbidden-character"] },
     { "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.", "ext4": ["too-long"], "xfs": ["too-long"], "btrfs": ["too-long"], "ntfs": ["too-long", "trailing-dot-or-space"] },
-    { "name": "CON.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ext4": ["too-long"], "xfs": ["too-long"], "btrfs": ["too-long"], "ntfs": ["too-long", "reserved-name"], "note": "255 bytes, reserved" }
+    { "name": "CON.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ext4": ["too-long"], "xfs": ["too-long"], "btrfs": ["too-long"], "ntfs": ["too-long", "reserved-name"], "note": "256 bytes, reserved" },
+    { "name": "CON.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"], "note": "255 bytes: reserved, not too long" },
+    { "name": "CON  .txt", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"], "note": "every trailing U+0020 is removed, not only one" },
+    { "name": "nul   .srt", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "COM1  ", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["trailing-dot-or-space", "reserved-name"] },
+    { "name": "CON\t.txt", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["control-character"], "note": "a tab is a control character, never removed" },
+    { "name": "PRN", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "NUL", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "CONOUT$", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "COM5", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "LPT4.srt", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "COM\u00b3", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "LPT\u00b9", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "lpt\u00b2.mkv", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "con\u0131n$", "ext4": [], "xfs": [], "btrfs": [], "ntfs": [], "note": "Unicode uppercase maps \u0131 to I, but only ASCII letters are compared without case" },
+    { "name": "a\u0085b", "ext4": [], "xfs": [], "btrfs": [], "ntfs": [], "note": "C1 controls are allowed" },
+    { "name": "a+b,c;d=e[f]", "ext4": [], "xfs": [], "btrfs": [], "ntfs": [], "note": "characters FAT forbids are allowed on NTFS" },
+    { "name_b64": "/wE=", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["invalid-utf8", "control-character"], "note": "invalid-utf8 comes before control-character" },
+    { "name_b64": "Q09OLv8=", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["invalid-utf8", "reserved-name"], "note": "a name that is not valid UTF-8 still gets reserved-name" },
+    { "name_b64": "Q09OLv8BOmFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEu", "ext4": ["too-long"], "xfs": ["too-long"], "btrfs": ["too-long"], "ntfs": ["too-long", "invalid-utf8", "control-character", "forbidden-character", "trailing-dot-or-space", "reserved-name"], "note": "all six reasons, in order" }
   ]
 }

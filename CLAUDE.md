@@ -105,7 +105,7 @@ docs/research/         research reports behind open design decisions (not contra
 ## Cross-platform rules (Linux now, Windows in the Rust version)
 - Logical key: the exact relative path, `/` separator; bytes on Linux, WTF-8 on Windows (keeps unpaired UTF-16 surrogates).
 - `ignore_case` uses Unicode simple case folding, exactly as regex `(?i)` (data from `unicode.SimpleFold`); the NTFS upcase table serves `lpath_key` only (specs.md §11.3, §15.8). Never `strings.EqualFold`, `strings.ToLower` or `x/text/cases` on names.
-- ext4, XFS, btrfs: 255 bytes per path component. Every NTFS disk follows the Windows rules, checked as a fixed table in both versions (specs.md §15.8): valid UTF-8, at most 255 bytes and 255 UTF-16 code units; characters 1–31 and `" * : < > ? \ |` forbidden; no trailing dot or space; reserved names as Windows 10 reads them (the part before the first dot, trailing spaces removed: CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1–9, COM¹–³, LPT1–9, LPT¹–³). Every component is checked, folders included. NTFS names are case-insensitive. ext4 `casefold`, XFS `ascii-ci` and NTFS `nocase` are refused at `disk add`.
+- ext4, XFS, btrfs: 255 bytes per path component. Every NTFS disk follows the Windows rules, checked as a fixed table in both versions (specs.md §15.8): valid UTF-8, at most 255 bytes and 255 UTF-16 code units; characters 1–31 and `" * : < > ? \ |` forbidden; no trailing dot or space; reserved names as Windows 10 reads them (the part before the first dot, every trailing space removed: CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1–9, COM¹–³, LPT1–9, LPT¹–³). Every component is checked, folders included. NTFS names are case-insensitive. ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase` and lowntfs-3g `ignore_case` are refused at `disk add`.
 - Deep trees: relative operations (`openat`) on Linux; `\\?\` prefix on Windows.
 - `rename` is atomic only within one filesystem: always go through `<workdir>/tmp/` on the target disk.
 - Creation time: `statx` birth time on Linux (ntfs-3g: `system.ntfs_crtime` attribute); `first_seen` when unavailable. On Windows, set it explicitly after the final rename (NTFS tunneling), and open files with `FILE_SHARE_DELETE`.
@@ -118,7 +118,7 @@ docs/research/         research reports behind open design decisions (not contra
 - USB drops are simulated with dm-error, dm-flakey or `scsi_debug` (the mount stays live and returns EIO), not only with a forced unmount.
 - `solver`: property tests (never two copies on a disk, `min_free` respected, capacity matching specs.md §13, user copies never removed implicitly).
 - Changes: atomic saves through mergerfs, metadata-only changes, in-place edits that keep the modification time, hard links.
-- `names`: the corpus in `conformance/corpus/names/`, with a verdict per filesystem.
+- `names`: the corpus in `conformance/corpus/names/`, with the reasons each filesystem refuses each name for (specs.md §15.8); `sudo make test-loopdev` creates its accepted names on every NTFS driver present.
 - Break-glass test in CI, on a pool with no stale copy and no conflict: daemon stopped and removed, plain mergerfs mounted from `mergerfs-config` → identical listing and content, no hidden file, test library unchanged.
 - Failed-mount test: an empty mount point yields `missing`, never deletions, and nothing is written there.
 - No test touches real disks, except `sudo make test-loopdev` or the `hwlab` hardware bench.
