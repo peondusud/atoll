@@ -31,7 +31,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 
 ## Stack and commands
 - Go, latest stable release; Linux amd64 and arm64.
-- SQLite: `modernc.org/sqlite` (no cgo). TOML: BurntSushi/toml or go-toml v2. Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
+- SQLite: `modernc.org/sqlite` (no cgo). TOML: BurntSushi/toml or go-toml v2. Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
 - BLAKE3: a Go implementation with SIMD, chosen after a throughput benchmark.
 - cgo and libfuse3 only for the FUSE view (phase 2a).
 
@@ -56,18 +56,21 @@ internal/rules/        parsing, matching, effective policy (pure)
 internal/glob/         in-house glob matcher (pure)
 internal/names/        exact paths, collision keys, per-filesystem compatibility (pure)
 internal/solver/       placement, capacity, original selection, job plan (pure)
+internal/value/        value grammars: durations, sizes, percentages, time windows (pure)
 internal/jobs/         queue, atomic copy pipeline, per-path locks
 internal/ops/          operation journal, crash recovery
 internal/watch/        fanotify / inotify, rescans, event grouping, file identity
 internal/integrity/    hashing (pure), scrub, repair, quarantine, duplicates
 internal/view/         mergerfs configuration and runtime branches, FUSE view
 internal/fsx/          disk I/O abstraction (real, and with fault injection)
+internal/vectors/      loads conformance/vectors/ for unit tests
 internal/trash/  internal/notify/  internal/alerts/  internal/cache/
 api/                   openapi.yaml, schemas/ for --json outputs
 schema/                migrations/NNNN_name.sql, config.schema.json
 conformance/           vectors/, scenarios/, corpus/names/, runner/ (language-neutral)
 test/                  integration, faults, break glass
 deploy/                systemd units, sample configuration
+docs/research/         research reports behind open design decisions (not contracts)
 ```
 
 ## Non-negotiable invariants
@@ -85,7 +88,7 @@ deploy/                systemd units, sample configuration
 12. Catalog: SQLite WAL with `synchronous=FULL`; a filesystem operation never runs before its `ops` row is committed.
 13. Never two copies of a file on the same physical disk.
 14. Atoll's own view presents the in-sync copy with the oldest creation time, never a stale, corrupt or unavailable copy. With mergerfs, move stale and corrupt copies out of `<root>/` (to the trash) as soon as they are found.
-15. Never alter a file name. A name incompatible with a target filesystem → another disk, or the `name-incompatible` state. The logical key is the exact path; NFC and NTFS-style case folding only detect collisions.
+15. Never alter a file name. A name incompatible with a target filesystem → another disk, or the `name-incompatible` state. The logical key is the exact path, never normalized; NFC/NFD and case folding serve only to detect collisions (`lpath_key`) and to match rules (specs.md §11.3), never to name or identify a file.
 16. No automatic disk adoption.
 17. Every operation that moves or deletes offers `--dry-run` and asks for confirmation (`--yes`).
 18. Only the `solver` decides placement. No other module moves files on its own initiative.
@@ -93,15 +96,16 @@ deploy/                systemd units, sample configuration
 ## Rust-rewrite readiness
 - Persisted and exchanged formats follow specs.md §29.3: SQL migration files, TOML configuration with a JSON Schema, OpenAPI for the local API, JSON schemas for `--json`, documented exit codes. Never `gob` or any other language-specific encoding.
 - Paths are BLOBs in SQLite; times are integer Unix nanoseconds UTC; in JSON, `path` or `path_b64`.
-- Pure core packages (`rules`, `glob`, `names`, `solver`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.
+- Pure core packages (`rules`, `glob`, `names`, `solver`, `value`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.
 - Every behavior change adds or updates a conformance vector or scenario before the code.
 - Sort every output explicitly; never depend on map iteration order or random seeds.
-- Reject regex constructs outside the common Go/Rust subset when the configuration loads (`\d`, `\w`, `\s`, `\b`, `\Q…\E`).
+- Reject regexes outside the grammar of specs.md §29.5, the common Go/Rust subset, when the configuration loads; Atoll checks it itself before the engine compiles.
 - The conformance runner talks to the binary only through the CLI and the filesystem; it imports nothing from `internal/`.
 
 ## Cross-platform rules (Linux now, Windows in the Rust version)
 - Logical key: the exact relative path, `/` separator; bytes on Linux, WTF-8 on Windows (keeps unpaired UTF-16 surrogates).
-- ext4, XFS, btrfs: 255 bytes per path component. NTFS: 255 UTF-16 code units; under Windows, characters 1–31, `\ / : * ? " < > |`, reserved names (CON, PRN, AUX, NUL, COM1–9, COM¹–³, LPT1–9, LPT¹–³, also with an extension) and a trailing dot or space are forbidden; names are case-insensitive. Names that are not valid UTF-8 cannot go to NTFS.
+- `ignore_case` uses Unicode simple case folding, exactly as regex `(?i)` (data from `unicode.SimpleFold`); the NTFS upcase table serves `lpath_key` only (specs.md §11.3, §15.8). Never `strings.EqualFold`, `strings.ToLower` or `x/text/cases` on names.
+- ext4, XFS, btrfs: 255 bytes per path component. Every NTFS disk follows the Windows rules, checked as a fixed table in both versions (specs.md §15.8): valid UTF-8, at most 255 bytes and 255 UTF-16 code units; characters 1–31 and `" * : < > ? \ |` forbidden; no trailing dot or space; reserved names as Windows 10 reads them (the part before the first dot, every trailing space removed: CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1–9, COM¹–³, LPT1–9, LPT¹–³). Every component is checked, folders included. NTFS names are case-insensitive. ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase` and lowntfs-3g `ignore_case` are refused at `disk add`.
 - Deep trees: relative operations (`openat`) on Linux; `\\?\` prefix on Windows.
 - `rename` is atomic only within one filesystem: always go through `<workdir>/tmp/` on the target disk.
 - Creation time: `statx` birth time on Linux (ntfs-3g: `system.ntfs_crtime` attribute); `first_seen` when unavailable. On Windows, set it explicitly after the final rename (NTFS tunneling), and open files with `FILE_SHARE_DELETE`.
@@ -114,7 +118,7 @@ deploy/                systemd units, sample configuration
 - USB drops are simulated with dm-error, dm-flakey or `scsi_debug` (the mount stays live and returns EIO), not only with a forced unmount.
 - `solver`: property tests (never two copies on a disk, `min_free` respected, capacity matching specs.md §13, user copies never removed implicitly).
 - Changes: atomic saves through mergerfs, metadata-only changes, in-place edits that keep the modification time, hard links.
-- `names`: the corpus in `conformance/corpus/names/`, with a verdict per filesystem.
+- `names`: the corpus in `conformance/corpus/names/`, with the reasons each filesystem refuses each name for (specs.md §15.8); `sudo make test-loopdev` creates its accepted names on every NTFS driver present.
 - Break-glass test in CI, on a pool with no stale copy and no conflict: daemon stopped and removed, plain mergerfs mounted from `mergerfs-config` → identical listing and content, no hidden file, test library unchanged.
 - Failed-mount test: an empty mount point yields `missing`, never deletions, and nothing is written there.
 - No test touches real disks, except `sudo make test-loopdev` or the `hwlab` hardware bench.

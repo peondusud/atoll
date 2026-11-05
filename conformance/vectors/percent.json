@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §29.5",
+  "description": "Percentages: a decimal number from 0 to 100 followed by %. The share of a total is computed exactly, then rounded down to whole bytes.",
+  "cases": [
+    { "input": "0%", "of": 1000, "result": 0 },
+    { "input": "5%", "of": 4000000000000, "result": 200000000000 },
+    { "input": "5%", "of": 8001563222016, "result": 400078161100, "note": "400078161100.8, rounded down" },
+    { "input": "90%", "of": 12000138625024, "result": 10800124762521, "note": "10800124762521.6, rounded down" },
+    { "input": "100%", "of": 1000, "result": 1000 },
+    { "input": "100.000%", "of": 1000, "result": 1000 },
+    { "input": "05%", "of": 1000, "result": 50, "note": "leading zeros are digits" },
+    { "input": "12.5%", "of": 8, "result": 1 },
+    { "input": "12.5%", "of": 7, "result": 0, "note": "0.875, rounded down" },
+    { "input": "33.3%", "of": 1000, "result": 333 },
+    { "input": "33.33%", "of": 1000, "result": 333, "note": "333.3, rounded down" },
+    { "input": "0.5%", "of": 1, "result": 0 },
+    { "input": "5%", "of": 0, "result": 0 },
+    { "input": "100%", "of": 9223372036854775807, "result": 9223372036854775807 },
+    { "input": "99.9999999999999999999%", "of": 9223372036854775807, "result": 9223372036854775806, "note": "exact arithmetic: a 64-bit float would give the whole total" },
+    { "input": "", "error": true },
+    { "input": "%", "error": true, "note": "no number" },
+    { "input": "5", "error": true, "note": "no percent sign" },
+    { "input": "100.0001%", "error": true, "note": "above 100" },
+    { "input": "101%", "error": true, "note": "above 100" },
+    { "input": "-5%", "error": true, "note": "no sign" },
+    { "input": "5.%", "error": true, "note": "digits needed after the dot" },
+    { "input": ".5%", "error": true, "note": "digits needed before the dot" },
+    { "input": "5 %", "error": true, "note": "no space" },
+    { "input": "5%%", "error": true },
+    { "input": "5GiB", "error": true, "note": "a size is not a percentage" }
+  ]
+}

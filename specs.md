@@ -232,7 +232,7 @@ CREATE TABLE disks(
 CREATE TABLE files(
   id INTEGER PRIMARY KEY,
   lpath BLOB UNIQUE NOT NULL,          -- exact logical path (bytes; WTF-8 on Windows)
-  lpath_key TEXT,                      -- NFC + NTFS-style case folding, collisions only; NULL if not UTF-8
+  lpath_key TEXT,                      -- NFD, NTFS upcase, NFC (§15.8); collisions only; NULL if not UTF-8
   size INTEGER NOT NULL,               -- current version
   mtime_ns INTEGER NOT NULL,
   blake3 BLOB,                         -- 32 bytes, b3sum-compatible
@@ -294,6 +294,11 @@ CREATE TABLE jobs(
   state TEXT, reason TEXT);
 
 CREATE TABLE events(id INTEGER PRIMARY KEY, ts_ns INTEGER, level TEXT, kind TEXT, data TEXT);
+
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  -- lpath_key_version: what computed lpath_key (§15.8): the language, the normalization library, its
+  --   release and its Unicode version, such as "go golang.org/x/text v0.43.0 17.0.0"
+  --   or "rust unicode-normalization 0.1.25 17.0.0"; compared for equality only
 ```
 
 - All INTEGER times are Unix nanoseconds, UTC. Times are compared at the coarser precision of the filesystems involved (`time_precision_ns`), so an ext4 → NTFS replica still matches.
@@ -308,7 +313,7 @@ CREATE TABLE events(id INTEGER PRIMARY KEY, ts_ns INTEGER, level TEXT, kind TEXT
 - Identifier: the filesystem UUID (ext4, XFS, btrfs) or the 64-bit NTFS serial number, readable on every system that can mount the filesystem, without writing anything to the disk.
 - Two disks with the same identifier (clones): both are refused until one identifier is regenerated (`tune2fs -U`, `xfs_admin -U`, `btrfstune -u`, `ntfslabel --new-serial`).
 - Never identify a disk by `/dev/sdX`, drive letter, Windows volume GUID (specific to each machine) or USB serial number (often fake behind a bridge).
-- `disk add` checks the block-device topology and refuses two pool filesystems on the same physical disk (R-06).
+- `disk add` checks the block-device topology and refuses two pool filesystems on the same physical disk (R-06). It also refuses the variants that change name rules (§15.8): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase` or with lowntfs-3g `ignore_case`.
 - Before any write, Atoll confirms in the same session that the mount path is a mount point of the expected filesystem (device and identifier). It then works through a directory handle opened on the verified root (`openat`-style calls) and re-checks the device id before each job. It writes nothing to an unconfirmed disk.
 - I/O errors (EIO, ENOTCONN, ENODEV) mean "disk unknown", never "file absent". Missing files count as deletions only after the disk's identity has been confirmed in the same scan; an empty mount point after a failed mount is a missing disk, never a mass deletion.
 - Recommended Linux setup:
@@ -326,8 +331,8 @@ CREATE TABLE events(id INTEGER PRIMARY KEY, ts_ns INTEGER, level TEXT, kind TEXT
 | Key | Example | Effect |
 |---|---|---|
 | `path` | `"Films/**"` or `'re:^Films/'` | glob or regex (§29.5) on the logical path |
-| `filename` | `"*sample*"` | glob or regex (§29.5) on the file name only |
-| `ext` | `["mkv", "mp4"]` | extensions, without the dot |
+| `filename` | `"*sample*"` | glob or regex (§29.5) on the file name: the last `/`-separated component of the logical path, which never ends with `/`; a `filename` glob that contains `/` is rejected when the configuration loads (use `path`) |
+| `ext` | `["mkv", "mp4"]` | extensions, without the dot; holds when one of them does (§11.3) |
 | `size_min`, `size_max` | `"100MiB"`, `"40GiB"` | inclusive bounds; size grammar in §29.5 |
 | `ignore_case` | `true` (default) | case ignored for `path`, `filename` and `ext` |
 
@@ -340,7 +345,14 @@ CREATE TABLE events(id INTEGER PRIMARY KEY, ts_ns INTEGER, level TEXT, kind TEXT
 - Ordered list: **the first matching rule wins**. Missing properties come from `[defaults]`, which in turn come from the `strategy` preset.
 - Rules apply to files; folders have no rule of their own.
 - `action = "ignore"`: the file stays in `media/` and in the view, but gets no hash and no replica.
-- Matching uses the NFC form of the path and of the pattern, so a pattern typed in NFC matches a name stored in NFD; with `ignore_case`, both are also case-folded. Grammars are in §29.5, so the Go and Rust versions match exactly the same paths.
+- Matching, with the grammars of §29.5:
+  - the path and every pattern (glob, regex text, extension) are put in NFC form, so a pattern typed in NFC matches a name stored in NFD. A glob is normalized once, before its braces are expanded. A name that is not valid UTF-8 is normalized run by run: each maximal valid UTF-8 run is put in NFC form, and the other bytes are kept as they are. NFC also applies to a regex's text, before its grammar is checked (§29.5), which changes its meaning when the text holds combining marks: `e` followed by U+0301 and `?` becomes `é?`, where `?` applies to the whole character. A mark typed right after an escape letter or a range endpoint composes with it too: `\n` followed by U+0303 becomes `\ñ`, which is rejected, and `[a-z` followed by U+0301 and `]` becomes `[a-ź]`, which holds `é`. Write such marks as `\x{…}`, which NFC leaves alone. An error quotes the text as typed and its NFC form;
+  - with `ignore_case`, two characters are equal when Unicode simple case folding (CaseFolding.txt, statuses C and S) puts them in the same class, exactly as regex `(?i)` compares them: `ß` matches `ẞ` but never `ss`; `ς`, `σ` and `Σ` match each other; `İ` and `ı` match only themselves. A class `[…]` matches a character when one of its case variants is in the class, and `[!…]` matches the others. Folding never rewrites the text: a regex only gets `(?i)` added, so `(?-i:…)` keeps its meaning;
+  - nothing is normalized again after folding, in globs as in regexes: `J` followed by U+030C, which has no precomposed form, does not match `ǰ` (U+01F0, which decomposes to `j` followed by U+030C);
+  - in a glob, each byte that is not part of a valid UTF-8 sequence is one character, matched only by `?`, `*` and negated classes; in a regex, it is one U+FFFD character, as in Go `regexp`;
+  - `ext` holds when the file name ends with `.` followed by one of its entries, characters compared as in a glob. An entry is a literal: `*` or `?` in it match only themselves. So for an entry `x` without glob syntax, `ext = ["x"]` and `filename = "*.x"` agree: `tar.gz` is a valid entry, `.nfo` has the extension `nfo`, and `film.` has none. An entry is non-empty, without `/` and without a leading `.`; an empty list is rejected;
+  - a pattern (glob, regex text or `ext` entry) with a run of more than 30 non-starters (§29.5) is rejected when the configuration loads, so normalization never inserts U+034F into a pattern. The run is counted on the pattern as written in the configuration, before NFC and before braces are expanded, and on each `ext` entry on its own;
+  - the Go and Rust versions match the same paths, except on the characters §29.5 leaves to each version's Unicode data, and on names with a run of more than 30 non-starters, where Go's normalization inserts U+034F (§29.5).
 - Changing rules never deletes anything. Replicas beyond the new level become `surplus` and are removed only by `atoll prune`, to the trash, after confirmation.
 - Size is evaluated once the file is stable (`settle`): a download in progress is not classified on a partial size. Decisions taken when a file is created (SSD cache, phase 2b) can only use path, file name and extension.
 - `atoll rules explain <path> [--size <size>]` shows the matching rule and the effective policy. `atoll rules check` validates the syntax, and lists rules that no current file reaches and rules entirely hidden by an earlier one in simple cases.
@@ -515,22 +527,34 @@ Each copy is compared with the recorded current version:
 - Same logical path with different content on two disks, at adoption or after concurrent changes: `conflict` state, every version kept.
 - Atoll's own view keeps presenting the copy it presented before; for a conflict found when adding a disk, the copy already in the pool. With mergerfs, the first branch's copy is shown.
 - Resolution: `atoll conflicts resolve <path> --keep <disk>`, with confirmation; the other versions go to the trash.
-- Paths that differ only by Unicode normalization (NFC/NFD) or by case are reported as `name-collision`: the merged view shows both, and Windows or macOS clients may treat them as one name. Nothing is changed automatically.
+- Paths with the same `lpath_key` (§15.8), which differ only by NFC/NFD form, by case as NTFS and Samba compare it, or by both, are reported as `name-collision`: the merged view shows both, and Windows or macOS clients may treat them as one name. Nothing is changed automatically.
 
 ### 15.8 Extended names
 
 - Logical key: the exact relative path, byte for byte on Linux and as WTF-8 on Windows (which keeps unpaired UTF-16 surrogates); never normalized. Every copy of a file has this exact path, as mergerfs merges entries by exact name.
-- `lpath_key` (NFC plus case folding following the NTFS upcase table, so `ß` and `ss` stay distinct) is computed only to detect collisions (§15.7); it is NULL for names that are not valid UTF-8.
-- A replica must keep the exact name, so compatibility is checked before every copy to a target filesystem:
-  - ext4, XFS, btrfs: at most 255 bytes per path component;
-  - NTFS: at most 255 UTF-16 code units per component;
-  - NTFS used under Windows: characters 1–31 and `\ / : * ? " < > |` forbidden; reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `COM¹`–`COM³`, `LPT1`–`LPT9`, `LPT¹`–`LPT³`) forbidden, also when followed by an extension (`NUL.txt`); no trailing dot or space;
-  - NTFS under Windows is case-insensitive: `Film.mkv` and `film.mkv` in the same folder collide;
-  - Linux names that are not valid UTF-8 cannot be written to NTFS.
+- `lpath_key` is computed only to detect collisions (§15.7); it is NULL for names that are not valid UTF-8. It is the NFD form of the path, then the NTFS upcase table applied to each UTF-16 code unit, then the NFC form. NFD comes first so that a precomposed lower-case letter collides with its decomposed upper-case form (`ǰ` and `J` followed by U+030C).
+  - The table is the one Windows 10 and 11 and `mkntfs` write, checked byte for byte on volumes they formatted (ntfs-3g says Windows 7 and 8 write it too): Unicode 5.1 simple uppercase on the BMP, kept only where simple lowercase maps it back (973 entries). Windows XP, Vista and Samba also merge `ς` with `σ` and `Σ`, so the table adds `ς` → `Σ`. It is generated from Unicode data, never copied.
+  - Characters above U+FFFF are left unchanged, as ntfs-3g, ntfs3 and Samba compare them exactly (and, as the on-disk format implies, Windows).
+  - The key depends on the normalization library and its Unicode version: on a name with a run of more than 30 non-starters, Go's inserts U+034F and Rust's does not (§29.5). Two releases of one library may also normalize differently, with the same Unicode version. The catalog records what computed the keys (`meta.lpath_key_version`, §9: the language, the library, its release and its Unicode version); when it is missing or differs in any way from the running version, Atoll recomputes every key before it looks for collisions. So the first run after an upgrade of the library, and the first Rust run on a catalog written by Go, recompute them, and keys from two implementations or two releases are never compared.
+  - So `ς` and `σ` share a key, while `ß`, `ẞ` and `ss`, or `ſ` and `s`, do not. The key serves collisions only; `ignore_case` matching follows Unicode simple case folding (§11.3).
+- A replica must keep the exact name, so compatibility is checked before every copy to a target filesystem. The check is a pure function of the logical path and the target's `fs`, the same table in both versions; it never asks the operating system, whose answer depends on its version and on mount options:
+  - every component of the logical path is checked, folders included, whether the folder already exists on the target or not;
+  - lengths are counted on the exact bytes, or on their exact UTF-16 conversion, never on a normalized form: 100 × `é` is 200 bytes in NFC and 300 in NFD;
+  - ext4, XFS, btrfs: at most 255 bytes per component; every other byte is allowed;
+  - NTFS: every NTFS disk follows the Windows rules, so that Windows and both Linux drivers can read everything Atoll writes there. A component must:
+    - be valid UTF-8, so it holds no encoded surrogate (ntfs3 refuses one, and ntfs-3g stores it, or silently rewrites a CESU-8 pair);
+    - hold at most 255 UTF-16 code units, a character above U+FFFF counting 2, and at most 255 bytes, since `lowntfs-3g` refuses longer names and cannot be told apart from `ntfs-3g`. A valid UTF-8 component never has more UTF-16 code units than bytes, so the byte limit always binds first; no UTF-16 length is computed for a name that is not valid UTF-8;
+    - hold none of U+0001–U+001F and none of `" * : < > ? \ |` (U+007F is allowed). On Linux 7.3, ntfs3 even reads `a:b` as a stream of the file `a`;
+    - not end with U+0020 or U+002E, which also rules out `...` and ` `; other spaces and dots, such as U+00A0, are allowed;
+    - not be a reserved name, as Windows 10 reads it (which also cuts at a `:`, forbidden anyway): take the component up to its first `.`, remove every trailing U+0020 (`CON  .txt` reads as `CON`), and compare it, ignoring the case of ASCII letters only, with `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1`–`COM9`, `LPT1`–`LPT9`, and `COM` or `LPT` followed by `¹`, `²` or `³` (U+00B9, U+00B2, U+00B3). So `CON.txt`, `NUL.tar.gz` and `CON .txt` are reserved, as on Windows 10. Windows 11 no longer reserves a device name followed by an extension, according to Microsoft's .NET documentation; its exact rule is not established. `COM0`, `LPT0`, `NULL`, `CLOCK$`, `CONERR$`, ` CON` (leading space) and `ＣＯＮ` (fullwidth) are not;
+  - a component that fails gets one or more reasons, from a closed list (§29.3), reported in this order: `too-long`, `invalid-utf8`, `control-character`, `forbidden-character`, `trailing-dot-or-space`, `reserved-name`. On ext4, XFS and btrfs, only `too-long` applies. Every rule reads bytes, except the UTF-16 length, so a name that is not valid UTF-8 still gets its other reasons;
+  - NTFS is case-insensitive: `Film.mkv` and `film.mkv` in the same folder collide (§15.7);
+  - variants that change these rules are refused when a disk is added (§10): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase` or with lowntfs-3g `ignore_case`. A case-insensitive folder found later under `<root>/` (`FS_CASEFOLD_FL`) makes that disk name-incompatible for every path below it.
 - Incompatible name: the solver picks a compatible disk. Failing that, `name-incompatible` state and an alert. Never an automatic rename.
-- Recommended: mount NTFS disks on Linux with `windows_names`, so applications cannot create names Windows rejects.
+- Recommended: mount NTFS disks on Linux with `windows_names` (Linux 6.2 or later for ntfs3), so applications cannot create most names Windows rejects. It enforces only part of the rules above: both drivers accept `CON .txt`, `COM¹`, `LPT³.nfo` and `CONIN$` with it.
+- Recommended: let Sonarr and Radarr replace `\ / : * ? " < > |` when they import a file (`Replace Illegal Characters`, `Colon Replacement`). Atoll never changes a file name on its own initiative (R-11): it only propagates renames the user made (§6.1, item 3). `atoll names check` lists the names to fix.
 - Long paths: `\\?\` prefix on Windows; relative operations (`openat`) on Linux for deep trees.
-- The name corpus of §29.4 records a verdict per filesystem for each name.
+- The name corpus of §29.4 records, for each name, its reasons on each of `ext4`, `xfs`, `btrfs` and `ntfs`; the vectors pin the check on whole paths.
 
 ## 16. Integrity
 
@@ -908,6 +932,7 @@ atoll repair <path> [--mode chunk|file]
 atoll dupes [--path <path>] [--min-size <size>]
 atoll trash list | restore <path> [--to <disk>] | purge [--older-than <duration>]
 atoll conflicts list | resolve <path> --keep <disk>
+atoll names check [--path <path>]        read-only: names not in NFC, not valid UTF-8, incompatible with a filesystem, or colliding (§15.7, §15.8)
 atoll guard list | confirm | reject
 atoll prune [--dry-run]
 atoll balance [--dry-run] [--move-originals]
@@ -933,7 +958,7 @@ atoll daemon [--foreground] [--dry-run]
 
 - Unit and property tests:
   - solver: never two copies on a disk; `min_free` respected; capacity matching §13; user copies never removed implicitly;
-  - rules: order, combined conditions, sizes, globs and regexes, NFC matching;
+  - rules: order, combined conditions, sizes, globs and regexes, NFC matching and case folding;
   - original selection: creation time on each filesystem and driver, ties, stale copies never presented;
   - names: the corpus of §29.4.
 - Integration without privileges: disks simulated with directories.
@@ -951,7 +976,7 @@ atoll daemon [--foreground] [--dry-run]
   - bursts of renames (Sonarr-like) and folder renames during a replication;
   - hard-linked paths never mistaken for renames.
 - Guards: mass-deletion guard; propagation limited to copies unchanged since the last sync.
-- Names: NFC/NFD and case collisions reported as `name-collision`; NTFS upcase folding (`ß` and `ss`).
+- Names: NFC/NFD and case collisions reported as `name-collision`; NTFS upcase folding (`ς` and `σ` share a key, `ẞ` and `ß` do not).
 - mergerfs with a dying branch: files stay readable through their replicas once the branch is removed; behavior before removal recorded.
 - Disk sleep: SMART polling does not wake a sleeping disk; no background work outside the windows.
 - **Break-glass test**, in CI, on a pool with no stale copy and no conflict: daemon stopped then uninstalled, plain mergerfs mounted from `mergerfs-config` at the same mount point: identical listing and content, no hidden file, test library unchanged.
@@ -1005,7 +1030,7 @@ atoll daemon [--foreground] [--dry-run]
 | Local API | `api/openapi.yaml` | HTTP/1.1 and JSON over a Unix socket (named pipe on Windows) |
 | CLI | §25, `api/schemas/` | same commands, flags, `--json` outputs and exit codes |
 | Hashes | §16 | BLAKE3-256 of the file; BLAKE3-256 of each 4 MiB chunk, concatenated |
-| States, job kinds, operation kinds, event kinds | §4, §9 | closed lists of lowercase strings |
+| States, job kinds, operation kinds, event kinds, name-compatibility reasons | §4, §9, §15.8 | closed lists of lowercase strings |
 
 - Nothing persisted or exchanged uses a language-specific encoding (no Go `gob`, no Rust `bincode`).
 - Times: integer Unix nanoseconds UTC in the catalog; RFC 3339 with offset in JSON.
@@ -1017,9 +1042,9 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, durations, sizes and time windows, name compatibility per filesystem, NTFS collisions, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, original selection, capacity formula, solver plans, BLAKE3 file and chunk hashes;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
-  - `corpus/names/`: the name corpus of §15.8, with a verdict per filesystem for each name.
+  - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
 - A runner drives any `atoll` binary through its CLI and the filesystem only; it imports nothing from the implementation.
 - Every behavior change first adds or updates a vector or scenario.
@@ -1040,10 +1065,61 @@ number   = digits [ "." digits ]
 - Glob, implemented in-house in both versions (third-party matchers disagree: doublestar's `*` stops at `/`, globset's crosses it), matched against the whole logical path without a leading `/`:
   - `*` matches any run of characters except `/`; `?` one character except `/`;
   - `**` as a whole path component matches zero or more components;
-  - `[abc]`, `[a-z]`, `[!a]` character classes; `{a,b}` alternatives, not nested;
+  - `[abc]`, `[a-z]`, `[!a]` character classes. A class ends at its first `]`, so `[]a]` is rejected as an empty class. A `-` between two characters marks a range, so `[--a]` is the range from `-` to `a`; any other `-` must come first or last. `[^` is reserved: negation is written `[!`. `/` is never a character or a range endpoint in a class; a range may span it, but never matches `/`;
+  - `{a,b}` alternatives, not nested; the product of the numbers of alternatives is at most 1024. Classes are read first, so a `,` or `}` in a class is literal (`{[,],x}` matches `,`); braces are then expanded, every other rule (`**` and empty components included) applies to each expansion, and the pattern matches when one expansion does (`{*,x}*` expands to `**`, which matches `p/q`);
   - names starting with a dot match like any other name;
+  - rejected: an empty pattern; an unterminated or empty class; `[^`; `/` as a class character or range endpoint; a reversed range; a `-` in a class that is neither first, last nor between two characters; a backslash, reserved for a future escape syntax; `**` inside a component; braces that are nested, unbalanced, or with an empty or single alternative; an empty component (a leading or trailing `/`, or `//`); more than 1024 expansions;
   - NFC and case folding as in §11.3.
-- Regex: `re:` prefix; the common subset of Go `regexp` and Rust `regex` (RE2 semantics: no backreferences, no lookaround). Rejected when the configuration loads: `\d`, `\w`, `\s` and `\b`, which are ASCII-only in Go and Unicode in Rust (write `[0-9]` or `\p{L}` instead), and `\Q…\E`. Unanchored unless the pattern uses `^` or `$`; `ignore_case` adds `(?i)`.
+- Regex: `re:` prefix. A regex must follow the grammar below, a common subset of Go `regexp` and Rust `regex` (RE2 semantics: no backreferences, no lookaround) where both engines give the same meaning. Atoll checks it itself, in both versions, on the text in NFC form (§11.3), before the engine compiles it, and rejects anything else when the configuration loads. Unanchored unless the pattern uses `^`, `$`, `\A` or `\z`; `ignore_case` adds `(?i)`.
+
+  ```
+  regex    = branch { "|" branch }
+  branch   = piece { piece }                      ; no empty branch: "", "a|" and "()" are rejected
+  piece    = atom [ repeat ] | anchor | "(?" flags ")"
+  anchor   = "^" | "$" | "\A" | "\z"
+  repeat   = ( "*" | "+" | "?" | "{" n "}" | "{" n ",}" | "{" n "," n "}" ) [ "?" ]
+  n        = "0" | nonzero { digit }              ; at most 1000; in {n,m}, n <= m
+  digit    = "0" … "9"
+  nonzero  = "1" … "9"
+  hex      = digit | "a" … "f" | "A" … "F"
+  atom     = char | "." | class | "(" regex ")" | "(?:" regex ")" | "(?" flags ":" regex ")"
+  flags    = letters [ "-" letters ] | "-" letters ; letters among i, m, s, U; each letter
+                                                  ; at most once in the whole group, on
+                                                  ; either side of "-": "(?i-i)" is rejected
+  char     = any character except  \ . + * ? ( ) | [ ] { } ^ $
+           | escape | property
+  escape   = "\" one of  \ . + * ? ( ) | [ ] { } ^ $ -
+           | "\a" | "\f" | "\t" | "\n" | "\r" | "\v"
+           | "\x" hex hex | "\x{" 1 to 6 hex "}"   ; a Unicode scalar value
+  property = ( "\p" | "\P" ) ( major | "{" name "}" )
+  class    = "[" [ "^" ] item { item } "]"       ; a "^" right after "[" always negates
+  item     = cchar [ "-" cchar ] | property | "-" ; a "-" item only first or last
+  cchar    = any character except  \ [ ] -  | escape
+  ```
+
+  - The text, in NFC form, is at most 1000 bytes long.
+  - A repeat applies to an atom: `a**`, `a{2}{3}`, `^*` and `(?i)*` are rejected. Nested counted repeats multiply to at most 1000, as Go requires: along any chain of counted repeats nested in one another, the product of their counts is at most 1000. The count of `{n}` is n, of `{n,m}` m, of `{n,}` n (1 when n is 0); a repeat with an upper bound of 0 ends the chain.
+  - In a class: an empty class is rejected, and a `]` is never a class character, even first (write `\]`); a `-` marks a range between two `cchar`s in order, and is otherwise allowed only first or last; two unescaped `-`, `&` or `~` in a row are rejected wherever they stand: Rust reads such a pair as a set operation (`[a--b]`, `[a&&b]`), and right after a range end, where Rust reads a literal (`[!-&&]`), the pair is rejected all the same, so the rule needs no parsing. A class never needs one of these characters twice: `[!-&&]` is `[!-&]`, and `[!---]` is `[!-\-]`.
+  - `major` is one of `C L M N P S Z`. `name` is a general category (`C Cc Cf Co L Ll Lm Lo Lt Lu M Mc Me Mn N Nd Nl No P Pc Pd Pe Pf Pi Po Ps S Sc Sk Sm So Z Zl Zp Zs`) or a script of Unicode 16.0 spelled as in its `Scripts.txt` (`Latin`, `Greek`, `Old_Italic`, `Common`, `Inherited`…).
+  - So, among others: `\d \D \w \W \s \S \b \B`, which mean different things in Go and Rust (write `[0-9]` or `\p{L}`), `\<` and `\>`, octal and back-references (`\0`, `\101`), `\Q…\E`, `{` or `}` outside a repeat (write `\{` and `\}`, as in `\{tmdb-[0-9]+\}`), POSIX classes, nested classes, other flags, and loose or prefixed property names (`\p{greek}`, `\p{^Lu}`, `\p{sc=Greek}`) are rejected.
+  - A regex weighs at most 1000, so that what both engines build stays small. Every element that adds to the automaton weighs at least 1, for each copy that the counted repeats around it make:
+    - a character or escape, a `.`, an anchor, a flag group `(?flags)` and each item of a class (a character or a range) weigh 1; a `\p` or `\P`, in a class or not, 100;
+    - a capturing group weighs 1 more than what it holds; `(?:…)` and `(?flags:…)` weigh what they hold;
+    - a repeat weighs its count times what it repeats (the count as above: `{n}` n, `{n,m}` m, `{n,}` n, or 1 when n is 0, and `*`, `+`, `?` 1; an upper bound of 0 gives 0), plus 1 for `*`, `+`, `?`, `{n,}` and `{n,m}` with n < m, which add branches (Rust adds one for each optional copy of `{n,m}`, but each copy already weighs at least 1); `{n}`, `{n,n}` and a lazy `?` after a repeat add nothing;
+    - an alternation weighs the sum of its branches, and a sequence the sum of its pieces.
+
+    The length and the weight are those of the text as written, in NFC form, without the `(?i)` that `ignore_case` adds.
+
+    So `\pL{10}`, `[a-z]{1000}`, `a{0,999}`, `(a){500}` and `(?:\pL{11}){0}a` pass, while `^\pL{10}$` (1002), `\pL{11}`, `[a-z0-9]{1000}`, `a{500}b{501}`, `(?:a|\pL){10}` and `(?:^^^a){1000}` (4000) are rejected. Without the weight, the length limit and the product rule let a 1000-byte regex need gigabytes in Rust (111 copies of `\pL{1000}`), or three times Rust's size limit with anchors alone (`(?:` and 989 `^`, then `a){1000}`).
+  - The Rust version sets `size_limit` to 10 MiB, the `regex` default, and `nest_limit` to 1000. Every regex within the bounds above fits them. Measured with `regex` 1.13.1, against the memory used while the automaton is built (which `size_limit` bounds):
+    - the costliest regex found, `(?i)[^\x{1141}-\x{34CF}]{0,998}`, needs 4.26 MB, 0.41 of the limit;
+    - a property costs at most 52 KB per 100 of weight;
+    - anchors, groups and repeats cost at most about 120 bytes per unit of weight.
+
+    Nesting never goes beyond 750 levels, as a group, a sequence and a repeat make 3 levels in 4 bytes. `regex` compiles recursively, one call per level: an optimized build needs about 0.5 MiB of stack for the deepest regexes, and an unoptimized one up to about 5 MiB, more than the 2 MiB of a default Rust thread (`cargo test` included). So the Rust version compiles regexes on a thread with at least 8 MiB of stack. With the length limit above, Go's own limits are never reached.
+  - The weight bounds the size of the automaton, not the time to compile it. With `ignore_case`, both engines fold every character of each class range, so a 1000-byte regex of wide ranges, such as `[B-` followed by U+10FFFF and `]`, 125 times, can take up to about 0.7 s to compile in Rust and 0.6 s in Go when the configuration loads, against 1 ms without `ignore_case`.
+- Unicode data: each version takes case folding and character properties from its regex engine (Go `unicode`, as `regexp` does; Rust `regex-syntax`), for globs and extensions too, so on valid UTF-8 a glob and the equivalent regex always agree; on other bytes, §11.3 gives them different rules. NFC comes from the normalization library, applied run by run (§11.3). The Unicode versions of these libraries differ (Go 1.27: 17.0; `regex-syntax` 0.8.5 and later: 16.0; `unicode-normalization` 0.1.25: 17.0, 0.1.26: 18.0). So the vectors (§29.4) only use characters assigned in Unicode 16.0, with expected results that no later version of these libraries' data changes.
+- Go's normalization follows the UAX #15 stream-safe format: after 30 non-starters it inserts U+034F, and Rust's does not. Go counts non-starters in the compatibility decomposition (NFKD) of each character: characters with a nonzero canonical combining class, and characters of class 0 that NFC may compose with the character before them (NFC_Quick_Check = Maybe: the conjoining jamo V and T, and others such as U+09BE). So `각` (U+AC01) ends with two non-starters, and the compatibility jamo U+3133 is one. A pattern (glob, regex text or `ext` entry) with a run of more than 30 non-starters is rejected when the configuration loads, in both versions, so U+034F is never inserted into a pattern. A name cannot be rejected: on a name with such a run, the two versions may match differently (§11.3) and compute different `lpath_key` (§15.8). The vectors keep every accepted pattern and every name below the bound.
 
 ### 29.6 Code structure for the port
 
@@ -1057,7 +1133,9 @@ number   = digits [ "." digits ]
 | SQLite | `modernc.org/sqlite` | `rusqlite` (bundled SQLite) |
 | BLAKE3 | Go implementation with SIMD, chosen after a benchmark | `blake3` (official) |
 | TOML | BurntSushi/toml or go-toml v2 | `toml` with `serde` |
-| Regex | `regexp` | `regex` |
+| Regex | `regexp`, after Atoll's grammar check (§29.5) | `regex`, with `regex-syntax` 0.8.5 or later, after the same check; `size_limit` 10 MiB, `nest_limit` 1000 (§29.5) |
+| Unicode normalization (NFC, NFD) | `golang.org/x/text/unicode/norm`, v0.43.0 or later | `unicode-normalization`, at the Unicode version of the Go toolchain it replaces (0.1.25 for Unicode 17.0) |
+| Case folding | `unicode.SimpleFold`, as `regexp` | `regex-syntax` (`case_fold_simple`), the version `regex` uses |
 | Glob | in-house | in-house, same vectors |
 | CLI | standard library or cobra | `clap` |
 | System calls (`statx`, `renameat2`, `openat`, fanotify, inotify) | `golang.org/x/sys/unix` | `rustix` or `nix` |
@@ -1081,3 +1159,11 @@ number   = digits [ "." digits ]
 - Single-copy windows: `immediate` mode before Atoll's own view, and SSD residency.
 - Rust rewrite: cost of a second implementation and of keeping both in sync until the switch; maturity of the `winfsp` crate to check before phase 4.
 - Windows arrives after the rewrite; until then, Windows PCs use the SMB share.
+- Names (research in `docs/research/name-compatibility.md`), to decide before the solver, the scanner and `atoll names check`:
+  - case collisions on NTFS targets: a hard constraint checked against the target's existing and planned siblings, or a report only; and folders, since the whole-path `lpath_key` misses `Films/a.mkv` against `films/b.mkv`;
+  - a user rename to a name that another copy's filesystem refuses (§15.3, §6.1): what happens to the copy left at the old name;
+  - the trash layout `<logical path>.chunks/` cannot hold a file name of 249 bytes or more (§17);
+  - total path length: mergerfs opens `<branch>/<path>` as one string, limited to 4096 bytes; Windows applications without long-path support stop at 259 UTF-16 units;
+  - the output of `atoll names check` (JSON schema, sort key, exit code) and the precedence between `name-incompatible` and `degraded`;
+  - on NTFS, 8.3 short names: both Linux drivers refuse to create a name equal to another file's short name, and ntfs-3g's `stat` returns that other file, so existence must never be decided by `stat` alone;
+  - mount checks: how to detect lowntfs-3g `ignore_case`, which mount information does not show (the FUSE daemon's command line?); ntfs3 must use `iocharset=utf8`, and its `ads` option (on by default from Linux 7.3) reads `a:b` as a stream; a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file.
