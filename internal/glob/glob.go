@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/peondusud/atoll/internal/names"
 )
 
 // MaxExpansions is the largest number of brace expansions a pattern may have.
@@ -34,11 +36,24 @@ const MaxExpansions = 1024
 //
 // A character is a Unicode scalar value encoded in valid UTF-8. Each byte of a
 // path that is not part of a valid UTF-8 sequence counts as one character,
-// which only ?, * and negated classes match. Characters are compared exactly:
-// the NFC form and case folding of specs.md §11.3 are applied by the caller.
+// which only ?, * and negated classes match. Characters are compared exactly,
+// unless the pattern ignores case (Options). The caller puts the pattern and
+// the path in NFC form (specs.md §11.3).
 type Pattern struct {
 	text string
 	alts [][]component // one per brace expansion
+	fold bool          // Options.IgnoreCase
+}
+
+// Options changes how a pattern matches.
+type Options struct {
+	// IgnoreCase compares characters under Unicode simple case folding,
+	// exactly as regex (?i) does (specs.md §11.3): a literal matches its case
+	// variants, and a class matches a character when one of its case variants
+	// is in the class; [!…] matches the other characters. Folding never
+	// rewrites the pattern, so range endpoints keep their meaning: [A-z]
+	// still holds _.
+	IgnoreCase bool
 }
 
 // component is one /-separated part of an expanded pattern.
@@ -80,8 +95,13 @@ func (e *SyntaxError) Error() string {
 	return fmt.Sprintf("glob %q: %s, at byte %d", e.Pattern, e.Msg, e.Offset)
 }
 
-// Compile parses a glob pattern.
+// Compile parses a glob pattern that compares characters exactly.
 func Compile(pattern string) (*Pattern, error) {
+	return CompileWith(pattern, Options{})
+}
+
+// CompileWith parses a glob pattern with options.
+func CompileWith(pattern string, opts Options) (*Pattern, error) {
 	fail := func(offset int, format string, args ...any) error {
 		return &SyntaxError{Pattern: pattern, Offset: offset, Msg: fmt.Sprintf(format, args...)}
 	}
@@ -99,7 +119,7 @@ func Compile(pattern string) (*Pattern, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Pattern{text: pattern, alts: make([][]component, 0, len(expansions))}
+	p := &Pattern{text: pattern, alts: make([][]component, 0, len(expansions)), fold: opts.IgnoreCase}
 	for _, toks := range expansions {
 		comps, err := split(toks, fail)
 		if err != nil {
@@ -323,7 +343,7 @@ func split(toks []token, fail failFunc) ([]component, error) {
 func (p *Pattern) Match(path string) bool {
 	parts := strings.Split(path, "/")
 	for _, comps := range p.alts {
-		if matchComponents(comps, parts) {
+		if matchComponents(comps, parts, p.fold) {
 			return true
 		}
 	}
@@ -333,7 +353,7 @@ func (p *Pattern) Match(path string) bool {
 // matchComponents matches path components, where a globstar matches zero or
 // more of them. Components match independently of each other, so retrying from
 // the last globstar only is enough, as for * in matchComponent.
-func matchComponents(comps []component, parts []string) bool {
+func matchComponents(comps []component, parts []string, fold bool) bool {
 	ci, pi := 0, 0
 	starCi, starPi := -1, 0
 	for {
@@ -344,7 +364,7 @@ func matchComponents(comps []component, parts []string) bool {
 				ci++
 				continue
 			}
-			if pi < len(parts) && matchComponent(c.toks, parts[pi]) {
+			if pi < len(parts) && matchComponent(c.toks, parts[pi], fold) {
 				ci++
 				pi++
 				continue
@@ -363,7 +383,7 @@ func matchComponents(comps []component, parts []string) bool {
 
 // matchComponent matches one component of a path against tokens that each
 // match one character, except * which matches any run.
-func matchComponent(toks []token, s string) bool {
+func matchComponent(toks []token, s string, fold bool) bool {
 	ti, si := 0, 0
 	starTi, starSi := -1, 0
 	for {
@@ -376,7 +396,7 @@ func matchComponent(toks []token, s string) bool {
 			}
 			if si < len(s) {
 				r, valid, w := decode(s[si:])
-				if t.matches(r, valid) {
+				if t.matches(r, valid, fold) {
 					ti++
 					si += w
 					continue
@@ -395,6 +415,16 @@ func matchComponent(toks []token, s string) bool {
 	}
 }
 
+// holds reports whether r lies in one of the ranges of a class token.
+func (t token) holds(r rune) bool {
+	for _, rg := range t.ranges {
+		if rg.lo <= r && r <= rg.hi {
+			return true
+		}
+	}
+	return false
+}
+
 // decode returns the first character of a non-empty s and its length. valid
 // is false for a byte that is not part of a valid UTF-8 sequence.
 func decode(s string) (r rune, valid bool, size int) {
@@ -405,23 +435,23 @@ func decode(s string) (r rune, valid bool, size int) {
 	return r, true, size
 }
 
-// matches reports whether a single-character token matches a character.
-func (t token) matches(r rune, valid bool) bool {
+// matches reports whether a single-character token matches a character. With
+// fold, characters compare under Unicode simple case folding.
+func (t token) matches(r rune, valid, fold bool) bool {
 	switch t.kind {
 	case tokLiteral:
-		return valid && r == t.r
+		return valid && (r == t.r || fold && names.FoldEqual(r, t.r))
 	case tokAny:
 		return true
 	case tokClass:
 		if !valid {
 			return t.negate
 		}
-		for _, rg := range t.ranges {
-			if rg.lo <= r && r <= rg.hi {
-				return !t.negate
-			}
+		in := t.holds(r)
+		if !in && fold {
+			in = names.FoldAny(r, t.holds)
 		}
-		return t.negate
+		return in != t.negate
 	case tokStar, tokSep:
 		return false // never asked: * and / are handled by the callers
 	default:
