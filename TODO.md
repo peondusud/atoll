@@ -29,19 +29,19 @@ To decide before the solver, the scanner and `atoll names check` need them:
 Every item here is a **decision**:
 
 - `api/openapi.yaml` and `api/schemas/` for the `--json` outputs.
-- The format of `conformance/scenarios/` and the runner. The runner refuses any scenario today.
 
 ## Phase 1a, not started (specs.md §28)
 
 - Configuration in the shell (§24.3, §10):
-  - reading the file through `internal/fsx`, `--config`, and looking `timezone` up on the machine;
-  - `atoll init`, `atoll rules check`, which shows warnings, and `atoll rules explain`, over `config.Policy` and `Policy.Sources`;
+  - `atoll init`, and in `atoll rules check`, the rules that no file reaches or that an earlier one hides (§11.3);
+  - `--help`, the French translation of the CLI, and human output that writes durations as the configuration does: `atoll rules explain` prints `settle_ns = 600000000000`;
   - the fallbacks of §12.2 where the policy is acted on: `rules.Policy` holds what the configuration asks for;
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
 - Catalog queries, on top of `catalog.Open`; syncing `disks` from the configuration at each start (§9).
 - `catalog rebuild` must start `ops.id` past the ids in each disk's trash, so that a new operation's folder cannot meet an old one (§17): rebuilding empties `sqlite_sequence`.
 - Memory of the daemon on 200,000 files (§26), with a `GOMEMLIMIT`: a plan holds about 100 MB on top of its input, which is about 50 MB, so the limit depends on the garbage collector's headroom and on what else the daemon holds.
 - Disk identity and mounts: FS UUID or NTFS serial, mount-point checks, states.
+- The conformance build (§29.4): reading disks and time from `ATOLL_CONFORMANCE`, `daemon --until-idle`, and a test that the delivered binary ignores that variable. The runner already writes the file, and `make conformance` already builds with the tag, but no code reads it yet, so the scenarios cover only what needs no disk.
 - Reading times: creation times (§7) through `statx`, or `system.ntfs_crtime` on ntfs-3g and lowntfs-3g, and `solver.CreationTimeNS`; modification and change times through `solver.TimeNS`; reading the time back in the copy pipeline (§14).
 - `disk add` and `disk remove`.
 - Scan.

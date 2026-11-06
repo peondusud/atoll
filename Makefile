@@ -19,9 +19,10 @@ test:
 test-race:
 	$(GO) test -race ./...
 
-# Black-box: conformance/scenarios against the binary, through its CLI only.
-conformance: build
-	$(GO) run ./conformance/runner --bin $(BIN) --scenarios conformance/scenarios
+# Black-box: conformance/scenarios against a conformance build, through its CLI only.
+conformance:
+	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
+	$(GO) run ./conformance/runner --bin $(BIN)-conformance --scenarios conformance/scenarios
 
 # The next two depend on the machine, not only on the code, so they never reuse
 # a cached result (-count=1).

@@ -1,0 +1,100 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a711.3, \u00a712.2, \u00a724.2",
+  "description": "Where a value comes from is the first of the rule, the file, the preset and a default that sets it. The preset safety sets replicas, mode and spread_mode. The file overrides its mode, even with the value a later source would give, and the value shown is what the file asks for, not what this phase falls back to.",
+  "config": "strategy = \"safety\"\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nmode = \"manual\"\nsettle = \"5m\"\n[placement]\noverflow = \"deny\"\nspread = \"domain\"\n[cache]\nmin_age = \"1d\"\n[[rule]]\nlabel = \"r\"\nfilename = \"y.*\"\nmode = \"immediate\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "x.mkv",
+        "rule": null,
+        "size": null,
+        "policy": {
+          "action": "manage",
+          "replicas": 1,
+          "mode": "manual",
+          "settle_ns": 300000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "strict",
+          "colocate": "none",
+          "overflow": "deny",
+          "cache": true,
+          "cache_min_age_ns": 86400000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "preset",
+          "mode": "file",
+          "settle": "file",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "file",
+          "spread_mode": "preset",
+          "colocate": "default",
+          "overflow": "file",
+          "cache": "default",
+          "cache_min_age": "file"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "y.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "y.mkv",
+        "rule": "r",
+        "size": null,
+        "policy": {
+          "action": "manage",
+          "replicas": 1,
+          "mode": "immediate",
+          "settle_ns": 300000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "strict",
+          "colocate": "none",
+          "overflow": "deny",
+          "cache": true,
+          "cache_min_age_ns": 86400000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "preset",
+          "mode": "rule",
+          "settle": "file",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "file",
+          "spread_mode": "preset",
+          "colocate": "default",
+          "overflow": "file",
+          "cache": "default",
+          "cache_min_age": "file"
+        }
+      }
+    }
+  ]
+}

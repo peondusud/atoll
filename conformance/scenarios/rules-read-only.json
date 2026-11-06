@@ -1,0 +1,113 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a711.3, \u00a725",
+  "description": "Both commands read the configuration only. They write nothing to a disk, and create no catalog: the catalog's folder is a disk only for the runner, which would see it there.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "old"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/disks/state/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "media/a.mkv",
+        "--json",
+        "--size",
+        "1B"
+      ],
+      "stdout_json": {
+        "path": "media/a.mkv",
+        "rule": null,
+        "size": 1,
+        "policy": {
+          "action": "manage",
+          "replicas": 1,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "default",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "old"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "state",
+      "tree": []
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "atoll rules check --json",
+  "description": "Whether the configuration loads, with its problems and warnings (specs.md §24.3, §24.4, §25). The wording of a message is not part of the contract.",
+  "type": "object",
+  "required": ["valid", "problems", "warnings"],
+  "additionalProperties": false,
+  "properties": {
+    "valid": { "type": "boolean" },
+    "problems": {
+      "description": "Sorted by key in byte order. Empty exactly when valid is true.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["message"],
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "description": "Left out on a syntax error, or when the file cannot be read.",
+            "type": "string",
+            "minLength": 1
+          },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "warnings": {
+      "description": "Sorted by key in byte order. Empty when valid is false.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "later_phase", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "key": { "type": "string", "minLength": 1 },
+          "later_phase": {
+            "description": "True for a setting whose feature arrives in a later phase (specs.md §24.4).",
+            "type": "boolean"
+          },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "if": { "properties": { "valid": { "const": true } } },
+  "then": { "properties": { "problems": { "maxItems": 0 } } },
+  "else": { "properties": { "problems": { "minItems": 1 }, "warnings": { "maxItems": 0 } } }
+}

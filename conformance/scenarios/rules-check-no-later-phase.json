@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.4",
+  "description": "The same settings at a value that does not ask for the feature get no warning, even when the file writes them out.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[defaults]\nmode = \"deferred\"\n[placement]\nnew_files = \"most-free\"\nspread_mode = \"prefer\"\ntags_mode = \"prefer\"\ncolocate = \"none\"\noverflow = \"allow\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[read]\npolicy = \"oldest\"\n[balance]\nschedule = \"never\"\nequalize = \"off\"\n[integrity]\nauto_repair = false\n[trash]\nlink_guard = false\n[cache]\nenabled = false\n[ups]\nenabled = false\n[notify.plex]\nurl = \"\"\n[notify.jellyfin]\nurl = \"\"\n[notify.emby]\nurl = \"\"\n[alerts]\ngotify = \"\"\nsmtp = \"\"\n[[disk]]\nid = \"c1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/c1\"\nfs = \"ext4\"\nrole = \"data\"\n[[rule]]\nlabel = \"r\"\nmode = \"manual\"\nspread_mode = \"prefer\"\ntags_mode = \"prefer\"\ncolocate = \"none\"\noverflow = \"allow\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    }
+  ]
+}

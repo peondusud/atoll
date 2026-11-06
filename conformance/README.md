@@ -13,4 +13,4 @@ Every behavior change first adds or updates a vector or scenario.
 
 The vector format is described in [`vectors/README.md`](vectors/README.md); the Go unit tests load the files through `internal/vectors`.
 
-Run the scenarios with `make conformance`. Their file format is not defined yet, so the runner refuses any scenario it finds instead of passing over it.
+Run the scenarios with `make conformance`. Their format is in [`scenarios/README.md`](scenarios/README.md).

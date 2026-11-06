@@ -1,0 +1,66 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "A configuration that cannot be read, being absent or a folder, is one problem with no key, and exit code 1.",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/absent.toml",
+        "rules",
+        "check",
+        "--json"
+      ],
+      "exit": 1,
+      "stdout_json": {
+        "valid": false,
+        "problems": [
+          {
+            "message": "${ANY}"
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config=${SANDBOX}/absent.toml",
+        "rules",
+        "check",
+        "--json"
+      ],
+      "exit": 1,
+      "stdout_json": {
+        "valid": false,
+        "problems": [
+          {
+            "message": "${ANY}"
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}",
+        "rules",
+        "check",
+        "--json"
+      ],
+      "exit": 1,
+      "stdout_json": {
+        "valid": false,
+        "problems": [
+          {
+            "message": "${ANY}"
+          }
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

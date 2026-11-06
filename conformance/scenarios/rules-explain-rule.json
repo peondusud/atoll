@@ -1,0 +1,158 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a711.3",
+  "description": "The first rule that matches wins, and each property it sets comes from it. A rule that does not set action leaves it to its default.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[rule]]\nlabel = \"series\"\npath = \"Series/**\"\nreplicas = 0\n[[rule]]\nlabel = \"films\"\npath = \"Films/**\"\nreplicas = 2\nmode = \"manual\"\nsettle = \"1h\"\npriority = 7\ntags = [\"sata\"]\ntags_mode = \"strict\"\ndomains = [\"d1\"]\nspread = \"none\"\nspread_mode = \"prefer\"\ncolocate = \"season\"\noverflow = \"deny\"\ncache = false\ncache_min_age = \"1d\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Films/x.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "Films/x.mkv",
+        "rule": "films",
+        "size": null,
+        "policy": {
+          "action": "manage",
+          "replicas": 2,
+          "mode": "manual",
+          "settle_ns": 3600000000000,
+          "priority": 7,
+          "tags": [
+            "sata"
+          ],
+          "tags_mode": "strict",
+          "domains": [
+            "d1"
+          ],
+          "spread": "none",
+          "spread_mode": "prefer",
+          "colocate": "season",
+          "overflow": "deny",
+          "cache": false,
+          "cache_min_age_ns": 86400000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "rule",
+          "mode": "rule",
+          "settle": "rule",
+          "priority": "rule",
+          "tags": "rule",
+          "tags_mode": "rule",
+          "domains": "rule",
+          "spread": "rule",
+          "spread_mode": "rule",
+          "colocate": "rule",
+          "overflow": "rule",
+          "cache": "rule",
+          "cache_min_age": "rule"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Series/x.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "Series/x.mkv",
+        "rule": "series",
+        "size": null,
+        "policy": {
+          "action": "manage",
+          "replicas": 0,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "rule",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Other/x.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "Other/x.mkv",
+        "rule": null,
+        "size": null,
+        "policy": {
+          "action": "manage",
+          "replicas": 1,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "default",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Films/x.mkv"
+      ]
+    }
+  ]
+}

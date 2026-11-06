@@ -39,7 +39,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 make build              # go build -o bin/atoll ./cmd/atoll
 go test ./...           # unit and property tests, including conformance/vectors; no root
 go test -race ./...     # mandatory before any commit touching jobs, ops, watch, integrity or catalog
-make conformance        # black-box runner: conformance/scenarios against bin/atoll
+make conformance        # black-box runner: conformance/scenarios against a conformance build
 make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
 golangci-lint run ./...

@@ -1,0 +1,82 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a711.3",
+  "description": "A file that is ignored has no other property, in its policy or in its sources.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[rule]]\nlabel = \"extras\"\next = [\"nfo\"]\naction = \"ignore\"\n[[rule]]\nlabel = \"manage\"\naction = \"manage\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Films/x.nfo",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "Films/x.nfo",
+        "rule": "extras",
+        "size": null,
+        "policy": {
+          "action": "ignore"
+        },
+        "sources": {
+          "action": "rule"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Films/x.nfo"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Films/x.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "Films/x.mkv",
+        "rule": "manage",
+        "size": null,
+        "policy": {
+          "action": "manage",
+          "replicas": 1,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "rule",
+          "replicas": "default",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    }
+  ]
+}

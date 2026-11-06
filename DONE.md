@@ -2,6 +2,25 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Conformance scenarios and the first CLI (specs.md §25, §29.4)
+
+Commit "Run conformance scenarios, with rules check and rules explain", on `main`.
+
+- The format is in [conformance/scenarios/README.md](conformance/scenarios/README.md), and `conformance/runner` runs it.
+- The maintainer's decisions:
+  - a test build (`-tags conformance`) takes folders as disks, so the delivered binary has no way to skip a mount check, and real mounts stay with `test-loopdev`;
+  - that build reads the time from a control file, and `daemon --until-idle` does what is due and stops, so nothing waits and Go and Rust reach the same ids. Changes reach scenarios through rescans, and the watcher is tested apart;
+  - one JSON file per scenario, with tree and JSON expected exactly. `${ANY}` stands for the wording of a message and a `*` component for an operation's id, and the runner always looks for hidden names and for anything outside `media` and `Atoll`;
+  - `atoll rules check` and `atoll rules explain` come first, as they need only the configuration.
+- `cmd/atoll` has those two commands and `--config`, with `api/schemas/rules-check.schema.json` and `rules-explain.schema.json`.
+- No code reads the control file yet, as nothing needs a disk: that comes with disk identity, and the file steps have only run against a fake binary so far and in two scenarios.
+- Found along the way:
+  - to Go, `time.LoadLocation("Local")` is the machine's zone, so `timezone = "Local"` would have loaded in Go and failed in Rust. It is now refused;
+  - §24.4 had no list of what a later phase brings. It lived only in `phase.go`, so no other version could reproduce those warnings. The table is now in §24.4, and two scenarios pin every row of it, asked for and not;
+  - nothing said that `--size` needs its unit, or that a usage error comes before the configuration is read;
+  - a field on the wrong step, such as `tree` on `atoll`, would have checked nothing, so the runner refuses it. One `*` entry now takes one file, so it cannot cover two operations.
+- Not covered: the default path `/etc/atoll/atoll.toml`, which a scenario must not touch.
+
 ## Catalog schema (specs.md §9)
 
 Commit "Define the catalog schema", on `main`.

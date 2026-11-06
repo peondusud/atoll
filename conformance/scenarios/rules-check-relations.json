@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.3",
+  "description": "Relations are read once the keys and values are good. The later of two rules with one label is reported.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[rule]]\nlabel = \"a\"\n[[rule]]\nlabel = \"a\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "exit": 1,
+      "stdout_json": {
+        "valid": false,
+        "problems": [
+          {
+            "key": "rule[1].label",
+            "message": "${ANY}"
+          }
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

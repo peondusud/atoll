@@ -1,0 +1,62 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a711.3, \u00a724.2",
+  "description": "With no rule, a file takes the pool-wide values, all of them defaults, and the output has no rule and no size. The path is a logical path, whatever its form: it need not exist.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Films/x.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "Films/x.mkv",
+        "rule": null,
+        "size": null,
+        "policy": {
+          "action": "manage",
+          "replicas": 1,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "default",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "Films/x.mkv"
+      ]
+    }
+  ]
+}

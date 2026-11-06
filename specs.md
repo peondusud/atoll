@@ -292,7 +292,8 @@ The catalog schema is `schema/migrations/`: plain SQL, with a comment on why eac
 - Changing rules never deletes anything. Replicas beyond the new level become `surplus` and are removed only by `atoll prune`, to the trash, after confirmation.
 - Size is evaluated once the file is stable (`settle`): a download in progress is not classified on a partial size. Decisions taken when a file is created (SSD cache, phase 2b) can only use path, file name and extension. While the size is not known, a rule with a size condition does not match, and the next one may. So the wait for a stable file takes its `settle` from the first rule that matches without a size condition, then from `[defaults]`, and `settle` and `cache` never go with `size_min` or `size_max` (§24.3): they are read before the size is known.
 - A size condition is inclusive, and every condition of the rule must hold. A rule with no condition matches every file.
-- `atoll rules explain <path> [--size <size>]` shows the matching rule and the effective policy, and where each value comes from: the first of the rule, the file (a section of the configuration), the preset and a default that sets it, even when that value equals what would come next. `atoll rules check` validates the syntax, and lists rules that no current file reaches and rules entirely hidden by an earlier one in simple cases.
+- `atoll rules explain <path> [--size <size>]` shows the matching rule and the effective policy, and where each value comes from: the first of the rule, the file (a section of the configuration), the preset and a default that sets it, even when that value equals what would come next. `<path>` is a logical path, relative to `<root>`. The command reads the configuration only and wakes no disk, and without `--size` it answers for a file whose size is not known yet. It shows what the configuration asks for, before the fallbacks of §12.2.
+- `atoll rules check` loads the configuration (§24.3) and shows its problems and warnings. Once it can read the catalog, it also lists rules that no current file reaches and rules entirely hidden by an earlier one in simple cases.
 
 ## 12. Redundancy strategy
 
@@ -978,7 +979,7 @@ A loaded rule holds what the file sets, plus `action` and `ignore_case`. The res
 
 ### 24.3 Loading
 
-Loading takes three steps. A `timezone` is then looked up among the time zones of the machine, the only part that depends on it.
+Loading takes three steps. A `timezone` is then looked up among the time zones of the machine, the only part that depends on it, and a problem is reported at `timezone`. `local` means the machine's own and `UTC` is always known, so neither is looked up. Any other name, `Local` included, must be a time zone in the machine's database: a folder or another file of that database is none, and a machine with no database knows none.
 
 1. **Syntax.** One leading UTF-8 byte order mark is ignored, as Windows editors may write one and go-toml alone refuses it (measured); a second one is a syntax error. The rest must be valid UTF-8 and valid TOML 1.1. A syntax error stops here.
 2. **Keys and values.** The tree the parser gives is checked against the schema, with keys compared byte for byte. A `format` starting with `atoll-` applies a grammar of §29.5. TOML types count: `1.0` is a float, so it is no integer, where JSON Schema would take it for one. A value gets one problem at most, and a list with a wrong item is not also checked as a whole: `min_free = ["5"]` gives `placement.min_free[0]`, not `placement.min_free`. A third-party validator ignores `format`, so it can accept a value Atoll refuses, such as `100.5%`, but never the reverse.
@@ -1003,8 +1004,32 @@ Each step reports every problem it finds, at most one per key, sorted by key as 
 ### 24.4 Warnings
 
 - A setting whose feature arrives in a later phase of §28 is accepted, has no effect yet, and gets a warning when the configuration loads, with the fallback of §12.2 when there is one. Only a value that asks for the feature gets one (`mode = "scheduled"`, `cache.enabled = true`), and only when the file or the preset sets it, never a default. So the schema holds every key from the start, and a configuration written today keeps loading.
-- `view.engine = "atoll"` is the exception: an error until phase 2a, as there would be no merged view at all.
+- `view.engine = "atoll"` is the exception: an error until phase 2a, as there would be no merged view at all. It is reported at `view.engine`, with the relations of §24.3.
 - A tag or domain that a rule or `read.classes` names and no disk carries gets a warning too, as `disk add` may bring it later. A disk with no `domain` carries none, not even its `id`. The key is that of the item, such as `rule[0].tags[1]`, and warnings are sorted as problems are.
+
+Phase 1a warns about these settings, and each phase removes its own lines. The key is the one written, or the one a preset sets (`rule[0].tags`, `disk[1].role`), and "any" takes in an empty list:
+
+| Setting | Value that gets a warning | Phase | Until then |
+|---|---|---|---|
+| `defaults.mode`, a rule's `mode` | `immediate`, `scheduled` | 1b | works as `deferred` |
+| `placement.spread_mode`, `placement.tags_mode`, and a rule's | `strict` | 1b | no effect |
+| `placement.overflow`, a rule's `overflow` | `deny` | 1b | no effect |
+| a rule's `tags`, `domains` | any | 1b | no effect |
+| `integrity.auto_repair` | `true` | 1b | scrubs only detect |
+| `integrity.repair_mode` | any | 1b | scrubs only detect |
+| `trash.link_guard` | `true` | 1b | no effect |
+| `balance.schedule` | anything but `never` | 1b | no effect |
+| `notify.plex.url`, `notify.jellyfin.url`, `notify.emby.url`, `alerts.gotify`, `alerts.smtp` | anything but `""` | 1b | no effect |
+| `read.policy` | anything but `oldest` | 2a | no effect |
+| `read.classes` | any | 2a | no effect |
+| `placement.new_files` | anything but `most-free` | 2b | works as `most-free` |
+| `placement.colocate`, a rule's `colocate` | anything but `none` | 2b | no effect |
+| `balance.equalize` | anything but `off` | 2b | no effect |
+| `cache.enabled` | `true` | 2b | no effect |
+| a disk's `role` | `cache` | 2b | no effect |
+| a rule's `cache`, `cache_min_age` | any | 2b | no effect |
+| `ups.enabled` | `true` | 2b | no effect |
+| `health.evacuate_on`, `health.avoid_hotter_than` | any | 4 | no effect |
 
 ## 25. Command-line interface
 
@@ -1032,8 +1057,12 @@ atoll mount <point>                      (phase 2a on Linux, phase 4 on Windows)
 atoll daemon [--foreground] [--dry-run]
 ```
 
+- `--config <path>` or `--config=<path>` comes before the command, and nowhere else, and names the configuration file. By default it is `/etc/atoll/atoll.toml`, and on Windows `%ProgramData%\Atoll\atoll.toml`.
 - Every command that moves or deletes accepts `--dry-run` and asks for confirmation, unless `--yes` is given. `daemon --dry-run` plans jobs without running them (shadow mode, §29.2).
 - Every command accepts `--json`; outputs follow the schemas in `api/schemas/`, and exit codes follow §29.3.
+- Flags may come before or after a path, and `--` ends them, for a path that starts with `-`. A command line is checked before the configuration is read, so a usage error comes first. It writes nothing to standard output, with `--json` or without.
+- `atoll rules check` exits with 0 when the configuration loads, warnings or not, and with 1 when it does not load or cannot be read, with the same output. So a script can run it before a restart.
+- `atoll rules explain` exits with 0 once it has answered, whatever the answer; with 1 when the configuration does not load or cannot be read, with nothing on standard output; and with 2 on a size or a path that is not well-formed. `<size>` is a size of §29.5, so it needs its unit.
 
 ## 26. Non-functional requirements
 
@@ -1135,10 +1164,12 @@ atoll daemon [--foreground] [--dry-run]
 
 - `conformance/` at the repository root, independent of the implementation language:
   - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration, the effective policy of a file, the catalog schema;
-  - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
+  - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs. Their format is in `conformance/scenarios/README.md`;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
 - A runner drives any `atoll` binary through its CLI and the filesystem only; it imports nothing from the implementation.
+- The binary it judges is a **conformance build** (`go build -tags conformance`; a feature of the same name in Rust), because a scenario needs what a real pool must never allow. The environment variable `ATOLL_CONFORMANCE` names a control file. That build takes the folders listed there as mounted disks with those identifiers, and reads the time from it. `daemon --until-idle` does all the work that is due and exits, so nothing waits or polls, and Go and Rust reach the same result, ids included. The delivered binary has none of this code, so it can never skip a mount check (invariant 3).
+- So the scenarios do not cover real mounts, which `test-loopdev` does, or the watcher: changes reach them through rescans, and fanotify and inotify are tested in `test/integration`.
 - Every behavior change first adds or updates a vector or scenario.
 
 ### 29.5 Value grammars

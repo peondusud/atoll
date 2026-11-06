@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725; api/schemas/rules-check.schema.json",
+  "description": "A configuration that does not load has problems and no warnings, even when it also asks for something of a later phase.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\nfoo = 1\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nmode = \"scheduled\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "exit": 1,
+      "stdout_json": {
+        "valid": false,
+        "problems": [
+          {
+            "key": "foo",
+            "message": "${ANY}"
+          }
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

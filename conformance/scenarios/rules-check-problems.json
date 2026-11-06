@@ -1,0 +1,39 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.3",
+  "description": "Keys and values: an unknown key, one that differs only in case, a bad value and a missing key are all reported, sorted by key in byte order.",
+  "config": "pool_id = \"p\"\nPool_ID = \"q\"\nfoo = 1\ntimezone = \"a b\"\n[view]\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "exit": 1,
+      "stdout_json": {
+        "valid": false,
+        "problems": [
+          {
+            "key": "Pool_ID",
+            "message": "${ANY}"
+          },
+          {
+            "key": "foo",
+            "message": "${ANY}"
+          },
+          {
+            "key": "timezone",
+            "message": "${ANY}"
+          },
+          {
+            "key": "view.mount",
+            "message": "${ANY}"
+          }
+        ],
+        "warnings": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.3",
+  "description": "A file of the time zone database, or nothing where there is no such file: neither is a time zone. A time zone is looked up on the machine once the file has loaded, and reported at its key.",
+  "config": "timezone = \"leapseconds\"\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "exit": 1,
+      "stdout_json": {
+        "valid": false,
+        "problems": [
+          {
+            "key": "timezone",
+            "message": "${ANY}"
+          }
+        ],
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--json"
+      ],
+      "exit": 1
+    }
+  ]
+}

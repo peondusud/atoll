@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.3",
+  "description": "UTC is always known, even on a machine with no time zone database.",
+  "config": "timezone = \"UTC\"\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    }
+  ]
+}

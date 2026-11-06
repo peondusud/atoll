@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "--config in both forms names the file that is read, and the second form holds an = of its own. The folder is a disk only for the runner: no configuration names it.",
+  "disks": [
+    {
+      "id": "c",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "steps": [
+    {
+      "do": "write",
+      "disk": "c",
+      "path": "a=b.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"/var/lib/a/catalog.db\"\n[view]\nmount = \"/srv/pool\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/c/a=b.toml",
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config=${SANDBOX}/disks/c/a=b.toml",
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    }
+  ]
+}

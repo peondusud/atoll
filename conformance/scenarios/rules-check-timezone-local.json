@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.2, \u00a724.3",
+  "description": "local, written out or left to its default, needs no lookup.",
+  "config": "timezone = \"local\"\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    }
+  ]
+}

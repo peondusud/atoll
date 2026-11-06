@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a712.2, \u00a724.4",
+  "description": "A preset that asks for what a later phase brings gets the same warnings as a file that asks for it. The preset safety sets replicas, which needs none.",
+  "config": "strategy = \"safety\"\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [
+          {
+            "key": "balance.schedule",
+            "later_phase": true,
+            "message": "${ANY}"
+          },
+          {
+            "key": "defaults.mode",
+            "later_phase": true,
+            "message": "${ANY}"
+          },
+          {
+            "key": "placement.spread_mode",
+            "later_phase": true,
+            "message": "${ANY}"
+          }
+        ]
+      }
+    }
+  ]
+}

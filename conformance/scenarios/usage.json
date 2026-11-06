@@ -1,0 +1,101 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725, \u00a729.3",
+  "description": "A command line that means nothing is exit code 2, before any configuration is read.",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config=x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "nothing"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "nothing"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--yaml"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--config",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "--config",
+        "x",
+        "check"
+      ],
+      "exit": 2
+    }
+  ]
+}

@@ -1,0 +1,212 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725, \u00a729.3",
+  "description": "Exit code 2 on a size or a path that is not well-formed, or anything else that means nothing. It comes before the configuration is read, so this one, which does not load, changes nothing.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "a",
+        "b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "--",
+        "a",
+        "b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "--"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        ""
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "/abs/x.mkv"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "a/../b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "a//b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "a/"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "."
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        ".."
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--verbose"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "-x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--config",
+        "y"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--size"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--size",
+        "10"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--size="
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--size",
+        "10XB"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--size",
+        "-1B"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--size",
+        "9999999TiB"
+      ],
+      "exit": 2
+    }
+  ]
+}

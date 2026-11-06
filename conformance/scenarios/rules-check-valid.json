@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.3, \u00a725",
+  "description": "A configuration that loads, with nothing to say: exit code 0, in JSON and in words.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check"
+      ]
+    }
+  ]
+}

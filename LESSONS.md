@@ -10,7 +10,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
   - a figure that measured the wrong quantity;
   - a key version that ignored the library release.
 
-  Spec-only ports in another language, written without reading the Go code, are the best way to find ambiguous spec text.
+  Spec-only ports in another language, written without reading the Go code, are the best way to find ambiguous spec text. Judged by the same conformance runner as the Go binary, one passed 21 of 24 scenarios from the documents alone, and all three failures were gaps in the documents: a list of settings that lived only in `phase.go`, and a `--size` form nobody had written down.
 - **Vectors first, then code, then a mutation check.** Breaking each rule on purpose and seeing a test fail shows which clauses the vectors really pin. One commit message claimed every weight clause was pinned: a mutation run showed `+`, `?`, `\z` and the lazy `?` were not.
 - **A mutation run proves nothing unless the tests pass first.** One run showed every mutation as caught, while a hand-written vector was wrong and the test failed before any mutation. Read the baseline before the mutations.
 - **Compare libraries at equal core counts.** At the default `GOMAXPROCS`, a BLAKE3 library looked three times faster than another because it used all 20 cores; on one core the other was 36% to 42% faster. Hundreds of allocations in a hash function were the clue.
@@ -22,6 +22,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - **A vector can pass for the wrong reason.** A new rule refused `tags_mode = "strict"` with no list, and an older case that expected `action = "ignore"` to refuse `tags_mode` went on passing through the new rule. Only a mutation showed it. Rerun the older mutations after adding a rule.
 - **Ask what is known when a value is read.** `settle` decides when a file's size may be read, so a rule that needs the size cannot set `settle`. The spec said both things in two places and never put them together.
 - **Measure memory before calling a function done.** The first placement plan allocated about 270 MB for 200,000 files, past the whole budget of §26, and passed every test. A per-prefix key map, a large struct per file and a result per healthy file were most of it. A tree of folders, a pointer for what is rare and no result for a healthy file brought what it holds to about 100 MB.
+- **A surviving mutation may show a check that does nothing.** Two checks in the conformance runner survived being switched off, because the next step failed anyway on what they guarded. They went, rather than gaining a test that pinned them.
 - **Break the schema too.** A loader driven by a schema is only as tested as each constraint in it: drop every `pattern`, bound, `enum` value and default in turn, in process, and read what no vector notices.
 
 ## Unicode and normalization

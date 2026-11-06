@@ -1,0 +1,302 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a711.3, \u00a729.5",
+  "description": "While the size is not known, a rule with a size condition does not match, and the next one may. The condition is inclusive, the size is in bytes after rounding down, and the flags go before or after the path, in either form.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[rule]]\nlabel = \"big\"\nsize_min = \"1GiB\"\nreplicas = 2\n[[rule]]\nlabel = \"rest\"\nreplicas = 0\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "x.mkv",
+        "rule": "rest",
+        "size": null,
+        "policy": {
+          "action": "manage",
+          "replicas": 0,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "rule",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x.mkv",
+        "--size",
+        "1GiB",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "x.mkv",
+        "rule": "big",
+        "size": 1073741824,
+        "policy": {
+          "action": "manage",
+          "replicas": 2,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "rule",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x.mkv",
+        "--size=1073741823B",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "x.mkv",
+        "rule": "rest",
+        "size": 1073741823,
+        "policy": {
+          "action": "manage",
+          "replicas": 0,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "rule",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "--size",
+        "2GiB",
+        "--json",
+        "x.mkv"
+      ],
+      "stdout_json": {
+        "path": "x.mkv",
+        "rule": "big",
+        "size": 2147483648,
+        "policy": {
+          "action": "manage",
+          "replicas": 2,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "rule",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "--json",
+        "--size=1.5KiB",
+        "x.mkv"
+      ],
+      "stdout_json": {
+        "path": "x.mkv",
+        "rule": "rest",
+        "size": 1536,
+        "policy": {
+          "action": "manage",
+          "replicas": 0,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "rule",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x.mkv",
+        "--size",
+        "0.9B",
+        "--json"
+      ],
+      "stdout_json": {
+        "path": "x.mkv",
+        "rule": "rest",
+        "size": 0,
+        "policy": {
+          "action": "manage",
+          "replicas": 0,
+          "mode": "deferred",
+          "settle_ns": 600000000000,
+          "priority": 0,
+          "tags": [],
+          "tags_mode": "prefer",
+          "domains": [],
+          "spread": "domain",
+          "spread_mode": "prefer",
+          "colocate": "none",
+          "overflow": "allow",
+          "cache": true,
+          "cache_min_age_ns": 604800000000000
+        },
+        "sources": {
+          "action": "default",
+          "replicas": "rule",
+          "mode": "default",
+          "settle": "default",
+          "priority": "default",
+          "tags": "default",
+          "tags_mode": "default",
+          "domains": "default",
+          "spread": "default",
+          "spread_mode": "default",
+          "colocate": "default",
+          "overflow": "default",
+          "cache": "default",
+          "cache_min_age": "default"
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x.mkv",
+        "--size",
+        "1GB"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Exit code 1 when the configuration does not load or cannot be read.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--json"
+      ],
+      "exit": 1
+    }
+  ]
+}

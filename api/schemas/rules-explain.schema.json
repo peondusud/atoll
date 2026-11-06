@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "atoll rules explain --json",
+  "description": "The rule that matches a file, its effective policy, and where each value comes from (specs.md §11.3). It shows what the configuration asks for, before the fallbacks of specs.md §12.2.",
+  "type": "object",
+  "required": ["rule", "size", "policy", "sources"],
+  "oneOf": [
+    { "required": ["path"] },
+    { "required": ["path_b64"] }
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "path": { "description": "The logical path, when it is valid UTF-8.", "type": "string", "minLength": 1 },
+    "path_b64": { "description": "Otherwise, its bytes.", "type": "string", "contentEncoding": "base64", "minLength": 1 },
+    "rule": { "description": "The rule's label, or null when no rule matches.", "type": ["string", "null"] },
+    "size": { "description": "The size given, in bytes, or null when none was.", "type": ["integer", "null"], "minimum": 0 },
+    "policy": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "properties": {
+        "action": { "enum": ["manage", "ignore"] },
+        "replicas": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "mode": { "enum": ["immediate", "deferred", "scheduled", "manual"] },
+        "settle_ns": { "type": "integer", "minimum": 0 },
+        "priority": { "type": "integer" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "tags_mode": { "enum": ["prefer", "strict"] },
+        "domains": { "type": "array", "items": { "type": "string" } },
+        "spread": { "enum": ["domain", "none"] },
+        "spread_mode": { "enum": ["prefer", "strict"] },
+        "colocate": { "enum": ["none", "folder", "season", "show"] },
+        "overflow": { "enum": ["allow", "deny"] },
+        "cache": { "type": "boolean" },
+        "cache_min_age_ns": { "type": "integer", "minimum": 0 }
+      },
+      "oneOf": [
+        { "description": "A file that is ignored has no other property (specs.md §11.3).", "properties": { "action": { "const": "ignore" } }, "maxProperties": 1 },
+        {
+          "properties": { "action": { "const": "manage" } },
+          "required": ["replicas", "mode", "settle_ns", "priority", "tags", "tags_mode", "domains", "spread", "spread_mode", "colocate", "overflow", "cache", "cache_min_age_ns"]
+        }
+      ]
+    },
+    "sources": {
+      "description": "Where each value of the policy comes from, under the same names without _ns (specs.md §11.3).",
+      "type": "object",
+      "required": ["action"],
+      "propertyNames": { "enum": ["action", "replicas", "mode", "settle", "priority", "tags", "tags_mode", "domains", "spread", "spread_mode", "colocate", "overflow", "cache", "cache_min_age"] },
+      "additionalProperties": { "enum": ["rule", "file", "preset", "default"] }
+    }
+  }
+}
