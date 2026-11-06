@@ -351,9 +351,9 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 ### 11.3 Semantics
 
-- Ordered list: **the first matching rule wins**. A property the rule leaves out takes its pool-wide value (§24.2).
+- Ordered list: **the first matching rule wins**. A property the rule leaves out takes its pool-wide value (§24.2). A file that no rule matches takes the pool-wide values, with `action = "manage"`.
 - Rules apply to files; folders have no rule of their own.
-- `action = "ignore"`: the file stays in `media/` and in the view, but gets no hash and no replica.
+- `action = "ignore"`: the file stays in `media/` and in the view, but gets no hash and no replica. It has no other property.
 - Matching, with the grammars of §29.5:
   - the path and every pattern (glob, regex text, extension) are put in NFC form, so a pattern typed in NFC matches a name stored in NFD. A glob is normalized once, before its braces are expanded. A name that is not valid UTF-8 is normalized run by run: each maximal valid UTF-8 run is put in NFC form, and the other bytes are kept as they are. NFC also applies to a regex's text, before its grammar is checked (§29.5), which changes its meaning when the text holds combining marks: `e` followed by U+0301 and `?` becomes `é?`, where `?` applies to the whole character. A mark typed right after an escape letter or a range endpoint composes with it too: `\n` followed by U+0303 becomes `\ñ`, which is rejected, and `[a-z` followed by U+0301 and `]` becomes `[a-ź]`, which holds `é`. Write such marks as `\x{…}`, which NFC leaves alone. An error quotes the text as typed and its NFC form;
   - with `ignore_case`, two characters are equal when Unicode simple case folding (CaseFolding.txt, statuses C and S) puts them in the same class, exactly as regex `(?i)` compares them: `ß` matches `ẞ` but never `ss`; `ς`, `σ` and `Σ` match each other; `İ` and `ı` match only themselves. A class `[…]` matches a character when one of its case variants is in the class, and `[!…]` matches the others. Folding never rewrites the text: a regex only gets `(?i)` added, so `(?-i:…)` keeps its meaning;
@@ -363,8 +363,9 @@ CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
   - a pattern (glob, regex text or `ext` entry) with a run of more than 30 non-starters (§29.5) is rejected when the configuration loads, so normalization never inserts U+034F into a pattern. The run is counted on the pattern as written in the configuration, before NFC and before braces are expanded, and on each `ext` entry on its own;
   - the Go and Rust versions match the same paths, except on the characters §29.5 leaves to each version's Unicode data, and on names with a run of more than 30 non-starters, where Go's normalization inserts U+034F (§29.5).
 - Changing rules never deletes anything. Replicas beyond the new level become `surplus` and are removed only by `atoll prune`, to the trash, after confirmation.
-- Size is evaluated once the file is stable (`settle`): a download in progress is not classified on a partial size. Decisions taken when a file is created (SSD cache, phase 2b) can only use path, file name and extension.
-- `atoll rules explain <path> [--size <size>]` shows the matching rule and the effective policy. `atoll rules check` validates the syntax, and lists rules that no current file reaches and rules entirely hidden by an earlier one in simple cases.
+- Size is evaluated once the file is stable (`settle`): a download in progress is not classified on a partial size. Decisions taken when a file is created (SSD cache, phase 2b) can only use path, file name and extension. While the size is not known, a rule with a size condition does not match, and the next one may. So the wait for a stable file takes its `settle` from the first rule that matches without a size condition, then from `[defaults]`, and `settle` and `cache` never go with `size_min` or `size_max` (§24.3): they are read before the size is known.
+- A size condition is inclusive, and every condition of the rule must hold. A rule with no condition matches every file.
+- `atoll rules explain <path> [--size <size>]` shows the matching rule and the effective policy, and where each value comes from: the first of the rule, the file (a section of the configuration), the preset and a default that sets it, even when that value equals what would come next. `atoll rules check` validates the syntax, and lists rules that no current file reaches and rules entirely hidden by an earlier one in simple cases.
 
 ## 12. Redundancy strategy
 
@@ -412,7 +413,7 @@ Until a strategy is implemented (see §28), it falls back to `most-free`, and th
   - the target path is free.
 - **Strict settings**, which `overflow` never relaxes:
   - `spread_mode = "strict"`: at least one copy in each failure domain, as long as the number of copies allows it; with fewer copies than domains, each copy in a different domain. A disk with no `domain` forms its own domain;
-  - `tags_mode = "strict"`: only disks carrying one of the rule's `tags` (the equivalent of DrivePool's hard file-placement limit).
+  - `tags_mode = "strict"`: only disks carrying one of the rule's `tags` when it has any, and in one of its `domains` when it has any (the equivalent of DrivePool's hard file-placement limit). A rule with neither has no limit, even when `[placement]` says `strict`; a rule that itself says `strict` with neither is refused when the configuration loads (§24.3).
   When they cannot be met, the file stays `degraded` and the status says so.
 - **Preferences**, in order: the rule's `tags` and `domains` (with `tags_mode = "prefer"`); spreading across domains (`spread`); `colocate`; the `new_files` strategy; a disk that is already spinning.
 - `overflow = "allow"` (default): when the preferred disks are full, another disk is used and a warning is raised. With `deny`, the file stays `degraded`.
@@ -1036,7 +1037,9 @@ Loading takes three steps. A `timezone` is then looked up among the time zones o
    - no two rules have the same `label`, and the later one is reported;
    - `path`, `filename` and `ext` compile (§11.1, §29.5), reported at that key, `ext` as a whole;
    - `size_min` is never above `size_max`, compared in bytes after rounding (§29.5), reported at `size_min`;
-   - `action = "ignore"` takes no other property of §11.2, reported at each such property. Conditions and `label` stay allowed.
+   - `action = "ignore"` takes no other property of §11.2, reported at each such property. Conditions and `label` stay allowed;
+   - `settle` and `cache` never go with `size_min` or `size_max`, as they are read before the size is known (§11.3), reported at `settle` and `cache`;
+   - a rule that sets `tags_mode = "strict"` has at least one item in `tags` or `domains`, reported at `tags_mode`. A `strict` that comes from `[placement]` asks for nothing (§12.4).
 
 Each step reports every problem it finds, at most one per key, sorted by key as written, in byte order. A key reads `placement.spread`, `disk[0].uuid` or `rule[2].ext[1]`, with indexes from 0. A part holding anything other than ASCII letters, digits, `_` and `-` is written in double quotes, such as `notify.plex.path_map."/srv/pool"`: `"` and `\` after a backslash, U+0000–U+001F and U+007F as `\uXXXX` in uppercase hexadecimal, and any other character as it is. A syntax error has no key. The wording of messages is not part of the contract.
 
@@ -1174,7 +1177,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration, the effective policy of a file;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.

@@ -19,6 +19,8 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - **Ask about contracts, with a recommendation and its cost.** The maintainer took the recommended option every time when it came with measured numbers and the side effect stated plainly (for example "`^\pL{10}$` becomes refused"). Facts that follow from an earlier decision do not need a new question. Neither do clarifications of what the code already does.
 - **Commit messages must be exact.** Say what changed and what was verified, never more.
 - **An example is not a contract.** Reading §24 as a schema turned up four keys that contradicted an invariant or served nothing (`chunk_size`, `keep_overwritten`, `move_originals`, `striping`), and work the spec ran "inside the time window" with no key for it. Check every key against the sections that use it.
+- **A vector can pass for the wrong reason.** A new rule refused `tags_mode = "strict"` with no list, and an older case that expected `action = "ignore"` to refuse `tags_mode` went on passing through the new rule. Only a mutation showed it. Rerun the older mutations after adding a rule.
+- **Ask what is known when a value is read.** `settle` decides when a file's size may be read, so a rule that needs the size cannot set `settle`. The spec said both things in two places and never put them together.
 - **Break the schema too.** A loader driven by a schema is only as tested as each constraint in it: drop every `pattern`, bound, `enum` value and default in turn, in process, and read what no vector notices.
 
 ## Unicode and normalization

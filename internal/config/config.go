@@ -59,23 +59,14 @@ type Disk struct {
 	Workdir string
 }
 
-// Rule is one [[rule]]: its conditions, compiled. A nil condition does not apply.
-type Rule struct {
-	Label    string
-	Path     *rules.Condition
-	Filename *rules.Condition
-	Ext      *rules.Condition
-	SizeMin  *int64
-	SizeMax  *int64
-}
-
 // Config is a configuration that loaded. Typed fields appear as the code that reads
 // them does; Effective gives every value in the meantime.
 type Config struct {
 	PoolID   string
 	Strategy string // empty without a preset
 	Disks    []Disk
-	Rules    []Rule
+	Rules    []rules.Rule
+	Pool     rules.Pool
 	// Warnings are sorted by key in byte order (specs.md §24.4).
 	Warnings []Problem
 
@@ -87,6 +78,12 @@ type Config struct {
 // with no value is not there. The caller must not change it.
 func (c *Config) Effective() map[string]any {
 	return c.effective
+}
+
+// Policy returns the effective policy of a file (specs.md §11.3). A nil size means it
+// is not known yet.
+func (c *Config) Policy(path string, size *int64) rules.Policy {
+	return rules.Effective(c.Rules, c.Pool, path, size)
 }
 
 // Parse loads a configuration from its text, in the three steps of specs.md §24.3.
@@ -110,14 +107,17 @@ func Parse(data []byte) (*Config, error) {
 		return nil, err
 	}
 
-	// A preset's choice counts as set, for the warnings about later phases.
+	// What the file sets, then what the file or the preset sets: rules explain tells the
+	// two apart, and the warnings about later phases read the second.
+	user := flatten(tree)
 	applyPreset(tree)
 	set := flatten(tree)
 	followMaintenanceWindow(tree)
 	s.applyDefaults(s.root, tree)
 
 	c := &Config{}
-	checkRelations(tree, c, &found)
+	c.Pool = buildPool(tree, user, set)
+	checkRelations(tree, user, c, &found)
 	found.addAll(laterPhaseErrors(tree))
 	if err := found.err(); err != nil {
 		return nil, err

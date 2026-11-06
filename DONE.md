@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Effective policy of a file (specs.md §11.3, §12.4, §24.2)
+
+Commit "Compute the effective policy of a file", on `main`.
+
+- `rules.Effective` takes the first rule that matches and fills what it leaves out from the pool-wide values. `Policy.Sources` says where each value comes from, for `atoll rules explain`. The policy holds what the configuration asks for: the fallbacks of §12.2 are for the code that acts on it.
+- The maintainer's decisions:
+  - `settle` and `cache` never go with a size condition, as they are read before the size is known;
+  - `tags_mode = "strict"` covers `tags` and `domains`, and a disk must satisfy both lists;
+  - `strict` from `[placement]` asks nothing of a rule with no list, and `strict` written on such a rule is an error.
+- While the size is not known, a rule with a size condition does not match, following §19.
+- Vectors: `policy.json`, including the example of §24.1.
+- Classifying one file takes 1.8 µs on an i7-12700K with the 10 rules of that example, so 200,000 files take about 0.4 s.
+
 ## Configuration schema and loader (specs.md §24)
 
 Commit "Define the configuration schema and load it", on `main`.

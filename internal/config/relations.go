@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/rules"
@@ -37,13 +38,13 @@ func stringList(t map[string]any, key string) []string {
 
 // checkRelations applies step 3 of specs.md §24.3, on values the schema has checked,
 // and fills the typed fields of c.
-func checkRelations(tree map[string]any, c *Config, found *problems) {
+func checkRelations(tree, user map[string]any, c *Config, found *problems) {
 	checkDisks(tree, c, found)
 	checkSpread("placement.spread", table(tree, "placement"), table(tree, "placement"), found)
 	if ups := table(tree, "ups"); ups["enabled"] == true && text(ups, "nut") == "" {
 		found.add("ups.nut", "ups.enabled needs a NUT address")
 	}
-	checkRules(tree, c, found)
+	checkRules(tree, user, c, found)
 }
 
 func checkDisks(tree map[string]any, c *Config, found *problems) {
@@ -168,7 +169,7 @@ func checkSpread(spreadKey string, t, pool map[string]any, found *problems) {
 	}
 }
 
-func checkRules(tree map[string]any, c *Config, found *problems) {
+func checkRules(tree, user map[string]any, c *Config, found *problems) {
 	placement := table(tree, "placement")
 	seen := map[string]bool{}
 	for i, r := range list(tree, "rule") {
@@ -194,7 +195,28 @@ func checkRules(tree map[string]any, c *Config, found *problems) {
 				}
 			}
 		}
-		c.Rules = append(c.Rules, compileRule(key, label, r, found))
+		checkReadBeforeSize(key, r, found)
+		if r["tags_mode"] == "strict" && len(stringList(r, "tags")) == 0 && len(stringList(r, "domains")) == 0 {
+			found.add(key+".tags_mode", `"strict" with neither tags nor domains limits nothing`)
+		}
+		compiled := compileRule(key, label, r, found)
+		_, compiled.ActionSet = user[key+".action"]
+		c.Rules = append(c.Rules, compiled)
+	}
+}
+
+// checkReadBeforeSize refuses what is read before a file's size is known on a rule that
+// only matches once it is, so it could never apply (specs.md §11.3).
+func checkReadBeforeSize(key string, r map[string]any, found *problems) {
+	_, smallest := r["size_min"]
+	_, largest := r["size_max"]
+	if !smallest && !largest {
+		return
+	}
+	for _, p := range []string{"settle", "cache"} {
+		if _, ok := r[p]; ok {
+			found.add(key+"."+p, "read before the size is known, so it cannot go with size_min or size_max")
+		}
 	}
 }
 
@@ -207,8 +229,9 @@ func ruleProperties() []string {
 	}
 }
 
-func compileRule(key, label string, r map[string]any, found *problems) Rule {
-	out := Rule{Label: label}
+func compileRule(key, label string, r map[string]any, found *problems) rules.Rule {
+	action, _ := r["action"].(string)
+	out := rules.Rule{Label: label, Action: rules.Action(action), Set: ruleSet(r)}
 	fold, _ := r["ignore_case"].(bool)
 	pattern := func(field rules.Field, name string) *rules.Condition {
 		s, ok := r[name].(string)
@@ -247,6 +270,116 @@ func compileRule(key, label string, r map[string]any, found *problems) Rule {
 		found.add(key+".size_min", "above size_max")
 	}
 	return out
+}
+
+// ruleSet reads what a rule sets. The schema has checked these values.
+func ruleSet(r map[string]any) rules.Properties {
+	return rules.Properties{
+		Replicas:    intOrNil(r, "replicas"),
+		Mode:        textOrNil(r, "mode"),
+		Settle:      durationOrNil(r, "settle"),
+		Priority:    intOrNil(r, "priority"),
+		Tags:        listOrNil(r, "tags"),
+		TagsMode:    textOrNil(r, "tags_mode"),
+		Domains:     listOrNil(r, "domains"),
+		Spread:      textOrNil(r, "spread"),
+		SpreadMode:  textOrNil(r, "spread_mode"),
+		Colocate:    textOrNil(r, "colocate"),
+		Overflow:    textOrNil(r, "overflow"),
+		Cache:       boolOrNil(r, "cache"),
+		CacheMinAge: durationOrNil(r, "cache_min_age"),
+	}
+}
+
+func intOrNil(t map[string]any, key string) *int {
+	v, ok := t[key].(int64)
+	if !ok {
+		return nil
+	}
+	n := int(v)
+	return &n
+}
+
+func textOrNil(t map[string]any, key string) *string {
+	v, ok := t[key].(string)
+	if !ok {
+		return nil
+	}
+	return &v
+}
+
+func boolOrNil(t map[string]any, key string) *bool {
+	v, ok := t[key].(bool)
+	if !ok {
+		return nil
+	}
+	return &v
+}
+
+func durationOrNil(t map[string]any, key string) *time.Duration {
+	s, ok := t[key].(string)
+	if !ok {
+		return nil
+	}
+	d, _ := value.ParseDuration(s)
+	return &d
+}
+
+func listOrNil(t map[string]any, key string) []string {
+	if _, ok := t[key]; !ok {
+		return nil
+	}
+	return stringList(t, key)
+}
+
+// buildPool reads the pool-wide values of rule properties (specs.md §24.2), from the
+// tree with its defaults, and where each comes from: user holds what the file sets,
+// and set what the file or the preset sets.
+func buildPool(tree, user, set map[string]any) rules.Pool {
+	defaults, placement, cache := table(tree, "defaults"), table(tree, "placement"), table(tree, "cache")
+	sources := map[string]rules.Source{}
+	for name, key := range poolKeys() {
+		_, inFile := user[key]
+		_, inSet := set[key]
+		switch {
+		case inFile:
+			sources[name] = rules.FromFile
+		case inSet:
+			sources[name] = rules.FromPreset
+		default:
+			sources[name] = rules.FromDefault
+		}
+	}
+	return rules.Pool{
+		Replicas:    *intOrNil(defaults, "replicas"),
+		Mode:        text(defaults, "mode"),
+		Settle:      *durationOrNil(defaults, "settle"),
+		Priority:    *intOrNil(defaults, "priority"),
+		TagsMode:    text(placement, "tags_mode"),
+		Spread:      text(placement, "spread"),
+		SpreadMode:  text(placement, "spread_mode"),
+		Colocate:    text(placement, "colocate"),
+		Overflow:    text(placement, "overflow"),
+		CacheMinAge: *durationOrNil(cache, "min_age"),
+		Sources:     sources,
+	}
+}
+
+// poolKeys gives the key of each rule property that has a pool-wide value (specs.md
+// §24.2).
+func poolKeys() map[string]string {
+	return map[string]string{
+		"replicas":      "defaults.replicas",
+		"mode":          "defaults.mode",
+		"settle":        "defaults.settle",
+		"priority":      "defaults.priority",
+		"tags_mode":     "placement.tags_mode",
+		"spread":        "placement.spread",
+		"spread_mode":   "placement.spread_mode",
+		"colocate":      "placement.colocate",
+		"overflow":      "placement.overflow",
+		"cache_min_age": "cache.min_age",
+	}
 }
 
 // unknownLabels warns about tags and domains no disk carries (specs.md §24.4).
