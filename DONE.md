@@ -2,6 +2,24 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll status` (specs.md §7, §15.11, §25)
+
+Commit "Report what the catalog holds, with atoll status", on `main`.
+
+- The maintainer's decisions:
+  - it reads the catalog and the configuration and touches no disk, so it says what the last scan saw, and `atoll disk list` is what looks now;
+  - `--path` keeps a file or a folder by whole components, in the counts and in `files`, and a path the catalog does not hold is an empty list with exit code 0;
+  - a file is at its level by what can be read now, so a copy on a `missing` disk does not count, even before `health.missing_grace`, unlike in the plan. The JSON holds integers only, so no rounding can differ between two versions, and the share of bytes correctly placed waits for `balance`;
+  - dates at a fixed width (§29.3), so both versions write the same bytes;
+  - with no eligible copy, a file keeps its original, as it keeps its size and date (§7). A scan used to write NULL;
+  - `corrupt` and `conflict` now come before `unavailable` in the order of §4.
+- A bug in the previous commit, found by writing the scenario for the rule above: `files.state` is all that remembers a conflict, and `unavailable` came first. So when every disk of a file in conflict went away, the file became `unavailable`, then `ok` when they returned, with copies whose content differs. Nothing acted on it yet, and a later phase could have taken those copies for identical.
+- Found along the way:
+  - holding the files of a large `--path` would have gone far past §26, so they are written as they are read, before the counts, which only the end knows. 200,000 files in JSON peak at about 21 MiB. A catalog that fails half way therefore leaves an unfinished output, and a script goes by the exit code;
+  - §25 said a flag given twice is a usage error, and `--json`, `--full` and `--size` accepted it, in every command. Only a scenario was missing;
+  - pages are read apart, so a scan running meanwhile can show a copy on a disk not yet in the list, which would have crashed the command;
+  - a port written from the documents disagreed with Go on the original of a file with no readable copy, which is how that rule was found.
+
 ## The first scan: `atoll init` and `atoll scan` (specs.md §9, §15.10, §25)
 
 Commit "Record what the disks hold, with atoll init and atoll scan", on `main`.

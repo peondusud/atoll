@@ -37,7 +37,7 @@ The maintainer chose (§15.8):
 | Path past the limit of a mergerfs branch (§15.8) | A hard constraint of the solver: Atoll never writes such a copy. Another disk, failing that `name-incompatible` and an alert. A copy already past the limit is only reported. |
 | Path past 259 UTF-16 units (§15.8) | Only listed by `atoll names check`: no state, no alert, no effect on placement. |
 | `atoll names check` (§15.9) | One finding per name to fix, the shortest path with the problem, in a flat sorted list. Always checks `ext4` and `ntfs`, whatever the pool holds. Exit code 0 whenever it ran. |
-| The state a file shows (§4) | The first that applies: `unavailable`, `corrupt`, `conflict`, `name-incompatible`, `name-collision`, `degraded`, `pending`, `unprotected`, `ok`. Placement and job order read the copies, never the state. |
+| The state a file shows (§4) | The first that applies: `corrupt`, `conflict`, `unavailable`, `name-incompatible`, `name-collision`, `degraded`, `pending`, `unprotected`, `ok`. Placement and job order read the copies, never the state. |
 
 ## Linux filesystems
 

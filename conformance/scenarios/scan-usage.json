@@ -46,6 +46,24 @@
         "b"
       ],
       "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full",
+        "--full"
+      ],
+      "exit": 2
     }
   ]
 }

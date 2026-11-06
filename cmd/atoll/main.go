@@ -62,9 +62,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runInit(configPath, args[1:], stdout, stderr)
 	case "scan":
 		return runScan(configPath, args[1:], stdout, stderr)
+	case "status":
+		return runStatus(configPath, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}
+}
+
+// setFlag records a flag that takes no value. Given twice, it is a usage error (specs.md §25).
+func setFlag(flag *bool, name string) error {
+	if *flag {
+		return fmt.Errorf("%s comes twice", name)
+	}
+	*flag = true
+	return nil
 }
 
 func usage(stderr io.Writer, message string) int {

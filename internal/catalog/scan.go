@@ -85,7 +85,8 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 		return fmt.Errorf("prepare: %w", err)
 	}
 	defer func() { _ = find.Close() }()
-	conflict, err := tx.PrepareContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ?")
+	// corrupt comes first in the order of specs.md §4, and only the state remembers it.
+	conflict, err := tx.PrepareContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'")
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
@@ -192,7 +193,7 @@ type CopyRow struct {
 	CtimeNS     sql.NullInt64
 	BtimeNS     sql.NullInt64
 	FirstSeenNS int64
-	Verified    bool
+	VerifiedNS  sql.NullInt64
 }
 
 // FileRow is one file, with its copies.
@@ -207,6 +208,7 @@ type FileRow struct {
 	Mode           string
 	State          string
 	Original       sql.NullString
+	FirstSeenNS    int64
 	Copies         []CopyRow
 }
 
@@ -246,8 +248,8 @@ func (r *FileReader) shareNull(raw []byte) sql.NullString {
 // Next gives the next files, and none at the end. What it gives is the caller's.
 func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk,
-			c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns IS NOT NULL, c.state
+		SELECT f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns,
+			c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state
 		FROM (SELECT * FROM files WHERE lpath > ? ORDER BY lpath LIMIT ?) f
 		LEFT JOIN copies c ON c.file_id = f.id
 		ORDER BY f.lpath, c.disk_id`, r.after, filePageSize)
@@ -262,9 +264,8 @@ func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 		var f FileRow
 		var c CopyRow
 		var firstSeen sql.NullInt64
-		var verified sql.NullBool
-		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original,
-			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &verified, &copyState)
+		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original, &f.FirstSeenNS,
+			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &c.VerifiedNS, &copyState)
 		if err != nil {
 			return nil, fmt.Errorf("files: %w", err)
 		}
@@ -276,7 +277,7 @@ func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 		}
 		if disk != nil {
 			c.Disk, c.CreatedBy, c.State = r.share(disk), r.share(createdBy), r.share(copyState)
-			c.FirstSeenNS, c.Verified = firstSeen.Int64, verified.Bool
+			c.FirstSeenNS = firstSeen.Int64
 			last := &files[len(files)-1]
 			last.Copies = append(last.Copies, c)
 		}
@@ -323,7 +324,7 @@ func Entries(ctx context.Context, db *sql.DB) ([]EntryKey, error) {
 func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, fs_uuid, fs_type, mount_path, root, workdir, role, position, COALESCE(domain, ''), tags,
-			COALESCE(capacity_bytes, 0), COALESCE(free_bytes, 0), state, COALESCE(last_seen_ns, 0)
+			COALESCE(capacity_bytes, 0), COALESCE(free_bytes, 0), state, COALESCE(last_seen_ns, 0), last_seen_ns IS NOT NULL
 		FROM disks ORDER BY position`)
 	if err != nil {
 		return nil, fmt.Errorf("disks: %w", err)
@@ -333,7 +334,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	for rows.Next() {
 		var d Disk
 		var tags string
-		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS); err != nil {
+		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen); err != nil {
 			return nil, fmt.Errorf("disks: %w", err)
 		}
 		if err := json.Unmarshal([]byte(tags), &d.Tags); err != nil {
@@ -449,7 +450,7 @@ func WriteHashes(ctx context.Context, db *sql.DB, nowNS int64, w *HashWrite) err
 			}
 		}
 		if w.Conflict {
-			if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ?", nowNS, w.FileID); err != nil {
+			if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'", nowNS, w.FileID); err != nil {
 				return fmt.Errorf("conflict: %w", err)
 			}
 		}

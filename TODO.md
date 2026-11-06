@@ -49,9 +49,8 @@ Every item here is a **decision**:
 - `deferred` and `manual` modes, with `--now` and `--force`.
 - Propagation of renames, deletions and modifications, with grouping and the mass-deletion guard, including renames to a name a disk refuses (§15.3). Until then `atoll scan` reports them in `changed` and `absent`, and the catalog does not follow.
 - Trash, including the `.chunks` folders and copies whose name the driver refuses (§17).
-- Detection-only scrub.
+- Detection-only scrub. `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`, and `repair` (phase 1b) must look for the conflict again before it clears that.
 - `mergerfs-config` and runtime branches.
-- `status`, with the state of `solver.ShownState`.
 - `atoll names check`: the CLI over `names.Check`, reading the catalog, with the JSON of `api/schemas/names-check.schema.json`.
 - ntfy alerts.
 - The operation journal (`ops`) and crash recovery, with fault injection.

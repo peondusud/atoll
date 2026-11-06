@@ -1,0 +1,72 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.11",
+  "description": "Before a first scan the catalog knows no disk and no file, and says so. Every state is there, at 0.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [],
+        "files_total": 0,
+        "files_at_level": 0,
+        "bytes_total": 0,
+        "bytes_at_level": 0,
+        "by_state": {
+          "ok": 0,
+          "pending": 0,
+          "degraded": 0,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status"
+      ]
+    }
+  ]
+}

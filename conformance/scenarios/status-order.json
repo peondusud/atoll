@@ -1,0 +1,136 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.11, \u00a729.3",
+  "description": "Disks and a file's copies follow the configuration, not their ids. A date before 1970 is written like any other.",
+  "disks": [
+    {
+      "id": "z",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x",
+          "mtime_ns": -1500000000
+        }
+      ]
+    },
+    {
+      "id": "a",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"z\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/z\"\nfs = \"ext4\"\n[[disk]]\nid = \"a\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/a\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "a",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "z",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/z",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          },
+          {
+            "id": "a",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/a",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          }
+        ],
+        "files_total": 1,
+        "files_at_level": 1,
+        "bytes_total": 1,
+        "bytes_at_level": 1,
+        "by_state": {
+          "ok": 1,
+          "pending": 0,
+          "degraded": 0,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": [
+          {
+            "path": "a",
+            "state": "ok",
+            "size": 1,
+            "mtime": "1969-12-31T23:59:58.500000000Z",
+            "blake3": null,
+            "replicas": 1,
+            "mode": "deferred",
+            "rule": null,
+            "original": "z",
+            "first_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": [
+              {
+                "disk": "z",
+                "state": "ok",
+                "size": 1,
+                "mtime": "1969-12-31T23:59:58.500000000Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": null
+              },
+              {
+                "disk": "a",
+                "state": "ok",
+                "size": 1,
+                "mtime": "2020-09-13T12:26:40.000000000Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": null
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

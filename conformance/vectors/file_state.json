@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §4",
-  "description": "The one state a file shows when several apply: the first in the order unavailable, corrupt, conflict, name-incompatible, name-collision, degraded, pending, unprotected, ok. With none, it is ok.",
+  "description": "The one state a file shows when several apply: the first in the order corrupt, conflict, unavailable, name-incompatible, name-collision, degraded, pending, unprotected, ok. With none, it is ok.",
   "cases": [
     { "applies": [], "state": "ok", "note": "nothing applies" },
     { "applies": ["ok"], "state": "ok" },
@@ -22,13 +22,15 @@
     { "applies": ["degraded", "name-incompatible"], "state": "name-incompatible" },
     { "applies": ["name-incompatible", "conflict"], "state": "conflict" },
     { "applies": ["conflict", "corrupt"], "state": "corrupt" },
-    { "applies": ["corrupt", "unavailable"], "state": "unavailable" },
+    { "applies": ["corrupt", "unavailable"], "state": "corrupt", "note": "only the state remembers it, and an outage must not make the catalog forget" },
+    { "applies": ["unavailable", "conflict"], "state": "conflict", "note": "likewise" },
+    { "applies": ["unavailable", "name-incompatible"], "state": "unavailable" },
     { "applies": ["degraded", "degraded"], "state": "degraded", "note": "a state given twice" },
-    { "applies": ["ok", "unprotected", "pending", "degraded", "name-collision", "name-incompatible", "conflict", "corrupt", "unavailable"], "state": "unavailable", "note": "all of them" },
+    { "applies": ["ok", "unprotected", "pending", "degraded", "name-collision", "name-incompatible", "conflict", "corrupt", "unavailable"], "state": "corrupt", "note": "all of them" },
     { "applies": ["fine"], "error": true, "note": "not a state" },
     { "applies": ["OK"], "error": true, "note": "states are lowercase" },
     { "applies": ["degraded", "fine"], "error": true, "note": "one unknown state is enough" },
-    { "applies": ["fine", "unavailable"], "error": true, "note": "even after the first in the order" },
-    { "applies": ["unavailable", "fine"], "error": true, "note": "or before it" }
+    { "applies": ["fine", "corrupt"], "error": true, "note": "even after the first in the order" },
+    { "applies": ["corrupt", "fine"], "error": true, "note": "or before it" }
   ]
 }

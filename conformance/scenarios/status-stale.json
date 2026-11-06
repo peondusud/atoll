@@ -1,0 +1,170 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.11",
+  "description": "Status touches no disk: what happened since the last scan does not show, and a disk unmounted since is still online. Disk list looks now.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "text": "yyy",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/a"
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/z",
+      "text": "new"
+    },
+    {
+      "do": "unmount",
+      "disk": "t1"
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999995,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 5
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999998,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 2
+          }
+        ],
+        "files_total": 2,
+        "files_at_level": 1,
+        "bytes_total": 5,
+        "bytes_at_level": 2,
+        "by_state": {
+          "ok": 1,
+          "pending": 1,
+          "degraded": 0,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t1",
+            "role": "data",
+            "state": "missing",
+            "reason": "not-mounted",
+            "message": "${ANY}"
+          },
+          {
+            "id": "t2",
+            "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t2",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": []
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/z",
+          "text": "new"
+        }
+      ]
+    }
+  ]
+}

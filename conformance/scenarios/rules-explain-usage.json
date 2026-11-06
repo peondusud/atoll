@@ -150,6 +150,29 @@
         "rules",
         "explain",
         "x",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
+        "--size",
+        "1B",
+        "--size=2B"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "explain",
+        "x",
         "--size"
       ],
       "exit": 2

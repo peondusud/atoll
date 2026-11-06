@@ -1,0 +1,173 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.11",
+  "description": "A disk no check has confirmed has no capacity, free space or date yet, which is not the same as 0. Once seen, it has them.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/b",
+          "text": "y"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "unmount",
+      "disk": "t1"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "missing",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": null,
+            "free_bytes": null,
+            "last_seen": null,
+            "copies": 0,
+            "bytes": 0
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          }
+        ],
+        "files_total": 1,
+        "files_at_level": 0,
+        "bytes_total": 1,
+        "bytes_at_level": 0,
+        "by_state": {
+          "ok": 0,
+          "pending": 0,
+          "degraded": 1,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status"
+      ]
+    },
+    {
+      "do": "mount",
+      "disk": "t1"
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:10:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:10:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          }
+        ],
+        "files_total": 2,
+        "files_at_level": 0,
+        "bytes_total": 2,
+        "bytes_at_level": 0,
+        "by_state": {
+          "ok": 0,
+          "pending": 2,
+          "degraded": 0,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    }
+  ]
+}

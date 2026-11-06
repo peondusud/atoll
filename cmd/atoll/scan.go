@@ -28,10 +28,14 @@ func parseScan(args []string) (scanArgs, error) {
 		a := args[i]
 		switch a {
 		case "--json":
-			out.asJSON = true
+			if err := setFlag(&out.asJSON, a); err != nil {
+				return out, err
+			}
 			continue
 		case "--full":
-			out.opts.Full = true
+			if err := setFlag(&out.opts.Full, a); err != nil {
+				return out, err
+			}
 			continue
 		}
 		value, isDisk := strings.CutPrefix(a, "--disk=")

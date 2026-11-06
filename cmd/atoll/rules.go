@@ -90,7 +90,9 @@ func rulesCheck(configPath string, args []string, stdout, stderr io.Writer) int 
 		if a != "--json" {
 			return usage(stderr, fmt.Sprintf("rules check: unknown argument %q", a))
 		}
-		asJSON = true
+		if err := setFlag(&asJSON, a); err != nil {
+			return usage(stderr, "rules check: "+err.Error())
+		}
 	}
 	out := check(configPath)
 	var err error
@@ -164,7 +166,9 @@ func parseExplain(args []string) (explainArgs, error) {
 			paths = append(paths, args[i+1:]...)
 			i = len(args)
 		case a == "--json":
-			out.asJSON = true
+			if err := setFlag(&out.asJSON, a); err != nil {
+				return out, err
+			}
 		case a == "--size":
 			i++
 			if i == len(args) {
@@ -195,6 +199,9 @@ func parseExplain(args []string) (explainArgs, error) {
 }
 
 func (e *explainArgs) setSize(text string) error {
+	if e.size != nil {
+		return errors.New("--size comes twice")
+	}
 	size, err := value.ParseSize(text)
 	if err != nil {
 		return fmt.Errorf("--size: %w", err)

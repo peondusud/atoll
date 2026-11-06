@@ -1,0 +1,122 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.11, \u00a725",
+  "description": "Usage errors come before the configuration is read, and a path that is not well-formed is one.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--nope"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path="
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "a",
+        "--path",
+        "b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path=a",
+        "--path=b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "/a"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "a/"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "a/../b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "a//b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "."
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--json",
+        "status"
+      ],
+      "exit": 2
+    }
+  ]
+}

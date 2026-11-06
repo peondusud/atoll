@@ -55,6 +55,16 @@
         "list"
       ],
       "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
     }
   ]
 }

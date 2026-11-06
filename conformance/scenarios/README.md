@@ -57,7 +57,7 @@ A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the to
 
 ## Comparing
 
-**`stdout_json`** must equal the output exactly: another key, a missing one, or another order in a list is a failure, and numbers compare by their text, so `3.0` is not `3`. A string `${ANY}` matches any string, for what is not part of the contract, such as the wording of a message. Only `--json` output is compared: human output and standard error are translated, and they are no contract.
+**`stdout_json`** must equal the output exactly: another key, a missing one, or another order in a list is a failure, and numbers compare by their text, so `3.0` is not `3`. A string `${ANY}` matches any string, for what is not part of the contract, such as the wording of a message, and `${ANY_OR_NULL}` a string or `null`, for what a filesystem may not have, such as a creation time. Only `--json` output is compared: human output and standard error are translated, and they are no contract.
 
 **`expect_tree`** covers the whole disk. An entry has a path and a `kind`: `file`, when left out, `dir` or `symlink`.
 
@@ -67,7 +67,7 @@ A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the to
 - A component that is exactly `*` matches any one name, for an operation's id in `Atoll/trash/<date>/<op-id>/…`.
 - Each entry takes one thing on the disk, and each file, symlink and empty folder on the disk must be taken. So one `*` entry does not cover two operations.
 
-**`expect_catalog`** compares `rows`, an array of arrays, with the rows of `query`, in order and exactly: integers, strings and `null`. A column that holds a BLOB is an error, so a query says how to read it, as in `CAST(lpath AS TEXT)` or `hex(blake3)`. `${SANDBOX}` and `${ANY}` work as in `stdout_json`. So a scenario can name a catalog anywhere, but only this path can be compared.
+**`expect_catalog`** compares `rows`, an array of arrays, with the rows of `query`, in order and exactly: integers, strings and `null`. A column that holds a BLOB is an error, so a query says how to read it, as in `CAST(lpath AS TEXT)` or `hex(blake3)`. `${SANDBOX}`, `${ANY}` and `${ANY_OR_NULL}` work as in `stdout_json`. So a scenario can name a catalog anywhere, but only this path can be compared.
 
 ## Always checked
 

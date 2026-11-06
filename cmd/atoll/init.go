@@ -24,7 +24,9 @@ func parseInit(args []string) (initArgs, error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--json" {
-			out.asJSON = true
+			if err := setFlag(&out.asJSON, a); err != nil {
+				return out, err
+			}
 			continue
 		}
 		name, value, hasValue := strings.Cut(a, "=")

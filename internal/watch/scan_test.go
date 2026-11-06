@@ -156,6 +156,59 @@ func failing(call, name string, with error) func(string, fsx.Dir) fsx.Dir {
 
 // TestAnErrorConcludesNothing: an I/O error during a walk means "disk unknown", never "file absent"
 // (invariant 4). Nothing is written, and no copy is reported absent, wherever the error comes.
+// TestCorruptOutlivesAnOutage: only the state remembers it, and a scenario cannot corrupt a disk.
+// conflict is in the scenario scan-original-kept.
+func TestCorruptOutlivesAnOutage(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "x")
+	b.scan(Options{})
+	if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'"); err != nil {
+		t.Fatal(err)
+	}
+	b.wrap = failing("names", "", syscall.EIO)
+	if out := b.scan(Options{}); !out.Partial() {
+		t.Fatalf("the disk answered: %+v", out.Disks[0])
+	}
+	if got := b.count("SELECT count(*) FROM disks WHERE state = 'missing'"); got != 1 {
+		t.Fatalf("%d disks missing", got)
+	}
+	if got := b.text("SELECT state FROM files"); got != "corrupt" {
+		t.Errorf("through the outage: %q", got)
+	}
+	b.wrap = nil
+	if out := b.scan(Options{}); out.Partial() {
+		t.Fatalf("the disk did not come back: %+v", out.Disks[0])
+	}
+	if got := b.text("SELECT state FROM files"); got != "corrupt" {
+		t.Errorf("after the outage: %q", got)
+	}
+}
+
+// TestCorruptStaysWhenCopiesDiffer: both apply, and it comes first (specs.md §4).
+func TestCorruptStaysWhenCopiesDiffer(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		opts       Options
+	}{
+		{"a new copy of another size", "yy", Options{}},
+		{"a new copy of the same size, with other content", "y", Options{Full: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t, "t1", "t2")
+			b.write("t1", "a", "x")
+			b.scan(Options{})
+			if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'"); err != nil {
+				t.Fatal(err)
+			}
+			b.write("t2", "a", tc.text)
+			b.scan(tc.opts)
+			if got := b.text("SELECT state FROM files"); got != "corrupt" {
+				t.Errorf("%q", got)
+			}
+		})
+	}
+}
+
 func TestAnErrorConcludesNothing(t *testing.T) {
 	for _, tc := range []struct {
 		call, name string

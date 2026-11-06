@@ -41,6 +41,15 @@
       "do": "atoll",
       "args": [
         "init",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
         "--pool-id",
         "p"
       ],

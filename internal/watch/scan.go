@@ -416,9 +416,10 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 	}
 }
 
-// settleFile gives what a file's original and policy make of its row. The state is the plan's.
+// settleFile gives what a file's original and policy make of its row. The state is the plan's. With
+// no eligible copy it keeps its original, as it keeps that copy's size and date (specs.md §7).
 func settleFile(c *config.Config, f *catalog.FileRow, position map[string]int, state map[string]solver.DiskState) (catalog.FileUpdate, error) {
-	update := catalog.FileUpdate{ID: f.ID, Size: f.Size, MtimeNS: f.MtimeNS, ReplicasTarget: f.ReplicasTarget, Rule: f.Rule, Mode: f.Mode, State: f.State}
+	update := catalog.FileUpdate{ID: f.ID, Size: f.Size, MtimeNS: f.MtimeNS, ReplicasTarget: f.ReplicasTarget, Rule: f.Rule, Mode: f.Mode, State: f.State, Original: f.Original}
 	original, err := originalOf(f, position, state)
 	if err != nil {
 		return update, err
@@ -664,7 +665,7 @@ func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[s
 		switch {
 		case bytes.Equal(read[i].file[:], reference):
 			write.Verified = append(write.Verified, read[i].cp.Disk)
-		case read[i].cp.Verified:
+		case read[i].cp.VerifiedNS.Valid:
 			// Whether this is a modification or corruption is for the scrub (specs.md §16).
 			readers[read[i].cp.Disk].report.Changed = append(readers[read[i].cp.Disk].report.Changed, f.Path)
 		default:

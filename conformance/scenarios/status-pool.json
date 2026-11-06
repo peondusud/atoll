@@ -1,0 +1,110 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.11",
+  "description": "The pool as the last scan saw it: a file on both disks is at its level, and one that waits for a replica is not. Without --path no file is listed.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "text": "yyy",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999995,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 5
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999998,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 2
+          }
+        ],
+        "files_total": 2,
+        "files_at_level": 1,
+        "bytes_total": 5,
+        "bytes_at_level": 2,
+        "by_state": {
+          "ok": 1,
+          "pending": 1,
+          "degraded": 0,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status"
+      ]
+    }
+  ]
+}

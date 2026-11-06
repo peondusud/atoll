@@ -24,11 +24,12 @@ import (
 )
 
 const (
-	formatVersion = 1
-	sandboxToken  = "${SANDBOX}"
-	anyToken      = "${ANY}"
-	defaultClock  = "2026-01-01T00:00:00Z"
-	controlEnv    = "ATOLL_CONFORMANCE"
+	formatVersion  = 1
+	sandboxToken   = "${SANDBOX}"
+	anyToken       = "${ANY}"
+	anyOrNullToken = "${ANY_OR_NULL}"
+	defaultClock   = "2026-01-01T00:00:00Z"
+	controlEnv     = "ATOLL_CONFORMANCE"
 )
 
 // stepTimeout bounds one run of the binary, so that a daemon that never goes idle fails its
@@ -650,6 +651,12 @@ func (b *sandbox) compareJSON(got []byte, want json.RawMessage) error {
 }
 
 func (b *sandbox) sameJSON(where string, got, want any) error {
+	if want == anyOrNullToken {
+		if _, isString := got.(string); isString || got == nil {
+			return nil
+		}
+		return fmt.Errorf("%s: %v, want a string or null", where, got)
+	}
 	switch w := want.(type) {
 	case string:
 		text, ok := got.(string)

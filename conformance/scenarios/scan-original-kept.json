@@ -1,0 +1,212 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a77, \u00a715.7",
+  "description": "A file in conflict stays one through an outage of all its disks, and keeps its original, with its size and date. A scan in between finds no eligible copy, which changes nothing about what the copies hold, so when they return it is not taken for healthy, and the older copy does not take over.",
+  "disks": [
+    {
+      "id": "state",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    },
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "yy"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/a",
+      "text": "x"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "one.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "two.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/one.toml",
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/one.toml",
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT state, original_disk, size FROM files",
+      "rows": [
+        [
+          "degraded",
+          "t1",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/two.toml",
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT state, original_disk, size FROM files",
+      "rows": [
+        [
+          "conflict",
+          "t1",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "unmount",
+      "disk": "t1"
+    },
+    {
+      "do": "unmount",
+      "disk": "t2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/two.toml",
+        "scan"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT state, original_disk, size FROM files",
+      "rows": [
+        [
+          "conflict",
+          "t1",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/two.toml",
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "missing",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          },
+          {
+            "id": "t2",
+            "state": "missing",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999998,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 2
+          }
+        ],
+        "files_total": 1,
+        "files_at_level": 0,
+        "bytes_total": 1,
+        "bytes_at_level": 0,
+        "by_state": {
+          "ok": 0,
+          "pending": 0,
+          "degraded": 0,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 1,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    },
+    {
+      "do": "mount",
+      "disk": "t1"
+    },
+    {
+      "do": "mount",
+      "disk": "t2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/two.toml",
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT state, original_disk, size FROM files",
+      "rows": [
+        [
+          "conflict",
+          "t1",
+          1
+        ]
+      ]
+    }
+  ]
+}

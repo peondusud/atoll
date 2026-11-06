@@ -40,7 +40,7 @@ func TestShownStateVectors(t *testing.T) {
 // whatever the order of the input.
 func TestShownStateEverySubset(t *testing.T) {
 	order := []State{
-		StateUnavailable, StateCorrupt, StateConflict, StateNameIncompatible, StateNameCollision,
+		StateCorrupt, StateConflict, StateUnavailable, StateNameIncompatible, StateNameCollision,
 		StateDegraded, StatePending, StateUnprotected, StateOK,
 	}
 	for mask := range 1 << len(order) {

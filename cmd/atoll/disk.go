@@ -45,7 +45,9 @@ func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
 		if a != "--json" {
 			return usage(stderr, fmt.Sprintf("disk list: unknown argument %q", a))
 		}
-		asJSON = true
+		if err := setFlag(&asJSON, a); err != nil {
+			return usage(stderr, "disk list: "+err.Error())
+		}
 	}
 	c, err := load(configPath)
 	if err != nil {

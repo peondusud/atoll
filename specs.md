@@ -69,7 +69,7 @@ Measurable goals:
 - **Failure domain**: group of disks likely to fail together (same DAS, same power supply, same controller).
 - **Tag**: label on a disk (`sata`, `usb`, `ssd`…), used by rules; an identifier (§29.5).
 - **Residency**: time a file stays on the SSD cache before its transfer to HDD.
-- **File states**: `ok`, `pending` (replicas to create), `degraded` (fewer replicas than wanted), `unprotected` (x1, or manual mode waiting), `unavailable` (no reachable copy), `corrupt`, `conflict`, `name-incompatible`, `name-collision` (§15.7). A file shows one state, the first that applies in this order: `unavailable`, `corrupt`, `conflict`, `name-incompatible`, `name-collision`, `degraded`, `pending`, `unprotected`, `ok`; it is `ok` when no other applies. The state serves display and alerts; placement and job order read the copies, never the state.
+- **File states**: `ok`, `pending` (replicas to create), `degraded` (fewer replicas than wanted), `unprotected` (x1, or manual mode waiting), `unavailable` (no reachable copy), `corrupt`, `conflict`, `name-incompatible`, `name-collision` (§15.7). A file shows one state, the first that applies in this order: `corrupt`, `conflict`, `unavailable`, `name-incompatible`, `name-collision`, `degraded`, `pending`, `unprotected`, `ok`; it is `ok` when no other applies. `corrupt` and `conflict` come first as `files.state` is all that remembers them, while a scan works out the others again: behind `unavailable`, an outage of a file's disks would make the catalog forget that its copies differ. So a file `corrupt` whose copies also turn out to differ stays `corrupt`. The state serves display and alerts; placement and job order read the copies, never the state.
 - **Copy states**: `ok`, `pending`, `stale` (does not match the current version), `corrupt`, `unavailable`, `surplus` (beyond the wanted level).
 - **Disk states**: `online`, `standby` (spun down), `missing`, `readonly`, `draining`, `failed`, `retired`.
 
@@ -170,6 +170,7 @@ Removal rules: `prune`, rebalancing and evacuation remove Atoll copies first and
 - Eligible copies: copy state `ok` or `surplus`, on a disk `online`, `standby`, `readonly` or `draining`. These hold the same bytes and can be read, so the original does not change when a disk sleeps; it changes when a draining disk leaves.
 - Each copy's creation time, or its `first_seen` where that is absent, is compared in exact nanoseconds, not at the coarser precision of §9, which serves times that must match. Here nothing has to match: creation times are never copied, and the choice is among identical copies. Ties: earliest `first_seen`, then disk order in the configuration (`disks.position`).
 - A file in `conflict` (§15.7) keeps its previous original (`files.original_disk`) as long as that copy is eligible, so adding a disk with an older version of different content does not change what is presented. Otherwise, or after `catalog rebuild` has lost it, the rule above applies. Outside a conflict the previous original is ignored.
+- With no eligible copy, a file keeps `files.original_disk`, as it keeps its size and modification time, which are that copy's. So a file in `conflict` whose disks all went away finds the same original when they return.
 - Stale, corrupt or unavailable copies are never presented by Atoll's own view, even when they are older.
 - Atoll preserves a replica's modification time, as far as its filesystem can hold it (§14), but never its creation time, so a replica is younger than its source. On Windows, NTFS "tunneling" can give a file re-created under the same name within 15 seconds its predecessor's creation time; the Windows version therefore sets the creation time explicitly after the final rename.
 - `files.mtime_ns` holds the original's modification time, so it follows the original to another disk. It needs no history, and `catalog rebuild` finds the same value.
@@ -437,7 +438,7 @@ U(k) = min over j = 0 … k−1 of (S − s1 − … − sj) / (k − j)
 - Output: target placement and a minimal job plan. It prefers creating over moving, moving an Atoll copy over moving a user copy, and smaller volumes first.
 - Pure, deterministic function, covered by property tests; every list it outputs is sorted by a documented key.
 - Hysteresis: rebalancing starts only when the share of bytes correctly placed falls below `[balance].trigger.ratio_below`, or when the bytes to move exceed `or_more_than`.
-- Status indicator: share of files at the wanted level, share of bytes correctly placed (`atoll status`).
+- Status indicator: share of files at the wanted level (`atoll status`, §15.11) and, with `balance` (phase 1b), share of bytes correctly placed.
 - Reachable capacity, for each k: the solver plans without running anything, moving no user copy, with every managed file wanted at k copies. The result is the bytes of the files that reach k copies in that plan, plus the formula of §13.1 applied to the free space that plan leaves, minus `min_free`, on each disk. So it accounts for data outside `media/` and for the trash, and it is what Atoll would really do; there is no second algorithm. It reads the whole catalog and wakes no disk.
 
 ### 13.4 The placement plan
@@ -652,6 +653,17 @@ A scan records what the disks hold. It writes nothing to a disk, moves nothing a
   - The reference is `files.blake3`. Where it is NULL, it becomes the hash of the original's copy if that was read, otherwise of the first copy read, with its chunk hashes (`file_chunks`).
   - A copy with the reference's hash gets `verified_ns`, verified before or not. An unverified copy with another hash makes the file a `conflict`, and stays unverified.
   - A verified copy with another hash is added to `changed`, and nothing is written. Deciding between a modification and corruption is for the scrub (§16).
+
+### 15.11 `atoll status`
+
+A read-only report of what the catalog holds. It reads the catalog and the configuration only, so it touches no disk, and it says what the last scan saw: `atoll disk list` is the command that looks now. A disk unplugged since the last scan still shows its state, with its `last_seen`.
+
+- **Disks**: every row of `disks`, retired ones included, by position, with its state, what the last check measured, and the copies, in any state, and the bytes the catalog holds on it, whatever `--path` says. A disk no check has confirmed has no capacity, free space or date: `null`.
+- **Files at their level**: a file is at its level when its copies `ok` or `surplus` on a disk `online`, `standby` or `readonly` reach `replicas` + 1. A copy on a `missing` disk does not count, even before `health.missing_grace`, unlike in the plan (§13.4): this counts what can be read now. A file in `conflict` counts by its copies like any other, and `by_state` says how many there are. The share of bytes correctly placed (§13.3) comes with `balance`.
+- **Counts** are integers, with no share in the JSON, so that no rounding can differ between two versions: `files_total` and `files_at_level`, `bytes_total` and `bytes_at_level` by the size of each file, and `by_state`, the state the last scan gave each file, with every state of §4, at 0 when no file has it.
+- **`--path <path>`** keeps the file at that path and everything below it, compared by whole components, in the counts and in `files`, by path in byte order. A path the catalog does not hold gives none, and exit code 0. Without `--path`, `files` is empty. Each file comes with its copies by position, and `original` is the disk of its original, the last one known when no copy can be read now (§7).
+- **Output**: `api/schemas/status.schema.json`.
+- **Exit code**: 0 whatever it reports; 1 when it cannot read the configuration or the catalog; 2 on a usage error, which takes in a path that is not well-formed (§4). Files are written as they are read, as a large folder would not fit in memory (§26). So a catalog that fails once they are on their way leaves an unfinished output, and a script goes by the exit code. Otherwise a failure writes nothing to standard output.
 
 ## 16. Integrity
 
@@ -1136,13 +1148,14 @@ atoll daemon [--foreground] [--dry-run]
 - A command's flags come after its whole name, so `atoll disk --json list` is a usage error, and so is a flag given twice. They may come before or after a path, and `--` ends them, for a path that starts with `-`. A command line is checked before the configuration is read, so a usage error comes first. It writes nothing to standard output, with `--json` or without.
 - `atoll init` creates what is missing, and may run again. The configuration is written with `--pool-id`, `--view-mount` and `--catalog`, and its folder made, only when the file does not exist, and needs the first two; with a file already there they are refused, with exit code 1. Then the catalog is created, with its folder, if it does not exist; a catalog of another `pool_id` is refused. It reads no disk. It exits with 0 once both exist; with 1 when the configuration cannot be written, read or loaded, or the catalog cannot be used; and with 2 on a usage error, which takes in a value the configuration would refuse, one of `--pool-id` and `--view-mount` without the other, and `--catalog` without them.
 - `atoll scan` follows §15.10, and `--disk <id>` limits the walk to one disk, without changing what is checked. It exits with 0 when every disk asked for was walked, and hashed with `--full`; with 4 when one was skipped or failed; with 1, and nothing on standard output, when the configuration or the catalog cannot be used, or `<id>` is no disk of the configuration; and with 2 on a usage error.
+- `atoll status` follows §15.11. It opens the catalog and looks at no disk.
 - `atoll disk list` runs a mount check (§10) on each disk of the configuration, in its order, and shows the state and the reason. It reads the configuration, the mount table and the disks, opens no catalog and writes nothing. So the states it shows for now are `online`, `readonly` and `missing`: `standby` comes with SMART, and `draining`, `failed` and `retired` with the catalog. It exits with 0 whatever the states; with 1 when the configuration does not load or cannot be read, with nothing on standard output; and with 2 on a usage error.
 - `atoll rules check` exits with 0 when the configuration loads, warnings or not, and with 1 when it does not load or cannot be read, with the same output. So a script can run it before a restart.
 - `atoll rules explain` exits with 0 once it has answered, whatever the answer; with 1 when the configuration does not load or cannot be read, with nothing on standard output; and with 2 on a size or a path that is not well-formed. `<size>` is a size of §29.5, so it needs its unit.
 
 ## 26. Non-functional requirements
 
-- Resources (ZimaBoard 2 or M920q): under 200 MB of memory for 200,000 files; under 5 % CPU outside scrubs. The binary sets a soft memory limit of 170 MiB unless `GOMEMLIMIT` says otherwise. A first scan of 200,000 files with two copies each peaks at about 180 MiB, in 12 s on an idle machine, and a later one at about 145 MiB, in 5 s (measured on empty files in a container, so it says nothing about the time real disks take).
+- Resources (ZimaBoard 2 or M920q): under 200 MB of memory for 200,000 files; under 5 % CPU outside scrubs. The binary sets a soft memory limit of 170 MiB unless `GOMEMLIMIT` says otherwise. A first scan of 200,000 files with two copies each peaks at about 180 MiB, in 12 s on an idle machine, and a later one at about 145 MiB, in 5 s (measured on empty files in a container, so it says nothing about the time real disks take). `atoll status` peaks at about 21 MiB on the same pool, with `--path` over all of it too, as it writes files as it reads them.
 - Throughput: copies and scrubs at 90 % or more of the disk's raw throughput; hashing is never the bottleneck.
 - Robustness: a hard kill (kill -9) or a power cut at any moment loses no file and leaves a consistent catalog after restart.
 - Security: local API over a socket with restricted permissions; HTTP limited to localhost or the Tailscale network, with a token.
@@ -1230,7 +1243,7 @@ atoll daemon [--foreground] [--dry-run]
 | States, job kinds, operation kinds, event kinds, name-compatibility reasons, mount-check reasons | §4, §9, §10, §15.8 | closed lists of lowercase strings |
 
 - Nothing persisted or exchanged uses a language-specific encoding (no Go `gob`, no Rust `bincode`).
-- Times: integer Unix nanoseconds UTC in the catalog, out-of-range values as §7 and §9 state; RFC 3339 with offset in JSON.
+- Times: integer Unix nanoseconds UTC in the catalog, out-of-range values as §7 and §9 state; RFC 3339 in JSON, in UTC with nine digits of fraction (`2026-10-26T01:00:00.000000000Z`), so that both versions write the same bytes.
 - Sizes: integer bytes everywhere except in the configuration file.
 - Paths: SQLite BLOBs (never TEXT, which a Rust `String` cannot read when the bytes are not UTF-8). In JSON, a `path` string when the path is valid UTF-8; otherwise `path_b64` with the raw bytes in base64.
 - Determinism: every list the solver or the CLI outputs is sorted by a documented key; no dependence on map iteration order or random seeds.

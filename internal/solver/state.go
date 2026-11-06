@@ -5,11 +5,12 @@ import "fmt"
 // State is the state of a file (specs.md §4).
 type State string
 
-// The states of a file, in the order ShownState applies them.
+// The states of a file, in the order ShownState applies them. Corrupt and conflict come first, as
+// the stored state is all that remembers them, and a scan works out the others again.
 const (
-	StateUnavailable      State = "unavailable"
 	StateCorrupt          State = "corrupt"
 	StateConflict         State = "conflict"
+	StateUnavailable      State = "unavailable"
 	StateNameIncompatible State = "name-incompatible"
 	StateNameCollision    State = "name-collision"
 	StateDegraded         State = "degraded"
@@ -42,11 +43,11 @@ func ShownState(applying []State) (State, error) {
 
 func stateRank(s State) (int, error) {
 	switch s {
-	case StateUnavailable:
-		return 0, nil
 	case StateCorrupt:
-		return 1, nil
+		return 0, nil
 	case StateConflict:
+		return 1, nil
+	case StateUnavailable:
 		return 2, nil
 	case StateNameIncompatible:
 		return 3, nil

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/status.schema.json",
+  "title": "atoll status --json",
+  "description": "What the catalog holds (specs.md §15.11). Disks are by position, files by path in byte order, and each file's copies by position.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disks", "files_total", "files_at_level", "bytes_total", "bytes_at_level", "by_state", "files"],
+  "properties": {
+    "disks": { "type": "array", "items": { "$ref": "#/$defs/disk" } },
+    "files_total": { "$ref": "#/$defs/count" },
+    "files_at_level": { "$ref": "#/$defs/count" },
+    "bytes_total": { "$ref": "#/$defs/count" },
+    "bytes_at_level": { "$ref": "#/$defs/count" },
+    "by_state": {
+      "description": "Every state of specs.md §4, at 0 when no file has it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "pending", "degraded", "unprotected", "unavailable", "corrupt", "conflict", "name-incompatible", "name-collision"],
+      "properties": {
+        "ok": { "$ref": "#/$defs/count" },
+        "pending": { "$ref": "#/$defs/count" },
+        "degraded": { "$ref": "#/$defs/count" },
+        "unprotected": { "$ref": "#/$defs/count" },
+        "unavailable": { "$ref": "#/$defs/count" },
+        "corrupt": { "$ref": "#/$defs/count" },
+        "conflict": { "$ref": "#/$defs/count" },
+        "name-incompatible": { "$ref": "#/$defs/count" },
+        "name-collision": { "$ref": "#/$defs/count" }
+      }
+    },
+    "files": {
+      "description": "What --path keeps. Empty without --path.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/file" }
+    }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "time": {
+      "description": "specs.md §29.3: UTC, with nine digits of fraction.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{9}Z$"
+    },
+    "timeOrNull": { "oneOf": [{ "$ref": "#/$defs/time" }, { "type": "null" }] },
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "mount", "fs", "role", "capacity_bytes", "free_bytes", "last_seen", "copies", "bytes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["online", "standby", "missing", "readonly", "draining", "failed", "retired"] },
+        "mount": { "type": "string", "minLength": 1 },
+        "fs": { "enum": ["ext4", "ntfs", "xfs", "btrfs"] },
+        "role": { "enum": ["data", "cache"] },
+        "capacity_bytes": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }], "description": "null until a check has confirmed it." },
+        "free_bytes": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }], "description": "null until a check has confirmed it." },
+        "last_seen": { "$ref": "#/$defs/timeOrNull" },
+        "copies": { "$ref": "#/$defs/count" },
+        "bytes": { "$ref": "#/$defs/count" }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "size", "mtime", "blake3", "replicas", "mode", "rule", "original", "first_seen", "copies"],
+      "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "path_b64": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["ok", "pending", "degraded", "unprotected", "unavailable", "corrupt", "conflict", "name-incompatible", "name-collision"] },
+        "size": { "$ref": "#/$defs/count" },
+        "mtime": { "$ref": "#/$defs/time", "description": "The original's." },
+        "blake3": { "oneOf": [{ "type": "string", "pattern": "^[0-9a-f]{64}$" }, { "type": "null" }] },
+        "replicas": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "mode": { "enum": ["immediate", "deferred", "scheduled", "manual"] },
+        "rule": { "type": ["string", "null"] },
+        "original": { "type": ["string", "null"], "description": "The disk of the original, the last one known when no copy can be read now (specs.md §7)." },
+        "first_seen": { "$ref": "#/$defs/time" },
+        "copies": { "type": "array", "items": { "$ref": "#/$defs/copy" } }
+      }
+    },
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disk", "state", "size", "mtime", "created", "created_by", "first_seen", "verified"],
+      "properties": {
+        "disk": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["ok", "pending", "stale", "corrupt", "unavailable", "surplus"] },
+        "size": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }] },
+        "mtime": { "$ref": "#/$defs/timeOrNull" },
+        "created": { "$ref": "#/$defs/timeOrNull", "description": "null when the creation time is absent (specs.md §7)." },
+        "created_by": { "enum": ["user", "atoll"] },
+        "first_seen": { "$ref": "#/$defs/time" },
+        "verified": { "$ref": "#/$defs/timeOrNull" }
+      }
+    }
+  }
+}

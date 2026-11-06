@@ -82,6 +82,16 @@
       "args": [
         "rules",
         "check",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
         "--config",
         "x"
       ],

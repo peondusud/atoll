@@ -1,0 +1,471 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.4, \u00a715.11",
+  "description": "What counts is what can be read now. A file with no replica wanted is at its level alone, a surplus copy counts, and a copy on a missing disk does not, even before health.missing_grace, though the plan still counts it. A retired disk does not count either, and comes after the others.",
+  "disks": [
+    {
+      "id": "state",
+      "uuid": "5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    },
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/both",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/one",
+          "text": "y",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/keep",
+          "text": "z",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/three",
+          "text": "w",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/both",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/three",
+          "text": "w",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/three",
+          "text": "w",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "all.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"single\"\npath = \"keep\"\nreplicas = 0\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "less.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"single\"\npath = \"keep\"\nreplicas = 0\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/all.toml",
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/all.toml",
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, c.state FROM copies c JOIN files f ON f.id = c.file_id WHERE CAST(f.lpath AS TEXT) = 'three' ORDER BY c.disk_id",
+      "rows": [
+        [
+          "t1",
+          "ok"
+        ],
+        [
+          "t2",
+          "ok"
+        ],
+        [
+          "t3",
+          "surplus"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/all.toml",
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999996,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 4,
+            "bytes": 4
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999998,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 2
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t3",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          }
+        ],
+        "files_total": 4,
+        "files_at_level": 3,
+        "bytes_total": 4,
+        "bytes_at_level": 3,
+        "by_state": {
+          "ok": 2,
+          "pending": 1,
+          "degraded": 0,
+          "unprotected": 1,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/all.toml",
+        "status",
+        "--path",
+        "three",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999996,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 4,
+            "bytes": 4
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999998,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 2
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t3",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          }
+        ],
+        "files_total": 1,
+        "files_at_level": 1,
+        "bytes_total": 1,
+        "bytes_at_level": 1,
+        "by_state": {
+          "ok": 1,
+          "pending": 0,
+          "degraded": 0,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": [
+          {
+            "path": "three",
+            "state": "ok",
+            "size": 1,
+            "mtime": "2020-09-13T12:26:40.000000000Z",
+            "blake3": null,
+            "replicas": 1,
+            "mode": "deferred",
+            "rule": null,
+            "original": "t1",
+            "first_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": [
+              {
+                "disk": "t1",
+                "state": "ok",
+                "size": 1,
+                "mtime": "2020-09-13T12:26:40.000000000Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": null
+              },
+              {
+                "disk": "t2",
+                "state": "ok",
+                "size": 1,
+                "mtime": "2020-09-13T12:26:40.000000000Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": null
+              },
+              {
+                "disk": "t3",
+                "state": "surplus",
+                "size": 1,
+                "mtime": "2020-09-13T12:26:40.000000000Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "do": "unmount",
+      "disk": "t2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/all.toml",
+        "scan"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, c.state FROM copies c JOIN files f ON f.id = c.file_id WHERE CAST(f.lpath AS TEXT) = 'three' ORDER BY c.disk_id",
+      "rows": [
+        [
+          "t1",
+          "ok"
+        ],
+        [
+          "t2",
+          "surplus"
+        ],
+        [
+          "t3",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/all.toml",
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999996,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 4,
+            "bytes": 4
+          },
+          {
+            "id": "t2",
+            "state": "missing",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999998,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 2
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t3",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          }
+        ],
+        "files_total": 4,
+        "files_at_level": 2,
+        "bytes_total": 4,
+        "bytes_at_level": 2,
+        "by_state": {
+          "ok": 1,
+          "pending": 1,
+          "degraded": 1,
+          "unprotected": 1,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    },
+    {
+      "do": "mount",
+      "disk": "t2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/less.toml",
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/less.toml",
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999996,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 4,
+            "bytes": 4
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t3",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999999,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1
+          },
+          {
+            "id": "t2",
+            "state": "retired",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999998,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 2
+          }
+        ],
+        "files_total": 4,
+        "files_at_level": 2,
+        "bytes_total": 4,
+        "bytes_at_level": 2,
+        "by_state": {
+          "ok": 1,
+          "pending": 2,
+          "degraded": 0,
+          "unprotected": 1,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a715.11",
+  "description": "A catalog of another pool is refused, as by every command that opens one, with nothing on standard output.",
+  "disks": [
+    {
+      "id": "state",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "steps": [
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "a.toml",
+      "text": "pool_id = \"a\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "b.toml",
+      "text": "pool_id = \"b\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [],
+        "files_total": 0,
+        "files_at_level": 0,
+        "bytes_total": 0,
+        "bytes_at_level": 0,
+        "by_state": {
+          "ok": 0,
+          "pending": 0,
+          "degraded": 0,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/b.toml",
+        "status"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/b.toml",
+        "status",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT value FROM meta WHERE key = 'pool_id'",
+      "rows": [
+        [
+          "a"
+        ]
+      ]
+    }
+  ]
+}
