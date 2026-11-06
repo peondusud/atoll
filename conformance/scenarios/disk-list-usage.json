@@ -1,0 +1,60 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Usage errors, checked before the configuration is read: this one does not load, and they still exit with 2.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "disk"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "frob"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "extra"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--size"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--config",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "--json",
+        "list"
+      ],
+      "exit": 2
+    }
+  ]
+}

@@ -2,6 +2,27 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Disk identity and the mount check (specs.md §10, §25)
+
+Commit "Identify disks and check their mounts, with atoll disk list", on `main`.
+
+- The measurements are in [docs/research/disk-identity.md](docs/research/disk-identity.md): both kernels, every driver, each shape of mount, dm-error, and USB disks really unplugged in qemu.
+- The maintainer's decisions:
+  - the identifier comes from the superblock, with no external tool, which takes root or the `disk` group;
+  - what changes name rules (`ads`, `nocase`, `iocharset`, `casefold`, `ascii-ci`, `ignore_case`), the `ntfs` driver of Linux 7.3 and a `ro` mount make a disk `readonly`. No `media/`, a bind of a folder and a btrfs subvolume make it `missing`;
+  - `atoll disk list` shows it, with `api/schemas/disk-list.schema.json`. The clock of the conformance build and `daemon --until-idle` wait for `scan`, their first use;
+  - a new replica keeps the date of its source (§14): taking the original's would change invariant 6 and §9, and leave the copies that differ as they are.
+- `internal/disks` has the mount table, the superblock and the check, pinned by `mountinfo.json`, `superblock.json` and `disk_check.json`, and the observer of each build. The delivered binary has no way to take a folder for a disk, and a test builds it and tries.
+- The runner has `unmount` and `mount` steps, for a failed mount.
+- Found along the way:
+  - an unplugged ext4 keeps answering `statx` and `getdents`, from the cache: only the device node tells;
+  - lowntfs-3g `ignore_case` shows nowhere, so a check asks for the root in the other case and compares inodes;
+  - Linux 7.3 has a third NTFS driver, reached by `mount -t ntfs` where no helper exists;
+  - Docker Desktop's 9p writes `path=C:\` in its options, which the first parser took for a broken table, so one mount that is none of the pool's would have made every disk `missing`. Now a backslash that escapes nothing stays, and a line that cannot be read says nothing about the others. Only the test that runs the delivered binary found it;
+  - on XFS `ascii-ci` the root answers in the other case too, which hid the feature behind `ignore-case` until the real test ran;
+  - checks that did nothing went: the mount-root attribute, as the entry says all of it, the length of a line, as a short one has no separator, and a test for a relative source, as it leads nowhere anyway.
+- Not done: the confirmation before writes, the handle on the verified root, the daemon's check, `Atoll/disk.toml`, the topology check and the remount, all in [TODO.md](TODO.md).
+
 ## Conformance scenarios and the first CLI (specs.md §25, §29.4)
 
 Commit "Run conformance scenarios, with rules check and rules explain", on `main`.

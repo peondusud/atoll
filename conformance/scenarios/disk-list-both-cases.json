@@ -1,0 +1,48 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a710",
+  "description": "A real second folder in the other case is no sign of a mount that ignores case: it is another folder, with another inode.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        },
+        {
+          "path": "MEDIA/b",
+          "text": "y"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t1",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          }
+        ]
+      }
+    }
+  ]
+}

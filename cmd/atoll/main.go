@@ -41,6 +41,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "rules":
 		return runRules(configPath, args[1:], stdout, stderr)
+	case "disk":
+		return runDisk(configPath, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}

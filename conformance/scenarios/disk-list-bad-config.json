@@ -1,0 +1,25 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Exit code 1 when the configuration does not load.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "exit": 1
+    }
+  ]
+}

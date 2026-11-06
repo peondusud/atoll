@@ -244,6 +244,42 @@ func TestControlFile(t *testing.T) {
 	}
 }
 
+func TestUnmountAndMount(t *testing.T) {
+	const (
+		tree     = `[{"path": "media/a", "text": "x"}]`
+		unmount  = `{"do": "unmount", "disk": "t1"}`
+		mount    = `{"do": "mount", "disk": "t1"}`
+		empty    = `{"do": "expect_tree", "disk": "t1", "tree": []}`
+		full     = `{"do": "expect_tree", "disk": "t1", "tree": ` + tree + `}`
+		run      = `{"do": "atoll"}`
+		isListed = `grep -q 'disks/t1"' "$ATOLL_CONFORMANCE"`
+		notThere = `! grep -q 'disks/t1"' "$ATOLL_CONFORMANCE"`
+	)
+	with := func(list string) string {
+		return `{"format_version": 1, "disks": [{"id": "t1", "uuid": "u", "fs": "ext4", "capacity": 1, "tree": ` + tree + `}], "steps": [` + list + `]}`
+	}
+	checkVerdicts(t, []verdictCase{
+		{"the folder is left empty", "exit 0", with(unmount + "," + empty), ""},
+		{"the tree is not there meanwhile", "exit 0", with(unmount + "," + full), "not on the disk"},
+		{"it comes back with its tree", "exit 0", with(unmount + "," + mount + "," + full), ""},
+		{"it comes back: not empty", "exit 0", with(unmount + "," + mount + "," + empty), "media/a"},
+		{"it stays in the control file at first", isListed, with(run), ""},
+		{"it leaves the control file", notThere, with(unmount + "," + run), ""},
+		{"it leaves the control file: the opposite", isListed, with(unmount + "," + run), "exit code 1"},
+		{"it returns to the control file", isListed, with(unmount + "," + mount + "," + run), ""},
+		{"the clock keeps it out", notThere, with(unmount + `,{"do": "advance", "by": "1s"},` + run), ""},
+		{"written to the empty folder, by a step", "exit 0", with(unmount + `,{"do": "write", "disk": "t1", "path": "x", "text": "y"},` + mount), "written to the empty folder"},
+		{"unmounted twice", "exit 0", with(unmount + "," + unmount), "already unmounted"},
+		{"mounted when it is", "exit 0", with(mount), "is not unmounted"},
+		{"mounted twice", "exit 0", with(unmount + "," + mount + "," + mount), "is not unmounted"},
+		{"unmount: an unknown disk", "exit 0", with(`{"do": "unmount", "disk": "x"}`), "unknown disk"},
+		{"mount: an unknown disk", "exit 0", with(`{"do": "mount", "disk": "x"}`), "unknown disk"},
+		{"unmount: a field that does not apply", "exit 0", with(`{"do": "unmount", "disk": "t1", "path": "x"}`), "does not apply"},
+		{"mount: a field that does not apply", "exit 0", with(`{"do": "mount", "disk": "t1", "by": "1s"}`), "does not apply"},
+		{"the binary writes to the empty folder", "echo x > disks/t1/stray", with(unmount + "," + run), "stray"},
+	})
+}
+
 func TestTimeout(t *testing.T) {
 	stepTimeout = 100 * time.Millisecond
 	defer func() { stepTimeout = 2 * time.Minute }()

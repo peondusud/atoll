@@ -97,6 +97,8 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "path", "path_b64", "mtime_ns"}, true
 	case "advance":
 		return []string{"by"}, true
+	case "unmount", "mount":
+		return []string{"disk"}, true
 	case "expect_tree":
 		return []string{"disk", "tree"}, true
 	default:
@@ -226,6 +228,7 @@ type sandbox struct {
 	now    time.Time
 	tops   map[string]map[string]bool // by disk id: what the scenario put at the top of it
 	hidden map[string]bool            // the hidden names the scenario gave, on any disk
+	away   map[string]bool            // the disks an unmount step set aside
 }
 
 func runFile(bin, file string) error {
@@ -242,7 +245,7 @@ func runFile(bin, file string) error {
 		return fmt.Errorf("sandbox: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	box := &sandbox{bin: bin, dir: dir, s: s, tops: map[string]map[string]bool{}, hidden: map[string]bool{}}
+	box := &sandbox{bin: bin, dir: dir, s: s, tops: map[string]map[string]bool{}, hidden: map[string]bool{}, away: map[string]bool{}}
 	if err := box.setUp(); err != nil {
 		return fmt.Errorf("set up: %w", err)
 	}
@@ -332,7 +335,9 @@ func (b *sandbox) writeControl() error {
 	}{Now: b.now.Format(time.RFC3339), Disks: []controlDisk{}}
 	for i := range b.s.Disks {
 		d := &b.s.Disks[i]
-		control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity})
+		if !b.away[d.ID] {
+			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity})
+		}
 	}
 	data, err := json.MarshalIndent(control, "", "  ")
 	if err != nil {
@@ -358,6 +363,10 @@ func (b *sandbox) do(s *step) error {
 		}
 		b.now = b.now.Add(by)
 		return b.writeControl()
+	case "unmount":
+		return b.unmount(s)
+	case "mount":
+		return b.mount(s)
 	case "expect_tree":
 		root, err := b.diskOf(s)
 		if err != nil {
@@ -367,6 +376,53 @@ func (b *sandbox) do(s *step) error {
 	default:
 		return b.fileStep(s)
 	}
+}
+
+// unmount leaves what a failed mount does: an empty folder where the disk was.
+func (b *sandbox) unmount(s *step) error {
+	root, err := b.diskOf(s)
+	if err != nil {
+		return err
+	}
+	if b.away[s.Disk] {
+		return fmt.Errorf("disk %q is already unmounted", s.Disk)
+	}
+	aside := b.asidePath(s.Disk)
+	if err := os.MkdirAll(filepath.Dir(aside), 0o755); err != nil {
+		return fmt.Errorf("unmount: %w", err)
+	}
+	if err := os.Rename(root, aside); err != nil {
+		return fmt.Errorf("unmount: %w", err)
+	}
+	if err := os.Mkdir(root, 0o755); err != nil {
+		return fmt.Errorf("unmount: %w", err)
+	}
+	b.away[s.Disk] = true
+	return b.writeControl()
+}
+
+// mount brings a disk back. A real mount would hide what was written to the empty folder, and
+// this refuses it, as nothing may write there (specs.md §10).
+func (b *sandbox) mount(s *step) error {
+	root, err := b.diskOf(s)
+	if err != nil {
+		return err
+	}
+	if !b.away[s.Disk] {
+		return fmt.Errorf("disk %q is not unmounted", s.Disk)
+	}
+	if err := os.Remove(root); err != nil {
+		return fmt.Errorf("mount: something was written to the empty folder: %w", err)
+	}
+	if err := os.Rename(b.asidePath(s.Disk), root); err != nil {
+		return fmt.Errorf("mount: %w", err)
+	}
+	delete(b.away, s.Disk)
+	return b.writeControl()
+}
+
+func (b *sandbox) asidePath(id string) string {
+	return filepath.Join(b.dir, "unmounted", id)
 }
 
 func (b *sandbox) diskOf(s *step) (string, error) {

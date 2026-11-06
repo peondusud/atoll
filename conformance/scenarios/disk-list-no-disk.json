@@ -1,0 +1,26 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "A pool may have no disk: an empty list, not an error.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/disk-list.schema.json",
+  "title": "atoll disk list --json",
+  "description": "The disks of the configuration, in its order, each after a mount check (specs.md §10, §25).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disks"],
+  "properties": {
+    "disks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/disk" }
+    }
+  },
+  "$defs": {
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "uuid", "fs", "mount", "role", "state", "reason", "message"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "uuid": { "type": "string", "minLength": 1 },
+        "fs": { "enum": ["ext4", "ntfs", "xfs", "btrfs"] },
+        "mount": { "type": "string", "minLength": 1 },
+        "role": { "enum": ["data", "cache"] },
+        "state": {
+          "description": "standby comes with SMART, and draining, failed and retired with the catalog (specs.md §25).",
+          "enum": ["online", "readonly", "missing"]
+        },
+        "reason": {
+          "description": "From a closed list (specs.md §10, §29.3). null when online.",
+          "type": ["string", "null"]
+        },
+        "message": {
+          "description": "For a reader, translated, and no contract. null when online.",
+          "type": ["string", "null"]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "online" } } },
+          "then": { "properties": { "reason": { "type": "null" }, "message": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "readonly" } } },
+          "then": {
+            "properties": {
+              "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "ignore-case", "casefold", "ascii-ci", "read-only-mount"] },
+              "message": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "state": { "const": "missing" } } },
+          "then": {
+            "properties": {
+              "reason": { "enum": ["not-mounted", "io-error", "partial-mount", "wrong-filesystem", "device-gone", "device-unreadable", "wrong-identifier", "no-root"] },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

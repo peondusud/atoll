@@ -246,10 +246,50 @@ The catalog schema is `schema/migrations/`: plain SQL, with a comment on why eac
 ## 10. Disk identity and mounts
 
 - Identifier: the filesystem UUID (ext4, XFS, btrfs) or the 64-bit NTFS serial number, readable on every system that can mount the filesystem, without writing anything to the disk.
-- Two disks with the same identifier (clones): both are refused until one identifier is regenerated (`tune2fs -U`, `xfs_admin -U`, `btrfstune -u`, `ntfslabel --new-serial`).
+- Atoll reads it from the superblock, with no external tool, so both versions read the same bytes. Offsets count from the start of the device, and a value "as a UUID" is 16 bytes, in order, as 8-4-4-4-12 lowercase hexadecimal digits:
+
+  | `fs` | Magic | Identifier | Also read |
+  |---|---|---|---|
+  | `ext4` | the bytes `53 EF` at 1080 | 16 bytes at 1128, as a UUID | `casefold`: bit `0x20000` of the little-endian 32-bit value at 1120 |
+  | `xfs` | `XFSB` at 0 | 16 bytes at 32, as a UUID | `ascii-ci`: bit `0x4000` of the big-endian 16-bit value at 100 |
+  | `btrfs` | `_BHRfS_M` at 65600 | 16 bytes at 65568, as a UUID | |
+  | `ntfs` | `NTFS` and four spaces at 3 | the little-endian 64-bit value at 72, as 16 uppercase hexadecimal digits | |
+
+  Only the layout of the disk's `fs` is read, so what an earlier filesystem left at another offset changes nothing. A head too short for a field holds no such filesystem. Reading a device takes root or the `disk` group. `blkid` without `-p` answers from its cache, and gave the UUID of the image that was on that loop device before; `FS_IOC_GETFSUUID` needs no privilege, but only ext4 and XFS have it (`docs/research/disk-identity.md`).
+- Two disks with the same identifier: both are refused until one identifier is regenerated (`tune2fs -U`, `xfs_admin -U`, `btrfstune -u`, `ntfslabel --new-serial`). A clone is not the only way there: two NTFS volumes that `mkntfs` makes in the same second get the same serial (measured).
 - Never identify a disk by `/dev/sdX`, drive letter, Windows volume GUID (specific to each machine) or USB serial number (often fake behind a bridge).
 - `disk add` checks the block-device topology and refuses two pool filesystems on the same physical disk (R-06). It also refuses the variants that change name rules (§15.8): ext4 with the `casefold` feature, XFS with `ascii-ci`, NTFS mounted with ntfs3 `nocase` or with lowntfs-3g `ignore_case`. And it refuses NTFS mounted with ntfs3 `ads`, which can destroy another file (§15.2).
 - Before any write, Atoll confirms in the same session that the mount path is a mount point of the expected filesystem (device and identifier). It then works through a directory handle opened on the verified root (`openat`-style calls) and re-checks the device id before each job. It writes nothing to an unconfirmed disk.
+- A **mount check** asks these questions in order and stops at the first that fails, which gives the disk's state and its reason, from a closed list (§29.3). It needs Linux 5.8 or later: a kernel that does not give the mount id fails question 1 with `io-error`.
+
+  | # | Question | Reason when it fails | State |
+  |---|---|---|---|
+  | 1 | Do `statx` on the mount path, without following a symlink, and the mount table `/proc/self/mountinfo` both answer? | `not-mounted` when the path does not exist (`ENOENT`, `ENOTDIR`), otherwise `io-error` | `missing` |
+  | 2 | Does the table's entry for the mount id of the path (`STATX_MNT_ID`) name exactly `mount`? An empty mount point gives its parent's entry, and a symlink or a path through a symlinked folder gives another name, so they all fail here. With mounts stacked on one path, the id is that of the top one. A line of the table that cannot be read says nothing about the others: it counts only when no entry has that id | `not-mounted`, or `io-error` when no entry has that id and a line cannot be read | `missing` |
+  | 3 | Is the entry's root `/`? A bind mount of a folder, or a btrfs subvolume, does not show the top of the disk | `partial-mount` | `missing` |
+  | 4 | Is the entry's type one that `fs` allows? `ext4`: `ext4`. `xfs`: `xfs`. `btrfs`: `btrfs`. `ntfs`: `ntfs3`, `fuseblk` or `ntfs` | `wrong-filesystem` | `missing` |
+  | 5 | Does the entry's source lead to a block device with the entry's major and minor numbers, btrfs excepted, as its entry holds an anonymous number? A USB disk that is unplugged keeps its mount in the table and `statx` keeps answering, so this is what notices it (measured) | `device-gone` | `missing` |
+  | 6 | Can the head of the device be read, up to byte 65607? A shorter device reads as far as it goes | `device-unreadable` | `missing` |
+  | 7 | Does the head hold the magic of `fs`? | `wrong-filesystem` | `missing` |
+  | 8 | Is its identifier the disk's `uuid`? | `wrong-identifier` | `missing` |
+  | 9 | Are the superblock options free of `shutdown`? | `io-error` | `missing` |
+  | 10 | Is `<root>` a folder with the same mount id as the path, and not a symlink? So a missing `media/` is never read as an empty disk | `no-root`, or `io-error` when `statx` fails with anything but `ENOENT` or `ENOTDIR` | `missing` |
+
+  A disk that passes them all is `online`, unless one of these applies, the first in this order. It is then `readonly`: Atoll may read it and writes nothing to it.
+
+  | Reason | When |
+  |---|---|
+  | `unsupported-driver` | the type is `ntfs`: a driver whose name rules were never measured (§22) |
+  | `ads` | type `ntfs3`, with `ads` among the superblock options |
+  | `nocase` | type `ntfs3`, with `nocase` among the superblock options |
+  | `iocharset` | type `ntfs3`, without `iocharset=utf8` among the superblock options |
+  | `casefold` | ext4, with that feature in the superblock |
+  | `ascii-ci` | XFS, with that feature in the superblock |
+  | `ignore-case` | `<root>` also answers under its name with each ASCII letter in the other case, with the same inode. Nothing else shows lowntfs-3g `ignore_case`: mount information does not, and the FUSE daemon's command line depends on how it was started. A real second folder has another inode. A `<root>` with no ASCII letter cannot be asked |
+  | `read-only-mount` | `ro` among the mount options or the superblock options, or `emergency_ro` among the latter |
+
+- Options are compared whole: `errors=remount-ro` is not `ro`, and `ads=0` is not `ads`.
+- A check wakes no disk once the head of its device is in the page cache: asked again, these questions caused no device read on ext4, ntfs3, ntfs-3g or lowntfs-3g (measured). The price is that it cannot see a failing disk whose answers are still cached, which stays `online` until an operation gets an I/O error (invariant 4).
 - ntfs3 `ads` is on by default from Linux 7.3 and shows in `/proc/mounts`. Mount with `ads=0`; Linux 6.12 does not know that option and refuses the mount, so add it when moving to a kernel that has `ads`. If a mount check finds `ads` on a disk already in the pool, the disk becomes `readonly`, so Atoll writes nothing to it, and an alert is raised. mergerfs keeps its branch, so the risk stays until the disk is remounted with `ads=0`.
 - I/O errors (EIO, ENOTCONN, ENODEV) mean "disk unknown", never "file absent". Missing files count as deletions only after the disk's identity has been confirmed in the same scan; an empty mount point after a failed mount is a missing disk, never a mass deletion.
 - Recommended Linux setup:
@@ -445,6 +485,7 @@ Rules:
 - If the destination path appeared meanwhile, the rename fails and the case becomes a `conflict`; nothing is overwritten.
 - If the source changes during the copy, the copy is abandoned and retried after `settle`.
 - A filesystem that cannot hold a modification time clamps it, without an error. Measured: ext4 and XFS stop at 1901-12-13 below, and above at 2446 (ext4), 2486 (XFS) or 2038 (ext4 with 128-byte inodes, XFS with `bigtime=0`); NTFS and btrfs kept every date tried, from 1601 to 9999. The copy is still made, `copies.mtime_ns` records what the disk holds, and the copy stays in sync. `atoll status` shows both dates, with no alert.
+- A replica takes the modification time of its source, the copy the job reads, which may not be the original. So where in-sync copies already hold different dates (§18, or a clamp above), a new replica holds its source's. This is deliberate: the content is the same and no new date appears. Reading the original's date would need its disk, which may be asleep or missing, and §9 rules out the catalog's value. It would change nothing for the copies that differ, which keep their dates.
 - One copy at a time per target disk (`max_parallel_per_disk`), at low I/O priority, except with `--force`.
 - Resume after a power cut or USB disconnection: the chunks already in the `.part` file are re-verified against their recorded hashes, then the copy resumes at the first missing or wrong chunk. The source is never re-read from the start, since the whole-file hash comes from the verification pass.
 - At startup, `tmp/` keeps the `.part` files that a pending job owns and deletes the others.
@@ -734,6 +775,7 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 
 - A pool can mix filesystems; the solver checks name compatibility (§15.8) and compares times at the coarser precision (§9).
 - A pool used directly under Windows can contain NTFS disks only.
+- Linux 7.3 also has an in-kernel driver of the type `ntfs`, which Linux 6.12 does not. `mount -t ntfs` reaches it unless a `mount.ntfs` helper exists, as Debian's `ntfs-3g` package installs. It mounted a dirty volume that ntfs3 refused. Its name rules were never measured, so a disk mounted with it is `readonly` (§10).
 - NTFS after an unclean USB drop: the volume is marked dirty, ntfs3 refuses to mount it without `force`, and Linux has no full equivalent of chkdsk. Atoll never forces such a mount; it alerts, and the volume is repaired with chkdsk on Windows. This is a reason to prefer ext4 for USB disks that Windows never reads.
 - §7 reads the creation time where a driver exposes it, and uses `first_seen` elsewhere. Measured per driver in `docs/research/file-times.md`.
 
@@ -1060,7 +1102,8 @@ atoll daemon [--foreground] [--dry-run]
 - `--config <path>` or `--config=<path>` comes before the command, and nowhere else, and names the configuration file. By default it is `/etc/atoll/atoll.toml`, and on Windows `%ProgramData%\Atoll\atoll.toml`.
 - Every command that moves or deletes accepts `--dry-run` and asks for confirmation, unless `--yes` is given. `daemon --dry-run` plans jobs without running them (shadow mode, §29.2).
 - Every command accepts `--json`; outputs follow the schemas in `api/schemas/`, and exit codes follow §29.3.
-- Flags may come before or after a path, and `--` ends them, for a path that starts with `-`. A command line is checked before the configuration is read, so a usage error comes first. It writes nothing to standard output, with `--json` or without.
+- A command's flags come after its whole name, so `atoll disk --json list` is a usage error. They may come before or after a path, and `--` ends them, for a path that starts with `-`. A command line is checked before the configuration is read, so a usage error comes first. It writes nothing to standard output, with `--json` or without.
+- `atoll disk list` runs a mount check (§10) on each disk of the configuration, in its order, and shows the state and the reason. It reads the configuration, the mount table and the disks, opens no catalog and writes nothing. So the states it shows for now are `online`, `readonly` and `missing`: `standby` comes with SMART, and `draining`, `failed` and `retired` with the catalog. It exits with 0 whatever the states; with 1 when the configuration does not load or cannot be read, with nothing on standard output; and with 2 on a usage error.
 - `atoll rules check` exits with 0 when the configuration loads, warnings or not, and with 1 when it does not load or cannot be read, with the same output. So a script can run it before a restart.
 - `atoll rules explain` exits with 0 once it has answered, whatever the answer; with 1 when the configuration does not load or cannot be read, with nothing on standard output; and with 2 on a size or a path that is not well-formed. `<size>` is a size of §29.5, so it needs its unit.
 
@@ -1151,7 +1194,7 @@ atoll daemon [--foreground] [--dry-run]
 | Local API | `api/openapi.yaml` | HTTP/1.1 and JSON over a Unix socket (named pipe on Windows) |
 | CLI | §25, `api/schemas/` | same commands, flags, `--json` outputs and exit codes |
 | Hashes | §16 | BLAKE3-256 of the file; BLAKE3-256 of each 4 MiB chunk, concatenated |
-| States, job kinds, operation kinds, event kinds, name-compatibility reasons | §4, §9, §15.8 | closed lists of lowercase strings |
+| States, job kinds, operation kinds, event kinds, name-compatibility reasons, mount-check reasons | §4, §9, §10, §15.8 | closed lists of lowercase strings |
 
 - Nothing persisted or exchanged uses a language-specific encoding (no Go `gob`, no Rust `bincode`).
 - Times: integer Unix nanoseconds UTC in the catalog, out-of-range values as §7 and §9 state; RFC 3339 with offset in JSON.
@@ -1163,7 +1206,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration, the effective policy of a file, the catalog schema;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration, the effective policy of a file, the catalog schema, the mount table, the superblock and the mount check;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs. Their format is in `conformance/scenarios/README.md`;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
@@ -1287,7 +1330,8 @@ identifier  = ( "a"…"z" | "0"…"9" ) { "a"…"z" | "0"…"9" | "_" | "-" }  ;
 - Single-copy windows: `immediate` mode before Atoll's own view, and SSD residency.
 - Rust rewrite: cost of a second implementation and of keeping both in sync until the switch; maturity of the `winfsp` crate to check before phase 4.
 - Windows arrives after the rewrite; until then, Windows PCs use the SMB share.
+- Before a session of writes, Atoll must confirm a disk (invariant 3). The mount check of §10 answers from the page cache: should that confirmation read the head past the cache, which wakes the disk, as the writes will?
 - Names (research in `docs/research/name-compatibility.md`), to decide before the solver, the scanner and `atoll names check`:
   - Atoll's own view (phase 2a): should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
   - on NTFS, 8.3 short names: both Linux drivers refuse to create a name equal to another file's short name, and ntfs-3g's `stat` returns that other file, so existence must never be decided by `stat` alone;
-  - mount checks: how to detect lowntfs-3g `ignore_case`, which mount information does not show (the FUSE daemon's command line?); ntfs3 must use `iocharset=utf8`; a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file (measured: under `ads`, a real name `a:b.mkv` is listed and `stat` gives `ENOENT`).
+  - scanning: a listed entry whose `lstat` fails means a name the driver cannot read, never a missing file (measured: under `ads`, a real name `a:b.mkv` is listed and `stat` gives `ENOENT`).

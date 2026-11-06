@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Exit code 1 when the configuration cannot be read.",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/absent.toml",
+        "disk",
+        "list"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}",
+        "disk",
+        "list",
+        "--json"
+      ],
+      "exit": 1
+    }
+  ]
+}

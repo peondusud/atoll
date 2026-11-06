@@ -35,8 +35,10 @@ test-integration:
 test-loopdev:
 	$(GO) test -count=1 -tags loopdev ./test/...
 
+# The conformance build holds code the delivered binary does not, so it gets a run of its own.
 lint:
 	$(GOLANGCI_LINT) run ./...
+	$(GOLANGCI_LINT) run --build-tags conformance ./cmd/... ./internal/disks/...
 
 clean:
 	rm -rf bin

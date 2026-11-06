@@ -48,9 +48,11 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `symlink` | `disk`, a path, `target` | creates a symbolic link |
 | `touch` | `disk`, a path, `mtime_ns` | sets a modification time |
 | `advance` | `by` | moves the clock forward, by a duration of `specs.md` §29.5 |
+| `unmount` | `disk` | a failed mount: the disk's folder is left empty and leaves the control file, and its tree is set aside |
+| `mount` | `disk` | brings an unmounted disk back, with its tree. A step fails if something was written to the empty folder meanwhile |
 | `expect_tree` | `disk`, `tree` | compares the whole disk with `tree`: below |
 
-A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the top of the disk. A step that fails stops the scenario, which fails. `specs.md` §29.4 also names operations through mergerfs, disconnections and crashes: those steps arrive with what they test, and a step the runner does not know fails the scenario.
+A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the top of the disk. A step that fails stops the scenario, which fails. `specs.md` §29.4 also names operations through mergerfs, I/O errors and crashes: those steps arrive with what they test, and a step the runner does not know fails the scenario.
 
 ## Comparing
 
@@ -73,7 +75,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
 
 ## The control file
 
-`ATOLL_CONFORMANCE` names `${SANDBOX}/conformance.json`, which only a conformance build reads (`specs.md` §29.4). The runner rewrites it on `advance`.
+`ATOLL_CONFORMANCE` names `${SANDBOX}/conformance.json`, which only a conformance build reads (`specs.md` §29.4). The runner rewrites it on `advance`, `unmount` and `mount`.
 
 ```json
 {
@@ -84,3 +86,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
   ]
 }
 ```
+
+A disk of the configuration is found here by its `mount`, equal to a `path`, and never by its `id`. To the mount check of `specs.md` §10, a `path` listed here has an entry that names it, with the root `/`, the type `fs` (`ntfs3` for `ntfs`), the mount options `rw` and the superblock options `rw`, plus `iocharset=utf8` on `ntfs3`. Its device answers, and its head holds the magic of `fs` and the identifier `uuid`. Any other folder has no such entry, and fails question 2. Question 10 and `ignore-case` look at the real folder, and the others of the second table find nothing to report.
+
+A conformance build reads this file only for a command that looks at disks, such as `atoll disk list`, even with no disk in the configuration, after the configuration has loaded. With `ATOLL_CONFORMANCE` unset or the file refused, such a command exits with 1.

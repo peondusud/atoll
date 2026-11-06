@@ -1,0 +1,160 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a710",
+  "description": "A disk with no managed root is missing, never empty, and Atoll does not create the folder (invariant 3). A file, a symlink and another case are no root.",
+  "disks": [
+    {
+      "id": "gone",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "Atoll/x",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "file",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "link",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "other/a",
+          "text": "x"
+        },
+        {
+          "path": "media",
+          "kind": "symlink",
+          "target": "other"
+        }
+      ]
+    },
+    {
+      "id": "upper",
+      "uuid": "5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "MEDIA/a",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"gone\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/gone\"\nfs = \"ext4\"\n[[disk]]\nid = \"file\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/file\"\nfs = \"ext4\"\n[[disk]]\nid = \"link\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/link\"\nfs = \"ext4\"\n[[disk]]\nid = \"upper\"\nuuid = \"5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/upper\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "gone",
+            "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/gone",
+            "role": "data",
+            "state": "missing",
+            "reason": "no-root",
+            "message": "${ANY}"
+          },
+          {
+            "id": "file",
+            "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/file",
+            "role": "data",
+            "state": "missing",
+            "reason": "no-root",
+            "message": "${ANY}"
+          },
+          {
+            "id": "link",
+            "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/link",
+            "role": "data",
+            "state": "missing",
+            "reason": "no-root",
+            "message": "${ANY}"
+          },
+          {
+            "id": "upper",
+            "uuid": "5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/upper",
+            "role": "data",
+            "state": "missing",
+            "reason": "no-root",
+            "message": "${ANY}"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "gone",
+      "tree": [
+        {
+          "path": "Atoll/x",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "file",
+      "tree": [
+        {
+          "path": "media",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "link",
+      "tree": [
+        {
+          "path": "other/a",
+          "text": "x"
+        },
+        {
+          "path": "media",
+          "kind": "symlink",
+          "target": "other"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "upper",
+      "tree": [
+        {
+          "path": "MEDIA/a",
+          "text": "x"
+        }
+      ]
+    }
+  ]
+}

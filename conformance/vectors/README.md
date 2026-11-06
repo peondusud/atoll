@@ -24,7 +24,7 @@ One JSON file per function. Every file has this envelope:
 - Every case may carry a `note`: a short explanation for reviewers, never read by the tests.
 - Unknown fields are errors, so a typo cannot silently disable a check. Keys are lowercase ASCII and match a field exactly, and no key appears twice in one object: Go's decoder would otherwise match `Name` or `NAME` to `name`, and keep the last of two equal keys, where Rust's fails.
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
-- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
+- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
 - Integers are exact JSON integers within the signed 64-bit range, without a fraction, an exponent or `-0`; they are never written as strings or floats.
 - Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding), written exactly as the standard encoder writes it: no line break, no other spelling. A case has exactly one of the two.
 - A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
@@ -299,6 +299,48 @@ Each case runs on a catalog with every migration applied and `catalog_fixture.sq
 | `error` | boolean | `true` when the last statement must fail, and only it |
 | `query` | string | a query to run after the statements, which must all succeed |
 | `rows` | array of arrays | what `query` must return, in order: integers, strings or `null` |
+
+### `mountinfo.json` — the mount table (§10)
+
+The text of `/proc/self/mountinfo`, one line per mount: `id parent major:minor root mount-point mount-options [optional fields] - type source superblock-options`. Fields are separated by exactly one space, so an empty source is an empty field. The separator is the first `-` from the seventh field on, so a root named `-` is a root. It is followed by the type, the source, and the superblock options, which are the rest of the line, as they come from each driver. `\ooo`, three octal digits up to `\377`, stands for one byte in every field but the numbers, and any other backslash stays as it is: 9p writes `path=C:\` (measured). Numbers are decimal digits only; `major` and `minor` are unsigned 32-bit, `id` and `parent` unsigned 64-bit. Options are split at each comma before their escapes are read, and an empty field is an empty list. The last newline is optional. A line that cannot be read, an empty one included, is counted, and the others stand.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `text`, `text_b64` | string | the table |
+| `entries` | array of objects | the entries it could read, in order: `id`, `major`, `minor`, `root`, `mount_point` or `mount_point_b64`, `mount_options`, `fstype`, `source`, `super_options` |
+| `unreadable` | integer | the lines it could not read; 0 when left out |
+| `find` | integer | optional: a mount id to look for |
+| `finds` | string | with `find`: the id, when an entry has it; `nothing`, when none has and every line could be read; `unknown`, when none has and a line could not be read |
+
+### `superblock.json` — the identifier of a filesystem (§10)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `fs` | string | the disk's `fs` |
+| `length` | integer | the size of the head: that many bytes, all zero but for `bytes` |
+| `bytes` | array of objects | what the head holds: `at`, an offset, and `hex`, the bytes |
+| `id` | string | the identifier |
+| `variant` | string | `casefold` or `ascii-ci`, when the superblock says so; left out otherwise |
+| `error` | boolean | `true` when the head holds no such filesystem, or `fs` is unknown |
+
+### `disk_check.json` — the mount check (§10)
+
+A case gives the answers a machine would give to each question, and the verdict. What is left out is a healthy answer, for a disk with `fs` `ext4` (when left out), `uuid` `3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b` (`01D9F3A2B4C5E6F7` on `ntfs`) and `mount` `/mnt/t1`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `fs`, `uuid`, `mount` | string | the disk in the configuration |
+| `path` | string | `ok` (when left out), `absent` or `io-error`: question 1 |
+| `no_entry` | boolean | the table has no entry for the mount id of the path |
+| `entry` | object | the entry, where it is not the healthy one: `mount_point` (`mount`), `root` (`/`), `fstype` (`ext4`, `xfs`, `btrfs`, or `ntfs3` on `ntfs`), `mount_options` (`["rw"]`), `super_options` (`["rw"]`, and `iocharset=utf8` on `ntfs3`) |
+| `device` | string | `ok` (when left out), `gone` or `unreadable`: questions 5 and 6 |
+| `no_magic` | boolean | the head does not hold the magic of `fs` |
+| `id` | string | the identifier in the head (`uuid` when left out) |
+| `variant` | string | `casefold` or `ascii-ci`, when the head says so |
+| `root_folder` | string | `ok` (when left out), `absent`, `not-a-folder`, `other-mount` or `io-error`: question 10 |
+| `other_case` | boolean | `<root>` also answers in the other case, with the same inode |
+| `state` | string | `online`, `readonly` or `missing` |
+| `reason` | string | the reason; left out when `online` |
 
 ### `capacity.json` — capacity of a pool (§13.1)
 
