@@ -211,110 +211,37 @@ Principles:
 - The SSD cache is a **disk role** (`role = "cache"`) known to the solver from phase 1, even though transfers arrive in phase 2b.
 - The merged view **reads** the catalog and leaves every placement decision to the solver.
 
-## 9. Data model (SQLite, sketch)
+## 9. Data model (SQLite)
 
-```sql
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous  = FULL;            -- a committed ops row survives a power cut
-PRAGMA foreign_keys = ON;
+The catalog schema is `schema/migrations/`: plain SQL, with a comment on why each table is as it is. This section gives what a schema cannot say.
 
-CREATE TABLE disks(
-  id TEXT PRIMARY KEY,                 -- human alias: "t1", "u1"
-  fs_uuid TEXT UNIQUE NOT NULL,        -- ext4/XFS/btrfs UUID or 64-bit NTFS serial
-  fs_type TEXT NOT NULL,               -- ext4 | ntfs | xfs | btrfs
-  device TEXT,                         -- physical disk seen at the last mount (topology check)
-  mount_path TEXT,
-  root TEXT NOT NULL DEFAULT 'media',
-  workdir TEXT NOT NULL DEFAULT 'Atoll',
-  role TEXT NOT NULL DEFAULT 'data',   -- data | cache
-  position INTEGER NOT NULL,           -- order in the configuration (tie-break, mergerfs branch order)
-  domain TEXT,
-  tags TEXT,                           -- JSON
-  capacity_bytes INTEGER, free_bytes INTEGER,
-  time_precision_ns INTEGER,           -- 1 (ext4, XFS, btrfs), 100 (NTFS), 10^9 (ext4, 128-byte inodes)
-  state TEXT NOT NULL, last_seen_ns INTEGER, smart_json TEXT);
+| Table | Holds |
+|---|---|
+| `meta` | `pool_id`, and `lpath_key_version`: what computed `lpath_key` (§15.8): the language, the normalization library, its release and its Unicode version, such as `go golang.org/x/text v0.43.0 17.0.0` or `rust unicode-normalization 0.1.25 17.0.0`; compared for equality only |
+| `disks` | a copy of the disks of the configuration, plus state, free space and SMART |
+| `files` | one row per managed file: its current version, level, rule, mode and state |
+| `file_chunks` | the chunk hashes of a file (§16) |
+| `copies` | one row per copy of a file |
+| `entries` | everything else the view must list: folders, symlinks, ignored files |
+| `ops` | the journal of Atoll's own filesystem operations |
+| `trash` | what each disk's trash holds |
+| `jobs`, `job_chunks` | the queue, and the chunk hashes a copy in progress has read (§14) |
+| `events` | what happened, written before any destructive action |
 
-CREATE TABLE files(
-  id INTEGER PRIMARY KEY,
-  lpath BLOB UNIQUE NOT NULL,          -- exact logical path (bytes; WTF-8 on Windows)
-  lpath_key TEXT,                      -- NFD, NTFS upcase, NFC (§15.8); collisions only; NULL if not UTF-8
-  size INTEGER NOT NULL,               -- current version
-  mtime_ns INTEGER NOT NULL,           -- the original's (§7)
-  blake3 BLOB,                         -- 32 bytes, b3sum-compatible
-  chunk_size INTEGER,                  -- 4 MiB (§16)
-  chunks BLOB,                         -- concatenated BLAKE3 chunk hashes (32 bytes each)
-  replicas_target INTEGER NOT NULL,    -- 0..2
-  original_disk TEXT,                  -- cached result of §7
-  rule TEXT, mode TEXT,
-  state TEXT NOT NULL,
-  first_seen_ns INTEGER, updated_ns INTEGER);
-
-CREATE TABLE copies(
-  file_id INTEGER NOT NULL REFERENCES files(id),
-  disk_id TEXT NOT NULL REFERENCES disks(id),
-  file_key TEXT,                       -- inode (Linux) or NTFS file ID
-  nlink INTEGER,                       -- hard links, Atoll's own link-guard link excluded
-  size INTEGER, mtime_ns INTEGER,      -- as this disk holds them (§14)
-  ctime_ns INTEGER,                    -- change time, recorded after each Atoll operation
-  btime_ns INTEGER,                    -- creation time; NULL if absent (§7)
-  created_by TEXT NOT NULL,            -- user | atoll
-  first_seen_ns INTEGER NOT NULL,
-  verified_ns INTEGER,
-  state TEXT NOT NULL,                 -- ok | pending | stale | corrupt | unavailable | surplus
-  PRIMARY KEY(file_id, disk_id));      -- never two copies on one disk (R-06)
-
-CREATE TABLE entries(                  -- everything else the view must list
-  lpath BLOB NOT NULL,
-  lpath_key TEXT,                      -- as in files (§15.8); collisions only; NULL if not UTF-8
-  disk_id TEXT NOT NULL REFERENCES disks(id),
-  kind TEXT NOT NULL,                  -- dir | symlink | ignored
-  mode INTEGER, mtime_ns INTEGER,
-  target BLOB,                         -- symlink target
-  created_by TEXT NOT NULL,            -- user | atoll
-  PRIMARY KEY(lpath, disk_id));
-
-CREATE TABLE ops(                      -- Atoll's own filesystem operations
-  id INTEGER PRIMARY KEY,              -- also names the trash folder of the operation
-  disk_id TEXT NOT NULL,
-  kind TEXT NOT NULL,                  -- create | rename | trash | restore | repair | mkdir | rmdir | utimens | link | unlink
-  path BLOB NOT NULL, path2 BLOB,
-  file_key TEXT,
-  started_ns INTEGER NOT NULL,
-  state TEXT NOT NULL);                -- planned | done | undone
-
-CREATE TABLE trash(
-  id INTEGER PRIMARY KEY,
-  lpath BLOB NOT NULL, disk_id TEXT NOT NULL,
-  trash_path BLOB NOT NULL,            -- location inside Atoll/trash/
-  op_id INTEGER NOT NULL REFERENCES ops(id),
-  size INTEGER, blake3 BLOB,
-  reason TEXT NOT NULL,                -- deleted | overwritten | repaired | quarantined | surplus | rebalance | renamed
-  deleted_ns INTEGER NOT NULL, expires_ns INTEGER NOT NULL);
-
-CREATE TABLE jobs(
-  id INTEGER PRIMARY KEY,
-  kind TEXT NOT NULL,                  -- replicate | rename | trash | purge | scrub | repair | refresh | transfer
-  file_id INTEGER, src_disk TEXT, dst_disk TEXT,
-  payload TEXT,                        -- JSON, including chunk-level progress
-  priority INTEGER, not_before_ns INTEGER, attempts INTEGER,
-  state TEXT, reason TEXT);
-
-CREATE TABLE events(id INTEGER PRIMARY KEY, ts_ns INTEGER, level TEXT, kind TEXT, data TEXT);
-
-CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  -- lpath_key_version: what computed lpath_key (§15.8): the language, the normalization library, its
-  --   release and its Unicode version, such as "go golang.org/x/text v0.43.0 17.0.0"
-  --   or "rust unicode-normalization 0.1.25 17.0.0"; compared for equality only
-```
-
+- **Pragmas**, set on every connection, never in a migration: `journal_mode = WAL`, `synchronous = FULL` (a committed `ops` row survives a power cut), `foreign_keys = ON`. Atoll checks that they took effect when it opens the catalog: a filesystem that cannot do WAL fails there, not later.
+- **Migrations**: `schema/migrations/NNNN_name.sql`, numbered from 1 with no gap. `PRAGMA user_version` holds the version. Each file runs in its own transaction with its `user_version`, so a failure leaves the catalog at the version before it. A catalog of a higher version than the binary is refused: going back to an older Atoll takes `catalog rebuild`. A file holds no pragma and no transaction statement.
+- **`disks`** is rewritten from the configuration at each start, and the configuration wins (§10). A retired disk keeps its row, so its identifier and its history stay.
+- **Chunk hashes have their own table**, as SQLite rewrites a whole row on each `UPDATE`. Measured on 200,000 files and 20 TB with `modernc.org/sqlite`, WAL and `synchronous = FULL`: changing the state of a 100 GB file writes 780 KB to the WAL and takes 4 to 5 ms with its hashes in `files`, against 5 KB and 1.3 ms here. The catalog is about 280 MB. The chunk size is fixed (§16), so the catalog does not store it.
+- **Tables are `STRICT`, and closed lists have a `CHECK`** (§29.3). Through the Go driver, a Go string written to a `BLOB` column of a table that is not strict is stored as `TEXT` with no error. A new state therefore takes a migration that rebuilds the table: about 0.7 s for `files` or `copies` at this size. `events.kind` has no `CHECK`, as each module adds its own; its list is in this specification.
+- **Deleting**: a file with copies cannot be deleted, and neither can a disk with copies or entries, so a bug cannot lose that knowledge in passing. Deleting a file deletes its chunk hashes and jobs. `ops` and `trash` have no foreign key to `disks`: the journal outlives a disk.
+- **Ids that name something on a disk never come back**: `files.id` names `Atoll/links/<file id>`, and `ops.id` names a folder in the trash (§17).
 - All INTEGER times are Unix nanoseconds, UTC. Times are compared at the coarser precision of the filesystems involved (`time_precision_ns`), so an ext4 → NTFS replica still matches. Creation times are never copied, so §7 compares them exactly.
 - A modification or change time outside the range of a signed 64-bit count of nanoseconds, from -2^63 to 2^63-1 (before 1677-09-21 or after 2262-04-11), is stored at the nearest limit, the same way in both versions. Reading it again gives the same value, so it is never taken for a change. A creation time is absent instead (§7). Atoll sets a time from a copy's `stat`, never from the catalog, so a stored limit never reaches a disk.
 - `files.lpath_key` and `entries.lpath_key` are indexed: the collision checks of §15.7 look names up by key.
 - Chunk hash volume: 20 TB ÷ 4 MiB × 32 bytes ≈ 150 MB, one BLOB per file.
-- Catalog location: `/var/lib/atoll/catalog.db` (Linux), `%ProgramData%\Atoll\catalog.db` (Windows).
+- Catalog location: `catalog` in the configuration, by default `/var/lib/atoll/catalog.db` (Linux), `%ProgramData%\Atoll\catalog.db` (Windows).
 - Daily catalog backup on the system disk and, with `maintenance.catalog_on_disks`, in each disk's `Atoll/catalog/`, inside `maintenance.window` (§21.6).
 - Rebuild (`atoll catalog rebuild`): from the manifests when present, otherwise through a full rescan with re-hashing. Since every copy sits at the same path, a rescan alone tells which copies belong together. No data is lost, but `first_seen`, recorded conflicts and corruption history are. So copies with different hashes become conflicts, whatever their sizes and modification times, as nothing is left to say which one is current. Copies with the same hash are in sync, each with its own modification time.
-- Schema changes ship as numbered SQL migration files shared by both implementations (§29.3).
 
 ## 10. Disk identity and mounts
 
@@ -1189,7 +1116,7 @@ atoll daemon [--foreground] [--dry-run]
 | Contract | Where | Rule |
 |---|---|---|
 | On-disk layout | §6, `disk.toml` | versioned by `format_version` |
-| Catalog schema | `schema/migrations/NNNN_name.sql` | plain SQL, applied in order by both versions; `PRAGMA user_version` holds the schema version; pragmas of §9 |
+| Catalog schema | `schema/migrations/NNNN_name.sql` | plain SQL, applied in order by both versions, needing SQLite 3.38 or later; `PRAGMA user_version` holds the schema version; pragmas of §9 |
 | Configuration | §24, `schema/config.schema.json` | TOML 1.1; unknown keys are errors |
 | Value grammars | §29.5 | durations, sizes, percentages, time windows, globs, regexes |
 | Local API | `api/openapi.yaml` | HTTP/1.1 and JSON over a Unix socket (named pipe on Windows) |
@@ -1207,7 +1134,7 @@ atoll daemon [--foreground] [--dry-run]
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:
-  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration, the effective policy of a file;
+  - `vectors/`: input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration, the effective policy of a file, the catalog schema;
   - `scenarios/`: black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs;
   - `corpus/names/`: the name corpus of §15.8: single names, with their reasons on each filesystem. The unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems.
 - Unit tests of both versions load the same `vectors/` files.
@@ -1301,7 +1228,7 @@ identifier  = ( "a"…"z" | "0"…"9" ) { "a"…"z" | "0"…"9" | "_" | "-" }  ;
 
 | Need | Go (phases 1–2) | Rust (phase 3 onward, to confirm) |
 |---|---|---|
-| SQLite | `modernc.org/sqlite` | `rusqlite` (bundled SQLite) |
+| SQLite | `modernc.org/sqlite`, v1.61.1 or later | `rusqlite` (bundled SQLite) |
 | BLAKE3 | `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`) | `blake3` (official) |
 | TOML | `github.com/pelletier/go-toml/v2`, v2.4.3 or later | `toml`, 1.2.0 or later (TOML 1.1) |
 | Regex | `regexp`, after Atoll's grammar check (§29.5) | `regex`, with `regex-syntax` 0.8.5 or later, after the same check; `size_limit` 10 MiB, `nest_limit` 1000 (§29.5) |

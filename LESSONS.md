@@ -35,6 +35,12 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - NFC can change regex syntax: a combining mark after an escape letter or a range endpoint composes with it (`\n` followed by U+0303 becomes `\ñ`). The grammar must apply to the NFC form, and errors must show the typed text.
 - A UTF-16 length is never more than the UTF-8 length of the same valid text. So on NTFS the 255-byte limit always binds before the 255-unit limit.
 
+## SQLite
+
+- A commit that changes one column rewrites the whole row, so a large BLOB in a row taxes every state change: 780 KB of WAL instead of 5 KB. Keep large BLOBs out of rows that change.
+- To measure what a commit writes, turn `wal_autocheckpoint` off. Otherwise the WAL is recycled, and its size says far less than what was written: the first run showed 117 KB for what was really 780 KB.
+- In a table that is not `STRICT`, a Go string written to a `BLOB` column is stored as `TEXT` with no error, which Rust cannot read back when the bytes are not UTF-8.
+
 ## TOML
 
 - Both Go TOML libraries match keys without case when decoding into a struct: `Pool_ID` is taken for `pool_id`, nothing reports it, and with both spellings one wins in silence. go-toml also reads `[disk]` as `[[disk]]`. Rust's `toml` refuses all of it. Decode into a generic tree and check the keys first.

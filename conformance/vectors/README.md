@@ -289,6 +289,17 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 | `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel` (disks by position), `overflow`. What is left out is empty or false |
 | `error` | boolean | `true` when the input is refused |
 
+### `catalog.json` — what the catalog schema accepts and refuses (§9, §29.3)
+
+Each case runs on a catalog with every migration applied and `catalog_fixture.sql` loaded, in a transaction that is rolled back, with the pragmas of §9. Any SQLite 3.38 or later must agree, so these need no Atoll code to run.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `sql` | array of strings | statements, run in order |
+| `error` | boolean | `true` when the last statement must fail, and only it |
+| `query` | string | a query to run after the statements, which must all succeed |
+| `rows` | array of arrays | what `query` must return, in order: integers, strings or `null` |
+
 ### `capacity.json` — capacity of a pool (§13.1)
 
 | Field | Type | Meaning |

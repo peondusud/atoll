@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Catalog schema (specs.md §9)
+
+Commit "Define the catalog schema", on `main`.
+
+- `schema/migrations/0001_initial.sql`, and `catalog.Open`, which sets and checks the pragmas of §9 and applies the migrations.
+- The maintainer's decisions:
+  - chunk hashes in a table of their own: changing the state of a 100 GB file writes 5 KB instead of 780 KB;
+  - `STRICT` tables and `CHECK` on the closed lists: through the Go driver, a string written to a `BLOB` column of an ordinary table is stored as `TEXT` with no error;
+  - `disks` is a copy of the configuration, rewritten at each start;
+  - no `chunk_size`, a `job_chunks` table instead of JSON, and the lists of job states and event levels.
+- Found while writing it: `ops.kind` had no `chmod`, though §6.1 propagates permissions; and `files.id` and `ops.id` name things on disks, so they use `AUTOINCREMENT` and never come back.
+- Vectors: `catalog.json`, on `catalog_fixture.sql`: plain SQL, which any SQLite must agree on.
+
 ## Placement plan (specs.md §12.4, §13.4)
 
 Commit "Plan which copies to create and how to mark the others", on `main`.
