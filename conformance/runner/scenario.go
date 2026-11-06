@@ -53,6 +53,9 @@ type disk struct {
 	FS       string  `json:"fs"`
 	Capacity int64   `json:"capacity"`
 	Tree     []entry `json:"tree"`
+	// Said of a disk, so that a folder can behave as a driver does.
+	Renameat2 *bool    `json:"renameat2"`
+	Refuses   []string `json:"refuses"`
 }
 
 // entry is what a tree holds at a path.
@@ -71,6 +74,7 @@ type step struct {
 	Args       []json.RawMessage `json:"args"`
 	Exit       int               `json:"exit"`
 	StdoutJSON json.RawMessage   `json:"stdout_json"`
+	CrashAt    string            `json:"crash_at"`
 	Disk       string            `json:"disk"`
 	Path       *string           `json:"path"`
 	PathB64    *string           `json:"path_b64"`
@@ -90,12 +94,12 @@ type step struct {
 func stepFields(do string) ([]string, bool) {
 	switch do {
 	case "atoll":
-		return []string{"args", "exit", "stdout_json"}, true
+		return []string{"args", "exit", "stdout_json", "crash_at"}, true
 	case "write":
 		return []string{"disk", "path", "path_b64", "text", "size", "mtime_ns"}, true
 	case "mkdir", "delete":
 		return []string{"disk", "path", "path_b64"}, true
-	case "rename":
+	case "rename", "link":
 		return []string{"disk", "path", "path_b64", "to", "to_b64"}, true
 	case "symlink":
 		return []string{"disk", "path", "path_b64", "target"}, true
@@ -103,6 +107,8 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "path", "path_b64", "mtime_ns"}, true
 	case "advance":
 		return []string{"by"}, true
+	case "tick":
+		return nil, true
 	case "unmount", "mount":
 		return []string{"disk"}, true
 	case "expect_tree":
@@ -239,6 +245,8 @@ type sandbox struct {
 	tops   map[string]map[string]bool // by disk id: what the scenario put at the top of it
 	hidden map[string]bool            // the hidden names the scenario gave, on any disk
 	away   map[string]bool            // the disks an unmount step set aside
+	// crashAt is the point an atoll step named, for its run only.
+	crashAt string
 }
 
 func runFile(bin, file string) error {
@@ -333,20 +341,23 @@ func (b *sandbox) controlPath() string {
 // writeControl writes the file only a conformance build reads (specs.md §29.4).
 func (b *sandbox) writeControl() error {
 	type controlDisk struct {
-		ID       string `json:"id"`
-		UUID     string `json:"uuid"`
-		FS       string `json:"fs"`
-		Path     string `json:"path"`
-		Capacity int64  `json:"capacity"`
+		ID        string   `json:"id"`
+		UUID      string   `json:"uuid"`
+		FS        string   `json:"fs"`
+		Path      string   `json:"path"`
+		Capacity  int64    `json:"capacity"`
+		Renameat2 *bool    `json:"renameat2,omitempty"`
+		Refuses   []string `json:"refuses,omitempty"`
 	}
 	control := struct {
-		Now   string        `json:"now"`
-		Disks []controlDisk `json:"disks"`
-	}{Now: b.now.Format(time.RFC3339), Disks: []controlDisk{}}
+		Now     string        `json:"now"`
+		Disks   []controlDisk `json:"disks"`
+		CrashAt string        `json:"crash_at,omitempty"`
+	}{Now: b.now.Format(time.RFC3339), Disks: []controlDisk{}, CrashAt: b.crashAt}
 	for i := range b.s.Disks {
 		d := &b.s.Disks[i]
 		if !b.away[d.ID] {
-			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity})
+			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses})
 		}
 	}
 	data, err := json.MarshalIndent(control, "", "  ")
@@ -359,6 +370,10 @@ func (b *sandbox) writeControl() error {
 	return nil
 }
 
+// tickWait is longer than a clock tick at the lowest usual HZ, which is 10 ms: within one, Linux 6.12
+// can leave a change time the same (specs.md §17.1).
+const tickWait = 20 * time.Millisecond
+
 func (b *sandbox) do(s *step) error {
 	switch s.Do {
 	case "atoll":
@@ -366,6 +381,9 @@ func (b *sandbox) do(s *step) error {
 			return err
 		}
 		return b.checkAlways()
+	case "tick":
+		time.Sleep(tickWait)
+		return nil
 	case "advance":
 		by, err := parseDuration(s.By)
 		if err != nil {
@@ -474,6 +492,13 @@ func (b *sandbox) fileStep(s *step) error {
 		}
 		b.note(s.Disk, to)
 		return os.Rename(full, filepath.Join(root, to))
+	case "link":
+		to, err := pathOf(s.To, s.ToB64)
+		if err != nil {
+			return fmt.Errorf("to: %w", err)
+		}
+		b.note(s.Disk, to)
+		return os.Link(full, filepath.Join(root, to))
 	case "delete":
 		return os.Remove(full)
 	case "symlink":
@@ -485,7 +510,17 @@ func (b *sandbox) fileStep(s *step) error {
 	}
 }
 
-func (b *sandbox) runAtoll(s *step) error {
+func (b *sandbox) runAtoll(s *step) (err error) {
+	if s.CrashAt != "" {
+		b.crashAt = s.CrashAt
+		if err := b.writeControl(); err != nil {
+			return err
+		}
+		defer func() {
+			b.crashAt = ""
+			err = errors.Join(err, b.writeControl())
+		}()
+	}
 	args := make([]string, 0, len(s.Args)+2)
 	if b.s.Config != nil {
 		args = append(args, "--config", b.configPath())
@@ -506,7 +541,7 @@ func (b *sandbox) runAtoll(s *step) error {
 	cmd.WaitDelay = time.Second // a child holding the output open must not outlast the timeout
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	if ctx.Err() != nil {
 		return fmt.Errorf("no end within %s; stdout %q; stderr %q", stepTimeout, stdout.String(), stderr.String())
 	}

@@ -167,6 +167,10 @@ func timeText(ns int64) string {
 	return time.Unix(0, ns).UTC().Format("2006-01-02T15:04:05.000000000Z")
 }
 
+func isUTF8(s string) bool {
+	return utf8.ValidString(s)
+}
+
 func nullTime(ns sql.NullInt64) *string {
 	if !ns.Valid {
 		return nil
@@ -238,48 +242,75 @@ func statusFileFrom(f *catalog.FileRow) *statusFile {
 	return file
 }
 
-// jsonStatus writes api/schemas/status.schema.json. The files come first, and the rest after them:
-// the counts are known only once every file has been read, and holding a large folder's files back
-// until then would not fit in the memory of specs.md §26. The order of keys means nothing in JSON.
-type jsonStatus struct {
+// jsonList writes a JSON object whose list goes out as it comes, and the rest after it: what the
+// rest says is known only at the end, and holding a large list back until then would not fit in the
+// memory of specs.md §26. The order of keys means nothing in JSON.
+type jsonList struct {
 	w      io.Writer
+	key    string
 	buffer bytes.Buffer
 	enc    *json.Encoder
 	listed bool
 }
 
-func newJSONStatus(w io.Writer) *jsonStatus {
-	j := &jsonStatus{w: w}
+func newJSONList(w io.Writer, key string) *jsonList {
+	j := &jsonList{w: w, key: key}
 	j.enc = json.NewEncoder(&j.buffer)
 	j.enc.SetEscapeHTML(false)
 	j.enc.SetIndent("    ", "  ")
 	return j
 }
 
-func (j *jsonStatus) file(f *catalog.FileRow) error {
+func (j *jsonList) item(v any) error {
 	start := ",\n    "
 	if !j.listed {
-		start = "{\n  \"files\": [\n    "
+		start = "{\n  \"" + j.key + "\": [\n    "
 	}
 	j.listed = true
 	j.buffer.Reset()
-	if err := j.enc.Encode(statusFileFrom(f)); err != nil {
+	if err := j.enc.Encode(v); err != nil {
 		return fmt.Errorf("writing the output: %w", err)
 	}
 	return writeText(j.w, start+strings.TrimSuffix(j.buffer.String(), "\n"))
 }
 
-func (j *jsonStatus) end(s *statusSummary) error {
-	start := "{\n  \"files\": [],"
+// end writes the rest, an object whose keys join those of the list.
+func (j *jsonList) end(rest any) error {
+	start := "{\n  \"" + j.key + "\": [],"
 	if j.listed {
 		start = "\n  ],"
 	}
-	var rest strings.Builder
-	if err := writeJSON(&rest, s); err != nil {
+	var text strings.Builder
+	if err := writeJSON(&text, rest); err != nil {
 		return err
 	}
 	// The object is open already, so its own opening brace goes.
-	return writeText(j.w, start+strings.TrimPrefix(rest.String(), "{"))
+	return writeText(j.w, start+strings.TrimPrefix(text.String(), "{"))
+}
+
+// close ends an object that holds only its list.
+func (j *jsonList) close() error {
+	if j.listed {
+		return writeText(j.w, "\n  ]\n}\n")
+	}
+	return writeText(j.w, "{\n  \""+j.key+"\": []\n}\n")
+}
+
+// jsonStatus writes api/schemas/status.schema.json.
+type jsonStatus struct {
+	*jsonList
+}
+
+func newJSONStatus(w io.Writer) jsonStatus {
+	return jsonStatus{newJSONList(w, "files")}
+}
+
+func (j jsonStatus) file(f *catalog.FileRow) error {
+	return j.item(statusFileFrom(f))
+}
+
+func (j jsonStatus) end(s *statusSummary) error {
+	return j.jsonList.end(s)
 }
 
 // textStatus writes for a reader, the summary last, where a long list leaves it in sight.

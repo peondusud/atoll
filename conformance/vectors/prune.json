@@ -1,0 +1,1886 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717.3",
+  "description": "For each surplus copy, by position, the first outcome that applies.",
+  "cases": [
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "the plain case"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [],
+      "note": "no surplus copy, nothing to say"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [],
+      "outcomes": [],
+      "note": "no copy at all"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t4",
+          "position": 3,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        },
+        {
+          "disk": "t4",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "two of them, by position whatever the input's order"
+    },
+    {
+      "state": "ok",
+      "replicas": 0,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t2",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "one copy wanted, one stays"
+    },
+    {
+      "state": "ok",
+      "replicas": 2,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t4",
+          "position": 3,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t4",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "three wanted"
+    },
+    {
+      "state": "conflict",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "conflict"
+        }
+      ],
+      "note": "a file in conflict: every copy may be the good one"
+    },
+    {
+      "state": "corrupt",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "corrupt"
+        }
+      ],
+      "note": "a file corrupt"
+    },
+    {
+      "state": "conflict",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "missing",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "conflict"
+        }
+      ],
+      "note": "the state comes before the disk"
+    },
+    {
+      "state": "pending",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "other states do not stop it: pending"
+    },
+    {
+      "state": "degraded",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "other states do not stop it: degraded"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "missing",
+          "verified": true,
+          "unchanged": false
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "disk-unavailable"
+        }
+      ],
+      "note": "a copy on a missing disk cannot be moved"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "readonly",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "disk-unavailable"
+        }
+      ],
+      "note": "nor on a disk read-only"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "standby",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "a disk asleep can be written, once woken"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "draining",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "disk-unavailable"
+        }
+      ],
+      "note": "nor draining"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "retired",
+          "verified": true,
+          "unchanged": false
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "disk-unavailable"
+        }
+      ],
+      "note": "the disk comes before the change"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": false
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "changed"
+        }
+      ],
+      "note": "it changed since its row"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": false,
+          "unchanged": false
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "changed"
+        }
+      ],
+      "note": "the change comes before the verification"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": false,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "unverified"
+        }
+      ],
+      "note": "it was never read"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": false,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "unverified"
+        }
+      ],
+      "note": "the file has no hash"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": false
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays changed"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": false
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": false
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is gone: the user deleted it, and no scan has seen that"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "missing",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is on a missing disk"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "draining",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is on a disk draining"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "failed",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is on a disk failed"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "retired",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is on a disk retired"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "readonly",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "standby",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "a disk read-only or asleep can be read"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "stale",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is stale"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "corrupt",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is corrupt"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "pending",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is pending"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "unavailable",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "one that stays is unavailable"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t2",
+          "outcome": "below-level"
+        },
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "another surplus copy does not stay"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": false,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "unverified"
+        }
+      ],
+      "note": "one that stays was never read"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": false,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": false
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "below-level"
+        }
+      ],
+      "note": "below the level comes before unread"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": false,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t4",
+          "position": 3,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t4",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "more than enough stay, and one is unread"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": false
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t4",
+          "position": 3,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t4",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "more than enough stay, and one changed"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "atoll",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "atoll",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "last-user-copy"
+        }
+      ],
+      "note": "the last user copy stays, even beyond the level"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "atoll",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "another user copy stays"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "atoll",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "atoll",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "atoll",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        }
+      ],
+      "note": "a copy Atoll made may go, with no user copy left at all"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "atoll",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "atoll",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t4",
+          "position": 3,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": false
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "last-user-copy"
+        }
+      ],
+      "note": "a user copy that does not count as staying does not save it"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t3",
+          "position": 2,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t4",
+          "position": 3,
+          "state": "surplus",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": false,
+          "unchanged": true
+        }
+      ],
+      "outcomes": [
+        {
+          "disk": "t3",
+          "outcome": "to-trash"
+        },
+        {
+          "disk": "t4",
+          "outcome": "unverified"
+        }
+      ],
+      "note": "each on its own: one moves, one does not"
+    },
+    {
+      "state": "fine",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "error": true,
+      "note": "not a state"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "bad",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "error": true,
+      "note": "not a copy state"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "bad",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "error": true,
+      "note": "not a disk state"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "me",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "error": true,
+      "note": "no such creator"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t1",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "error": true,
+      "note": "two copies on one disk"
+    },
+    {
+      "state": "ok",
+      "replicas": 1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "error": true,
+      "note": "two disks at one position"
+    },
+    {
+      "state": "ok",
+      "replicas": 3,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "error": true,
+      "note": "replicas go from 0 to 2"
+    },
+    {
+      "state": "ok",
+      "replicas": -1,
+      "hash": true,
+      "copies": [
+        {
+          "disk": "t1",
+          "position": 0,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        },
+        {
+          "disk": "t2",
+          "position": 1,
+          "state": "ok",
+          "created_by": "user",
+          "disk_state": "online",
+          "verified": true,
+          "unchanged": true
+        }
+      ],
+      "error": true
+    }
+  ]
+}

@@ -1,0 +1,285 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717.2, \u00a729.4",
+  "description": "The move happened: until a command that writes resolves it, the entry is not listed and a scan reports the copy absent. Then the operation finishes, and there is nothing left to do.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes"
+      ],
+      "crash_at": "moved",
+      "exit": 137
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/1/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "trash",
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": false,
+        "bytes": 0,
+        "copies": [
+          {
+            "path": "a",
+            "disk": "t3",
+            "size": 1024,
+            "outcome": "changed"
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1024,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1024,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 0,
+            "bytes": 0,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [
+              {
+                "path": "a"
+              }
+            ],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "trash",
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "bytes": 0,
+        "copies": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "trash",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1"
+        ],
+        [
+          "t2"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "a",
+            "disk": "t3",
+            "reason": "surplus",
+            "size": 1024,
+            "blake3": "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+            "deleted": "2026-01-01T00:00:00.000000000Z",
+            "expires": "2026-01-31T00:00:00.000000000Z",
+            "op": 1
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/1/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ]
+}

@@ -13,6 +13,8 @@ import (
 	"slices"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/names"
 )
@@ -23,8 +25,9 @@ const controlEnv = "ATOLL_CONFORMANCE"
 
 // control is the file conformance/scenarios/README.md describes.
 type control struct {
-	Now   string        `json:"now"`
-	Disks []controlDisk `json:"disks"`
+	Now     string        `json:"now"`
+	Disks   []controlDisk `json:"disks"`
+	CrashAt string        `json:"crash_at"`
 }
 
 type controlDisk struct {
@@ -33,6 +36,10 @@ type controlDisk struct {
 	FS       names.Filesystem `json:"fs"`
 	Path     string           `json:"path"`
 	Capacity int64            `json:"capacity"`
+	// Renameat2 and Refuses are said of a disk by a scenario, so that a folder can behave as a
+	// driver does: see conformance/scenarios/README.md.
+	Renameat2 *bool    `json:"renameat2"`
+	Refuses   []string `json:"refuses"`
 }
 
 // NewMachine gives what a conformance build sees: the folders listed in the control file as
@@ -59,12 +66,13 @@ func NewMachine() (Machine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("control file: %w", err)
 	}
-	return folders{c.Disks, now.UnixNano()}, nil
+	return folders{c.Disks, now.UnixNano(), c.CrashAt}, nil
 }
 
 type folders struct {
-	disks []controlDisk
-	now   int64
+	disks   []controlDisk
+	now     int64
+	crashAt string
 }
 
 func (f folders) find(path string) *controlDisk {
@@ -91,6 +99,43 @@ func (f folders) Mount(mount string) MountSeen {
 func (f folders) Device(_ names.Filesystem, entry *MountEntry) DeviceSeen {
 	d := f.find(entry.MountPoint)
 	return DeviceSeen{Device: DeviceOK, Identity: &Identity{ID: d.UUID}}
+}
+
+// ReadPastCache has no device to read: a folder answers as the control file says.
+func (f folders) ReadPastCache(fs names.Filesystem, entry *MountEntry) DeviceSeen {
+	return f.Device(fs, entry)
+}
+
+// Checkpoint stops at once at the point the control file names, as kill -9 would: nothing runs
+// after it, neither a deferred call nor a flush.
+func (f folders) Checkpoint(point string) {
+	if point == f.crashAt {
+		os.Exit(crashExit)
+	}
+}
+
+// crashExit is what kill -9 gives in a shell, and what a scenario expects of a crash.
+const crashExit = 137
+
+func (f folders) OpenTop(mount string) (fsx.Dir, error) {
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return nil, fmt.Errorf("top: %w", err)
+	}
+	d := f.find(mount)
+	if d == nil {
+		return top, nil
+	}
+	return fsx.Fault(top, func(call, name string) error {
+		switch {
+		case call == "rename" && d.Renameat2 != nil && !*d.Renameat2:
+			return unix.EINVAL
+		case (call == "rename" || call == "link" || call == "mkdir") && slices.Contains(d.Refuses, name):
+			return unix.EINVAL
+		default:
+			return nil
+		}
+	}), nil
 }
 
 func (folders) Root(mount, root string) RootSeen {

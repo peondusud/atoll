@@ -1,0 +1,225 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Usage errors come before the configuration is read: this one does not load.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "trash"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "--json",
+        "list"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "--"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--to",
+        "t1"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--dry-run",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--yes",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a//b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "/a"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a/"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "--nope",
+        "a"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--older-than"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--older-than="
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--older-than",
+        "soon"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--older-than",
+        "1h",
+        "--older-than=1h"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--dry-run",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    }
+  ]
+}

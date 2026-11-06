@@ -2,6 +2,38 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The journal and the trash: `atoll prune` and `atoll trash` (specs.md §6.1, §9, §10, §15.10, §17, §25)
+
+Commit "Send surplus copies to the trash, with atoll prune and atoll trash", on `main`. The first code that writes to a disk.
+
+- The maintainer's decisions:
+  - `prune` and `trash` come first, ahead of the copy pipeline, as they need only a move inside one filesystem;
+  - a session confirms each disk by reading its head past the page cache, once, before it first reads or writes that disk. The handle comes first, so that what is confirmed is what the handle leads to;
+  - a copy goes only if the copies that stay reach the level, unchanged and verified, and the level is the larger of the file's row and what the configuration says now;
+  - a verified copy with another hash loses `verified_ns`, or `prune` would count it as good and send the good one to the trash;
+  - an exclusive `flock` on the catalog for every command that writes;
+  - a reprise tells a file edited in place from an intact one, and starts the retention of what it finishes again;
+  - a restore looks first and journals nothing for `path-taken` or `name-collision`. A missing folder is an operation of its own, `kind = mkdir`, and the root is never made;
+  - a purge keeps another file at the entry's place, with `changed`, and so does a restore;
+  - another root, workdir or id is refused while a disk holds copies, entries, trash or planned operations;
+  - a walk reports a name that `lstat`, `openat` or `readlink` cannot reach in `unreadable`, with no row, and the disk stays `online`.
+- What it does: one journaled operation per copy, in `internal/catalog/ops.go`, `internal/ops` and `internal/trash`, moved by `renameat2` with `RENAME_NOREPLACE` or by `link`, `fsync` and `unlink`, then synced. A reprise resolves what a crash left from a table of what each name holds. Crash points in the conformance build (`crash_at`) make a `kill -9` at each step a plain scenario.
+- Measured on ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g, on Linux 6.12 and 7.3, in throwaway probes and now in `test/loopdev`:
+  - the move keeps the inode, the modification time and the creation time;
+  - ntfs-3g and lowntfs-3g give `EINVAL` for `RENAME_NOREPLACE` whatever the name, so only `link` can tell a refused name;
+  - on a device that fails, XFS answers the move with success, and only the first `fsync` after it gives `EIO`: a file can be back at its source after a remount. So nothing is `done` on the strength of the move alone;
+  - ntfs3 has no journal of its own: a device that fails during a write can leave a name and its record that disagree, which it answers with `ESTALE` or `EINVAL`. So the test of a dying device skips those cases on ntfs3, where only a repair can say more.
+- Four adversarial reviews, on the code as each round left it: 85 findings confirmed, then 48, 33 and 3. What they found, and each with a failing test first:
+  - in the third round, on the link path, a source's name gone during the `fsync` made Atoll unlink the file's last name, while a crash one line earlier kept the file;
+  - in the third round too, an edit in place during the `fsync`s before a move, which keeps the inode, reached the trash unseen. The copy is now compared with its row right before the move, and a reprise syncs before it looks, so that nothing long comes between a look and what it decides;
+  - a move called `undone` with what it left not durable, so that the next move went through a folder that could vanish;
+  - a reprise that removed a source's name without looking again after a long `fsync`;
+  - `--older-than 0s` purging what its own reprise had just finished, which its dry run had not shown;
+  - hard links: every name of a file moves together, so the rows of the others follow, unless they already disagreed, which is a change nobody has looked at.
+- A port written from the documents alone, never reading the Go code, passes all 174 scenarios and every vector. Its failures along the way were mostly gaps in the documents, which is how the event levels, the order of a reprise and several exit codes came to be written down.
+- Verified: `go test ./...`, the race detector, lint and every scenario. 351 real outputs against their schemas, which refuse 196 broken ones. 301 mutations of this work, and the 432 of the older lists, all caught, and 2 more that did not compile. The older lists ran before the last small fixes, which touch none of what they test. Left out of the lists as equivalent: the two guards that only save a query, and a kind check that only an inode reused by a folder could reach. `test/loopdev` passes on Linux 6.12 and 7.3, on each driver, with ntfs3 skipped where a dying device left its volume in need of a repair. Of 13 mutations judged on real mounts, 10 were caught; the fsync of the target folder removed, in either direction, survives there, as the next fsync catches the same failure on these drivers, and a unit test pins the order; and one mount check is pinned by a unit test.
+- Not measured: real disks, and disks asleep.
+
 ## `atoll status` (specs.md §7, §15.11, §25)
 
 Commit "Report what the catalog holds, with atoll status", on `main`.

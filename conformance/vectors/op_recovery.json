@@ -1,0 +1,362 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717.2",
+  "description": "What a reprise does with an operation left planned, from what each name holds, compared with ops.file_key.",
+  "cases": [
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "same",
+      "action": "finish",
+      "remove_source": true,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "link was interrupted"
+    },
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "same",
+      "changed": false,
+      "action": "finish",
+      "remove_source": true,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "link was interrupted, and the file is what its row says"
+    },
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "same",
+      "changed": true,
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": true,
+      "move_back": false,
+      "warn": false,
+      "note": "edited in place since: the live name stays, and the one in the trash goes"
+    },
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "absent",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "the move was done"
+    },
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "absent",
+      "changed": true,
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "changed says nothing without a source"
+    },
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "other",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "a new file at the source, for the next scan"
+    },
+    {
+      "kind": "trash",
+      "target": "absent",
+      "source": "same",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "nothing happened"
+    },
+    {
+      "kind": "trash",
+      "target": "absent",
+      "source": "absent",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "the file went somewhere else"
+    },
+    {
+      "kind": "trash",
+      "target": "absent",
+      "source": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "another file at the source"
+    },
+    {
+      "kind": "trash",
+      "target": "other",
+      "source": "absent",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": true,
+      "warn": true,
+      "note": "a file took the name between the look and the move: it goes back"
+    },
+    {
+      "kind": "trash",
+      "target": "other",
+      "source": "same",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "the target is not what was moved, and the name is taken"
+    },
+    {
+      "kind": "trash",
+      "target": "other",
+      "source": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "neither is"
+    },
+    {
+      "kind": "restore",
+      "target": "same",
+      "source": "same",
+      "action": "finish",
+      "remove_source": true,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "link was interrupted"
+    },
+    {
+      "kind": "restore",
+      "target": "same",
+      "source": "absent",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "the move was done"
+    },
+    {
+      "kind": "restore",
+      "target": "same",
+      "source": "other",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "something else in the trash folder: not this operation's to judge"
+    },
+    {
+      "kind": "restore",
+      "target": "absent",
+      "source": "same",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "nothing happened"
+    },
+    {
+      "kind": "restore",
+      "target": "absent",
+      "source": "absent",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "the entry is gone"
+    },
+    {
+      "kind": "restore",
+      "target": "absent",
+      "source": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "another file in the trash"
+    },
+    {
+      "kind": "restore",
+      "target": "other",
+      "source": "same",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "the path was taken: what is there is not ours"
+    },
+    {
+      "kind": "restore",
+      "target": "other",
+      "source": "absent",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "it never moves a live file into the trash"
+    },
+    {
+      "kind": "restore",
+      "target": "other",
+      "source": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "neither is"
+    },
+    {
+      "kind": "unlink",
+      "source": "absent",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "it is gone"
+    },
+    {
+      "kind": "unlink",
+      "source": "same",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "nothing happened"
+    },
+    {
+      "kind": "unlink",
+      "source": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "another file at that name"
+    },
+    {
+      "kind": "mkdir",
+      "target": "same",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "the folder is there"
+    },
+    {
+      "kind": "mkdir",
+      "target": "absent",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "nothing happened"
+    },
+    {
+      "kind": "mkdir",
+      "target": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "not a folder"
+    },
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "lost",
+      "error": true,
+      "note": "not a word"
+    },
+    {
+      "kind": "trash",
+      "target": "lost",
+      "source": "same",
+      "error": true
+    },
+    {
+      "kind": "restore",
+      "target": "lost",
+      "source": "same",
+      "error": true
+    },
+    {
+      "kind": "trash",
+      "source": "same",
+      "error": true,
+      "note": "a move has a target"
+    },
+    {
+      "kind": "restore",
+      "target": "same",
+      "error": true,
+      "note": "and a source"
+    },
+    {
+      "kind": "unlink",
+      "target": "same",
+      "source": "same",
+      "error": true,
+      "note": "an unlink has no target"
+    },
+    {
+      "kind": "unlink",
+      "source": "lost",
+      "error": true
+    },
+    {
+      "kind": "mkdir",
+      "target": "same",
+      "source": "same",
+      "error": true,
+      "note": "a folder has no source"
+    },
+    {
+      "kind": "mkdir",
+      "target": "lost",
+      "error": true
+    },
+    {
+      "kind": "rmdir",
+      "source": "same",
+      "error": true,
+      "note": "no reprise for that kind yet"
+    }
+  ]
+}

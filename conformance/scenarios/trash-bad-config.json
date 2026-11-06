@@ -1,0 +1,58 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Exit code 1 when the configuration does not load.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "prune"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge"
+      ],
+      "exit": 1
+    }
+  ]
+}

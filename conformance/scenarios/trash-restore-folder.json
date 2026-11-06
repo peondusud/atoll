@@ -1,0 +1,301 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a76.1, \u00a717.4",
+  "description": "A folder takes what is below it, by whole components: d takes no dd. Each folder missing on the way is an operation of its own, and Atoll's own. A path that starts with a dash takes --.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/x",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/d/sub/y",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/dd/y",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/x",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/d/sub/y",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/dd/y",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/x",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/d/sub/y",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/dd/y",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "bytes": 3072,
+        "copies": [
+          {
+            "path": "d/sub/y",
+            "disk": "t3",
+            "size": 1024,
+            "outcome": "trashed"
+          },
+          {
+            "path": "d/x",
+            "disk": "t3",
+            "size": 1024,
+            "outcome": "trashed"
+          },
+          {
+            "path": "dd/y",
+            "disk": "t3",
+            "size": 1024,
+            "outcome": "trashed"
+          }
+        ]
+      }
+    },
+    {
+      "do": "delete",
+      "disk": "t3",
+      "path": "media/d/sub"
+    },
+    {
+      "do": "delete",
+      "disk": "t3",
+      "path": "media/d"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT) FROM entries WHERE disk_id = 't3'",
+      "rows": [
+        [
+          "dd"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "de",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "entries": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "--json",
+        "--",
+        "-x"
+      ],
+      "stdout_json": {
+        "applied": false,
+        "entries": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "d",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "entries": [
+          {
+            "path": "d/sub/y",
+            "disk": "t3",
+            "op": 1,
+            "outcome": "restored"
+          },
+          {
+            "path": "d/x",
+            "disk": "t3",
+            "op": 2,
+            "outcome": "restored"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/d/sub/y",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/d/x",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/dd",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/3/dd/y",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, CAST(path AS TEXT), state FROM ops WHERE id > 3 ORDER BY id",
+      "rows": [
+        [
+          4,
+          "restore",
+          "d/sub/y",
+          "done"
+        ],
+        [
+          5,
+          "mkdir",
+          "d",
+          "done"
+        ],
+        [
+          6,
+          "mkdir",
+          "d/sub",
+          "done"
+        ],
+        [
+          7,
+          "restore",
+          "d/x",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), created_by FROM entries WHERE disk_id = 't3' ORDER BY lpath",
+      "rows": [
+        [
+          "d",
+          "atoll"
+        ],
+        [
+          "d/sub",
+          "atoll"
+        ],
+        [
+          "dd",
+          "user"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), created_by FROM entries WHERE disk_id = 't3' ORDER BY lpath",
+      "rows": [
+        [
+          "d",
+          "atoll"
+        ],
+        [
+          "d/sub",
+          "atoll"
+        ],
+        [
+          "dd",
+          "user"
+        ]
+      ]
+    }
+  ]
+}

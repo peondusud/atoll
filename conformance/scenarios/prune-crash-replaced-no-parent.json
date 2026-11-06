@@ -1,0 +1,214 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717.2",
+  "description": "With the folder it goes back to gone, the operation stays planned and nothing is made, until that folder is back.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes"
+      ],
+      "crash_at": "moved",
+      "exit": 137
+    },
+    {
+      "do": "write",
+      "disk": "t3",
+      "path": "Atoll/trash/2026-01-01/1/d/b",
+      "text": "other"
+    },
+    {
+      "do": "rename",
+      "disk": "t3",
+      "path": "Atoll/trash/2026-01-01/1/d/b",
+      "to": "Atoll/trash/2026-01-01/1/d/a"
+    },
+    {
+      "do": "delete",
+      "disk": "t3",
+      "path": "media/d"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "applied": true,
+        "bytes": 0,
+        "copies": [
+          {
+            "path": "d/a",
+            "disk": "t3",
+            "size": 1024,
+            "outcome": "changed"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "trash",
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM events WHERE kind = 'op-undone'",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/1/d/a",
+          "text": "other"
+        }
+      ]
+    },
+    {
+      "do": "mkdir",
+      "disk": "t3",
+      "path": "media/d"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "applied": true,
+        "bytes": 0,
+        "copies": [
+          {
+            "path": "d/a",
+            "disk": "t3",
+            "size": 1024,
+            "outcome": "changed"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "trash",
+          "undone"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM trash",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT level, kind, json_extract(data, '$.op') FROM events WHERE kind = 'op-undone'",
+      "rows": [
+        [
+          "warning",
+          "op-undone",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/d/a",
+          "text": "other"
+        },
+        {
+          "path": "Atoll/trash",
+          "kind": "dir"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/trash-purge.schema.json",
+  "title": "atoll trash purge --json",
+  "description": "Each entry it reaches, by path in byte order, then by operation (specs.md §17.4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "applied",
+    "bytes",
+    "entries"
+  ],
+  "properties": {
+    "applied": {
+      "type": "boolean",
+      "description": "Whether it was allowed to write."
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The sizes of the entries to-purge or purged."
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "op",
+        "size",
+        "outcome"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disk": {
+          "type": "string",
+          "minLength": 1
+        },
+        "op": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "size": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "purged",
+            "to-purge",
+            "changed",
+            "disk-unavailable",
+            "io-error"
+          ]
+        }
+      }
+    }
+  }
+}

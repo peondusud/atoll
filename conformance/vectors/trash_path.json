@@ -1,0 +1,142 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717",
+  "description": "The location of a copy inside <workdir>/trash/: the UTC date of the operation, its id, then the logical path, byte for byte.",
+  "cases": [
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 1,
+      "path": "a",
+      "trash_path": "2026-01-01/1/a",
+      "note": "at the top of the root"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 4812,
+      "path": "Films/Avatar (2009)/Avatar.mkv",
+      "trash_path": "2026-01-01/4812/Films/Avatar (2009)/Avatar.mkv",
+      "note": "the example of specs.md \u00a76, with its date"
+    },
+    {
+      "started_ns": 1767225599999999999,
+      "op_id": 1,
+      "path": "a",
+      "trash_path": "2025-12-31/1/a",
+      "note": "the last nanosecond of the day before"
+    },
+    {
+      "started_ns": 1767311999999999999,
+      "op_id": 2,
+      "path": "a",
+      "trash_path": "2026-01-01/2/a",
+      "note": "the last nanosecond of the day"
+    },
+    {
+      "started_ns": 1767312000000000000,
+      "op_id": 2,
+      "path": "a",
+      "trash_path": "2026-01-02/2/a",
+      "note": "the next day"
+    },
+    {
+      "started_ns": 1709164800000000000,
+      "op_id": 3,
+      "path": "a",
+      "trash_path": "2024-02-29/3/a",
+      "note": "a leap day"
+    },
+    {
+      "started_ns": 0,
+      "op_id": 1,
+      "path": "a",
+      "trash_path": "1970-01-01/1/a",
+      "note": "the epoch"
+    },
+    {
+      "started_ns": -1,
+      "op_id": 1,
+      "path": "a",
+      "trash_path": "1969-12-31/1/a",
+      "note": "just before the epoch: a date is not cut toward zero"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 9007199254740993,
+      "path": "a",
+      "trash_path": "2026-01-01/9007199254740993/a",
+      "note": "an id past what a double holds"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 7,
+      "path_b64": "RmlsbXMv/y5ta3Y=",
+      "trash_path_b64": "MjAyNi0wMS0wMS83L0ZpbG1zL/8ubWt2",
+      "note": "bytes that are not UTF-8 stay as they are"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 7,
+      "path": "S\u00e9ries/\u00e9",
+      "trash_path": "2026-01-01/7/S\u00e9ries/\u00e9",
+      "note": "no normalization"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 7,
+      "path": "a b/ c /.hidden",
+      "trash_path": "2026-01-01/7/a b/ c /.hidden",
+      "note": "spaces and dots are names like others"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 0,
+      "path": "a",
+      "error": true,
+      "note": "ids start at 1"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": -1,
+      "path": "a",
+      "error": true
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 1,
+      "path": "",
+      "error": true,
+      "note": "not well-formed"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 1,
+      "path": "/a",
+      "error": true
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 1,
+      "path": "a/",
+      "error": true
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 1,
+      "path": "a//b",
+      "error": true
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 1,
+      "path": "a/./b",
+      "error": true
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 1,
+      "path": "../a",
+      "error": true,
+      "note": "it must not leave the operation's folder"
+    }
+  ]
+}

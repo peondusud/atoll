@@ -37,7 +37,13 @@ type bench struct {
 	now    int64
 	// readOnly makes every disk show a read-only mount.
 	readOnly bool
+	// noSpace says which mounts fail statfs.
+	noSpace map[string]error
 }
+
+// pastTick lets the clock behind a change time move, which Linux 6.12 can leave the same within a
+// clock tick (specs.md §17.1), and at the lowest usual HZ a tick is 10 ms.
+func pastTick() { time.Sleep(20 * time.Millisecond) }
 
 func (b *bench) Mount(mount string) disks.MountSeen {
 	options := []string{"rw"}
@@ -64,7 +70,20 @@ func (b *bench) Root(string, string) disks.RootSeen {
 
 func (b *bench) Now() int64 { return b.now }
 
-func (b *bench) Space(string) (capacity, free int64, err error) {
+func (b *bench) OpenTop(mount string) (fsx.Dir, error) {
+	return fsx.OpenDir(mount) //nolint:wrapcheck // a test double
+}
+
+func (b *bench) ReadPastCache(fs names.Filesystem, entry *disks.MountEntry) disks.DeviceSeen {
+	return b.Device(fs, entry)
+}
+
+func (b *bench) Checkpoint(string) {}
+
+func (b *bench) Space(mount string) (capacity, free int64, err error) {
+	if err := b.noSpace[mount]; err != nil {
+		return 0, 0, err
+	}
 	return 1 << 30, 1 << 29, nil
 }
 
@@ -275,6 +294,8 @@ func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 		want       string
 	}{
 		{"stat", "b", syscall.ENOENT, "b"},
+		{"stat", "b", syscall.ELOOP, "b"},
+		{"stat", "b", syscall.ENOTDIR, "b"},
 		{"opendir", "sub", syscall.ENOENT, "sub"},
 		{"opendir", "sub", syscall.ELOOP, "sub"},
 		{"opendir", "sub", syscall.ENOTDIR, "sub"},
@@ -299,7 +320,61 @@ func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 			if got := b.count("SELECT count(*) FROM files WHERE lpath = ?", []byte("a")); got != 1 {
 				t.Error("the rest of the disk was not read")
 			}
+			if got := b.count("SELECT count(*) FROM entries WHERE lpath = ?", []byte(tc.want)); got != 0 {
+				t.Error("a row for a name it could not reach")
+			}
+			if tc.call == "opendir" && r.Folders != 0 {
+				t.Errorf("%d folders counted", r.Folders)
+			}
 		})
+	}
+}
+
+// TestAFailedStatfs: a disk that passed its check and cannot say how full it is counts as failed, keeps
+// what the last check measured, and the others go on (specs.md §15.10, §25).
+func TestAFailedStatfs(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "a", "x")
+	b.write("t2", "a", "x")
+	b.scan(Options{})
+	b.noSpace = map[string]error{b.dirs["t1"]: syscall.ENOTCONN}
+	out := b.scan(Options{})
+	first, second := out.Disks[0], out.Disks[1]
+	if first.Walked || first.Verdict.State != disks.Missing || first.Verdict.Reason != disks.IOError {
+		t.Errorf("%+v", first)
+	}
+	if !second.Walked || second.Verdict.State != disks.Online {
+		t.Errorf("the other disk: %+v", second)
+	}
+	if !out.Partial() {
+		t.Error("nothing says that a disk failed")
+	}
+	if got := b.count("SELECT count(*) FROM disks WHERE id = 't1' AND state = 'missing' AND capacity_bytes = ?", int64(1<<30)); got != 1 {
+		t.Error("the row of the disk is not what it should be")
+	}
+}
+
+// TestAnIgnoredFileKeepsItsMode: what a rule ignores is an entry like any other.
+func TestAnIgnoredFileKeepsItsMode(t *testing.T) {
+	b := newBench(t, "t1")
+	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(t.TempDir(), "catalog.db"), filepath.Join(t.TempDir(), "pool")) +
+		fmt.Sprintf("[[disk]]\nid = \"t1\"\nuuid = %q\nmount = %q\nfs = \"ext4\"\n", b.config.Disks[0].UUID, b.dirs["t1"]) +
+		"[[rule]]\nlabel = \"skip\"\next = [\"nfo\"]\naction = \"ignore\"\n"
+	c, err := config.Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.config = c
+	b.write("t1", "x.nfo", "n")
+	full := filepath.Join(b.dirs["t1"], "media", "x.nfo")
+	for _, mode := range []os.FileMode{0o640, 0o600} {
+		if err := os.Chmod(full, mode); err != nil {
+			t.Fatal(err)
+		}
+		b.scan(Options{})
+		if got := b.count("SELECT mode FROM entries WHERE lpath = ?", []byte("x.nfo")); got != int(mode) {
+			t.Errorf("mode %o, want %o", got, mode)
+		}
 	}
 }
 
@@ -555,6 +630,7 @@ func TestAFileThatMovesDuringTheRead(t *testing.T) {
 	b := newBench(t, "t1")
 	b.write("t1", "a", "x")
 	b.scan(Options{})
+	pastTick()
 	full := filepath.Join(b.dirs["t1"], "media", "a")
 	b.wrap = func(_ string, d fsx.Dir) fsx.Dir {
 		return &changing{Dir: d, name: "a", during: func() {
@@ -576,28 +652,48 @@ func TestAFileThatMovesDuringTheRead(t *testing.T) {
 }
 
 // TestAVerifiedCopyThatDiffers: same size and times, another hash. The scrub decides what that is
-// (specs.md §16), so a scan writes nothing, and no conflict: no scenario can reach this.
+// (specs.md §16), so no conflict yet, and no scenario can reach this. But nothing may rely on it, or
+// prune would count it as a good copy and send the good one to the trash (specs.md §15.10).
 func TestAVerifiedCopyThatDiffers(t *testing.T) {
 	b := newBench(t, "t1")
 	b.write("t1", "a", "x")
 	b.scan(Options{Full: true})
-	before := b.count("SELECT verified_ns / 1000000000 FROM copies")
-	b.now += 3600 * 1000000000
-	b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &changing{Dir: d, name: "a", serve: []byte("y")} }
-	out := b.scan(Options{Full: true})
-	r := out.Disks[0]
-	if !slices.Equal(r.Changed, []string{"a"}) || r.Known != 1 {
-		t.Errorf("%+v", r)
+	if got := b.count("SELECT count(*) FROM copies WHERE verified_ns IS NOT NULL"); got != 1 {
+		t.Fatalf("%d verified", got)
 	}
-	if len(out.Conflicts) != 0 {
-		t.Errorf("a conflict: %v", out.Conflicts)
+	serve := func(_ string, d fsx.Dir) fsx.Dir { return &changing{Dir: d, name: "a", serve: []byte("y")} }
+	b.wrap = serve
+	r := b.scan(Options{Full: true}).Disks[0]
+	if !slices.Equal(r.Changed, []string{"a"}) {
+		t.Errorf("changed: %v", r.Changed)
 	}
-	if got := b.count("SELECT verified_ns / 1000000000 FROM copies"); got != before {
-		t.Error("it was verified again")
+	if got := b.count("SELECT count(*) FROM copies WHERE verified_ns IS NOT NULL"); got != 0 {
+		t.Error("it stays verified")
+	}
+	if got := b.text("SELECT state FROM files"); got == "conflict" {
+		t.Error("a conflict, on a first mismatch")
+	}
+	// Read again with the same answer, it is an unverified copy that differs.
+	b.scan(Options{Full: true})
+	if got := b.text("SELECT state FROM files"); got != "conflict" {
+		t.Errorf("the state is %q", got)
+	}
+	// A wrong read heals itself.
+	c := newBench(t, "t1")
+	c.write("t1", "a", "x")
+	c.scan(Options{Full: true})
+	c.wrap = serve
+	c.scan(Options{Full: true})
+	c.wrap = nil
+	c.scan(Options{Full: true})
+	if got := c.count("SELECT count(*) FROM copies WHERE verified_ns IS NOT NULL"); got != 1 {
+		t.Error("it did not come back")
+	}
+	if got := c.text("SELECT state FROM files"); got == "conflict" {
+		t.Error("a conflict, from one wrong read")
 	}
 }
 
-// TestAReferenceThatDiffersIsAConflict: the copy that is new meets a hash already known.
 func TestAnUnverifiedCopyThatDiffersIsAConflict(t *testing.T) {
 	b := newBench(t, "t1", "t2")
 	b.write("t1", "a", "x")
@@ -657,6 +753,7 @@ func TestWhatMakesACopyChanged(t *testing.T) {
 	b := newBench(t, "t1")
 	b.write("t1", "a", "x")
 	b.scan(Options{})
+	pastTick()
 	if err := os.Chmod(filepath.Join(b.dirs["t1"], "media", "a"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -816,6 +913,7 @@ func TestAFileThatMovedBeforeTheRead(t *testing.T) {
 	b := newBench(t, "t1")
 	b.write("t1", "a", "x")
 	b.scan(Options{})
+	pastTick()
 	full := filepath.Join(b.dirs["t1"], "media", "a")
 	var opened atomic.Bool
 	b.wrap = func(_ string, d fsx.Dir) fsx.Dir {
@@ -841,6 +939,7 @@ func TestAChmodDuringTheRead(t *testing.T) {
 	b := newBench(t, "t1")
 	b.write("t1", "a", "x")
 	b.scan(Options{})
+	pastTick()
 	full := filepath.Join(b.dirs["t1"], "media", "a")
 	b.wrap = func(_ string, d fsx.Dir) fsx.Dir {
 		return &changing{Dir: d, name: "a", during: func() {

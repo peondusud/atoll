@@ -1,0 +1,159 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717.2",
+  "description": "An operation that stays planned on a disk that is away gives exit code 4, even with nothing to list. A dry run resolves nothing, and says nothing of it.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes"
+      ],
+      "crash_at": "moved",
+      "exit": 137
+    },
+    {
+      "do": "unmount",
+      "disk": "t3"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "applied": true,
+        "bytes": 0,
+        "entries": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--yes",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "applied": true,
+        "entries": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": false,
+        "bytes": 0,
+        "entries": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "trash",
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "mount",
+      "disk": "t3"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "bytes": 0,
+        "entries": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "trash",
+          "done"
+        ]
+      ]
+    }
+  ]
+}

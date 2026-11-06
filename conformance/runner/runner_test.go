@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +55,18 @@ func checkVerdicts(t *testing.T, cases []verdictCase) {
 }
 
 // steps makes a scenario of a list of steps.
+// A tick must outlast a clock tick, whatever else the machine is doing: too short, a scenario that
+// needs a change time to move fails on correct code.
+func TestATickWaits(t *testing.T) {
+	start := time.Now()
+	if err := (&sandbox{}).do(&step{Do: "tick"}); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took < 10*time.Millisecond {
+		t.Errorf("%v", took)
+	}
+}
+
 func steps(list string) string {
 	return `{"format_version": 1, "steps": [` + list + `]}`
 }
@@ -122,6 +136,8 @@ func TestRefusingAScenario(t *testing.T) {
 		{"an unknown field in an entry", "exit 0", steps(file + `{"path": "a", "txt": "x"}]}`), "unknown field"},
 		{"a field on the wrong step", "exit 0", steps(`{"do": "atoll", "tree": []}`), "does not apply"},
 		{"a field on the wrong step: advance", "exit 0", steps(`{"do": "advance", "by": "1m", "exit": 1}`), "does not apply"},
+		{"a tick", "exit 0", steps(`{"do": "tick"}`), ""},
+		{"a field on the wrong step: tick", "exit 0", steps(`{"do": "tick", "by": "1m"}`), "does not apply"},
 		{"a field on the wrong step: expect_tree", "exit 0", steps(`{"do": "expect_tree", "disk": "d", "tree": [], "path": "a"}`), "does not apply"},
 		{"a field on the wrong step: delete", "exit 0", steps(`{"do": "delete", "disk": "d", "path": "a", "text": "x"}`), "does not apply"},
 		{"a field on the wrong step: mkdir", "exit 0", steps(`{"do": "mkdir", "disk": "d", "path": "a", "size": 1}`), "does not apply"},
@@ -193,6 +209,9 @@ func TestComparingATree(t *testing.T) {
 		{"rename", "exit 0", onDisk(`{"do": "rename", "disk": "d", "path": "media/a", "to": "media/b"}, ` + expect(`{"path": "media/b", "text": "x"}`)), ""},
 		{"rename to bytes", "exit 0", onDisk(`{"do": "rename", "disk": "d", "path": "media/a", "to_b64": "bWVkaWEvYf8="}, ` + expect(`{"path_b64": "bWVkaWEvYf8=", "text": "x"}`)), ""},
 		{"rename with no target", "exit 0", onDisk(`{"do": "rename", "disk": "d", "path": "media/a"}`), "to: no path"},
+		{"link", "exit 0", onDisk(`{"do": "link", "disk": "d", "path": "media/a", "to": "media/b"}, ` + expect(a+`{"path": "media/b", "text": "x"}`)), ""},
+		{"link with no target", "exit 0", onDisk(`{"do": "link", "disk": "d", "path": "media/a"}`), "to: no path"},
+		{"link out of the disk", "exit 0", onDisk(`{"do": "link", "disk": "d", "path": "media/a", "to": "../x"}`), "clean path"},
 		{"rename out of the disk", "exit 0", onDisk(`{"do": "rename", "disk": "d", "path": "media/a", "to": "../x"}`), "clean path"},
 		{"delete", "exit 0", onDisk(`{"do": "delete", "disk": "d", "path": "media/a"}, ` + expect(`{"path": "media", "kind": "dir"}`)), ""},
 		{"delete what is not there", "exit 0", onDisk(`{"do": "delete", "disk": "d", "path": "media/z"}`), "no such file"},
@@ -242,6 +261,53 @@ func TestAlwaysChecked(t *testing.T) {
 		{"two disks with one id", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": []}, {"id": "d", "uuid": "v", "fs": "ext4", "capacity": 10, "tree": []}], "steps": [` + run + `]}`, "twice"},
 		{"a disk with no id", "exit 0", `{"format_version": 1, "disks": [{"uuid": "u", "fs": "ext4", "capacity": 10, "tree": []}], "steps": [` + run + `]}`, "no id"},
 	})
+}
+
+// A crash point lasts for one run, and what a scenario says of a disk reaches the control file.
+func TestCrashAtAndDiskFields(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "seen.json")
+	bin := fakeBinary(t, `cat "$ATOLL_CONFORMANCE" >>`+file)
+	err := runFile(bin, scenarioFile(t, `{"format_version": 1, "spec": "x", "description": "x",
+		"disks": [{"id": "t1", "uuid": "u", "fs": "ext4", "capacity": 1, "tree": [], "renameat2": false, "refuses": ["a"]},
+		          {"id": "t2", "uuid": "v", "fs": "ext4", "capacity": 1, "tree": []}],
+		"steps": [{"do": "atoll", "crash_at": "moved"}, {"do": "atoll"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs []map[string]any
+	dec := json.NewDecoder(bytes.NewReader(seen))
+	for dec.More() {
+		var run map[string]any
+		if err := dec.Decode(&run); err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, run)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("%d runs: %s", len(runs), seen)
+	}
+	if runs[0]["crash_at"] != "moved" {
+		t.Errorf("first run: %v", runs[0])
+	}
+	if _, there := runs[1]["crash_at"]; there {
+		t.Errorf("second run: %v", runs[1])
+	}
+	disks, _ := runs[0]["disks"].([]any)
+	first, _ := disks[0].(map[string]any)
+	second, _ := disks[1].(map[string]any)
+	if first["renameat2"] != false || !reflect.DeepEqual(first["refuses"], []any{"a"}) {
+		t.Errorf("first disk: %v", first)
+	}
+	if _, there := second["renameat2"]; there {
+		t.Errorf("second disk: %v", second)
+	}
+	if _, there := second["refuses"]; there {
+		t.Errorf("second disk: %v", second)
+	}
 }
 
 func TestControlFile(t *testing.T) {

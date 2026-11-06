@@ -30,7 +30,10 @@ const (
 // holds them, and nanoseconds count forward, also before the epoch (specs.md §9).
 type Stat struct {
 	Kind     Kind
+	Dev      uint64 // the device of the filesystem that holds it
 	Mode     uint32 // the permission bits
+	Uid      uint32
+	Gid      uint32
 	Size     int64
 	Ino      uint64
 	Nlink    uint32
@@ -60,6 +63,22 @@ type Dir interface {
 	OpenDir(name string) (Dir, error)
 	OpenFile(name string) (File, error)
 	ReadLink(name string) (string, error)
+	// Mkdir makes a folder with a mode, less the umask, and fails on a name that exists.
+	Mkdir(name string, mode uint32) error
+	// Adopt gives a folder of this folder the mode and owner of another.
+	Adopt(name string, like *Stat) error
+	// Rename moves a name to another folder of the same filesystem, and never replaces anything:
+	// renameat2 with RENAME_NOREPLACE.
+	Rename(name string, to Dir, newName string) error
+	// Link gives a file a second name, in a folder of the same filesystem.
+	Link(name string, to Dir, newName string) error
+	// Unlink removes the name of a file, and Rmdir an empty folder.
+	Unlink(name string) error
+	Rmdir(name string) error
+	// Sync makes what was done to the names of this folder durable.
+	Sync() error
+	// SetMtime sets the modification time of the folder itself.
+	SetMtime(t Time) error
 	Close() error
 }
 
@@ -184,6 +203,87 @@ func (d *realDir) ReadLink(name string) (string, error) {
 	}
 }
 
+func (d *realDir) Mkdir(name string, mode uint32) error {
+	if err := unix.Mkdirat(d.fd(), name, mode); err != nil {
+		return fmt.Errorf("make folder %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Adopt(name string, like *Stat) error {
+	mode := unix.Fchmodat(d.fd(), name, like.Mode, 0)
+	owner := unix.Fchownat(d.fd(), name, int(like.Uid), int(like.Gid), unix.AT_SYMLINK_NOFOLLOW)
+	if err := errors.Join(mode, owner); err != nil {
+		return fmt.Errorf("adopt %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Rename(name string, to Dir, newName string) error {
+	target, err := realOf(to)
+	if err != nil {
+		return err
+	}
+	if err := unix.Renameat2(d.fd(), name, target.fd(), newName, unix.RENAME_NOREPLACE); err != nil {
+		return fmt.Errorf("rename %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Link(name string, to Dir, newName string) error {
+	target, err := realOf(to)
+	if err != nil {
+		return err
+	}
+	if err := unix.Linkat(d.fd(), name, target.fd(), newName, 0); err != nil {
+		return fmt.Errorf("link %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Unlink(name string) error {
+	if err := unix.Unlinkat(d.fd(), name, 0); err != nil {
+		return fmt.Errorf("unlink %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Rmdir(name string) error {
+	if err := unix.Unlinkat(d.fd(), name, unix.AT_REMOVEDIR); err != nil {
+		return fmt.Errorf("remove folder %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Sync() error {
+	if err := unix.Fsync(d.fd()); err != nil {
+		return fmt.Errorf("fsync %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
+func (d *realDir) SetMtime(t Time) error {
+	times := []unix.Timespec{{Nsec: unix.UTIME_OMIT}, {Sec: t.Sec, Nsec: t.Nsec}}
+	if err := unix.UtimesNanoAt(d.fd(), ".", times, 0); err != nil {
+		return fmt.Errorf("set the time of %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
+// realOf finds the folder below any wrapping, as a system call takes only a real one.
+func realOf(d Dir) (*realDir, error) {
+	for {
+		switch v := d.(type) {
+		case *realDir:
+			return v, nil
+		case interface{ Unwrap() Dir }:
+			d = v.Unwrap()
+		default:
+			return nil, fmt.Errorf("not a folder of a disk: %T", d)
+		}
+	}
+}
+
 func (d *realDir) Close() error {
 	if err := d.file.Close(); err != nil {
 		return fmt.Errorf("close: %w", err)
@@ -220,7 +320,10 @@ func statx(fd int, name string, flags int) (Stat, error) {
 		return Stat{}, fmt.Errorf("statx %q: this kernel gives no mount id: Atoll needs Linux 5.8 or later", name)
 	}
 	out := Stat{
+		Dev:      unix.Mkdev(st.Dev_major, st.Dev_minor),
 		Mode:     uint32(st.Mode) &^ unix.S_IFMT,
+		Uid:      st.Uid,
+		Gid:      st.Gid,
 		Size:     int64(st.Size),
 		Ino:      st.Ino,
 		Nlink:    st.Nlink,
@@ -279,6 +382,54 @@ func splitPath(path string) (folders []string, name string) {
 // It says nothing about the disk (specs.md §15.10).
 func IsUnreadableName(err error) bool {
 	return errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, ErrNotARegularFile)
+}
+
+// IsDiskLost says whether an error means that the disk cannot be relied on any more (invariant 4).
+// EROFS is here because ext4 gives it once a device has failed, and ESTALE because ntfs3 gives it for a
+// name and a record that writes lost with the device left disagreeing (measured). What it gives for a
+// folder in that state, EINVAL, leaves the operation planned too, with the disk as it is.
+func IsDiskLost(err error) bool {
+	return errors.Is(err, unix.EIO) || errors.Is(err, unix.ENOTCONN) || errors.Is(err, unix.ENODEV) ||
+		errors.Is(err, unix.ENXIO) || errors.Is(err, unix.EROFS) || errors.Is(err, unix.ESTALE)
+}
+
+// IsFlagRefused says whether renameat2 may have refused its flag rather than the move: ntfs-3g and
+// lowntfs-3g give EINVAL whatever the name (measured). Only link can tell.
+func IsFlagRefused(err error) bool {
+	return errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS)
+}
+
+// IsNameRefused says whether link refused the name it was given: a driver's own rule (measured with
+// windows_names, on ntfs3, ntfs-3g and lowntfs-3g).
+func IsNameRefused(err error) bool {
+	return errors.Is(err, unix.EINVAL)
+}
+
+// IsExisting says whether a name was already taken.
+func IsExisting(err error) bool {
+	return errors.Is(err, unix.EEXIST)
+}
+
+// ErrBusy says that another process holds a lock.
+var ErrBusy = errors.New("another command holds it")
+
+// LockFile takes an exclusive lock on a file that exists, without waiting, and creates nothing. The
+// kernel lets go of it when the process ends, however it ends. The caller must keep the lock until
+// it has closed every other use of that file: closing a descriptor of a file drops the POSIX locks a
+// process holds on it, which is how SQLite locks its own.
+func LockFile(path string) (release func(), err error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("lock %q: %w", path, err)
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, fmt.Errorf("lock %q: %w", path, ErrBusy)
+		}
+		return nil, fmt.Errorf("lock %q: %w", path, err)
+	}
+	return func() { _ = file.Close() }, nil
 }
 
 // Space is what statfs says about a disk: all of it, and what a program may fill.

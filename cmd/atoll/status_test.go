@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/fsx"
 )
 
 type brokenWriter struct{}
@@ -51,10 +52,44 @@ func TestStatusLooksAtNoDisk(t *testing.T) {
 	}
 }
 
+// One command that writes at a time: what only reads goes on (specs.md §25).
+func TestTheCatalogLock(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "atoll.toml")
+	file := filepath.Join(dir, "catalog.db")
+	text := "pool_id = \"p\"\ncatalog = " + strconv.Quote(file) + "\n[view]\nmount = " + strconv.Quote(filepath.Join(dir, "pool")) + "\n"
+	if err := os.WriteFile(config, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
+		t.Fatal(err)
+	}
+	release, err := fsx.LockFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	for _, args := range [][]string{{"scan"}, {"prune"}, {"prune", "--yes"}, {"prune", "--dry-run"}, {"trash", "restore", "a"}, {"trash", "purge"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(append([]string{"--config", config}, args...), &stdout, &stderr); code != exitError {
+			t.Errorf("%v: exit %d", args, code)
+		}
+		if stdout.Len() != 0 || !strings.Contains(stderr.String(), fsx.ErrBusy.Error()) {
+			t.Errorf("%v: %q, %q", args, stdout.String(), stderr.String())
+		}
+	}
+	for _, args := range [][]string{{"status"}, {"trash", "list"}, {"disk", "list"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(append([]string{"--config", config}, args...), &stdout, &stderr); code != exitOK {
+			t.Errorf("%v: exit %d, %s", args, code, stderr.String())
+		}
+	}
+}
+
 // TestUsageInProcess runs in this process, as a panic would also exit with 2.
 func TestUsageInProcess(t *testing.T) {
 	for _, args := range [][]string{
-		{"--config"}, {"status", "x"}, {"status", "--path"}, {"status", "--path="}, {"status", "--path", "a", "--path", "b"},
+		{"--config"}, {"trash", "purge", "--older-than"}, {"status", "x"}, {"status", "--path"}, {"status", "--path="}, {"status", "--path", "a", "--path", "b"},
 		{"status", "--json", "--json"}, {"status", "--path=/a"},
 	} {
 		var stdout, stderr bytes.Buffer

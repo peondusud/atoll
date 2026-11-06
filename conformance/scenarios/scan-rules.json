@@ -162,6 +162,15 @@
           "user"
         ]
       ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT mode <> 0 FROM entries WHERE lpath = CAST('a.nfo' AS BLOB)",
+      "rows": [
+        [
+          1
+        ]
+      ]
     }
   ]
 }

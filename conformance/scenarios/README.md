@@ -30,7 +30,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `format_version` | integer | `1`. The runner refuses any other value |
 | `spec`, `description` | string | for readers; both are required in this folder |
 | `clock` | string | the time of the conformance build, in RFC 3339 with an offset. Left out, it is `2026-01-01T00:00:00Z` |
-| `disks` | array of objects | `id`, `uuid`, `fs`, `capacity` in bytes, and `tree`, what the disk holds at the start. A disk is the folder `${SANDBOX}/disks/<id>` |
+| `disks` | array of objects | `id`, `uuid`, `fs`, `capacity` in bytes, and `tree`, what the disk holds at the start. A disk is the folder `${SANDBOX}/disks/<id>`. Optional: `renameat2`, `false` for a disk that lacks `RENAME_NOREPLACE`, and `refuses`, the names it refuses as the target of a move or a link |
 | `config` | string | the text of the configuration, written to `${SANDBOX}/atoll.toml`, which each `atoll` step gets through `--config`, before its `args`. Left out, no step gets it |
 | `steps` | array of objects | what happens, in order: below |
 
@@ -40,14 +40,16 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 
 | `do` | Fields | Meaning |
 |---|---|---|
-| `atoll` | `args`, `exit`, `stdout_json` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input. `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8 |
+| `atoll` | `args`, `exit`, `stdout_json`, `crash_at` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input. `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, for this run only |
 | `write` | `disk`, a path, `text` or `size`, `mtime_ns` | writes a file and any folders above it, replacing the content of what is there in place |
 | `mkdir` | `disk`, a path | creates a folder and its parents |
 | `rename` | `disk`, a path, `to` or `to_b64` | renames, replacing what is at the target as `rename(2)` does |
+| `link` | `disk`, a path, `to` or `to_b64` | gives a file another name, as `link(2)` does |
 | `delete` | `disk`, a path | removes a file or an empty folder |
 | `symlink` | `disk`, a path, `target` | creates a symbolic link |
 | `touch` | `disk`, a path, `mtime_ns` | sets a modification time |
 | `advance` | `by` | moves the clock forward, by a duration of `specs.md` §29.5 |
+| `tick` | | waits until the real clock behind a change time has moved, which it may not do within a clock tick (`specs.md` §17.1). `advance` moves another clock |
 | `unmount` | `disk` | a failed mount: the disk's folder is left empty and leaves the control file, and its tree is set aside |
 | `mount` | `disk` | brings an unmounted disk back, with its tree. A step fails if something was written to the empty folder meanwhile |
 | `expect_tree` | `disk`, `tree` | compares the whole disk with `tree`: below |
@@ -78,7 +80,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
 
 ## The control file
 
-`ATOLL_CONFORMANCE` names `${SANDBOX}/conformance.json`, which only a conformance build reads (`specs.md` §29.4). The runner rewrites it on `advance`, `unmount` and `mount`.
+`ATOLL_CONFORMANCE` names `${SANDBOX}/conformance.json`, which only a conformance build reads (`specs.md` §29.4). The runner rewrites it on `advance`, `unmount` and `mount`, and around an `atoll` step with `crash_at`.
 
 ```json
 {
@@ -86,9 +88,24 @@ After each `atoll` step, on each disk (`specs.md` §6):
   "disks": [
     { "id": "t1", "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b", "fs": "ext4",
       "path": "/tmp/atoll-scenario-1/disks/t1", "capacity": 1000000 }
-  ]
+  ],
+  "crash_at": "moved"
 }
 ```
+
+`crash_at`, left out when no step asks for it, makes the binary stop at once with exit code 137 the first time it reaches that point of an operation (`specs.md` §17.1), with no cleanup, as `kill -9` would:
+
+| Point | Reached |
+|---|---|
+| `journaled` | once a `trash`, `restore` or purge operation is committed `planned`, before anything is written to a disk |
+| `trash-folders` | once the folders of a move to the trash are made and synced, before the copy is looked at again and moved. A restore and a purge have none |
+| `folder-made` | once a restore has made a folder below the root, before it is synced or recorded |
+| `linked` | between `link` and the `fsync` that follows it, so only on a disk with `renameat2` at `false` |
+| `moved` | once the name has moved, or the file of a purge is gone, before any later `fsync` of what holds it. With `renameat2` at `false`, `unlink` has run too, so the source's name is gone, which is not yet synced, and the target folder was synced once already, between `link` and `unlink` |
+| `target-synced` | after `fsync` of the target folder. A purge has none |
+| `source-synced` | after every `fsync`, before the operation is committed `done`, and so before the folders left empty go |
+
+A disk's entry also holds what the scenario says of it, when it says so: `renameat2`, at `false`, makes `RENAME_NOREPLACE` give `EINVAL` on that disk; and with a name in `refuses`, that, `link` and `mkdir` give `EINVAL` for a target of that name, which is compared with the last component only.
 
 A disk of the configuration is found here by its `mount`, equal to a `path`, and never by its `id`. To the mount check of `specs.md` §10, a `path` listed here has an entry that names it, with the root `/`, the type `fs` (`ntfs3` for `ntfs`), the mount options `rw` and the superblock options `rw`, plus `iocharset=utf8` on `ntfs3`. Its device answers, and its head holds the magic of `fs` and the identifier `uuid`. Any other folder has no such entry, and fails question 2. Question 10 and `ignore-case` look at the real folder, and the others of the second table find nothing to report.
 

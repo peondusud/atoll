@@ -1,0 +1,58 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "With no catalog there is nothing to read, and none is created.",
+  "disks": [
+    {
+      "id": "state",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/disks/state/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_tree",
+      "disk": "state",
+      "tree": []
+    }
+  ]
+}

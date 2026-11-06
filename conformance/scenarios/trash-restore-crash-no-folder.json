@@ -1,0 +1,190 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717.2",
+  "description": "A folder left by a crash, and gone since: its operation is undone, with nothing to report, and a new one makes it.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/sub/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/sub/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/sub/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "bytes": 1024,
+        "copies": [
+          {
+            "path": "d/sub/a",
+            "disk": "t3",
+            "size": 1024,
+            "outcome": "trashed"
+          }
+        ]
+      }
+    },
+    {
+      "do": "delete",
+      "disk": "t3",
+      "path": "media/d/sub"
+    },
+    {
+      "do": "delete",
+      "disk": "t3",
+      "path": "media/d"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "d/sub/a",
+        "--yes"
+      ],
+      "crash_at": "folder-made",
+      "exit": 137
+    },
+    {
+      "do": "delete",
+      "disk": "t3",
+      "path": "media/d"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "d/sub/a",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "entries": [
+          {
+            "path": "d/sub/a",
+            "disk": "t3",
+            "op": 1,
+            "outcome": "restored"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, kind, state FROM ops WHERE id > 1 ORDER BY id",
+      "rows": [
+        [
+          2,
+          "restore",
+          "undone"
+        ],
+        [
+          3,
+          "mkdir",
+          "undone"
+        ],
+        [
+          4,
+          "restore",
+          "done"
+        ],
+        [
+          5,
+          "mkdir",
+          "done"
+        ],
+        [
+          6,
+          "mkdir",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM events WHERE kind = 'op-undone'",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/d/sub/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/trash",
+          "kind": "dir"
+        }
+      ]
+    }
+  ]
+}

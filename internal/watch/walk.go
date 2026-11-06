@@ -18,6 +18,7 @@ type FoundFile struct {
 	BtimeNS *int64 // nil when the creation time is absent (specs.md §7)
 	FileKey string
 	Nlink   int64
+	Mode    int64
 }
 
 // FoundEntry is a folder, symlink or other file a walk found. Kind is never solver.EntryIgnored
@@ -115,6 +116,8 @@ func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, mountID uint
 	below, err := dir.OpenDir(name)
 	switch {
 	case fsx.IsUnreadableName(err):
+		// Reported, with no row: its entry was the last one added.
+		w.Entries = w.Entries[:len(w.Entries)-1]
 		w.Unreadable = append(w.Unreadable, path)
 		return nil
 	case err != nil:
@@ -124,6 +127,15 @@ func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, mountID uint
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = below.Close()
 	return walkErr
+}
+
+// FileFrom says what a walk would say of a regular file.
+func FileFrom(path string, st *fsx.Stat) (FoundFile, error) {
+	mtime, err := solver.TimeNS(st.Mtime.Sec, st.Mtime.Nsec)
+	if err != nil {
+		return FoundFile{}, fmt.Errorf("modification time: %w", err)
+	}
+	return foundFile(path, st, mtime)
 }
 
 func foundFile(path string, st *fsx.Stat, mtime int64) (FoundFile, error) {
@@ -138,6 +150,7 @@ func foundFile(path string, st *fsx.Stat, mtime int64) (FoundFile, error) {
 		CtimeNS: ctime,
 		FileKey: fmt.Sprintf("%d", st.Ino),
 		Nlink:   int64(st.Nlink),
+		Mode:    int64(st.Mode),
 	}
 	if st.HasBirth {
 		birth, ok, err := solver.CreationTimeNS(st.Birth.Sec, st.Birth.Nsec)

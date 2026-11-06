@@ -14,6 +14,8 @@ const (
 	exitOK    = 0
 	exitError = 1
 	exitUsage = 2
+	// exitConfirm says that a command was not allowed to do what it would have done (specs.md §29.3).
+	exitConfirm = 3
 	// exitPartial says that part of what was asked could not be done (specs.md §29.3).
 	exitPartial = 4
 )
@@ -64,6 +66,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runScan(configPath, args[1:], stdout, stderr)
 	case "status":
 		return runStatus(configPath, args[1:], stdout, stderr)
+	case "prune":
+		return runPrune(configPath, args[1:], stdout, stderr)
+	case "trash":
+		return runTrash(configPath, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}

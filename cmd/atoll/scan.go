@@ -12,6 +12,7 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -152,11 +153,20 @@ func scan(c *config.Config, opts watch.Options) (outcome *watch.Outcome, err err
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
+	if release, err = fsx.LockFile(catalogPath(c)); err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
 	outcome, err = watch.Scan(ctx, db, c, machine, opts)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)

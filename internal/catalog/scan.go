@@ -194,6 +194,7 @@ type CopyRow struct {
 	BtimeNS     sql.NullInt64
 	FirstSeenNS int64
 	VerifiedNS  sql.NullInt64
+	FileKey     sql.NullString
 }
 
 // FileRow is one file, with its copies.
@@ -249,7 +250,7 @@ func (r *FileReader) shareNull(raw []byte) sql.NullString {
 func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns,
-			c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state
+			c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state, c.file_key
 		FROM (SELECT * FROM files WHERE lpath > ? ORDER BY lpath LIMIT ?) f
 		LEFT JOIN copies c ON c.file_id = f.id
 		ORDER BY f.lpath, c.disk_id`, r.after, filePageSize)
@@ -265,7 +266,7 @@ func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 		var c CopyRow
 		var firstSeen sql.NullInt64
 		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original, &f.FirstSeenNS,
-			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &c.VerifiedNS, &copyState)
+			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &c.VerifiedNS, &copyState, &c.FileKey)
 		if err != nil {
 			return nil, fmt.Errorf("files: %w", err)
 		}
@@ -427,7 +428,10 @@ type HashWrite struct {
 	Hash     []byte
 	Chunks   []byte
 	Verified []string // the disks whose copy has the file's hash
-	Conflict bool
+	// Unverified holds the disks of a verified copy that no longer has it: nothing may rely on such
+	// a copy, and whether it is a modification or corruption is for the scrub (specs.md §15.10, §16).
+	Unverified []string
+	Conflict   bool
 }
 
 // WriteHashes writes what reading one file gave, in its own transaction, so that an interrupted
@@ -446,6 +450,11 @@ func WriteHashes(ctx context.Context, db *sql.DB, nowNS int64, w *HashWrite) err
 		}
 		for _, disk := range w.Verified {
 			if _, err := tx.ExecContext(ctx, "UPDATE copies SET verified_ns = ? WHERE file_id = ? AND disk_id = ?", nowNS, w.FileID, disk); err != nil {
+				return fmt.Errorf("copy on %q: %w", disk, err)
+			}
+		}
+		for _, disk := range w.Unverified {
+			if _, err := tx.ExecContext(ctx, "UPDATE copies SET verified_ns = NULL WHERE file_id = ? AND disk_id = ?", w.FileID, disk); err != nil {
 				return fmt.Errorf("copy on %q: %w", disk, err)
 			}
 		}

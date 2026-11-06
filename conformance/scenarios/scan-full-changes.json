@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a715.10, \u00a716",
-  "description": "A copy that changed is not read, and its row stays, and a file added between two scans is hashed. A verified copy whose hash differs while its times do not cannot come from a scenario, which cannot corrupt a disk: test/loopdev has that.",
+  "description": "A copy that changed is not read, and its row stays, and a file added between two scans is hashed. A verified copy whose hash differs while its times do not cannot come from a scenario, which cannot corrupt a disk: a unit test has that, with a reader that serves other bytes.",
   "disks": [
     {
       "id": "t1",

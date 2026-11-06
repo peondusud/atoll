@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/prune.schema.json",
+  "title": "atoll prune --json",
+  "description": "Each surplus copy, by path in byte order, then by position (specs.md §17.3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "applied",
+    "bytes",
+    "copies"
+  ],
+  "properties": {
+    "applied": {
+      "type": "boolean",
+      "description": "Whether it was allowed to write."
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The sizes of the copies to-trash or trashed."
+    },
+    "copies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/copy"
+      }
+    }
+  },
+  "$defs": {
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "size",
+        "outcome"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disk": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcome": {
+          "enum": [
+            "trashed",
+            "to-trash",
+            "unverified",
+            "conflict",
+            "corrupt",
+            "below-level",
+            "last-user-copy",
+            "changed",
+            "disk-unavailable",
+            "name-refused",
+            "io-error"
+          ]
+        }
+      }
+    }
+  }
+}

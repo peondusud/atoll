@@ -67,16 +67,9 @@ func (o *Outcome) Partial() bool {
 // (specs.md §15.10).
 func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, opts Options) (*Outcome, error) {
 	now := m.Now()
-	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	verdicts, err := CheckDisks(ctx, db, c, m, now)
 	if err != nil {
 		return nil, err
-	}
-	rows, err := diskRows(c, verdicts, m, now)
-	if err != nil {
-		return nil, err
-	}
-	if err := catalog.SyncDisks(ctx, db, rows); err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	out := &Outcome{Disks: []Report{}}
 	for i := range c.Disks {
@@ -90,14 +83,14 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 		}
 		out.Disks = append(out.Disks, *report)
 	}
-	if err := settle(ctx, db, c, now); err != nil {
+	if err := Settle(ctx, db, c, now); err != nil {
 		return nil, err
 	}
 	if opts.Full {
 		if err := hashCopies(ctx, db, c, m, out, now); err != nil {
 			return nil, err
 		}
-		if err := settle(ctx, db, c, now); err != nil {
+		if err := Settle(ctx, db, c, now); err != nil {
 			return nil, err
 		}
 	}
@@ -110,13 +103,27 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 	return out, nil
 }
 
+// CheckDisks runs a mount check on every disk of the configuration, and records what it found.
+func CheckDisks(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, now int64) ([]disks.Verdict, error) {
+	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	if err := catalog.SyncDisks(ctx, db, diskRows(c, verdicts, m, now)); err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	return verdicts, nil
+}
+
 func sortPaths(r *Report) {
 	for _, list := range [][]string{r.Changed, r.Absent, r.Unreadable, r.OtherMounts} {
 		slices.Sort(list)
 	}
 }
 
-func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now int64) ([]catalog.Disk, error) {
+// diskRows says what to record of each disk. One that passed its check and cannot say how full it is
+// counts as failed, in the verdict too, and keeps what the last check measured (specs.md §15.10).
+func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now int64) []catalog.Disk {
 	rows := make([]catalog.Disk, 0, len(c.Disks))
 	for i := range c.Disks {
 		d := &c.Disks[i]
@@ -127,13 +134,15 @@ func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now i
 		if verdicts[i].State != disks.Missing {
 			capacity, free, err := m.Space(d.Mount)
 			if err != nil {
-				return nil, fmt.Errorf("disk %q: %w", d.ID, err)
+				verdicts[i] = disks.Verdict{State: disks.Missing, Reason: disks.IOError, Message: err.Error()}
+				row.State = string(disks.Missing)
+			} else {
+				row.Seen, row.Capacity, row.Free, row.LastSeenNS = true, capacity, free, now
 			}
-			row.Seen, row.Capacity, row.Free, row.LastSeenNS = true, capacity, free, now
 		}
 		rows = append(rows, row)
 	}
-	return rows, nil
+	return rows
 }
 
 // walkDisk walks one disk and writes what it found, whole or not at all.
@@ -191,7 +200,7 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, disk string,
 		size := f.Size
 		policy := c.Policy(f.Path, &size)
 		if policy.Action == rules.Ignore {
-			entries = append(entries, catalog.EntryRow{Path: f.Path, Kind: string(solver.EntryIgnored), MtimeNS: f.MtimeNS})
+			entries = append(entries, catalog.EntryRow{Path: f.Path, Kind: string(solver.EntryIgnored), Mode: f.Mode, MtimeNS: f.MtimeNS})
 			r.Ignored++
 			return
 		}
@@ -217,7 +226,7 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, disk string,
 		f := &w.Files[next]
 		next++
 		found(f)
-		if unchanged(f, k) {
+		if Unchanged(f, k) {
 			r.Known++
 		} else {
 			r.Changed = append(r.Changed, f.Path)
@@ -270,7 +279,8 @@ func atOrBelow(set map[string]bool, path string) bool {
 	return false
 }
 
-func unchanged(f *FoundFile, k *catalog.KnownCopy) bool {
+// Unchanged says whether a look at a copy found what its row says (specs.md §15.10).
+func Unchanged(f *FoundFile, k *catalog.KnownCopy) bool {
 	return k.Size.Valid && k.Size.Int64 == f.Size &&
 		k.MtimeNS.Valid && k.MtimeNS.Int64 == f.MtimeNS &&
 		k.CtimeNS.Valid && k.CtimeNS.Int64 == f.CtimeNS &&
@@ -286,8 +296,8 @@ type settled struct {
 	update *catalog.FileUpdate
 }
 
-// settle gives each file its original, its policy and what the plan says, on the whole catalog.
-func settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error {
+// Settle gives each file its original, its policy and what the plan says, on the whole catalog.
+func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error {
 	diskList, err := catalog.Disks(ctx, db)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
@@ -666,8 +676,10 @@ func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[s
 		case bytes.Equal(read[i].file[:], reference):
 			write.Verified = append(write.Verified, read[i].cp.Disk)
 		case read[i].cp.VerifiedNS.Valid:
-			// Whether this is a modification or corruption is for the scrub (specs.md §16).
+			// Whether this is a modification or corruption is for the scrub (specs.md §16). Until
+			// then nothing may rely on it: prune counts verified copies as what stays.
 			readers[read[i].cp.Disk].report.Changed = append(readers[read[i].cp.Disk].report.Changed, f.Path)
+			write.Unverified = append(write.Unverified, read[i].cp.Disk)
 		default:
 			write.Conflict = true
 		}

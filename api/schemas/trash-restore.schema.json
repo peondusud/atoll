@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/trash-restore.schema.json",
+  "title": "atoll trash restore --json",
+  "description": "For each path, its newest entry, by path in byte order (specs.md §17.4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "applied",
+    "entries"
+  ],
+  "properties": {
+    "applied": {
+      "type": "boolean",
+      "description": "Whether it was allowed to write."
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "op",
+        "outcome"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disk": {
+          "type": "string",
+          "minLength": 1
+        },
+        "op": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "outcome": {
+          "enum": [
+            "restored",
+            "to-restore",
+            "path-taken",
+            "name-collision",
+            "changed",
+            "disk-unavailable",
+            "name-refused",
+            "io-error"
+          ]
+        }
+      }
+    }
+  }
+}

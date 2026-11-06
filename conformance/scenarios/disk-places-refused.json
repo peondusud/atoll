@@ -1,0 +1,216 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79",
+  "description": "Another work folder or root is refused for a disk whose trash or copies the catalog holds, and so is another uuid for an id that holds only a trash. Each would read what the catalog holds against another place.",
+  "disks": [
+    {
+      "id": "state",
+      "uuid": "5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    },
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "a.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"single\"\npath = \"**\"\nreplicas = 0\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "work-t1.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\nworkdir = \"Other\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"single\"\npath = \"**\"\nreplicas = 0\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "root-t1.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\nroot = \"Other\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"single\"\npath = \"**\"\nreplicas = 0\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "work.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\nworkdir = \"Other\"\n[[rule]]\nlabel = \"single\"\npath = \"**\"\nreplicas = 0\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "root.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\nroot = \"Other\"\n[[rule]]\nlabel = \"single\"\npath = \"**\"\nreplicas = 0\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "uuid.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"single\"\npath = \"**\"\nreplicas = 0\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "prune",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "bytes": 1024,
+        "copies": [
+          {
+            "path": "a",
+            "disk": "t2",
+            "size": 1024,
+            "outcome": "trashed"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM copies WHERE disk_id = 't2'",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/work.toml",
+        "scan"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/root.toml",
+        "scan"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/uuid.toml",
+        "scan"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/work-t1.toml",
+        "scan"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/root-t1.toml",
+        "scan"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/work.toml",
+        "prune",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT fs_uuid, root, workdir FROM disks WHERE id = 't2'",
+      "rows": [
+        [
+          "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+          "media",
+          "Atoll"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "trash",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "a",
+            "disk": "t2",
+            "reason": "surplus",
+            "size": 1024,
+            "blake3": "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+            "deleted": "2026-01-01T00:00:00.000000000Z",
+            "expires": "2026-01-31T00:00:00.000000000Z",
+            "op": 1
+          }
+        ]
+      }
+    }
+  ]
+}

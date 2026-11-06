@@ -182,6 +182,40 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `state` | string | the one it shows |
 | `error` | boolean | `true` when a state is unknown |
 
+### `trash_path.json` — where a copy goes in the trash (§17)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `started_ns` | integer | when the operation started |
+| `op_id` | integer | its id |
+| `path`, `path_b64` | string | the logical path |
+| `trash_path`, `trash_path_b64` | string | the location inside `<workdir>/trash/` |
+| `error` | boolean | `true` when the id is not positive or the path is not well-formed |
+
+### `prune.json` — what `atoll prune` does with each surplus copy (§17.3)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | string | the file's state |
+| `replicas` | integer | its wanted replicas |
+| `hash` | boolean | whether it has a hash |
+| `copies` | array of objects | its copies, in any order: `disk`, `position`, `state`, `created_by`, `disk_state`, `verified` and `unchanged`, all required |
+| `outcomes` | array of objects | for each `surplus` copy, by position: `disk` and `outcome` |
+| `error` | boolean | `true` when a state or a creator is unknown, or a disk or position appears twice |
+
+### `op_recovery.json` — what a reprise does with an operation (§17.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | string | `trash`, `restore`, `unlink` for a purge, or `mkdir` |
+| `source`, `target` | string | `absent`, `same` or `other`, compared with `ops.file_key`, and for `mkdir` with being a folder. An `unlink` has no target, and a `mkdir` no source |
+| `changed` | boolean | optional: for `trash`, whether the file is no longer what its row says |
+| `action` | string | `finish` or `undo` |
+| `remove_source`, `remove_target` | boolean | which name must go |
+| `move_back` | boolean | whether the file at the target goes back to the source |
+| `warn` | boolean | whether it gets an `op-undone` event |
+| `error` | boolean | `true` on an unknown word or kind, or a name that kind does not have or lacks |
+
 ### `original.json` — the original of a file (§7)
 
 | Field | Type | Meaning |

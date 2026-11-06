@@ -32,26 +32,25 @@ Every item here is a **decision**:
   - `--help`, the French translation of the CLI, and human output that writes durations as the configuration does: `atoll rules explain` prints `settle_ns = 600000000000`;
   - the fallbacks of §12.2 for the modes, when jobs act on them: `rules.Policy` holds what the configuration asks for, and `atoll scan` already gives the plan only what has an effect;
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
-- `catalog rebuild` must start `ops.id` past the ids in each disk's trash, so that a new operation's folder cannot meet an old one (§17): rebuilding empties `sqlite_sequence`.
+- **decision**: a nested btrfs subvolume below the root has its own inode numbers, so `file_key` does not identify a file there, and what happens to a hard-linked file can write another file's row, which then reads as changed. Also, nothing can move from it to the trash, as `rename` gives `EXDEV`. Should a walk treat a folder on another device like a folder on another mount?
+- `catalog rebuild` must start `ops.id` past the ids in each disk's trash, as must `atoll init` over a catalog that went missing, so that a new operation's folder does not meet an old one (§17): both restart `sqlite_sequence`. Until then such a meeting costs one `io-error`, and the next run takes another id.
 - Memory of the daemon on 200,000 files (§26): `atoll scan` stays under the limit, and a daemon holds more than a scan does.
 - What the mount check of §10 leaves to do for disks:
-  - **decision** (§30): what confirms a disk before a session of writes (invariant 3). Should it read the head past the page cache, which wakes the disk, as the writes will?
-  - a directory handle on the verified root, and the device id checked again before each job (invariant 3), with the first command that writes;
   - the check every 30 s in the daemon, which must wake no disk (§18), and the alert when a disk becomes `missing` or `readonly`;
   - `Atoll/disk.toml`, `atoll disk show`, and the inode size in the ext4 superblock, which gives `time_precision_ns`;
   - at `disk add`: the block-device topology (R-06), another filesystem with the same identifier (§10), and the warning about `chattr +i`;
   - the remount after a USB reset (§10).
 - The conformance build (§29.4): `daemon --until-idle`, with the first jobs. It reads its disks and its clock from `ATOLL_CONFORMANCE` already.
 - Reading the time back in the copy pipeline (§14).
-- `disk add` and `disk remove`, and the other `atoll disk` commands.
+- `disk add` and `disk remove`, and the other `atoll disk` commands. `disk remove` must refuse a disk with `planned` operations: on a disk no longer in the configuration they wait for good, and every command that writes exits with 4.
 - The scan in the daemon: at startup, after an overflow, every `maintenance.rescan_every`, and hashing new files inside `maintenance.window` (§15.1, §18). `atoll scan` hashes only with `--full`.
 - `time_precision_ns` when `disks` is written (§9), which the comparison of times across filesystems will need.
 - `deferred` and `manual` modes, with `--now` and `--force`.
 - Propagation of renames, deletions and modifications, with grouping and the mass-deletion guard, including renames to a name a disk refuses (§15.3). Until then `atoll scan` reports them in `changed` and `absent`, and the catalog does not follow.
-- Trash, including the `.chunks` folders and copies whose name the driver refuses (§17).
+- The rest of the trash (§17): `[trash].max_size` and its purging order, the `.chunks` folders with `repair`, `restore --to` with the copy pipeline, the link guard, the alert for a name the driver refuses, the reasons other than `surplus`, and removing Atoll's own folders below the root once they are empty (§6.1). A folder's attributes other than its mode and owner wait for the pipeline.
 - Detection-only scrub. `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`, and `repair` (phase 1b) must look for the conflict again before it clears that.
 - `mergerfs-config` and runtime branches.
 - `atoll names check`: the CLI over `names.Check`, reading the catalog, with the JSON of `api/schemas/names-check.schema.json`.
 - ntfy alerts.
-- The operation journal (`ops`) and crash recovery, with fault injection.
+- The operation journal (`ops`) covers the trash so far (§17.1, §17.2). Each new kind of operation, starting with the copy pipeline and propagation, needs its own reprise, with kill -9 at each step and fault injection.
 - The break-glass test and the failed-mount test in CI.

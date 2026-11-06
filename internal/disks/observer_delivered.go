@@ -35,8 +35,27 @@ func (machine) Mount(mount string) MountSeen {
 	return ParseMountInfo(table).Find(info.MountID)
 }
 
+func (machine) OpenTop(mount string) (fsx.Dir, error) {
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return nil, fmt.Errorf("top: %w", err)
+	}
+	return top, nil
+}
+
 func (machine) Device(fs names.Filesystem, entry *MountEntry) DeviceSeen {
 	head, err := fsx.ReadBlockHead(entry.Source, HeadSize)
+	return seenDevice(fs, entry, head, err)
+}
+
+func (machine) ReadPastCache(fs names.Filesystem, entry *MountEntry) DeviceSeen {
+	head, err := fsx.ReadBlockHeadDirect(entry.Source)
+	return seenDevice(fs, entry, head, err)
+}
+
+func (machine) Checkpoint(string) {}
+
+func seenDevice(fs names.Filesystem, entry *MountEntry, head fsx.BlockHead, err error) DeviceSeen {
 	switch {
 	case errors.Is(err, fsx.ErrNotBlockDevice), fsx.IsDeviceGone(err):
 		return DeviceSeen{Device: DeviceGoneAway, Note: err.Error()}

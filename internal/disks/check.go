@@ -128,6 +128,13 @@ type Machine interface {
 	Space(mount string) (capacity, free int64, err error)
 	// OpenRoot opens the managed root of a disk that passed its check.
 	OpenRoot(mount, root string) (fsx.Dir, error)
+	// OpenTop opens the top of a disk that passed its check, for what writes to it.
+	OpenTop(mount string) (fsx.Dir, error)
+	// ReadPastCache answers questions 5 to 7 again, past the page cache (specs.md §10).
+	ReadPastCache(fs names.Filesystem, entry *MountEntry) DeviceSeen
+	// Checkpoint marks a point of an operation, where a conformance build may stop at once as
+	// kill -9 would (specs.md §29.4). It does nothing in the delivered binary.
+	Checkpoint(point string)
 }
 
 // CheckAll checks each disk, in the order given.
@@ -192,6 +199,34 @@ func Check(observer Observer, d *config.Disk) Verdict {
 		return missing(IOError, fmt.Sprintf("%q does not answer: %s", d.Root, root.Note))
 	}
 	return judgeWrites(e, device.Identity.Variant, root.OtherCase, d.Root)
+}
+
+// Confirm runs a mount check, then reads the head past the page cache, so that a disk whose answers
+// are still cached does not pass (specs.md §10). A session does this once per disk.
+func Confirm(m Machine, d *config.Disk) Verdict {
+	verdict := Check(m, d)
+	if verdict.State == Missing {
+		return verdict
+	}
+	seen := m.Mount(d.Mount)
+	if seen.Entry == nil {
+		return missing(NotMounted, "nothing is mounted at that path")
+	}
+	device := m.ReadPastCache(d.FS, seen.Entry)
+	switch device.Device {
+	case DeviceOK:
+	case DeviceGoneAway:
+		return missing(DeviceGone, fmt.Sprintf("its device %q is gone: %s", seen.Entry.Source, device.Note))
+	case DeviceUnreadable:
+		return missing(DeviceUnread, fmt.Sprintf("its device %q does not answer: %s", seen.Entry.Source, device.Note))
+	}
+	switch {
+	case device.Identity == nil:
+		return missing(WrongFilesystem, fmt.Sprintf("its device %q holds no %s", seen.Entry.Source, d.FS))
+	case device.Identity.ID != d.UUID:
+		return missing(WrongIdentifier, fmt.Sprintf("another disk is mounted there: %s", device.Identity.ID))
+	}
+	return verdict
 }
 
 func missing(reason Reason, message string) Verdict {

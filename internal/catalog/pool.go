@@ -209,6 +209,9 @@ func syncOne(ctx context.Context, tx *sql.Tx, d *Disk) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
+	if err := checkPlaces(ctx, tx, d); err != nil {
+		return err
+	}
 	for _, id := range clashes {
 		holds, err := holdsAnything(ctx, tx, id)
 		if err != nil {
@@ -254,9 +257,35 @@ func syncOne(ctx context.Context, tx *sql.Tx, d *Disk) error {
 	return nil
 }
 
+// checkPlaces refuses another root or work folder for a disk that holds anything: the catalog's paths
+// are relative to them, so a copy would read as absent and an entry of the trash as gone (specs.md
+// §9, §17.2).
+func checkPlaces(ctx context.Context, tx *sql.Tx, d *Disk) error {
+	var root, workdir string
+	err := tx.QueryRowContext(ctx, "SELECT root, workdir FROM disks WHERE id = ?", d.ID).Scan(&root, &workdir)
+	switch {
+	case isNoRows(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("read: %w", err)
+	case root == d.Root && workdir == d.Workdir:
+		return nil
+	}
+	holds, err := holdsAnything(ctx, tx, d.ID)
+	if err != nil {
+		return err
+	}
+	if holds {
+		return fmt.Errorf("the catalog has copies or a trash on it at the root %q and the work folder %q: put the configuration back", root, workdir)
+	}
+	return nil
+}
+
 func holdsAnything(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
 	var holds bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM copies WHERE disk_id = ?1) OR EXISTS(SELECT 1 FROM entries WHERE disk_id = ?1)`, id).Scan(&holds)
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM copies WHERE disk_id = ?1) OR EXISTS(SELECT 1 FROM entries WHERE disk_id = ?1)
+			OR EXISTS(SELECT 1 FROM trash WHERE disk_id = ?1) OR EXISTS(SELECT 1 FROM ops WHERE disk_id = ?1 AND state = 'planned')`, id).Scan(&holds)
 	if err != nil {
 		return false, fmt.Errorf("read: %w", err)
 	}

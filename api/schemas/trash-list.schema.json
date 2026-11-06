@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/trash-list.schema.json",
+  "title": "atoll trash list --json",
+  "description": "Each entry whose operation is done, by path in byte order, then by operation (specs.md §17.4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entries"
+  ],
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "time": {
+      "description": "specs.md §29.3: UTC, with nine digits of fraction.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{9}Z$"
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "reason",
+        "size",
+        "blake3",
+        "deleted",
+        "expires",
+        "op"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disk": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "enum": [
+            "deleted",
+            "overwritten",
+            "repaired",
+            "quarantined",
+            "surplus",
+            "rebalance",
+            "renamed"
+          ]
+        },
+        "size": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blake3": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deleted": {
+          "$ref": "#/$defs/time"
+        },
+        "expires": {
+          "$ref": "#/$defs/time"
+        },
+        "op": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
