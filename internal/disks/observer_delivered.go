@@ -5,14 +5,16 @@ package disks
 import (
 	"errors"
 	"fmt"
+	"path"
+	"time"
 
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/names"
 )
 
-// NewObserver gives the observer of the delivered binary, which looks at the machine. Taking a
-// folder for a disk takes another build (specs.md §29.4), so nothing here can skip a check.
-func NewObserver() (Observer, error) {
+// NewMachine gives what the delivered binary sees, which is the machine. Taking a folder for a
+// disk takes another build (specs.md §29.4), so nothing here can skip a check.
+func NewMachine() (Machine, error) {
 	return machine{}, nil
 }
 
@@ -55,4 +57,24 @@ func (machine) Device(fs names.Filesystem, entry *MountEntry) DeviceSeen {
 
 func (machine) Root(mount, root string) RootSeen {
 	return lookAtRoot(mount, root)
+}
+
+func (machine) Now() int64 {
+	return time.Now().UnixNano()
+}
+
+func (machine) Space(mount string) (capacity, free int64, err error) {
+	capacity, free, err = fsx.Space(mount)
+	if err != nil {
+		return 0, 0, fmt.Errorf("space: %w", err)
+	}
+	return capacity, free, nil
+}
+
+func (machine) OpenRoot(mount, root string) (fsx.Dir, error) {
+	dir, err := fsx.OpenDir(path.Join(mount, root))
+	if err != nil {
+		return nil, fmt.Errorf("root: %w", err)
+	}
+	return dir, nil
 }

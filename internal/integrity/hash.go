@@ -1,7 +1,10 @@
 package integrity
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"slices"
 
 	"github.com/zeebo/blake3"
@@ -52,6 +55,33 @@ func (h *Hasher) Write(p []byte) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// HashReader reads to the end, and gives the whole-file hash and the chunk hashes (specs.md §16).
+func HashReader(ctx context.Context, r io.Reader) (file [HashSize]byte, chunks []byte, err error) {
+	h, err := NewHasher(ChunkSize)
+	if err != nil {
+		return file, nil, err
+	}
+	buffer := make([]byte, 1<<20)
+	for {
+		if err := ctx.Err(); err != nil {
+			return file, nil, fmt.Errorf("integrity: %w", err)
+		}
+		n, err := r.Read(buffer)
+		if n > 0 {
+			if _, err := h.Write(buffer[:n]); err != nil {
+				return file, nil, err
+			}
+		}
+		switch {
+		case errors.Is(err, io.EOF):
+			file, chunks = h.Sum()
+			return file, chunks, nil
+		case err != nil:
+			return file, nil, fmt.Errorf("integrity: %w", err)
+		}
+	}
 }
 
 // Sum returns the whole-file hash and the chunk hashes so far, concatenated. A

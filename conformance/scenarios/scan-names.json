@@ -1,0 +1,187 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.4, \u00a715.7, \u00a715.8, \u00a715.10",
+  "description": "ext4 holds them all, and the empty NTFS disk does not: a name it refuses, a name that collides with one placed before it in the plan's order, and a name that is not UTF-8, which has no key. Nothing is renamed.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a:b.mkv",
+          "text": "1"
+        },
+        {
+          "path": "media/Film.mkv",
+          "text": "2"
+        },
+        {
+          "path": "media/film.mkv",
+          "text": "3"
+        },
+        {
+          "path_b64": "bWVkaWEv/y5ta3Y=",
+          "text": "4"
+        }
+      ]
+    },
+    {
+      "id": "u1",
+      "uuid": "01D9F3A2B4C5E6F7",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"u1\"\nuuid = \"01D9F3A2B4C5E6F7\"\nmount = \"${SANDBOX}/disks/u1\"\nfs = \"ntfs\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 4,
+            "bytes": 4,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 4,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "u1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 0,
+            "bytes": 0,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT hex(lpath), state, lpath_key FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "46696C6D2E6D6B76",
+          "pending",
+          "FILM.MKV"
+        ],
+        [
+          "613A622E6D6B76",
+          "name-incompatible",
+          "A:B.MKV"
+        ],
+        [
+          "66696C6D2E6D6B76",
+          "name-collision",
+          "FILM.MKV"
+        ],
+        [
+          "FF2E6D6B76",
+          "name-incompatible",
+          null
+        ]
+      ]
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path_b64": "bWVkaWEv/y5ta3Y="
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 3,
+            "bytes": 3,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 3,
+            "hashed": 0,
+            "changed": [],
+            "absent": [
+              {
+                "path_b64": "/y5ta3Y="
+              }
+            ],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "u1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 0,
+            "bytes": 0,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    }
+  ]
+}

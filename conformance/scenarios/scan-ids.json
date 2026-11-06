@@ -1,0 +1,106 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.10",
+  "description": "Ids follow the byte order of paths, disk after disk in the order of the configuration, not the order of a walk: a b/x before a/x, and 0, on the second disk, last.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a/x",
+          "text": "1"
+        },
+        {
+          "path": "media/a b/x",
+          "text": "2"
+        },
+        {
+          "path": "media/Z",
+          "text": "3"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/0",
+          "text": "4"
+        },
+        {
+          "path": "media/Z",
+          "text": "3"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, CAST(lpath AS TEXT) FROM files ORDER BY id",
+      "rows": [
+        [
+          1,
+          "Z"
+        ],
+        [
+          2,
+          "a b/x"
+        ],
+        [
+          3,
+          "a/x"
+        ],
+        [
+          4,
+          "0"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT file_id, disk_id FROM copies ORDER BY file_id, disk_id",
+      "rows": [
+        [
+          1,
+          "t1"
+        ],
+        [
+          1,
+          "t2"
+        ],
+        [
+          2,
+          "t1"
+        ],
+        [
+          3,
+          "t1"
+        ],
+        [
+          4,
+          "t2"
+        ]
+      ]
+    }
+  ]
+}

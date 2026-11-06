@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/scan.schema.json",
+  "title": "atoll scan --json",
+  "description": "What a scan found (specs.md §15.10). Disks are in the order of the configuration, and every list of paths is in byte order.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disks", "conflicts"],
+  "properties": {
+    "disks": {
+      "description": "The disks asked for.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/disk" }
+    },
+    "conflicts": {
+      "description": "Every file of the catalog in the state conflict, after this scan.",
+      "$ref": "#/$defs/paths"
+    }
+  },
+  "$defs": {
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "reason", "message", "walked", "files", "bytes", "folders", "symlinks", "ignored", "new", "known", "hashed", "changed", "absent", "unreadable", "other_mounts"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["online", "readonly", "missing"] },
+        "reason": {
+          "description": "From the closed list of specs.md §10. null when online.",
+          "type": ["string", "null"]
+        },
+        "message": {
+          "description": "For a reader, translated, and no contract. null when online.",
+          "type": ["string", "null"]
+        },
+        "walked": {
+          "description": "The walk ended and was written. When false, everything below is empty.",
+          "type": "boolean"
+        },
+        "files": { "$ref": "#/$defs/count", "description": "Regular files found to manage." },
+        "bytes": { "$ref": "#/$defs/count", "description": "Their total size." },
+        "folders": { "$ref": "#/$defs/count" },
+        "symlinks": { "$ref": "#/$defs/count" },
+        "ignored": { "$ref": "#/$defs/count" },
+        "new": { "$ref": "#/$defs/count", "description": "Copies this scan added to the catalog." },
+        "known": { "$ref": "#/$defs/count", "description": "Copies already in the catalog, and unchanged." },
+        "hashed": { "$ref": "#/$defs/count", "description": "Copies read to the end by --full." },
+        "changed": { "$ref": "#/$defs/paths" },
+        "absent": { "$ref": "#/$defs/paths" },
+        "unreadable": { "$ref": "#/$defs/paths" },
+        "other_mounts": { "$ref": "#/$defs/paths" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "online" } } },
+          "then": { "properties": { "reason": { "type": "null" }, "message": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "readonly" } } },
+          "then": {
+            "properties": {
+              "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "casefold", "ascii-ci", "ignore-case", "read-only-mount"] },
+              "message": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "state": { "const": "missing" } } },
+          "then": {
+            "properties": {
+              "reason": { "enum": ["not-mounted", "io-error", "partial-mount", "wrong-filesystem", "device-gone", "device-unreadable", "wrong-identifier", "no-root"] },
+              "message": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "walked": { "const": false } } },
+          "then": {
+            "properties": {
+              "files": { "const": 0 }, "bytes": { "const": 0 }, "folders": { "const": 0 }, "symlinks": { "const": 0 }, "ignored": { "const": 0 },
+              "new": { "const": 0 }, "known": { "const": 0 }, "hashed": { "const": 0 },
+              "changed": { "maxItems": 0 }, "absent": { "maxItems": 0 }, "unreadable": { "maxItems": 0 }, "other_mounts": { "maxItems": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "count": { "type": "integer", "minimum": 0 },
+    "paths": {
+      "type": "array",
+      "items": {
+        "description": "A path of specs.md §29.3: path when it is valid UTF-8, otherwise path_b64.",
+        "type": "object",
+        "additionalProperties": false,
+        "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }],
+        "properties": {
+          "path": { "type": "string" },
+          "path_b64": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,101 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "No configuration and no values; values with a configuration already there; a configuration that does not load; a catalog of another pool. None changes anything.",
+  "disks": [
+    {
+      "id": "state",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/none.toml",
+        "init"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "bad.toml",
+      "text": "pool_id = \n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/bad.toml",
+        "init"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "a.toml",
+      "text": "pool_id = \"a\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "init",
+        "--pool-id",
+        "a",
+        "--view-mount",
+        "${SANDBOX}/pool"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "init"
+      ]
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "b.toml",
+      "text": "pool_id = \"b\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/b.toml",
+        "init"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/b.toml",
+        "init",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT value FROM meta WHERE key = 'pool_id'",
+      "rows": [
+        [
+          "a"
+        ]
+      ]
+    }
+  ]
+}

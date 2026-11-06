@@ -1,0 +1,207 @@
+package fsx
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func TestFileTime(t *testing.T) {
+	for _, tc := range []struct {
+		units uint64
+		want  Time
+	}{
+		{132539040001234567, Time{1609430400, 123456700}}, // ntfs-3g wrote it, ntfs3 read it (docs/research/file-times.md)
+		{0, Time{-11644473600, 0}},
+		{116444736000000000, Time{0, 0}},
+		{116444736000000001, Time{0, 100}},
+		{116444735999999999, Time{-1, 999999900}},
+		{1<<64 - 1, Time{1844674407370 - 11644473600 + 0, 955161500}},
+	} {
+		if got := FileTime(tc.units); got != tc.want {
+			t.Errorf("%d: got %+v, want %+v", tc.units, got, tc.want)
+		}
+	}
+}
+
+func TestDirNeverFollowsASymlink(t *testing.T) {
+	top := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(top, "real/sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(top, "real/file"), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{"to-dir": "real", "to-file": "real/file"} {
+		if err := os.Symlink(target, filepath.Join(top, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := OpenDir(filepath.Join(top, "to-dir")); !errors.Is(err, syscall.ENOTDIR) && !errors.Is(err, syscall.ELOOP) {
+		t.Errorf("OpenDir through a symlink: %v", err)
+	}
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	names, err := dir.Names()
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"real", "to-dir", "to-file"}) {
+		t.Errorf("names: %v", names)
+	}
+	if _, err := dir.OpenDir("to-dir"); !IsUnreadableName(err) {
+		t.Errorf("OpenDir on a symlink: %v", err)
+	}
+	if _, err := dir.OpenFile("to-file"); !IsUnreadableName(err) {
+		t.Errorf("OpenFile on a symlink: %v", err)
+	}
+	if _, err := OpenFileAt(dir, "to-dir/file"); !IsUnreadableName(err) {
+		t.Errorf("a path through a symlink: %v", err)
+	}
+	st, err := dir.Stat("to-file")
+	if err != nil || st.Kind != KindSymlink {
+		t.Errorf("Stat on a symlink: %+v, %v", st, err)
+	}
+	target, err := dir.ReadLink("to-file")
+	if err != nil || target != "real/file" {
+		t.Errorf("ReadLink: %q, %v", target, err)
+	}
+	f, err := OpenFileAt(dir, "real/file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if info, err := f.Info(); err != nil || info.Size != 3 || info.Kind != KindFile {
+		t.Errorf("Info: %+v, %v", info, err)
+	}
+	if _, err := dir.OpenFile("real"); !IsUnreadableName(err) {
+		t.Errorf("OpenFile on a folder: %v", err)
+	}
+}
+
+// TestStatSaysWhatStatxSays: each field, against what the os package reads. A wrong one would be
+// compared with itself on every later scan, and nothing else would show it.
+func TestStatSaysWhatStatxSays(t *testing.T) {
+	top := t.TempDir()
+	full := filepath.Join(top, "file")
+	if err := os.WriteFile(full, []byte("abcde"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(full, filepath.Join(top, "again")); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Unix(1000000000, 123000000)
+	if err := os.Chtimes(full, when, when); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	st, err := dir.Stat("file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want syscall.Stat_t
+	if err := syscall.Stat(full, &want); err != nil {
+		t.Fatal(err)
+	}
+	if st.Kind != KindFile || st.Size != 5 || st.Mode != 0o640 || st.Nlink != 2 || st.Ino != want.Ino {
+		t.Errorf("%+v, inode %d", st, want.Ino)
+	}
+	if st.Mtime != (Time{1000000000, 123000000}) {
+		t.Errorf("modification time %+v", st.Mtime)
+	}
+	if st.Ctime != (Time{want.Ctim.Sec, want.Ctim.Nsec}) || st.Ctime.Sec <= st.Mtime.Sec {
+		t.Errorf("change time %+v, want %+v", st.Ctime, want.Ctim)
+	}
+	file, err := dir.OpenFile("file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	seen, err := file.Info()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.Ino != st.Ino || seen.Ctime != st.Ctime || seen.MountID != st.MountID {
+		t.Errorf("an open file: %+v, want %+v", seen, st)
+	}
+}
+
+func TestOpenFileRefusesAFifoWithoutWaiting(t *testing.T) {
+	top := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(top, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	if _, err := dir.OpenFile("pipe"); !errors.Is(err, ErrNotARegularFile) {
+		t.Errorf("got %v", err)
+	}
+	st, err := dir.Stat("pipe")
+	if err != nil || st.Kind != KindOther {
+		t.Errorf("Stat: %+v, %v", st, err)
+	}
+}
+
+func TestWriteNewNeverReplaces(t *testing.T) {
+	top := t.TempDir()
+	path := filepath.Join(top, "file")
+	if err := WriteNew(path, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteNew(path, []byte("second")); err == nil {
+		t.Error("it replaced a file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "first" {
+		t.Errorf("%q, %v", data, err)
+	}
+	entries, err := os.ReadDir(top)
+	if err != nil || len(entries) != 1 {
+		t.Errorf("left behind: %v, %v", entries, err)
+	}
+	if exists, err := Exists(path); !exists || err != nil {
+		t.Errorf("Exists: %v, %v", exists, err)
+	}
+	if exists, err := Exists(path + "x"); exists || err != nil {
+		t.Errorf("Exists: %v, %v", exists, err)
+	}
+}
+
+func TestSumSizes(t *testing.T) {
+	top := t.TempDir()
+	for name, size := range map[string]int{"a": 3, "sub/b": 5, "sub/deep/c": 7} {
+		full := filepath.Join(top, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("a", filepath.Join(top, "link")); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	if got, err := SumSizes(dir); got != 15 || err != nil {
+		t.Errorf("got %d, %v", got, err)
+	}
+}

@@ -1,0 +1,167 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a711.3, \u00a713.4, \u00a715.10",
+  "description": "The policy of each file, with its size. An ignored file is an entry. A replica nobody wants, or one waiting for atoll replicate, leaves a file unprotected.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.nfo",
+          "text": "x"
+        },
+        {
+          "path": "media/Tmp/b",
+          "text": "yy"
+        },
+        {
+          "path": "media/Manual/c",
+          "text": "zzz"
+        },
+        {
+          "path": "media/big",
+          "size": 2048
+        },
+        {
+          "path": "media/d",
+          "text": "wwww"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"skip\"\next = [\"nfo\"]\naction = \"ignore\"\n[[rule]]\nlabel = \"temporary\"\npath = \"Tmp/**\"\nreplicas = 0\n[[rule]]\nlabel = \"manual\"\npath = \"Manual/**\"\nmode = \"manual\"\n[[rule]]\nlabel = \"big\"\nsize_min = \"1KiB\"\nreplicas = 0\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 4,
+            "bytes": 2057,
+            "folders": 2,
+            "symlinks": 0,
+            "ignored": 1,
+            "new": 4,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 0,
+            "bytes": 0,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), replicas_target, mode, rule, state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "Manual/c",
+          1,
+          "manual",
+          "manual",
+          "unprotected"
+        ],
+        [
+          "Tmp/b",
+          0,
+          "deferred",
+          "temporary",
+          "unprotected"
+        ],
+        [
+          "big",
+          0,
+          "deferred",
+          "big",
+          "unprotected"
+        ],
+        [
+          "d",
+          1,
+          "deferred",
+          null,
+          "pending"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, kind, CAST(target AS TEXT), created_by FROM entries ORDER BY lpath, disk_id",
+      "rows": [
+        [
+          "Manual",
+          "t1",
+          "dir",
+          null,
+          "user"
+        ],
+        [
+          "Tmp",
+          "t1",
+          "dir",
+          null,
+          "user"
+        ],
+        [
+          "a.nfo",
+          "t1",
+          "ignored",
+          null,
+          "user"
+        ]
+      ]
+    }
+  ]
+}

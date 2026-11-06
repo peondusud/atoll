@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Usage errors come before the configuration is read: this one does not load.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--nope"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--disk"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full=1"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--disk",
+        "a",
+        "--disk",
+        "b"
+      ],
+      "exit": 2
+    }
+  ]
+}

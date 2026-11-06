@@ -1,6 +1,8 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,6 +279,69 @@ func TestUnmountAndMount(t *testing.T) {
 		{"unmount: a field that does not apply", "exit 0", with(`{"do": "unmount", "disk": "t1", "path": "x"}`), "does not apply"},
 		{"mount: a field that does not apply", "exit 0", with(`{"do": "mount", "disk": "t1", "by": "1s"}`), "does not apply"},
 		{"the binary writes to the empty folder", "echo x > disks/t1/stray", with(unmount + "," + run), "stray"},
+	})
+}
+
+func TestExpectCatalog(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(t.Context(), `CREATE TABLE t(i INTEGER, s TEXT, n TEXT, b BLOB);
+		INSERT INTO t VALUES (1, 'a', NULL, x'ff'), (2, 'b', 'x', x'00')`); err != nil {
+		t.Fatal(err)
+	}
+	box := &sandbox{dir: dir}
+	expect := func(query, rows string) error {
+		return box.compareCatalog(&step{Query: query, Rows: json.RawMessage(rows)})
+	}
+	for _, tc := range []struct {
+		note, query, rows, fails string
+	}{
+		{"it matches", "SELECT i, s, n FROM t ORDER BY i", `[[1, "a", null], [2, "b", "x"]]`, ""},
+		{"no row", "SELECT i FROM t WHERE i = 9", `[]`, ""},
+		{"a row too many", "SELECT i FROM t ORDER BY i", `[[1]]`, "2 items, want 1"},
+		{"a row too few", "SELECT i FROM t WHERE i = 1", `[[1], [2]]`, "1 items, want 2"},
+		{"another order", "SELECT i FROM t ORDER BY i", `[[2], [1]]`, "$[0][0]"},
+		{"an integer differs", "SELECT i FROM t WHERE i = 1", `[[2]]`, "$[0][0]"},
+		{"a string differs", "SELECT s FROM t WHERE i = 1", `[["b"]]`, "$[0][0]"},
+		{"null is a value", "SELECT n FROM t WHERE i = 1", `[["a"]]`, "$[0][0]"},
+		{"${ANY}", "SELECT s FROM t WHERE i = 1", `[["${ANY}"]]`, ""},
+		{"${SANDBOX}", "SELECT '" + dir + "/x'", `[["${SANDBOX}/x"]]`, ""},
+		{"a BLOB must say how to read it", "SELECT b FROM t WHERE i = 1", `[["x"]]`, "read it with CAST or hex"},
+		{"hex reads it", "SELECT hex(b) FROM t WHERE i = 1", `[["FF"]]`, ""},
+		{"a query that fails", "SELECT nothing FROM t", `[]`, "query"},
+		{"a real number is refused", "SELECT 1.5", `[[1.5]]`, "read it with CAST or hex"},
+	} {
+		err := expect(tc.query, tc.rows)
+		switch {
+		case tc.fails == "" && err != nil:
+			t.Errorf("%s: %v", tc.note, err)
+		case tc.fails != "" && (err == nil || !strings.Contains(err.Error(), tc.fails)):
+			t.Errorf("%s: %v, want a failure about %q", tc.note, err, tc.fails)
+		}
+	}
+	if err := (&sandbox{dir: t.TempDir()}).compareCatalog(&step{Query: "SELECT 1", Rows: json.RawMessage(`[]`)}); err == nil || !strings.Contains(err.Error(), "catalog") {
+		t.Errorf("no catalog: %v", err)
+	}
+	checkVerdicts(t, []verdictCase{
+		{"no query", "exit 0", steps(`{"do": "expect_catalog", "rows": []}`), "no query"},
+		{"no rows", "exit 0", steps(`{"do": "expect_catalog", "query": "SELECT 1"}`), "no rows"},
+		{"a field that does not apply", "exit 0", steps(`{"do": "expect_catalog", "query": "SELECT 1", "rows": [], "disk": "a"}`), "does not apply"},
+		{"no catalog at all", "exit 0", steps(`{"do": "expect_catalog", "query": "SELECT 1", "rows": []}`), "catalog"},
+	})
+}
+
+func TestWriteStepExpandsTheSandbox(t *testing.T) {
+	const tree = `[{"path": "x", "text": "a"}]`
+	body := `{"format_version": 1, "disks": [{"id": "t1", "uuid": "u", "fs": "ext4", "capacity": 1, "tree": ` + tree + `}], "steps": [
+		{"do": "write", "disk": "t1", "path": "f", "text": "in ${SANDBOX}/y"},
+		{"do": "atoll"}]}`
+	checkVerdicts(t, []verdictCase{
+		{"it is expanded", `grep -q "in $PWD/y" disks/t1/f`, body, ""},
+		{"the token does not stay", `! grep -q 'SANDBOX' disks/t1/f`, body, ""},
 	})
 }
 

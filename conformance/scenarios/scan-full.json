@@ -1,0 +1,397 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.10, \u00a716",
+  "description": "--full reads every copy, one read feeding both hashes. Equal content is verified. Content that differs behind an equal size is a conflict, the original's hash stands, and the other copy stays unverified. Another --full verifies again.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 10000000,
+      "tree": [
+        {
+          "path": "media/same",
+          "size": 1024
+        },
+        {
+          "path": "media/differs",
+          "size": 1024
+        },
+        {
+          "path": "media/only",
+          "size": 1024
+        },
+        {
+          "path": "media/empty",
+          "text": ""
+        },
+        {
+          "path": "media/long",
+          "size": 4194305
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 10000000,
+      "tree": [
+        {
+          "path": "media/same",
+          "size": 1024
+        },
+        {
+          "path": "media/differs",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 5,
+            "bytes": 4197377,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 5,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 2048,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 2,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "differs",
+          "ok"
+        ],
+        [
+          "empty",
+          "pending"
+        ],
+        [
+          "long",
+          "pending"
+        ],
+        [
+          "only",
+          "pending"
+        ],
+        [
+          "same",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 5,
+            "bytes": 4197377,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 5,
+            "hashed": 5,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 2048,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 2,
+            "hashed": 2,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": [
+          {
+            "path": "differs"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), lower(hex(blake3)), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "differs",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+          "conflict"
+        ],
+        [
+          "empty",
+          "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+          "pending"
+        ],
+        [
+          "long",
+          "0460893a0170917e0d568bb27c0287984d4f7e9d59eafb95e6fb3c01ec611eab",
+          "pending"
+        ],
+        [
+          "only",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+          "pending"
+        ],
+        [
+          "same",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), lower(hex(k.chunks)) FROM file_chunks k JOIN files f ON f.id = k.file_id ORDER BY f.lpath",
+      "rows": [
+        [
+          "differs",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7"
+        ],
+        [
+          "long",
+          "4e94e6f582581a0f3855f3ce504b153e951e65036fe9e2f010b7e25473c54f98684200d461e94e063925de567369dd89b8c1959b6f94ec8e740edf4c2bd21396"
+        ],
+        [
+          "only",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7"
+        ],
+        [
+          "same",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.verified_ns FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "differs",
+          "t1",
+          1767226200000000000
+        ],
+        [
+          "differs",
+          "t2",
+          null
+        ],
+        [
+          "empty",
+          "t1",
+          1767226200000000000
+        ],
+        [
+          "long",
+          "t1",
+          1767226200000000000
+        ],
+        [
+          "only",
+          "t1",
+          1767226200000000000
+        ],
+        [
+          "same",
+          "t1",
+          1767226200000000000
+        ],
+        [
+          "same",
+          "t2",
+          1767226200000000000
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 5,
+            "bytes": 4197377,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 5,
+            "hashed": 5,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 2048,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 2,
+            "hashed": 2,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": [
+          {
+            "path": "differs"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.verified_ns FROM copies c JOIN files f ON f.id = c.file_id WHERE CAST(f.lpath AS TEXT) = 'same' AND c.disk_id = 't2'",
+      "rows": [
+        [
+          1767226800000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/same",
+          "size": 1024
+        },
+        {
+          "path": "media/differs",
+          "size": 1024
+        },
+        {
+          "path": "media/only",
+          "size": 1024
+        },
+        {
+          "path": "media/empty",
+          "text": ""
+        },
+        {
+          "path": "media/long",
+          "size": 4194305
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/same",
+          "size": 1024
+        },
+        {
+          "path": "media/differs",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ]
+    }
+  ]
+}

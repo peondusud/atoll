@@ -2,6 +2,23 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The first scan: `atoll init` and `atoll scan` (specs.md §9, §15.10, §25)
+
+Commit "Record what the disks hold, with atoll init and atoll scan", on `main`.
+
+- The maintainer's decisions:
+  - a copy that changed or went away is only reported, in `changed` and `absent`, until propagation exists: no state in the catalog would be true for it;
+  - `atoll init` is the only one to create a catalog, so a mistyped path cannot start again from nothing in silence;
+  - the same size on two disks is `ok`, unverified, until `--full` reads them, and another size is a `conflict` at once;
+  - a walk is written whole or not at all, and the rules of `--json`, ids and retired disks are in §15.10 and §9.
+- `internal/watch` walks a disk through handles and compares it with the catalog, `internal/catalog` holds the queries, and `internal/fsx` the handles, with `Fault` for injecting errors. Every scan gives each file its original, its policy and what the plan says, so the solver now runs on real data. Its jobs are not kept, as nothing runs them yet.
+- The conformance build reads its clock and gives its disks a capacity, and the runner gets `expect_catalog`, so the scenarios compare the catalog itself.
+- Found along the way:
+  - the first version peaked at 432 MiB on 200,000 files, past §26. Rows kept while the plan ran, a map of known copies, and each string copied before being shared were most of it. A merge in the order of paths, reading by pages and a soft limit bring the first scan to about 180 MiB and the next to about 145 MiB, and it got faster: 12 s against 19 s;
+  - a file whose times move while it is read gives a hash of nothing in particular, so `--full` compares them before and after;
+  - a port written from the documents showed that what the walk did not reach was reported `absent`, and through another mount `--full` would have read a file of that mount.
+- Not done: propagation, jobs, `daemon --until-idle`, the scan in the daemon, hashing inside `maintenance.window`, all in [TODO.md](TODO.md).
+
 ## Disk identity and the mount check (specs.md §10, §25)
 
 Commit "Identify disks and check their mounts, with atoll disk list", on `main`.

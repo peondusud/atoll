@@ -230,7 +230,9 @@ The catalog schema is `schema/migrations/`: plain SQL, with a comment on why eac
 
 - **Pragmas**, set on every connection, never in a migration: `journal_mode = WAL`, `synchronous = FULL` (a committed `ops` row survives a power cut), `foreign_keys = ON`. Atoll checks that they took effect when it opens the catalog: a filesystem that cannot do WAL fails there, not later.
 - **Migrations**: `schema/migrations/NNNN_name.sql`, numbered from 1 with no gap. `PRAGMA user_version` holds the version. Each file runs in its own transaction with its `user_version`, so a failure leaves the catalog at the version before it. A catalog of a higher version than the binary is refused: going back to an older Atoll takes `catalog rebuild`. A file holds no pragma and no transaction statement.
-- **`disks`** is rewritten from the configuration at each start, and the configuration wins (§10). A retired disk keeps its row, so its identifier and its history stay.
+- **`disks`** is rewritten from the configuration at each start, and the configuration wins (§10). A retired disk keeps its row, so its identifier and its history stay: a disk the configuration no longer lists becomes `retired`, placed after the others by `id`, and comes back if it is listed again.
+  - A disk whose `id` now has another `uuid` is refused while it holds copies or entries, and so is a `uuid` that another `id` has: what the catalog knows about those copies would be read against another disk. `disk replace` is the way to do that.
+- **`meta`**: `atoll init` writes `pool_id` and `lpath_key_version`. A catalog that does not exist, or whose `pool_id` is not the configuration's, is refused, so a mistyped path or an unmounted folder cannot start again from an empty catalog in silence.
 - **Chunk hashes have their own table**, as SQLite rewrites a whole row on each `UPDATE`. Measured on 200,000 files and 20 TB with `modernc.org/sqlite`, WAL and `synchronous = FULL`: changing the state of a 100 GB file writes 780 KB to the WAL and takes 4 to 5 ms with its hashes in `files`, against 5 KB and 1.3 ms here. The catalog is about 280 MB. The chunk size is fixed (§16), so the catalog does not store it.
 - **Tables are `STRICT`, and closed lists have a `CHECK`** (§29.3). Through the Go driver, a Go string written to a `BLOB` column of a table that is not strict is stored as `TEXT` with no error. A new state therefore takes a migration that rebuilds the table: about 0.7 s for `files` or `copies` at this size. `events.kind` has no `CHECK`, as each module adds its own; its list is in this specification.
 - **Deleting**: a file with copies cannot be deleted, and neither can a disk with copies or entries, so a bug cannot lose that knowledge in passing. Deleting a file deletes its chunk hashes and jobs. `ops` and `trash` have no foreign key to `disks`: the journal outlives a disk.
@@ -621,6 +623,35 @@ A read-only report of the names to fix. It reads the catalog and the configurati
 - **Order**: by `path` in byte order, then by `kind` in the order of the table, then by `fs` or `disk` in byte order. `reasons` keep their order of §15.8, and `with` is in byte order.
 - **Output**: `api/schemas/names-check.schema.json`. A name that is not valid UTF-8 goes in `path_b64` (§29.3); a name in `with` always has a key, so it is valid UTF-8.
 - **Exit code**: 0 whenever the check ran, with or without findings, as for `atoll dupes`. A script counts `.findings`. 1 when it cannot read the catalog or the configuration, 2 on a usage error (§29.3).
+
+### 15.10 `atoll scan`
+
+A scan records what the disks hold. It writes nothing to a disk, moves nothing and starts no job.
+
+- It runs a mount check (§10) on every disk of the configuration, and records the result in `disks`. Then it walks the disks asked for, in the order of the configuration. A disk that is `missing` is skipped, never read as empty (invariant 4), and `readonly` is walked like `online`.
+- **A walk** starts at `<root>` and goes on only through handles opened below it (`openat`), never following a symlink.
+  - A folder on another mount is recorded as a folder, not entered, and reported in `other_mounts`.
+  - A listed name whose `lstat` gives `ENOENT` is reported in `unreadable`, with no row: a name the driver cannot read looks the same as a file removed during the walk.
+  - Any other error stops the walk. The disk becomes `missing` with the reason `io-error`, nothing that walk found is written and nothing is concluded from it.
+- **What it finds**:
+  - a regular file that its effective policy (§11.3), given its size, says to manage: a copy, with `created_by = user`, its inode, links, size and times (§7, §9);
+  - a folder: an entry `dir`. A symlink: an entry `symlink` with its target;
+  - a regular file that a rule ignores, and anything else (FIFO, socket, device): an entry `ignored`.
+- **Written in one transaction per disk**, once its walk is over. Files new to the catalog take their ids in the byte order of their paths, disk after disk in the order of the configuration, so both versions give the same ids. `first_seen` is the time of the scan. The entries of that disk then match the walk; a folder Atoll created stays `created_by = atoll`.
+- **A copy not yet in the catalog**, of a file that is:
+  - with the file's size: `ok`. It stays unverified (`verified_ns` NULL) until `--full`, so a file shown as `ok` may turn out to be a `conflict`, and a scan that reads no content cannot say otherwise;
+  - with another size: the file becomes `conflict` (§15.7), as its content must differ. Every copy stays `ok` and nothing is written to any of them.
+- **A copy already in the catalog**:
+  - with the same inode, size, modification time and change time: `known`;
+  - otherwise it is reported in `changed`, or in `absent` when the walk did not find it, and its row does not change. Propagation (§15.3 to §15.5) is what acts on them, and until it exists the catalog does not follow a rename or a deletion;
+  - if a rule now ignores it, its row stays what it was, its rule, mode and `replicas_target` included, and it counts in `files`. The plan sees those, with the pool's priority and spread;
+  - below a name in `unreadable` or `other_mounts`, it is not `absent`: the walk did not get there, so nothing can be said about it.
+- **Then, on the whole catalog**, for each file: its original (§7), whose size and modification time become the file's; its policy, into `rule`, `mode` and `replicas_target`, unless a rule ignores it; and the plan of §13.4, into `state`, with `conflict` and `corrupt` kept (§4), and into the marks `surplus` and `ok` of its copies. The plan's jobs are not kept, as nothing runs them yet. A disk is past `health.missing_grace` when it is `missing` and more than that time has gone since `last_seen_ns`; one never seen is not. The settings §24.4 says have no effect yet are not given to the plan: it sees no `tags` or `domains`, and `prefer`, `prefer` and `allow` for `tags_mode`, `spread_mode` and `overflow`.
+- **`--full`** then hashes the copies on the disks that were walked: file after file in the byte order of their paths, on each file by position, one read feeding both hashes (§16), with one transaction per file, so an interruption loses little. A copy in `changed` or `absent`, or that the walk did not reach, is not read, a name that can no longer be read is added to `unreadable`, and an I/O error stops that disk as above, with what it already hashed kept.
+  - A copy whose size or times move during the read is added to `changed`, and its hash is not used.
+  - The reference is `files.blake3`. Where it is NULL, it becomes the hash of the original's copy if that was read, otherwise of the first copy read, with its chunk hashes (`file_chunks`).
+  - A copy with the reference's hash gets `verified_ns`, verified before or not. An unverified copy with another hash makes the file a `conflict`, and stays unverified.
+  - A verified copy with another hash is added to `changed`, and nothing is written. Deciding between a modification and corruption is for the scrub (§16).
 
 ## 16. Integrity
 
@@ -1076,7 +1107,7 @@ Phase 1a warns about these settings, and each phase removes its own lines. The k
 ## 25. Command-line interface
 
 ```
-atoll init                               create the configuration and the catalog
+atoll init [--pool-id <id> --view-mount <path> [--catalog <path>]]   create the configuration and the catalog
 atoll disk add | list | show | remove | fail | replace
 atoll scan [--disk <id>] [--full]        quick: size and times; --full: re-hash everything
 atoll status [--path <path>]             copies, original and states
@@ -1102,14 +1133,16 @@ atoll daemon [--foreground] [--dry-run]
 - `--config <path>` or `--config=<path>` comes before the command, and nowhere else, and names the configuration file. By default it is `/etc/atoll/atoll.toml`, and on Windows `%ProgramData%\Atoll\atoll.toml`.
 - Every command that moves or deletes accepts `--dry-run` and asks for confirmation, unless `--yes` is given. `daemon --dry-run` plans jobs without running them (shadow mode, §29.2).
 - Every command accepts `--json`; outputs follow the schemas in `api/schemas/`, and exit codes follow §29.3.
-- A command's flags come after its whole name, so `atoll disk --json list` is a usage error. They may come before or after a path, and `--` ends them, for a path that starts with `-`. A command line is checked before the configuration is read, so a usage error comes first. It writes nothing to standard output, with `--json` or without.
+- A command's flags come after its whole name, so `atoll disk --json list` is a usage error, and so is a flag given twice. They may come before or after a path, and `--` ends them, for a path that starts with `-`. A command line is checked before the configuration is read, so a usage error comes first. It writes nothing to standard output, with `--json` or without.
+- `atoll init` creates what is missing, and may run again. The configuration is written with `--pool-id`, `--view-mount` and `--catalog`, and its folder made, only when the file does not exist, and needs the first two; with a file already there they are refused, with exit code 1. Then the catalog is created, with its folder, if it does not exist; a catalog of another `pool_id` is refused. It reads no disk. It exits with 0 once both exist; with 1 when the configuration cannot be written, read or loaded, or the catalog cannot be used; and with 2 on a usage error, which takes in a value the configuration would refuse, one of `--pool-id` and `--view-mount` without the other, and `--catalog` without them.
+- `atoll scan` follows §15.10, and `--disk <id>` limits the walk to one disk, without changing what is checked. It exits with 0 when every disk asked for was walked, and hashed with `--full`; with 4 when one was skipped or failed; with 1, and nothing on standard output, when the configuration or the catalog cannot be used, or `<id>` is no disk of the configuration; and with 2 on a usage error.
 - `atoll disk list` runs a mount check (§10) on each disk of the configuration, in its order, and shows the state and the reason. It reads the configuration, the mount table and the disks, opens no catalog and writes nothing. So the states it shows for now are `online`, `readonly` and `missing`: `standby` comes with SMART, and `draining`, `failed` and `retired` with the catalog. It exits with 0 whatever the states; with 1 when the configuration does not load or cannot be read, with nothing on standard output; and with 2 on a usage error.
 - `atoll rules check` exits with 0 when the configuration loads, warnings or not, and with 1 when it does not load or cannot be read, with the same output. So a script can run it before a restart.
 - `atoll rules explain` exits with 0 once it has answered, whatever the answer; with 1 when the configuration does not load or cannot be read, with nothing on standard output; and with 2 on a size or a path that is not well-formed. `<size>` is a size of §29.5, so it needs its unit.
 
 ## 26. Non-functional requirements
 
-- Resources (ZimaBoard 2 or M920q): under 200 MB of memory for 200,000 files; under 5 % CPU outside scrubs.
+- Resources (ZimaBoard 2 or M920q): under 200 MB of memory for 200,000 files; under 5 % CPU outside scrubs. The binary sets a soft memory limit of 170 MiB unless `GOMEMLIMIT` says otherwise. A first scan of 200,000 files with two copies each peaks at about 180 MiB, in 12 s on an idle machine, and a later one at about 145 MiB, in 5 s (measured on empty files in a container, so it says nothing about the time real disks take).
 - Throughput: copies and scrubs at 90 % or more of the disk's raw throughput; hashing is never the bottleneck.
 - Robustness: a hard kill (kill -9) or a power cut at any moment loses no file and leaves a consistent catalog after restart.
 - Security: local API over a socket with restricted permissions; HTTP limited to localhost or the Tailscale network, with a token.

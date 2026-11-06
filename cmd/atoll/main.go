@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 )
 
@@ -13,13 +14,27 @@ const (
 	exitOK    = 0
 	exitError = 1
 	exitUsage = 2
+	// exitPartial says that part of what was asked could not be done (specs.md §29.3).
+	exitPartial = 4
 )
 
 // defaultConfig is where the configuration lives (specs.md §25).
 const defaultConfig = "/etc/atoll/atoll.toml"
 
 func main() {
+	limitMemory()
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// softMemoryLimit keeps a scan of 200,000 files under the 200 MB of specs.md §26. It costs no time
+// there, measured, as the collector only works harder near the limit. A larger pool goes past it
+// and is slowed down, not stopped: GOMEMLIMIT raises it.
+const softMemoryLimit = 170 << 20
+
+func limitMemory() {
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(softMemoryLimit)
+	}
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -43,6 +58,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runRules(configPath, args[1:], stdout, stderr)
 	case "disk":
 		return runDisk(configPath, args[1:], stdout, stderr)
+	case "init":
+		return runInit(configPath, args[1:], stdout, stderr)
+	case "scan":
+		return runScan(configPath, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}

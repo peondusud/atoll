@@ -1,0 +1,155 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.10, \u00a716",
+  "description": "A copy that changed is not read, and its row stays, and a file added between two scans is hashed. A verified copy whose hash differs while its times do not cannot come from a scenario, which cannot corrupt a disk: test/loopdev has that.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 10000000,
+      "tree": [
+        {
+          "path": "media/kept",
+          "size": 1024
+        },
+        {
+          "path": "media/edited",
+          "size": 1024
+        },
+        {
+          "path": "media/gone",
+          "size": 1024
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 3,
+            "bytes": 3072,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 3,
+            "known": 0,
+            "hashed": 3,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/edited",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/gone"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/added",
+      "size": 1024
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 3,
+            "bytes": 3072,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 1,
+            "known": 1,
+            "hashed": 2,
+            "changed": [
+              {
+                "path": "edited"
+              }
+            ],
+            "absent": [
+              {
+                "path": "gone"
+              }
+            ],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), lower(hex(f.blake3)), c.verified_ns FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath",
+      "rows": [
+        [
+          "added",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+          1767226200000000000
+        ],
+        [
+          "edited",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+          1767225600000000000
+        ],
+        [
+          "gone",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+          1767225600000000000
+        ],
+        [
+          "kept",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+          1767226200000000000
+        ]
+      ]
+    }
+  ]
+}

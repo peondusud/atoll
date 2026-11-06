@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"slices"
+	"time"
 
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/names"
@@ -33,14 +35,14 @@ type controlDisk struct {
 	Capacity int64            `json:"capacity"`
 }
 
-// NewObserver gives the observer of a conformance build, which takes the folders listed in the
-// control file as mounted disks.
-func NewObserver() (Observer, error) {
-	path := os.Getenv(controlEnv)
-	if path == "" {
+// NewMachine gives what a conformance build sees: the folders listed in the control file as
+// mounted disks, and its clock.
+func NewMachine() (Machine, error) {
+	file := os.Getenv(controlEnv)
+	if file == "" {
 		return nil, errors.New("a conformance build needs " + controlEnv)
 	}
-	data, err := fsx.ReadFile(path)
+	data, err := fsx.ReadFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("control file: %w", err)
 	}
@@ -53,11 +55,16 @@ func NewObserver() (Observer, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return nil, errors.New("control file: trailing data")
 	}
-	return folders{c.Disks}, nil
+	now, err := time.Parse(time.RFC3339, c.Now)
+	if err != nil {
+		return nil, fmt.Errorf("control file: %w", err)
+	}
+	return folders{c.Disks, now.UnixNano()}, nil
 }
 
 type folders struct {
 	disks []controlDisk
+	now   int64
 }
 
 func (f folders) find(path string) *controlDisk {
@@ -88,4 +95,33 @@ func (f folders) Device(_ names.Filesystem, entry *MountEntry) DeviceSeen {
 
 func (folders) Root(mount, root string) RootSeen {
 	return lookAtRoot(mount, root)
+}
+
+func (f folders) Now() int64 {
+	return f.now
+}
+
+// Space says what the control file does: a folder has no capacity of its own.
+func (f folders) Space(mount string) (capacity, free int64, err error) {
+	d := f.find(mount)
+	if d == nil {
+		return 0, 0, fmt.Errorf("no disk at %q", mount)
+	}
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return 0, 0, fmt.Errorf("space: %w", err)
+	}
+	used, err := fsx.SumSizes(top)
+	if err = errors.Join(err, top.Close()); err != nil {
+		return 0, 0, fmt.Errorf("space: %w", err)
+	}
+	return d.Capacity, max(d.Capacity-used, 0), nil
+}
+
+func (folders) OpenRoot(mount, root string) (fsx.Dir, error) {
+	dir, err := fsx.OpenDir(path.Join(mount, root))
+	if err != nil {
+		return nil, fmt.Errorf("root: %w", err)
+	}
+	return dir, nil
 }

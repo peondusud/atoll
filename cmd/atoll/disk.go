@@ -51,7 +51,7 @@ func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	observer, err := disks.NewObserver()
+	observer, err := disks.NewMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}

@@ -1,0 +1,309 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a713.4, \u00a715.10",
+  "description": "A first scan records what is there, reads no content, and writes nothing to a disk. Each file wants a replica, and the empty disk can take it, so the plan makes them pending. What is outside the root is not looked at.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/Films/a.mkv",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/Films/b.mkv",
+          "text": "yyy",
+          "mtime_ns": 1600000000000000001
+        },
+        {
+          "path": "Other/x",
+          "text": "outside"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 5,
+            "folders": 1,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 2,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 0,
+            "bytes": 0,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, CAST(lpath AS TEXT), size, mtime_ns, blake3 IS NULL, replicas_target, mode, rule, state, original_disk, first_seen_ns FROM files ORDER BY id",
+      "rows": [
+        [
+          1,
+          "Films/a.mkv",
+          2,
+          1600000000000000000,
+          1,
+          1,
+          "deferred",
+          null,
+          "pending",
+          "t1",
+          1767225600000000000
+        ],
+        [
+          2,
+          "Films/b.mkv",
+          3,
+          1600000000000000001,
+          1,
+          1,
+          "deferred",
+          null,
+          "pending",
+          "t1",
+          1767225600000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT file_id, disk_id, size, mtime_ns, created_by, state, first_seen_ns, verified_ns FROM copies ORDER BY file_id, disk_id",
+      "rows": [
+        [
+          1,
+          "t1",
+          2,
+          1600000000000000000,
+          "user",
+          "ok",
+          1767225600000000000,
+          null
+        ],
+        [
+          2,
+          "t1",
+          3,
+          1600000000000000001,
+          "user",
+          "ok",
+          1767225600000000000,
+          null
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, kind, CAST(target AS TEXT), created_by FROM entries ORDER BY lpath, disk_id",
+      "rows": [
+        [
+          "Films",
+          "t1",
+          "dir",
+          null,
+          "user"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT lpath_key FROM files ORDER BY id",
+      "rows": [
+        [
+          "FILMS/A.MKV"
+        ],
+        [
+          "FILMS/B.MKV"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT lpath_key FROM entries",
+      "rows": [
+        [
+          "FILMS"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT file_key IS NOT NULL, ctime_ns IS NOT NULL, nlink FROM copies ORDER BY file_id",
+      "rows": [
+        [
+          1,
+          1,
+          1
+        ],
+        [
+          1,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM file_chunks",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, fs_uuid, fs_type, mount_path, root, workdir, role, position, domain, tags, capacity_bytes, free_bytes, state, last_seen_ns FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+          "ext4",
+          "${SANDBOX}/disks/t1",
+          "media",
+          "Atoll",
+          "data",
+          0,
+          null,
+          "[]",
+          1000000,
+          999988,
+          "online",
+          1767225600000000000
+        ],
+        [
+          "t2",
+          "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+          "ext4",
+          "${SANDBOX}/disks/t2",
+          "media",
+          "Atoll",
+          "data",
+          1,
+          null,
+          "[]",
+          1000000,
+          1000000,
+          "online",
+          1767225600000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/Films/a.mkv",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/Films/b.mkv",
+          "text": "yyy",
+          "mtime_ns": 1600000000000000001
+        },
+        {
+          "path": "Other/x",
+          "text": "outside"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    }
+  ]
+}

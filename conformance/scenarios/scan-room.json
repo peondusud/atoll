@@ -1,0 +1,104 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.1, \u00a713.4, \u00a715.10",
+  "description": "The plan sees the real free space, min_free and what already holds a path. With 1000 bytes, 800 used and 5 % kept: 200 are free, of which 150 can be filled, so one file of 100 fits and a second does not, though it would fit in what is free. A folder on the target blocks a file of its name, and 800 bytes find no room on the other disk.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000,
+      "tree": [
+        {
+          "path": "media/blocked",
+          "size": 10
+        },
+        {
+          "path": "media/fits",
+          "size": 100
+        },
+        {
+          "path": "media/no-room",
+          "size": 400
+        },
+        {
+          "path": "media/past-min-free",
+          "size": 100
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000,
+      "tree": [
+        {
+          "path": "media/filler",
+          "size": 800
+        },
+        {
+          "path": "media/blocked",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "blocked",
+          "degraded"
+        ],
+        [
+          "filler",
+          "degraded"
+        ],
+        [
+          "fits",
+          "pending"
+        ],
+        [
+          "no-room",
+          "degraded"
+        ],
+        [
+          "past-min-free",
+          "degraded"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, capacity_bytes, free_bytes FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          1000,
+          390
+        ],
+        [
+          "t2",
+          1000,
+          200
+        ]
+      ]
+    }
+  ]
+}

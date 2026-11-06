@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/init.schema.json",
+  "title": "atoll init --json",
+  "description": "What atoll init did (specs.md §25). It may run again, so kept is a success.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["configuration", "catalog"],
+  "properties": {
+    "configuration": { "enum": ["created", "kept"] },
+    "catalog": { "enum": ["created", "kept"] }
+  }
+}

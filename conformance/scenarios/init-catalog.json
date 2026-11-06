@@ -1,0 +1,66 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a725",
+  "description": "With the configuration there, init creates the catalog, with its pool and the version of its keys. It may run again.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--json"
+      ],
+      "stdout_json": {
+        "configuration": "kept",
+        "catalog": "created"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT value FROM meta WHERE key = 'pool_id'",
+      "rows": [
+        [
+          "p"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT key FROM meta ORDER BY key",
+      "rows": [
+        [
+          "lpath_key_version"
+        ],
+        [
+          "pool_id"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM files",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--json"
+      ],
+      "stdout_json": {
+        "configuration": "kept",
+        "catalog": "kept"
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    }
+  ]
+}

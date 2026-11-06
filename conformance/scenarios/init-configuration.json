@@ -1,0 +1,87 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.2, \u00a725",
+  "description": "With no file there, init writes a configuration that loads, and its folders. It reads no disk, and writes none.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/sub/dir/atoll.toml",
+        "init",
+        "--pool-id",
+        "home",
+        "--view-mount",
+        "${SANDBOX}/pool",
+        "--catalog",
+        "${SANDBOX}/catalog.db",
+        "--json"
+      ],
+      "stdout_json": {
+        "configuration": "created",
+        "catalog": "created"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT value FROM meta WHERE key = 'pool_id'",
+      "rows": [
+        [
+          "home"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/sub/dir/atoll.toml",
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/sub/dir/atoll.toml",
+        "init",
+        "--json"
+      ],
+      "stdout_json": {
+        "configuration": "kept",
+        "catalog": "kept"
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    }
+  ]
+}

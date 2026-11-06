@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.3, \u00a725",
+  "description": "A path with what TOML must escape stays that path.",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/atoll.toml",
+        "init",
+        "--pool-id",
+        "p",
+        "--view-mount",
+        "${SANDBOX}/po\"ol\\x",
+        "--catalog",
+        "${SANDBOX}/catalog.db"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/atoll.toml",
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": []
+      }
+    }
+  ]
+}

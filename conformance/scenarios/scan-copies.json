@@ -1,0 +1,267 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a77, \u00a713.4, \u00a715.7, \u00a715.10",
+  "description": "One path on several disks is one file. Same size: the copies are ok, each keeping its own date, and beyond the level the last is marked surplus. Another size: a conflict at once, every copy kept, and the date is the original's.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/same",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/sizes",
+          "text": "yy",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/same",
+          "text": "xx",
+          "mtime_ns": 1600000000000000005
+        },
+        {
+          "path": "media/sizes",
+          "text": "yyy",
+          "mtime_ns": 1600000000000000005
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/same",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/sizes",
+          "text": "yy",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 4,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 2,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 5,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 2,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 4,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 2,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": [
+          {
+            "path": "sizes"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), size, mtime_ns, state, original_disk, blake3 IS NULL FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "same",
+          2,
+          1600000000000000000,
+          "ok",
+          "t1",
+          1
+        ],
+        [
+          "sizes",
+          2,
+          1600000000000000000,
+          "conflict",
+          "t1",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.size, c.mtime_ns, c.state, c.verified_ns FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "same",
+          "t1",
+          2,
+          1600000000000000000,
+          "ok",
+          null
+        ],
+        [
+          "same",
+          "t2",
+          2,
+          1600000000000000005,
+          "ok",
+          null
+        ],
+        [
+          "same",
+          "t3",
+          2,
+          1600000000000000000,
+          "surplus",
+          null
+        ],
+        [
+          "sizes",
+          "t1",
+          2,
+          1600000000000000000,
+          "ok",
+          null
+        ],
+        [
+          "sizes",
+          "t2",
+          3,
+          1600000000000000005,
+          "ok",
+          null
+        ],
+        [
+          "sizes",
+          "t3",
+          2,
+          1600000000000000000,
+          "surplus",
+          null
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/same",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/sizes",
+          "text": "yy",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/same",
+          "text": "xx",
+          "mtime_ns": 1600000000000000005
+        },
+        {
+          "path": "media/sizes",
+          "text": "yyy",
+          "mtime_ns": 1600000000000000005
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/same",
+          "text": "xx",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/sizes",
+          "text": "yy",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ]
+}

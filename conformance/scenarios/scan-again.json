@@ -1,0 +1,457 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.1, \u00a715.10",
+  "description": "A second scan: what changed or went away is reported and its row stays, what is new is added, and a copy on another disk joins its file. Rows of folders follow the disk, as they say only what is there.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/d",
+          "text": "4"
+        },
+        {
+          "path": "media/gone",
+          "kind": "dir"
+        },
+        {
+          "path": "media/keep/k",
+          "text": "5"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 5,
+            "bytes": 5,
+            "folders": 2,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 5,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 0,
+            "bytes": 0,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 5,
+            "bytes": 5,
+            "folders": 2,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 5,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 0,
+            "bytes": 0,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/b",
+      "to": "media/b2"
+    },
+    {
+      "do": "touch",
+      "disk": "t1",
+      "path": "media/c",
+      "mtime_ns": 1600000000000000009
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/d",
+      "text": "44"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/e",
+      "text": "6"
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/c",
+      "text": "3"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/gone"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 5,
+            "bytes": 6,
+            "folders": 1,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 2,
+            "known": 1,
+            "hashed": 0,
+            "changed": [
+              {
+                "path": "c"
+              },
+              {
+                "path": "d"
+              }
+            ],
+            "absent": [
+              {
+                "path": "a"
+              },
+              {
+                "path": "b"
+              }
+            ],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 1,
+            "known": 0,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, CAST(lpath AS TEXT), size, first_seen_ns FROM files ORDER BY id",
+      "rows": [
+        [
+          1,
+          "a",
+          1,
+          1767225600000000000
+        ],
+        [
+          2,
+          "b",
+          1,
+          1767225600000000000
+        ],
+        [
+          3,
+          "c",
+          1,
+          1767225600000000000
+        ],
+        [
+          4,
+          "d",
+          1,
+          1767225600000000000
+        ],
+        [
+          5,
+          "keep/k",
+          1,
+          1767225600000000000
+        ],
+        [
+          6,
+          "b2",
+          1,
+          1767226200000000000
+        ],
+        [
+          7,
+          "e",
+          1,
+          1767226200000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT file_id, disk_id, size, first_seen_ns FROM copies ORDER BY file_id, disk_id",
+      "rows": [
+        [
+          1,
+          "t1",
+          1,
+          1767225600000000000
+        ],
+        [
+          2,
+          "t1",
+          1,
+          1767225600000000000
+        ],
+        [
+          3,
+          "t1",
+          1,
+          1767225600000000000
+        ],
+        [
+          3,
+          "t2",
+          1,
+          1767226200000000000
+        ],
+        [
+          4,
+          "t1",
+          1,
+          1767225600000000000
+        ],
+        [
+          5,
+          "t1",
+          1,
+          1767225600000000000
+        ],
+        [
+          6,
+          "t1",
+          1,
+          1767226200000000000
+        ],
+        [
+          7,
+          "t1",
+          1,
+          1767226200000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT mtime_ns FROM copies WHERE file_id = 3 AND disk_id = 't1'",
+      "rows": [
+        [
+          1600000000000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, kind, CAST(target AS TEXT), created_by FROM entries ORDER BY lpath, disk_id",
+      "rows": [
+        [
+          "keep",
+          "t1",
+          "dir",
+          null,
+          "user"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 5,
+            "bytes": 6,
+            "folders": 1,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 3,
+            "hashed": 0,
+            "changed": [
+              {
+                "path": "c"
+              },
+              {
+                "path": "d"
+              }
+            ],
+            "absent": [
+              {
+                "path": "a"
+              },
+              {
+                "path": "b"
+              }
+            ],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    }
+  ]
+}

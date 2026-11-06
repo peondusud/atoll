@@ -142,7 +142,7 @@ func diskOf(v *volume, at string) *config.Disk {
 
 func check(t *testing.T, d *config.Disk) disks.Verdict {
 	t.Helper()
-	observer, err := disks.NewObserver()
+	observer, err := disks.NewMachine()
 	if err != nil {
 		t.Fatal(err)
 	}

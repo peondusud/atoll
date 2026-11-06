@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	_ "modernc.org/sqlite" // to read a catalog, as a scenario's expectations do (specs.md §29.4)
 )
 
 const (
@@ -78,6 +81,8 @@ type step struct {
 	MtimeNS    *int64            `json:"mtime_ns"`
 	By         string            `json:"by"`
 	Tree       []entry           `json:"tree"`
+	Query      string            `json:"query"`
+	Rows       json.RawMessage   `json:"rows"`
 }
 
 // stepFields lists what a step may hold besides do, and reports whether the runner knows it.
@@ -101,6 +106,8 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk"}, true
 	case "expect_tree":
 		return []string{"disk", "tree"}, true
+	case "expect_catalog":
+		return []string{"query", "rows"}, true
 	default:
 		return nil, false
 	}
@@ -139,6 +146,8 @@ func parseScenario(data []byte) (*scenario, error) {
 			err = errors.New("no tree")
 		case st.Do == "expect_tree":
 			err = checkEntries(st.Tree)
+		case st.Do == "expect_catalog" && (st.Query == "" || st.Rows == nil):
+			err = errors.New("no query, or no rows")
 		case st.Do == "write":
 			err = checkEntry(&entry{Text: st.Text, Size: st.Size})
 		case st.Do == "touch" && st.MtimeNS == nil:
@@ -373,6 +382,8 @@ func (b *sandbox) do(s *step) error {
 			return err
 		}
 		return compareTree(root, s.Tree)
+	case "expect_catalog":
+		return b.compareCatalog(s)
 	default:
 		return b.fileStep(s)
 	}
@@ -446,7 +457,12 @@ func (b *sandbox) fileStep(s *step) error {
 	switch s.Do {
 	case "write":
 		b.note(s.Disk, rel)
-		return writeEntry(root, rel, &entry{Text: s.Text, Size: s.Size, MtimeNS: s.MtimeNS})
+		text := s.Text
+		if text != nil {
+			replaced := strings.ReplaceAll(*text, sandboxToken, b.dir)
+			text = &replaced
+		}
+		return writeEntry(root, rel, &entry{Text: text, Size: s.Size, MtimeNS: s.MtimeNS})
 	case "mkdir":
 		b.note(s.Disk, rel)
 		return os.MkdirAll(full, 0o755)
@@ -532,6 +548,76 @@ func (b *sandbox) argument(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("argument %s: %w", raw, err)
 	}
 	return string(decoded), nil
+}
+
+// compareCatalog runs a query on the scenario's catalog, read-only, and compares its rows.
+func (b *sandbox) compareCatalog(s *step) error {
+	want, err := decodeExact(s.Rows)
+	if err != nil {
+		return fmt.Errorf("rows: %w", err)
+	}
+	got, err := b.queryCatalog(s.Query)
+	if err != nil {
+		return err
+	}
+	data, err := json.Marshal(got)
+	if err != nil {
+		return fmt.Errorf("query %q: %w", s.Query, err)
+	}
+	gotValue, err := decodeExact(data)
+	if err != nil {
+		return fmt.Errorf("query %q: %w", s.Query, err)
+	}
+	if err := b.sameJSON("$", gotValue, want); err != nil {
+		return fmt.Errorf("query %q: %w\nall of it: %s", s.Query, err, data)
+	}
+	return nil
+}
+
+func (b *sandbox) queryCatalog(query string) (rows [][]any, err error) {
+	path := filepath.Join(b.dir, "catalog.db")
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), stepTimeout)
+	defer cancel()
+	result, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query %q: %w", query, err)
+	}
+	defer func() { err = errors.Join(err, result.Close()) }()
+	columns, err := result.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("query %q: %w", query, err)
+	}
+	rows = [][]any{}
+	for result.Next() {
+		row := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range row {
+			targets[i] = &row[i]
+		}
+		if err := result.Scan(targets...); err != nil {
+			return nil, fmt.Errorf("query %q: %w", query, err)
+		}
+		for i, value := range row {
+			switch value.(type) {
+			case nil, int64, string:
+			default:
+				return nil, fmt.Errorf("query %q: column %q holds %T: read it with CAST or hex", query, columns[i], value)
+			}
+		}
+		rows = append(rows, row)
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("query %q: %w", query, err)
+	}
+	return rows, nil
 }
 
 // decodeExact keeps numbers as their text: no float rounds one, and 3.0 is not 3.

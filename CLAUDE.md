@@ -23,7 +23,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 - `solver`: target placement, original selection and job plan. Pure, deterministic function.
 - `jobs`: priority queue (replicate, rename, trash, refresh, repair, transfer).
 - `ops`: journal of Atoll's own filesystem operations, written before each operation.
-- `watch`: fanotify (with process attribution) or inotify, rescans, grouping of events per path.
+- `watch`: fanotify (with process attribution) or inotify, scans and rescans, grouping of events per path.
 - `integrity`: BLAKE3 whole-file and 4 MiB chunk hashes, scrub, repair, quarantine, duplicates.
 - `view`: mergerfs configuration and runtime branch changes (phase 1), FUSE view through cgofuse (phase 2a).
 - `trash` (with the optional link guard), `notify` (Plex, Emby, Jellyfin), `alerts`, `cache` (phase 2b).

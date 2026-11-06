@@ -1,0 +1,188 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.10",
+  "description": "A file's policy follows the configuration at each scan, a rule gone leaves no label, and a rule that now ignores a known file leaves it what it was, while a new file it matches is ignored.",
+  "disks": [
+    {
+      "id": "state",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    },
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "a.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"first\"\npath = \"**\"\nreplicas = 0\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "b.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"second\"\npath = \"**\"\nmode = \"manual\"\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "c.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n"
+    },
+    {
+      "do": "write",
+      "disk": "state",
+      "path": "d.toml",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"skip\"\npath = \"**\"\naction = \"ignore\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/a.toml",
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), replicas_target, mode, rule, state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a",
+          0,
+          "deferred",
+          "first",
+          "unprotected"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/b.toml",
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), replicas_target, mode, rule, state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a",
+          1,
+          "manual",
+          "second",
+          "unprotected"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/c.toml",
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), replicas_target, mode, rule, state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a",
+          1,
+          "deferred",
+          null,
+          "degraded"
+        ]
+      ]
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/b",
+      "text": "y"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "${SANDBOX}/disks/state/d.toml",
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 1,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), replicas_target, mode, rule, state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a",
+          1,
+          "deferred",
+          null,
+          "degraded"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, kind, CAST(target AS TEXT), created_by FROM entries ORDER BY lpath, disk_id",
+      "rows": [
+        [
+          "b",
+          "t1",
+          "ignored",
+          null,
+          "user"
+        ]
+      ]
+    }
+  ]
+}

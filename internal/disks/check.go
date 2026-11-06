@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/names"
 )
 
@@ -114,6 +115,19 @@ type Observer interface {
 	Mount(mount string) MountSeen
 	Device(fs names.Filesystem, entry *MountEntry) DeviceSeen
 	Root(mount, root string) RootSeen
+}
+
+// Machine is what the rest of Atoll asks of the machine it runs on, about its disks and the time.
+// A conformance build answers from a control file (specs.md §29.4), and the delivered binary has
+// none of that code.
+type Machine interface {
+	Observer
+	// Now is the time, in Unix nanoseconds.
+	Now() int64
+	// Space says how large a disk is, and what a program may fill.
+	Space(mount string) (capacity, free int64, err error)
+	// OpenRoot opens the managed root of a disk that passed its check.
+	OpenRoot(mount, root string) (fsx.Dir, error)
 }
 
 // CheckAll checks each disk, in the order given.

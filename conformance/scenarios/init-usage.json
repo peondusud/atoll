@@ -1,0 +1,145 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Usage errors come before anything is read, and a value the configuration would refuse is one.",
+  "disks": [
+    {
+      "id": "state",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/disks/state/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--nope"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--pool-id"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--pool-id",
+        "p"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--view-mount",
+        "/a"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--pool-id",
+        "p",
+        "--catalog",
+        "/c"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--catalog",
+        "/c"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--pool-id",
+        "a b",
+        "--view-mount",
+        "/a"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--pool-id",
+        "p",
+        "--view-mount",
+        "relative"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--pool-id",
+        "p",
+        "--view-mount",
+        "/a",
+        "--catalog",
+        "relative"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--pool-id",
+        "p",
+        "--view-mount",
+        "/a",
+        "--catalog",
+        "/a"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--pool-id",
+        "a",
+        "--pool-id",
+        "b",
+        "--view-mount",
+        "/a"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "expect_tree",
+      "disk": "state",
+      "tree": []
+    }
+  ]
+}
