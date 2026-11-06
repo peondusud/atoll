@@ -54,7 +54,8 @@ type Problem struct {
 // operating system, whose answer depends on its version and mount options.
 func CheckPath(path string, fs Filesystem) ([]Problem, error) {
 	var problems []Problem
-	for i, c := range strings.Split(path, "/") {
+	i := 0
+	for c := range strings.SplitSeq(path, "/") {
 		reasons, err := ComponentReasons(c, fs)
 		if err != nil {
 			return nil, fmt.Errorf("logical path %q: %w", path, err)
@@ -62,6 +63,7 @@ func CheckPath(path string, fs Filesystem) ([]Problem, error) {
 		if reasons != nil {
 			problems = append(problems, Problem{Component: i, Reasons: reasons})
 		}
+		i++
 	}
 	return problems, nil
 }

@@ -57,7 +57,7 @@ func checkRootAndPath(root, path string) error {
 
 // checkLogicalPath rejects what can never be a logical path.
 func checkLogicalPath(path string) error {
-	for _, c := range strings.Split(path, "/") {
+	for c := range strings.SplitSeq(path, "/") {
 		if err := checkComponent(c); err != nil {
 			return fmt.Errorf("logical path %q: %w", path, err)
 		}

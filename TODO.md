@@ -20,7 +20,8 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 ## Pure core still without vectors (specs.md §29.4)
 
-- **Solver** (§12.4, §13.3): placement, hard constraints (name compatibility, NTFS collisions through `names.TargetNames`, and the branch path limit through `names.FitsBranch`), the job plan, the reachable capacity as a dry run of that plan, and property tests.
+- **Solver, phase 1b** (§13.3): moving copies when rebalancing (`atoll balance`), the hysteresis, and the reachable capacity as a dry run of that plan (`atoll capacity`), which needs the moves to mean what it says. Moving an Atoll copy also fixes a file whose copies cover too few domains, which stays `degraded` until then.
+- **Solver, phase 2b** (§12.4): `colocate` and the `ordered` and `percent` strategies. Until then the caller gives the plan `most-free` and no `colocate` (§12.2): `solver.Placement` has neither.
 - **BLAKE3**: run `conformance/vectors/blake3.json` on real arm64 and AVX-512 hardware, measure throughput there, and move `zeebo/blake3` to a tagged release when one holds the arm64 backends (`docs/research/blake3.md`).
 
 ## Contracts not yet defined (specs.md §29.3)
@@ -38,6 +39,7 @@ Every item here is a **decision**:
   - `atoll init`, `atoll rules check`, which shows warnings, and `atoll rules explain`, over `config.Policy` and `Policy.Sources`;
   - the fallbacks of §12.2 where the policy is acted on: `rules.Policy` holds what the configuration asks for;
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
+- Memory of the daemon on 200,000 files (§26), with a `GOMEMLIMIT`: a plan holds about 100 MB on top of its input, which is about 50 MB, so the limit depends on the garbage collector's headroom and on what else the daemon holds.
 - Disk identity and mounts: FS UUID or NTFS serial, mount-point checks, states.
 - Reading times: creation times (§7) through `statx`, or `system.ntfs_crtime` on ntfs-3g and lowntfs-3g, and `solver.CreationTimeNS`; modification and change times through `solver.TimeNS`; reading the time back in the copy pipeline (§14).
 - `disk add` and `disk remove`.

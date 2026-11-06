@@ -273,6 +273,22 @@ A case loads a configuration, then asks for the policy of one file. The values a
 | `policy` | object | every value of the policy: `action`, `replicas`, `mode`, `settle_ns`, `priority`, `tags`, `tags_mode`, `domains`, `spread`, `spread_mode`, `colocate`, `overflow`, `cache`, `cache_min_age_ns`. With `action = "ignore"`, only `action` |
 | `sources` | object | where some of these come from, by the same names (without `_ns`): `rule`, `file`, `preset` or `default` |
 
+### `plan.json` — the placement plan (§12.4, §13.4)
+
+A case gives a pool and its files, and the whole plan: `jobs`, then `results`, which must match exactly and in order.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`) |
+| `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `policy` (below) |
+| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0) |
+| `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`) |
+| `entries` | array of objects | `disk`, `path`, `kind`: `dir`, `symlink` or `ignored` |
+| `min_free` | array of strings | as in the configuration; `["0%"]` when left out |
+| `jobs` | array of objects | `kind` (`refresh` or `replicate`), `path` or `path_b64`, `src`, `dst` |
+| `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel` (disks by position), `overflow`. What is left out is empty or false |
+| `error` | boolean | `true` when the input is refused |
+
 ### `capacity.json` — capacity of a pool (§13.1)
 
 | Field | Type | Meaning |

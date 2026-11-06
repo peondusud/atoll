@@ -21,6 +21,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - **An example is not a contract.** Reading §24 as a schema turned up four keys that contradicted an invariant or served nothing (`chunk_size`, `keep_overwritten`, `move_originals`, `striping`), and work the spec ran "inside the time window" with no key for it. Check every key against the sections that use it.
 - **A vector can pass for the wrong reason.** A new rule refused `tags_mode = "strict"` with no list, and an older case that expected `action = "ignore"` to refuse `tags_mode` went on passing through the new rule. Only a mutation showed it. Rerun the older mutations after adding a rule.
 - **Ask what is known when a value is read.** `settle` decides when a file's size may be read, so a rule that needs the size cannot set `settle`. The spec said both things in two places and never put them together.
+- **Measure memory before calling a function done.** The first placement plan allocated about 270 MB for 200,000 files, past the whole budget of §26, and passed every test. A per-prefix key map, a large struct per file and a result per healthy file were most of it. A tree of folders, a pointer for what is rare and no result for a healthy file brought what it holds to about 100 MB.
 - **Break the schema too.** A loader driven by a schema is only as tested as each constraint in it: drop every `pattern`, bound, `enum` value and default in turn, in process, and read what no vector notices.
 
 ## Unicode and normalization

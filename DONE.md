@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Placement plan (specs.md §12.4, §13.4)
+
+Commit "Plan which copies to create and how to mark the others", on `main`.
+
+- `solver.MakePlan` gives the jobs (`refresh`, then `replicate`), the marks of the copies (`surplus`, back to `ok`, canceled) and the states of each file. It moves and removes nothing.
+- The maintainer's decisions:
+  - placement only for now: moves, hysteresis and reachable capacity come with `balance` and `capacity` (phase 1b);
+  - with `spread_mode = "strict"`, the domains to cover are those of every data disk not `failed`, `retired` or `draining`, so a file waits for a missing bay rather than doubling up on the other;
+  - `overflow` concerns the rule's `tags` and `domains` only;
+  - the details of §13.4: the order of files and of disks, which copies count, what is kept beyond the level.
+- Report: [docs/research/placement-order.md](docs/research/placement-order.md). Where room is short, all orders protect the same bytes; smallest first protects 98% of files at 60% full, against 68% in the library's order and 6.5% largest first.
+- Two things the plan found along the way:
+  - a refresh writes a copy, so it takes the same name checks as creating, which §17 already required for a name the driver refuses;
+  - a plan for 200,000 files first allocated about 270 MB. `names.TargetNames` is now a tree of folders, and a plan holds 76 to 97 MB on top of its input, in about 1 s at worst.
+- Vectors: `plan.json`. Property tests in `internal/solver`: no two copies on a disk, `min_free` respected, no copy past the level, marks never away from the last readable or user copy, the order of the input changes nothing, a plan fed back adds nothing, and nothing past the capacity of §13.1.
+
 ## Effective policy of a file (specs.md §11.3, §12.4, §24.2)
 
 Commit "Compute the effective policy of a file", on `main`.
