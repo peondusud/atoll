@@ -3357,6 +3357,128 @@ func TestADryRunOfWhatLandsInAFolderWhoseLookFails(t *testing.T) {
 	}
 }
 
+// A folder job that lands below the new name of another, failed for now, waits with it: run first, it would make that
+// name, and the other would find it there and go, leaving its old folder behind. A dry run says the same of one whose
+// look fails.
+func TestAJobLandingBelowTheNewNameOfOneThatStays(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	for _, name := range []string{"a/x", "c/y"} {
+		b.write("t1", name, "x")
+		b.write("t2", name, "x")
+	}
+	b.scan(false)
+	mount := b.dirs["t2"]
+	b.gone[mount] = true
+	b.rename("t1", "c", "n")
+	b.rename("t1", "a", "n/b")
+	b.settle()
+	b.gone[mount] = false
+	b.fail[mount] = func(call, name string) error {
+		if call == "stat" && name == "n" {
+			return syscall.EACCES
+		}
+		return nil
+	}
+	dry, err := Run(t.Context(), b.db, b.config, b, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := outcomeOf(dry, KindFolder, "c"); got != "io-error" {
+		t.Errorf("dry run, the folder: %q (%+v)", got, dry.Operations)
+	}
+	if got := outcomeOf(dry, KindFolder, "a"); got != "" {
+		t.Errorf("dry run, what lands below its new name: %q (%+v)", got, dry.Operations)
+	}
+	b.fail[mount] = func(call, name string) error {
+		if call == "rename" && name == "n" {
+			return syscall.ENOSPC
+		}
+		return nil
+	}
+	out := b.pass()
+	if got := outcomeOf(out, KindFolder, "c"); got != "io-error" {
+		t.Errorf("the folder: %q (%+v)", got, out.Operations)
+	}
+	if !b.exists("t2", "media/a/x") || b.exists("t2", "media/n") {
+		t.Fatal("what lands below its new name did not wait")
+	}
+	b.fail[mount] = nil
+	b.pass()
+	for _, name := range []string{"media/n/y", "media/n/b/x"} {
+		if !b.exists("t2", name) {
+			t.Errorf("%s is not there", name)
+		}
+	}
+	if b.exists("t2", "media/c") {
+		t.Error("the old folder is left behind")
+	}
+}
+
+// A folder job whose old name holds a folder another job takes out, failed for now, waits for that one: run first,
+// it would carry that folder away with it. A dry run says the same of one whose look fails.
+func TestAJobHoldingAFolderThatStays(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	for _, name := range []string{"D/a", "D/s/x"} {
+		b.write("t1", name, "x")
+		b.write("t2", name, "x")
+	}
+	b.scan(false)
+	mount := b.dirs["t2"]
+	b.gone[mount] = true
+	b.rename("t1", "D/s", "F")
+	b.rename("t1", "D", "E")
+	b.settle()
+	b.gone[mount] = false
+	b.fail[mount] = func(call, name string) error {
+		if call == "stat" && name == "F" {
+			return syscall.EACCES
+		}
+		return nil
+	}
+	dry, err := Run(t.Context(), b.db, b.config, b, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := outcomeOf(dry, KindFolder, "D/s"); got != "io-error" {
+		t.Errorf("dry run, the folder inside: %q (%+v)", got, dry.Operations)
+	}
+	if got := outcomeOf(dry, KindFolder, "D"); got != "" {
+		t.Errorf("dry run, the folder that holds it: %q (%+v)", got, dry.Operations)
+	}
+	b.fail[mount] = func(call, name string) error {
+		if call == "rename" && name == "F" {
+			return syscall.ENOSPC
+		}
+		return nil
+	}
+	out := b.pass()
+	if got := outcomeOf(out, KindFolder, "D/s"); got != "io-error" {
+		t.Errorf("the folder inside: %q (%+v)", got, out.Operations)
+	}
+	if !b.exists("t2", "media/D/a") || !b.exists("t2", "media/D/s/x") {
+		t.Fatal("the folder that holds it did not wait")
+	}
+	b.fail[mount] = nil
+	b.pass()
+	for _, name := range []string{"media/F/x", "media/E/a"} {
+		if !b.exists("t2", name) {
+			t.Errorf("%s is not there", name)
+		}
+	}
+	for _, name := range []string{"media/E/s", "media/D"} {
+		if b.exists("t2", name) {
+			t.Errorf("%s is left", name)
+		}
+	}
+}
+
+// A file row that is not there has no copy anywhere.
+func TestNoFileRowHasNoCopy(t *testing.T) {
+	if got := copyAt(nil, "t1"); got != -1 {
+		t.Errorf("%d", got)
+	}
+}
+
 // A folder removed, whose row stays for a moment for the copies below it: a name the look did not find is no lasting
 // refusal. The rename waits for that row, and nothing goes to the trash.
 func TestARefusedCopyWhoseCollisionWasRemoved(t *testing.T) {

@@ -724,7 +724,7 @@ A copy may be **peer** of the copies that are `gone`: it is `created_by = atoll`
 | The copies | What happens |
 |---|---|
 | at least one `moved` | Rename, below |
-| some `gone`, none `uncertain` or `own`, no `gone` with `old_lpath`; at least one copy remains, and every copy that remains is `there` or `unknown`, and a peer; the file not in `conflict` or `corrupt`; `deletes.direct = "propagate"` | Deletion: a `copy-gone` event for each `gone`, whose rows go, and a trash job for each that remains, unless it has one queued for a deletion, which stands, `reason = deleted`, `src_disk` the disk of the first `gone` by position |
+| some `gone`, none `uncertain` or `own`, no `gone` with `old_lpath`; at least one copy remains, and every copy that remains is `there` or `unknown`, and a peer; the file not in `conflict` or `corrupt`; `deletes.direct = "propagate"` | Deletion: a `copy-gone` event for each `gone`, whose rows go, and a trash job for each that remains, unless it has one queued for a deletion, which stands (one queued for a refused rename stands beside it), `reason = deleted`, `src_disk` the disk of the first `gone` by position |
 | some `gone` or `uncertain` or `own`, otherwise, with at least one that remains | Kept (§15.3, §15.4, invariant 10): their rows go, and nothing goes to the trash. A `copy-gone` event for each `gone` without `old_lpath`, and a `copy-kept` event at level `warning` |
 | all `gone` or `uncertain` or `own` | Gone: a `copy-gone` event for each `gone` without `old_lpath`, and no `copy-kept`, as no copy is left that a deletion did not reach. The rows go, and the file goes with its chunks. Nothing can be propagated: an x1 file, or a deletion through mergerfs |
 | none `moved`, `gone`, `uncertain` or `own` | Nothing |

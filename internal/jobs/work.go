@@ -1073,7 +1073,7 @@ func (p *pass) planDecided(ctx context.Context, d *solver.PropDecision, f *catal
 			if queued {
 				continue
 			}
-			plan.dropped[f.ID] = true
+			// A job queued for another reason stands beside this one, as in a real pass: the queued jobs list it too.
 			// A copy not as its row says is left there, as a queued job finds it.
 			outcome := p.trashOutcome(d.Src)
 			if outcome == OutcomeToTrash && !isAsItsRow(p.verdictOf(f, c)) {

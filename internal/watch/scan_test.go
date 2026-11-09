@@ -722,17 +722,33 @@ func TestAFolderWithNoCreationTimeIsNotLookedFor(t *testing.T) {
 	}
 }
 
-// What a walk could not read says nothing: its folder keeps its row, and so does what sits below it.
+// What a walk could not read says nothing: its folder keeps its row, and so does what sits below it, with or without
+// a copy there. With one, the folder may be one renamed since it was listed, kept for that; with none, only what the
+// walk could not read keeps it.
 func TestTheEntriesOfAnUnreachableFolderStay(t *testing.T) {
-	b := newBench(t, "t1")
-	b.write("t1", "sub/deep/c", "z")
-	b.scan(Options{})
-	b.wrap = failing("opendir", "sub", syscall.ELOOP)
-	b.scan(Options{})
-	for _, name := range []string{"sub", "sub/deep"} {
-		if got := b.count("SELECT count(*) FROM entries WHERE lpath = ?", []byte(name)); got != 1 {
-			t.Errorf("%d rows of %s", got, name)
-		}
+	for _, tc := range []struct {
+		name string
+		fill func(t *testing.T, b *bench)
+	}{
+		{"with a copy below", func(_ *testing.T, b *bench) { b.write("t1", "sub/deep/c", "z") }},
+		{"with no copy below", func(t *testing.T, b *bench) {
+			if err := os.MkdirAll(filepath.Join(b.dirs["t1"], "media", "sub", "deep"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t, "t1")
+			tc.fill(t, b)
+			b.scan(Options{})
+			b.wrap = failing("opendir", "sub", syscall.ELOOP)
+			b.scan(Options{})
+			for _, name := range []string{"sub", "sub/deep"} {
+				if got := b.count("SELECT count(*) FROM entries WHERE lpath = ?", []byte(name)); got != 1 {
+					t.Errorf("%d rows of %s", got, name)
+				}
+			}
+		})
 	}
 }
 
