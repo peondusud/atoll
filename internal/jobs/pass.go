@@ -117,6 +117,8 @@ type pass struct {
 	unfound map[string][]string
 	// where a decision of this pass found a copy back at its file's path, by disk
 	cleared map[string][]string
+	// the folders, by disk, found renamed and left waiting in this pass
+	waited map[string][]string
 	// the copies, by disk, moved to a name another file holds: their rows cannot leave where they say
 	stuck map[string]map[int64]bool
 	// the folders found renamed that copies came with, as the rows said before any decision of this pass
@@ -148,7 +150,7 @@ func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, a
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink,
 		rows: map[string]int64{}, walked: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
 		guards: map[string]*guardState{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
-		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, unfound: map[string][]string{}, cleared: map[string][]string{}, out: &Outcome{DryRun: !apply},
+		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
 	if err := p.readSettings(); err != nil {
 		return nil, err
@@ -650,7 +652,9 @@ func (p *pass) applyDecisions(ctx context.Context, decisions []solver.PropDecisi
 		case solver.PropRename, solver.PropDeletion, solver.PropKept, solver.PropGone:
 			change := p.changeOf(d, rows[d.Path])
 			if !p.apply {
-				p.planDecided(d, rows[d.Path], &change)
+				if err := p.planDecided(ctx, d, rows[d.Path], &change); err != nil {
+					return err
+				}
 			}
 			changes = append(changes, change)
 		case solver.PropHeld:
@@ -924,7 +928,9 @@ func (p *pass) decideFolder(ctx context.Context, disk string, move watch.FolderM
 		}
 		waiting -= left
 	}
-	if waiting > 0 {
+	// A folder renamed inside it that waits keeps its rows where they are: its entries would carry them away.
+	if waiting > 0 || slices.ContainsFunc(p.waited[disk], func(f string) bool { return strings.HasPrefix(f, move.From+"/") }) {
+		p.waited[disk] = append(p.waited[disk], move.From)
 		return nil
 	}
 	if !p.realMoves[folderKey{disk, move.From}] {
@@ -943,6 +949,7 @@ func (p *pass) decideFolder(ctx context.Context, disk string, move watch.FolderM
 		return err
 	}
 	if waits {
+		p.waited[disk] = append(p.waited[disk], move.From)
 		return nil
 	}
 	if err := p.follow(ctx, disk, move, positions); err != nil {

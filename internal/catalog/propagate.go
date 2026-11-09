@@ -1150,6 +1150,17 @@ func TrashJobState(ctx context.Context, db *sql.DB, fileID int64, disk string) (
 	return state, nil
 }
 
+// QueuedTrash says whether a copy has a trash job queued for that reason: a decision leaves it as it is.
+func QueuedTrash(ctx context.Context, db *sql.DB, fileID int64, disk, reason string) (bool, error) {
+	var queued bool
+	err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM jobs WHERE kind = 'trash' AND file_id = ? AND dst_disk = ? AND state = ? AND reason = ?)",
+		fileID, disk, JobQueued, reason).Scan(&queued)
+	if err != nil {
+		return false, fmt.Errorf("job: %w", err)
+	}
+	return queued, nil
+}
+
 // DropStaleCanceled forgets what a rejection said of a copy no longer behind: whichever way it caught up,
 // a later refused rename of it is another question.
 func DropStaleCanceled(ctx context.Context, db *sql.DB) error {

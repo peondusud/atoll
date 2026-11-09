@@ -1039,7 +1039,7 @@ func (p *pass) planOf(disk string) *diskPlan {
 }
 
 // planDecided says what a decision would run, as nothing a dry run decides is recorded.
-func (p *pass) planDecided(d *solver.PropDecision, f *catalog.FileRow, change *catalog.FileChange) {
+func (p *pass) planDecided(ctx context.Context, d *solver.PropDecision, f *catalog.FileRow, change *catalog.FileChange) error {
 	if change.DropJobs {
 		p.jobsDropped[f.ID] = true
 	}
@@ -1060,12 +1060,20 @@ func (p *pass) planDecided(d *solver.PropDecision, f *catalog.FileRow, change *c
 				FileID: f.ID, Place: c.Place(f), Target: d.Target, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, BtimeNS: c.BtimeNS, FileKey: c.FileKey, Verified: c.VerifiedNS,
 			})
 		case solver.ActTrash:
-			plan.dropped[f.ID] = true
 			if c.OldPath != nil {
 				plan.renames = append(plan.renames, catalog.RenameRow{
 					FileID: f.ID, Place: *c.OldPath, Target: f.Path, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, BtimeNS: c.BtimeNS, FileKey: c.FileKey, Verified: c.VerifiedNS,
 				})
 			}
+			// A job queued for that deletion stands, with its source, as a real pass keeps it: the queued jobs list it.
+			queued, err := catalog.QueuedTrash(ctx, p.db, f.ID, a.Disk, reasonDeleted)
+			if err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+			if queued {
+				continue
+			}
+			plan.dropped[f.ID] = true
 			// A copy not as its row says is left there, as a queued job finds it.
 			outcome := p.trashOutcome(d.Src)
 			if outcome == OutcomeToTrash && !isAsItsRow(p.verdictOf(f, c)) {
@@ -1080,6 +1088,7 @@ func (p *pass) planDecided(d *solver.PropDecision, f *catalog.FileRow, change *c
 		case solver.ActClear, solver.ActOwnFile, solver.ActStay:
 		}
 	}
+	return nil
 }
 
 // isAsItsRow says that a copy is what its row says, as far as this pass can tell.
