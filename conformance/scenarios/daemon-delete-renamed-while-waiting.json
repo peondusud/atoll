@@ -1,0 +1,192 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.12",
+  "description": "Renamed while a job waits, under a guard that keeps the job from running: a user acted on the copy, so the deletion no longer stands, and confirming sends nothing.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\nfiles = 2\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "unmount",
+      "disk": "t2"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/b"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/c"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "mount",
+      "disk": "t2"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t2",
+      "path": "media/a",
+      "to": "media/keep"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), j.state FROM jobs j JOIN files f ON f.id = j.file_id",
+      "rows": []
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "confirm",
+        "--disk",
+        "t1"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/keep",
+          "text": "1"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/1/b",
+          "text": "2"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/2/c",
+          "text": "3"
+        }
+      ]
+    }
+  ]
+}

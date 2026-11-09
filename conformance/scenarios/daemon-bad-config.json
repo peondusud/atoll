@@ -1,0 +1,54 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "Exit code 1 when the configuration does not load.",
+  "config": "pool_id = \n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "list"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "confirm",
+        "--disk",
+        "t1"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "reject",
+        "--disk",
+        "t1",
+        "--json"
+      ],
+      "exit": 1
+    }
+  ]
+}

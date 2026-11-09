@@ -1,0 +1,285 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.6, \u00a715.12",
+  "description": "Confirmed, and more gone since: what the confirm covers is decided, what came after is held, and the trash jobs of that disk wait while it holds.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        },
+        {
+          "path": "media/d",
+          "text": "4"
+        },
+        {
+          "path": "media/e",
+          "text": "5"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        },
+        {
+          "path": "media/d",
+          "text": "4"
+        },
+        {
+          "path": "media/e",
+          "text": "5"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\nfiles = 1\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/b"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/c"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [
+          {
+            "disk": "t1",
+            "count": 3
+          }
+        ],
+        "waiting": 3,
+        "next_due": "2026-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "confirm",
+        "--disk",
+        "t1"
+      ]
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/d"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/e"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "deleted"
+          },
+          {
+            "path": "b",
+            "decision": "deleted"
+          },
+          {
+            "path": "c",
+            "decision": "deleted"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "a",
+            "reason": "deleted",
+            "outcome": "held"
+          },
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "b",
+            "reason": "deleted",
+            "outcome": "held"
+          },
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "c",
+            "reason": "deleted",
+            "outcome": "held"
+          }
+        ],
+        "guards": [
+          {
+            "disk": "t1",
+            "count": 2
+          }
+        ],
+        "waiting": 2,
+        "next_due": "2026-01-01T00:02:00.000000000Z"
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        },
+        {
+          "path": "media/d",
+          "text": "4"
+        },
+        {
+          "path": "media/e",
+          "text": "5"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), j.state FROM jobs j JOIN files f ON f.id = j.file_id ORDER BY f.lpath",
+      "rows": [
+        [
+          "a",
+          "queued"
+        ],
+        [
+          "b",
+          "queued"
+        ],
+        [
+          "c",
+          "queued"
+        ]
+      ]
+    }
+  ]
+}

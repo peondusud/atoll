@@ -80,6 +80,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -99,6 +101,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }
@@ -161,6 +165,8 @@
             "hashed": 5,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -180,6 +186,8 @@
             "hashed": 2,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }
@@ -314,6 +322,8 @@
             "hashed": 5,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -333,6 +343,8 @@
             "hashed": 2,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }

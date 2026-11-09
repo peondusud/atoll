@@ -72,6 +72,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -91,6 +93,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }
@@ -157,6 +161,8 @@
                 "path_b64": "/y5ta3Y="
               }
             ],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -176,6 +182,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }

@@ -56,6 +56,12 @@ func ResolveRestore(target, source Seen) (Decision, error) {
 	}
 }
 
+// ResolveRename decides for a rename on a disk: as for a restore, as the target is a logical path that
+// anyone can write to, so what is found there stays (specs.md §17.2).
+func ResolveRename(target, source Seen) (Decision, error) {
+	return ResolveRestore(target, source)
+}
+
 // ResolveUnlink decides for a purge, from what the file in the trash holds.
 func ResolveUnlink(source Seen) (Decision, error) {
 	if err := knownSeen(source); err != nil {

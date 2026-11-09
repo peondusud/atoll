@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/peondusud/atoll/internal/layout"
@@ -17,6 +19,7 @@ const (
 	OpRestore = "restore"
 	OpUnlink  = "unlink"
 	OpMkdir   = "mkdir"
+	OpRename  = "rename"
 )
 
 // Op is one operation of the journal.
@@ -24,8 +27,8 @@ type Op struct {
 	ID      int64
 	Disk    string
 	Kind    string
-	Path    string // the logical path
-	Path2   string // the location inside the trash
+	Path    string // the logical path, or for a rename where it sat
+	Path2   string // the location inside the trash, or for a rename the target
 	FileKey string // the identity of the file moved
 }
 
@@ -139,7 +142,7 @@ func FinishTrash(ctx context.Context, db *sql.DB, op *Op, restart *Restart, link
 		if err := markOp(ctx, tx, op.ID, "done"); err != nil {
 			return err
 		}
-		if err := dropCopyRow(ctx, tx, op.Disk, op.Path); err != nil {
+		if err := finishCopy(ctx, tx, op); err != nil {
 			return err
 		}
 		if restart != nil {
@@ -155,13 +158,52 @@ func FinishTrash(ctx context.Context, db *sql.DB, op *Op, restart *Restart, link
 	return nil
 }
 
-// CopyOf gives what a copy's row says, with nothing valid in it when there is none.
+// finishCopy says that a copy went for good: its row, found by disk, place and inode, the job that sent
+// it, and its file if that was its last copy. A reprise comes here too, so that a run with a crash ends
+// as a run without one (specs.md §15.12).
+func finishCopy(ctx context.Context, tx *sql.Tx, op *Op) error {
+	var fileID int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT c.file_id FROM copies c JOIN files f ON f.id = c.file_id
+		WHERE c.disk_id = ?1 AND c.file_key = ?2 AND (c.old_lpath = ?3 OR (c.old_lpath IS NULL AND f.lpath = ?3))`,
+		op.Disk, op.FileKey, []byte(op.Path)).Scan(&fileID)
+	switch {
+	case isNoRows(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("copy: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM copies WHERE file_id = ? AND disk_id = ?", fileID, op.Disk); err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE kind = 'trash' AND file_id = ? AND dst_disk = ?", fileID, op.Disk); err != nil {
+		return fmt.Errorf("job: %w", err)
+	}
+	return dropFileIfEmpty(ctx, tx, fileID)
+}
+
+// dropFileIfEmpty removes a file with no copy left, with its chunks and jobs.
+func dropFileIfEmpty(ctx context.Context, tx *sql.Tx, fileID int64) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE id = ?1 AND NOT EXISTS(SELECT 1 FROM copies WHERE file_id = ?1)", fileID); err != nil {
+		return fmt.Errorf("file: %w", err)
+	}
+	return nil
+}
+
+// CopyOf gives what a copy's row says, by where it sits, with nothing valid in it when there is none.
 func CopyOf(ctx context.Context, db *sql.DB, disk, path string) (KnownCopy, error) {
-	row := KnownCopy{Path: path}
-	err := db.QueryRowContext(ctx, "SELECT c.size, c.mtime_ns, c.ctime_ns, c.file_key FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? AND f.lpath = ?", disk, []byte(path)).
-		Scan(&row.Size, &row.MtimeNS, &row.CtimeNS, &row.FileKey)
+	row := KnownCopy{Path: path, FilePath: path}
+	var file []byte
+	err := db.QueryRowContext(ctx, `
+		SELECT f.id, f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key
+		FROM copies c JOIN files f ON f.id = c.file_id
+		WHERE c.disk_id = ?1 AND (c.old_lpath = ?2 OR (c.old_lpath IS NULL AND f.lpath = ?2))`, disk, []byte(path)).
+		Scan(&row.FileID, &file, &row.Size, &row.MtimeNS, &row.CtimeNS, &row.BtimeNS, &row.FileKey)
 	if err != nil && !isNoRows(err) {
 		return row, fmt.Errorf("copy: %w", err)
+	}
+	if file != nil {
+		row.FilePath = string(file)
 	}
 	return row, nil
 }
@@ -175,7 +217,8 @@ func KeyTaken(ctx context.Context, db *sql.DB, disk, path string) (bool, error) 
 	}
 	var taken bool
 	err := db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND f.lpath_key = ?2 AND f.lpath <> ?3)
+		SELECT EXISTS(SELECT 1 FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3)
+			OR EXISTS(SELECT 1 FROM copies WHERE disk_id = ?1 AND old_lpath_key = ?2 AND old_lpath <> ?3)
 			OR EXISTS(SELECT 1 FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3)`,
 		disk, key, []byte(path)).Scan(&taken)
 	if err != nil {
@@ -184,9 +227,78 @@ func KeyTaken(ctx context.Context, db *sql.DB, disk, path string) (bool, error) 
 	return taken, nil
 }
 
+// KeyTakenExcept is KeyTaken, leaving out one name and all below it: what a rename frees as it comes.
+func KeyTakenExcept(ctx context.Context, db *sql.DB, disk, path, except string) (bool, error) {
+	return keyTakenBy(ctx, db, disk, path, except, nil, []string{
+		"SELECT f.lpath FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3",
+		"SELECT old_lpath FROM copies WHERE disk_id = ?1 AND old_lpath_key = ?2 AND old_lpath <> ?3",
+		"SELECT lpath FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3",
+	})
+}
+
+// KeyStaysTaken is KeyTakenExcept by what the last look still found: not a row whose clock runs, nor a name at or
+// below a folder found renamed and not yet decided. A rename waits for those, and nothing goes to the trash for them.
+func KeyStaysTaken(ctx context.Context, db *sql.DB, disk, path, except string, leaving []string) (bool, error) {
+	return keyTakenBy(ctx, db, disk, path, except, leaving, []string{
+		"SELECT f.lpath FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND c.gone_ns IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3",
+		"SELECT old_lpath FROM copies WHERE disk_id = ?1 AND gone_ns IS NULL AND old_lpath_key = ?2 AND old_lpath <> ?3",
+		"SELECT lpath FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3",
+	})
+}
+
+func keyTakenBy(ctx context.Context, db *sql.DB, disk, path, except string, leaving, queries []string) (bool, error) {
+	key := keyOf(path)
+	if !key.Valid {
+		return false, nil
+	}
+	isLeaving := func(name string) bool {
+		return slices.ContainsFunc(leaving, func(from string) bool { return name == from || strings.HasPrefix(name, from+"/") })
+	}
+	check := func(query string) (bool, error) {
+		rows, err := db.QueryContext(ctx, query, disk, key, []byte(path))
+		if err != nil {
+			return false, fmt.Errorf("names: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var name []byte
+			if err := rows.Scan(&name); err != nil {
+				return false, fmt.Errorf("names: %w", err)
+			}
+			if s := string(name); s != except && !strings.HasPrefix(s, except+"/") && !isLeaving(s) {
+				return true, nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("names: %w", err)
+		}
+		return false, nil
+	}
+	for _, query := range queries {
+		taken, err := check(query)
+		if err != nil || taken {
+			return taken, err
+		}
+	}
+	return false, nil
+}
+
+// TakenByRename says whether a path is the path of a file whose copy on this disk still sits elsewhere,
+// so that a disk has no room for another copy of it (specs.md §15.12).
+func TakenByRename(ctx context.Context, db *sql.DB, disk, path string) (bool, error) {
+	var taken bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM files f JOIN copies c ON c.file_id = f.id WHERE f.lpath = ?2 AND c.disk_id = ?1 AND c.old_lpath IS NOT NULL)`,
+		disk, []byte(path)).Scan(&taken)
+	if err != nil {
+		return false, fmt.Errorf("names: %w", err)
+	}
+	return taken, nil
+}
+
 // LinkedPaths gives the paths whose copy on a disk is that file, by what the catalog knows.
 func LinkedPaths(ctx context.Context, db *sql.DB, disk, fileKey string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, "SELECT f.lpath FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? AND c.file_key = ? ORDER BY f.lpath", disk, fileKey)
+	rows, err := db.QueryContext(ctx, "SELECT COALESCE(c.old_lpath, f.lpath) AS place FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? AND c.file_key = ? ORDER BY place", disk, fileKey)
 	if err != nil {
 		return nil, fmt.Errorf("links: %w", err)
 	}
@@ -247,10 +359,10 @@ func FinishMkdir(ctx context.Context, db *sql.DB, op *Op, e *EntryRow) error {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, created_by)
-			VALUES (?, ?, ?, 'dir', ?, ?, 'atoll')
+			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, created_by, file_key, btime_ns)
+			VALUES (?, ?, ?, 'dir', ?, ?, 'atoll', ?, ?)
 			ON CONFLICT(lpath, disk_id) DO UPDATE SET kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, created_by = 'atoll'`,
-			[]byte(e.Path), keyOf(e.Path), op.Disk, e.Mode, e.MtimeNS)
+			[]byte(e.Path), keyOf(e.Path), op.Disk, e.Mode, e.MtimeNS, e.FileKey, e.BtimeNS)
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", e.Path, err)
 		}
@@ -269,10 +381,28 @@ func markOp(ctx context.Context, tx *sql.Tx, id int64, state string) error {
 	return nil
 }
 
+// dropCopyRow removes what a row left from before says of a path that was found free. A row that still
+// sits elsewhere is not at this path, whatever its file's path is. A file that sat behind at this path goes if
+// that was its last copy, as it would otherwise hold its own path for good.
 func dropCopyRow(ctx context.Context, tx *sql.Tx, disk, path string) error {
-	_, err := tx.ExecContext(ctx, "DELETE FROM copies WHERE disk_id = ? AND file_id = (SELECT id FROM files WHERE lpath = ?)", disk, []byte(path))
+	behind, err := queryAll(ctx, tx, func(rows *sql.Rows) (int64, error) {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, fmt.Errorf("read: %w", err)
+		}
+		return id, nil
+	}, "SELECT file_id FROM copies WHERE disk_id = ? AND old_lpath = ?", disk, []byte(path))
 	if err != nil {
 		return fmt.Errorf("copy: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, "DELETE FROM copies WHERE disk_id = ?1 AND ((old_lpath IS NULL AND file_id = (SELECT id FROM files WHERE lpath = ?2)) OR old_lpath = ?2)", disk, []byte(path))
+	if err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	for _, id := range behind {
+		if err := dropFileIfEmpty(ctx, tx, id); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -461,8 +591,17 @@ func FinishRestore(ctx context.Context, db *sql.DB, op *Op, nowNS int64, c *NewC
 		if err := dropCopyRow(ctx, tx, op.Disk, op.Path); err != nil {
 			return err
 		}
-		if err := writeCopies(ctx, tx, op.Disk, nowNS, []NewCopy{*c}); err != nil {
-			return err
+		// The file at that path may have a copy here still sitting elsewhere, renamed since this was
+		// planned: a disk holds one copy of a file, and the next walk reports this one (specs.md §15.10).
+		var behind bool
+		err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM files f JOIN copies k ON k.file_id = f.id WHERE f.lpath = ? AND k.disk_id = ?)", []byte(op.Path), op.Disk).Scan(&behind)
+		if err != nil {
+			return fmt.Errorf("copy: %w", err)
+		}
+		if !behind {
+			if err := writeCopies(ctx, tx, op.Disk, nowNS, []NewCopy{*c}); err != nil {
+				return err
+			}
 		}
 		return writeLinks(ctx, tx, op.Disk, links)
 	})

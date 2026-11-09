@@ -48,6 +48,7 @@ type Copy struct {
 	State       CopyState
 	CreatedBy   string
 	FirstSeenNS int64
+	OldPath     string // where it sits, when it has not followed a rename yet (specs.md §15.12)
 }
 
 // Placement is what a file's effective policy says about where its copies go.
@@ -565,6 +566,14 @@ func (p *planner) namesOf(d *planDisk) (*names.TargetNames, error) {
 		if slices.Contains(f.holding, d) {
 			if err := t.Add(f.Path); err != nil {
 				return nil, fmt.Errorf("plan: %w", err)
+			}
+		}
+		// A copy that has not followed a rename is at that name on its disk, whatever the file is called.
+		for i := range f.Copies {
+			if c := &f.Copies[i]; c.Disk == d.ID && c.OldPath != "" {
+				if err := t.Add(c.OldPath); err != nil {
+					return nil, fmt.Errorf("plan: %w", err)
+				}
 			}
 		}
 	}

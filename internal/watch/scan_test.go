@@ -476,7 +476,11 @@ func (d *otherMount) OpenDir(name string) (fsx.Dir, error) {
 	if name == d.name {
 		d.t.Errorf("a walk entered %q, on another mount", name)
 	}
-	return d.Dir.OpenDir(name) //nolint:wrapcheck // a test double
+	below, err := d.Dir.OpenDir(name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return &otherMount{Dir: below, t: d.t, name: d.name}, nil
 }
 
 func TestAnotherMountIsNotEntered(t *testing.T) {
@@ -494,6 +498,295 @@ func TestAnotherMountIsNotEntered(t *testing.T) {
 	if got := b.count("SELECT count(*) FROM files WHERE lpath = ?", []byte("inner/not-ours")); got != 0 {
 		t.Error("a file of another mount was recorded")
 	}
+}
+
+// A folder renamed with another mount below it: what the walk does not enter says nothing, at its new name as at
+// its old one, and no row below it reads as gone.
+func TestAFolderRenamedAroundAMount(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "D/m/x", "x")
+	b.write("t1", "D/y", "y")
+	b.scan(Options{})
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Rename(filepath.Join(media, "D"), filepath.Join(media, "E")); err != nil {
+		t.Fatal(err)
+	}
+	b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &otherMount{Dir: d, t: t, name: "m"} }
+	r := b.scan(Options{Full: true}).Disks[0]
+	if !slices.Equal(r.OtherMounts, []string{"E/m"}) {
+		t.Errorf("other mounts: %v", r.OtherMounts)
+	}
+	if len(r.Absent) != 0 {
+		t.Errorf("absent: %v", r.Absent)
+	}
+	if len(r.Unreadable) != 0 {
+		t.Errorf("unreadable: %v", r.Unreadable)
+	}
+	if len(r.Moved) != 1 || r.Moved[0].Path != "D/y" {
+		t.Errorf("moved: %+v", r.Moved)
+	}
+}
+
+// A folder below another mount says nothing of where it went: the walk did not get there.
+func TestAFolderBelowAMountIsNotRenamed(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "m/sub/x", "x")
+	b.scan(Options{})
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Rename(filepath.Join(media, "m", "sub"), filepath.Join(media, "z")); err != nil {
+		t.Fatal(err)
+	}
+	b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &otherMount{Dir: d, t: t, name: "m"} }
+	r := b.scan(Options{}).Disks[0]
+	if len(r.FolderMoves) != 0 {
+		t.Errorf("folder moves: %+v", r.FolderMoves)
+	}
+}
+
+// A folder at a name an operation left planned says nothing of where it went: only the reprise can tell.
+func TestAFolderAtAPlannedNameIsNotRenamed(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "d/x", "x")
+	b.scan(Options{})
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Rename(filepath.Join(media, "d"), filepath.Join(media, "e")); err != nil {
+		t.Fatal(err)
+	}
+	r, err := LookAtDisk(t.Context(), b.db, b.config, b, &b.config.Disks[0], disks.Verdict{State: disks.Online}, b.now, &Look{Planned: []string{"d", "e"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.FolderMoves) != 0 {
+		t.Errorf("folder moves: %+v", r.FolderMoves)
+	}
+}
+
+// bindOf makes a folder look like a bind mount of another, on a mount of its own or not.
+type bindOf struct {
+	fsx.Dir
+	name, of string
+	onItsOwn bool
+}
+
+func (d *bindOf) Stat(name string) (fsx.Stat, error) {
+	if name != d.name {
+		return d.Dir.Stat(name) //nolint:wrapcheck // a test double
+	}
+	st, err := d.Dir.Stat(d.of)
+	if !d.onItsOwn {
+		st.MountID++
+	}
+	return st, err //nolint:wrapcheck // a test double
+}
+
+// One folder at two names with no row, one of them another mount: the walk entered the other, whatever order a
+// map gives them. Both entered, the first in byte order.
+func TestAFolderRenamedAndBoundElsewhere(t *testing.T) {
+	for _, onItsOwn := range []bool{false, true} {
+		for range 20 {
+			b := newBench(t, "t1")
+			b.write("t1", "D/x", "x")
+			b.scan(Options{})
+			media := filepath.Join(b.dirs["t1"], "media")
+			if err := os.Rename(filepath.Join(media, "D"), filepath.Join(media, "E")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(media, "M"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &bindOf{Dir: d, name: "M", of: "E", onItsOwn: onItsOwn} }
+			r := b.scan(Options{}).Disks[0]
+			if len(r.FolderMoves) != 1 || r.FolderMoves[0].To != "E" {
+				t.Fatalf("folder moves: %+v", r.FolderMoves)
+			}
+		}
+	}
+}
+
+// A folder at its own name, bound at another: that other is no rename, and has its entry as any folder has.
+func TestABindMountIsNoRenameAWalkStraddles(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "E/x", "x")
+	b.scan(Options{})
+	if err := os.Mkdir(filepath.Join(b.dirs["t1"], "media", "M"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &bindOf{Dir: d, name: "M", of: "E"} }
+	b.scan(Options{})
+	if got := b.count("SELECT count(*) FROM entries WHERE lpath = ?", []byte("M")); got != 1 {
+		t.Errorf("%d rows at the other name", got)
+	}
+}
+
+// sameIno gives a folder the inode of another, with another creation time: the root of each btrfs subvolume has one
+// inode number, and a walk enters them.
+type sameIno struct {
+	fsx.Dir
+	name, of string
+}
+
+func (d *sameIno) Stat(name string) (fsx.Stat, error) {
+	st, err := d.Dir.Stat(name)
+	if err != nil || name != d.name {
+		return st, err //nolint:wrapcheck // a test double
+	}
+	other, err := d.Dir.Stat(d.of)
+	if err != nil {
+		return st, err //nolint:wrapcheck // a test double
+	}
+	st.Ino = other.Ino
+	st.Birth.Sec = other.Birth.Sec + 1
+	return st, nil
+}
+
+// sameBirth gives a folder the creation time of another, as a coarse clock can.
+type sameBirth struct {
+	fsx.Dir
+	name, of string
+}
+
+func (d *sameBirth) Stat(name string) (fsx.Stat, error) {
+	st, err := d.Dir.Stat(name)
+	if err != nil || name != d.name {
+		return st, err //nolint:wrapcheck // a test double
+	}
+	other, err := d.Dir.Stat(d.of)
+	if err != nil {
+		return st, err //nolint:wrapcheck // a test double
+	}
+	st.Birth = other.Birth
+	return st, nil
+}
+
+// A folder made at a renamed folder's old name within the same tick of a coarse clock: its inode says it is another.
+func TestAFolderMadeAgainWithTheSameCreationTime(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "D/x", "x")
+	b.scan(Options{})
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Rename(filepath.Join(media, "D"), filepath.Join(media, "E")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(media, "D"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &sameBirth{Dir: d, name: "D", of: "E"} }
+	r := b.scan(Options{}).Disks[0]
+	if len(r.FolderMoves) != 1 || r.FolderMoves[0].To != "E" {
+		t.Errorf("folder moves: %+v", r.FolderMoves)
+	}
+}
+
+// A folder that went away with another made at its name is no name on its way out: the new one has the row, and what
+// sat below it is gone.
+func TestAnotherFolderAtAFoldersName(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "D/x", "x")
+	b.scan(Options{})
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Rename(filepath.Join(media, "D"), filepath.Join(b.dirs["t1"], "away")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(media, "D"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := b.scan(Options{}).Disks[0]; len(r.UnfoundFolders)+len(r.FolderMoves) != 0 {
+		t.Errorf("%+v, %+v", r.UnfoundFolders, r.FolderMoves)
+	}
+}
+
+// noBirth stands for a filesystem that gives no creation time.
+type noBirth struct{ fsx.Dir }
+
+func (d *noBirth) Stat(name string) (fsx.Stat, error) {
+	st, err := d.Dir.Stat(name)
+	st.HasBirth = false
+	return st, err //nolint:wrapcheck // a test double
+}
+
+// With no creation time a folder cannot be looked for: what cannot be found at its name is simply not there.
+func TestAFolderWithNoCreationTimeIsNotLookedFor(t *testing.T) {
+	b := newBench(t, "t1")
+	b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &noBirth{Dir: d} }
+	b.write("t1", "D/x", "x")
+	b.scan(Options{})
+	if err := os.Rename(filepath.Join(b.dirs["t1"], "media", "D"), filepath.Join(b.dirs["t1"], "away")); err != nil {
+		t.Fatal(err)
+	}
+	r := b.scan(Options{}).Disks[0]
+	if len(r.UnfoundFolders)+len(r.FolderMoves) != 0 {
+		t.Errorf("%+v, %+v", r.UnfoundFolders, r.FolderMoves)
+	}
+	if got := b.count("SELECT count(*) FROM entries WHERE lpath = ?", []byte("D")); got != 0 {
+		t.Errorf("%d rows of a folder that is not there", got)
+	}
+}
+
+// What a walk could not read says nothing: its folder keeps its row, and so does what sits below it.
+func TestTheEntriesOfAnUnreachableFolderStay(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "sub/deep/c", "z")
+	b.scan(Options{})
+	b.wrap = failing("opendir", "sub", syscall.ELOOP)
+	b.scan(Options{})
+	for _, name := range []string{"sub", "sub/deep"} {
+		if got := b.count("SELECT count(*) FROM entries WHERE lpath = ?", []byte(name)); got != 1 {
+			t.Errorf("%d rows of %s", got, name)
+		}
+	}
+}
+
+// One inode number on two folders, with two creation times, is two folders: a new one has its row, and what it holds
+// has rows, and a rename beside it is still read.
+func TestTwoFoldersWithOneInodeNumber(t *testing.T) {
+	t.Run("a new one beside one with a row", func(t *testing.T) {
+		b := newBench(t, "t1")
+		b.write("t1", "shows/x", "x")
+		b.scan(Options{})
+		b.write("t1", "anime/y", "y")
+		b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &sameIno{Dir: d, name: "anime", of: "shows"} }
+		b.scan(Options{})
+		if got := b.count("SELECT count(*) FROM entries WHERE lpath = ?", []byte("anime")); got != 1 {
+			t.Errorf("%d rows of the folder", got)
+		}
+		if got := b.count("SELECT count(*) FROM files WHERE lpath = ?", []byte("anime/y")); got != 1 {
+			t.Errorf("%d rows of the file", got)
+		}
+	})
+	t.Run("one renamed, and a new one at its name", func(t *testing.T) {
+		b := newBench(t, "t1")
+		b.write("t1", "shows/x", "x")
+		b.scan(Options{})
+		media := filepath.Join(b.dirs["t1"], "media")
+		if err := os.Rename(filepath.Join(media, "shows"), filepath.Join(media, "tv")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(media, "shows"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &sameIno{Dir: d, name: "shows", of: "tv"} }
+		r := b.scan(Options{}).Disks[0]
+		if len(r.FolderMoves) != 1 || r.FolderMoves[0].To != "tv" {
+			t.Errorf("folder moves: %+v", r.FolderMoves)
+		}
+	})
+	t.Run("a new one sorting before a folder renamed", func(t *testing.T) {
+		b := newBench(t, "t1")
+		b.write("t1", "D/x", "x")
+		b.scan(Options{})
+		media := filepath.Join(b.dirs["t1"], "media")
+		if err := os.Rename(filepath.Join(media, "D"), filepath.Join(media, "Z")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(media, "A"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		b.wrap = func(_ string, d fsx.Dir) fsx.Dir { return &sameIno{Dir: d, name: "A", of: "Z"} }
+		r := b.scan(Options{}).Disks[0]
+		if len(r.FolderMoves) != 1 || r.FolderMoves[0].To != "Z" {
+			t.Errorf("folder moves: %+v", r.FolderMoves)
+		}
+	})
 }
 
 func TestACanceledScanIsAnError(t *testing.T) {
@@ -862,12 +1155,13 @@ func TestAReadonlyDiskIsWalked(t *testing.T) {
 }
 
 // TestAFileFollowsItsOriginal: its size and date are the original's, the reference is the original's
-// hash, and the original moves as the creation times say. The times are set in the catalog, as
-// whether a filesystem has them is no part of this.
+// hash, and the original moves as the creation times say. A row's creation time is part of what says
+// that a copy is still that file (specs.md §15.1), so the times are real ones.
 func TestAFileFollowsItsOriginal(t *testing.T) {
 	b := newBench(t, "t1", "t2")
-	b.write("t1", "a", "x")
 	b.write("t2", "a", "y")
+	time.Sleep(20 * time.Millisecond)
+	b.write("t1", "a", "x")
 	full := filepath.Join(b.dirs["t2"], "media", "a")
 	when := time.Unix(1500000000, 0)
 	if err := os.Chtimes(full, when, when); err != nil {
@@ -880,9 +1174,9 @@ func TestAFileFollowsItsOriginal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	set("t1", 2000)
-	set("t2", 1000)
-	b.scan(Options{})
+	if b.count("SELECT count(*) FROM copies WHERE btime_ns IS NULL") > 0 {
+		t.Skip("this filesystem gives no creation time")
+	}
 	if got := b.text("SELECT original_disk FROM files"); got != "t2" {
 		t.Errorf("original %q", got)
 	}

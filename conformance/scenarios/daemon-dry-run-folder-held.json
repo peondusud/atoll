@@ -1,0 +1,203 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.6, \u00a715.12",
+  "description": "A copy still below a folder renamed, held by the guard: the folder waits in a dry run too, and the others follow one by one.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/x",
+          "text": "1"
+        },
+        {
+          "path": "media/d/y",
+          "text": "2"
+        },
+        {
+          "path": "media/k",
+          "text": "k"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d/x",
+          "text": "1"
+        },
+        {
+          "path": "media/d/y",
+          "text": "2"
+        },
+        {
+          "path": "media/k",
+          "text": "k"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\nfiles = 1\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/d/y"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/k"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/d",
+      "to": "media/e"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": true,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "d/x",
+            "decision": "renamed",
+            "to": "e/x"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "d/x",
+            "to": "e/x",
+            "outcome": "to-rename"
+          }
+        ],
+        "guards": [
+          {
+            "disk": "t1",
+            "count": 2
+          }
+        ],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "d/x",
+            "decision": "renamed",
+            "to": "e/x"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "d/x",
+            "to": "e/x",
+            "outcome": "renamed"
+          }
+        ],
+        "guards": [
+          {
+            "disk": "t1",
+            "count": 2
+          }
+        ],
+        "waiting": 0,
+        "next_due": null
+      }
+    }
+  ]
+}

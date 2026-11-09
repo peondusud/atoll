@@ -1,0 +1,166 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.12",
+  "description": "Another file at the old name on the other disk does not follow: it stays where it is.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/b"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/a"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/a",
+      "text": "new"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "renamed",
+            "to": "b"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "b",
+            "outcome": "changed"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "new"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, CAST(c.old_lpath AS TEXT) FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "b",
+          "t1",
+          null
+        ],
+        [
+          "b",
+          "t2",
+          "a"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

@@ -21,7 +21,7 @@
     "disk": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "state", "reason", "message", "walked", "files", "bytes", "folders", "symlinks", "ignored", "new", "known", "hashed", "changed", "absent", "unreadable", "other_mounts"],
+      "required": ["id", "state", "reason", "message", "walked", "files", "bytes", "folders", "symlinks", "ignored", "new", "known", "hashed", "changed", "moved", "absent", "path_taken", "unreadable", "other_mounts"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "state": { "enum": ["online", "readonly", "missing"] },
@@ -46,7 +46,29 @@
         "known": { "$ref": "#/$defs/count", "description": "Copies already in the catalog, and unchanged." },
         "hashed": { "$ref": "#/$defs/count", "description": "Copies read to the end by --full." },
         "changed": { "$ref": "#/$defs/paths" },
+        "moved": {
+          "description": "Copies found at a new name, by their old path in byte order (specs.md §15.12). The new name counts in files and bytes, and has no row.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "allOf": [
+              { "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }] },
+              { "oneOf": [{ "required": ["to"] }, { "required": ["to_b64"] }] }
+            ],
+            "properties": {
+              "path": { "type": "string" },
+              "path_b64": { "type": "string" },
+              "to": { "type": "string" },
+              "to_b64": { "type": "string" }
+            }
+          }
+        },
         "absent": { "$ref": "#/$defs/paths" },
+        "path_taken": {
+          "description": "Files at the path of a file whose copy on this disk still sits elsewhere: they get no row (specs.md §15.10).",
+          "$ref": "#/$defs/paths"
+        },
         "unreadable": { "$ref": "#/$defs/paths" },
         "other_mounts": { "$ref": "#/$defs/paths" }
       },
@@ -79,7 +101,7 @@
             "properties": {
               "files": { "const": 0 }, "bytes": { "const": 0 }, "folders": { "const": 0 }, "symlinks": { "const": 0 }, "ignored": { "const": 0 },
               "new": { "const": 0 }, "known": { "const": 0 }, "hashed": { "const": 0 },
-              "changed": { "maxItems": 0 }, "absent": { "maxItems": 0 }, "unreadable": { "maxItems": 0 }, "other_mounts": { "maxItems": 0 }
+              "changed": { "maxItems": 0 }, "moved": { "maxItems": 0 }, "absent": { "maxItems": 0 }, "path_taken": { "maxItems": 0 }, "unreadable": { "maxItems": 0 }, "other_mounts": { "maxItems": 0 }
             }
           }
         }

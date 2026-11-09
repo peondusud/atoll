@@ -207,7 +207,7 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | string | `trash`, `restore`, `unlink` for a purge, or `mkdir` |
+| `kind` | string | `trash`, `restore`, `rename`, `unlink` for a purge, or `mkdir` |
 | `source`, `target` | string | `absent`, `same` or `other`, compared with `ops.file_key`, and for `mkdir` with being a folder. An `unlink` has no target, and a `mkdir` no source |
 | `changed` | boolean | optional: for `trash`, whether the file is no longer what its row says |
 | `action` | string | `finish` or `undo` |
@@ -215,6 +215,40 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `move_back` | boolean | whether the file at the target goes back to the source |
 | `warn` | boolean | whether it gets an `op-undone` event |
 | `error` | boolean | `true` on an unknown word or kind, or a name that kind does not have or lacks |
+
+### `copy_verdict.json` — what a look found of one copy (§15.1, §15.12)
+
+A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a creation time.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `row` | object | the look its row records |
+| `at_name` | object | optional: what its name holds now. An empty look, with an empty `inode`, stands for what is no regular file |
+| `candidates` | array of objects | optional: what else this walk found that could be it: `name` and `look` |
+| `own` | boolean | optional: whether the same file is in that disk's own `trash/` or `tmp/` |
+| `not_reached` | boolean | optional: whether the walk did not get there |
+| `verdict` | string | `unknown`, `there`, `edited`, `moved`, `uncertain`, `replaced`, `own` or `gone` |
+| `target` | string | only with `moved`: the candidate's name |
+
+### `propagation.json` — what a pass decides about each file (§15.12)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `direct` | string | `deletes.direct` |
+| `files` | array of objects | `path`, `state`, `follow` when a folder renamed gives it a new path, and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held` and `size` |
+| `taken` | array of strings | optional: the paths held by files outside this step |
+| `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone` or `trash`), with `target` for `other-target` |
+| `error` | boolean | `true` on an unknown word, a path or disk that appears twice, or a `moved` with no target |
+
+### `guard.json` — whether the guard of a disk trips (§15.6, §29.5)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `count` | integer | what counts toward `files` |
+| `count_percent` | integer | what counts toward `percent` |
+| `rows` | integer | the copies on that disk the share is taken of |
+| `files`, `percent` | integer, string | `deletes.mass_guard.files` and `percent` |
+| `tripped` | boolean | whether it trips |
 
 ### `original.json` — the original of a file (§7)
 

@@ -38,6 +38,16 @@ func (p Percent) Of(total int64) int64 {
 	return r.Int64()
 }
 
+// Exceeded says whether count is more than the share p of total, compared exactly: count * 100 > p *
+// total, so that no rounding decides it.
+func (p Percent) Exceeded(count, total int64) bool {
+	if p.n.num == nil {
+		return count > 0
+	}
+	left := new(big.Int).Mul(big.NewInt(count), new(big.Int).Mul(big.NewInt(100), pow10(p.n.scale)))
+	return left.Cmp(new(big.Int).Mul(big.NewInt(total), p.n.num)) > 0
+}
+
 // String returns the percentage as written in the configuration.
 func (p Percent) String() string {
 	if p.text == "" {

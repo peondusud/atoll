@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/guard-list.schema.json",
+  "title": "atoll guard list --json",
+  "description": "The mass-deletion guard of each disk, by position (specs.md §15.6), from the catalog only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disks"],
+  "properties": {
+    "disks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["disk", "tripped", "count", "paths"],
+        "properties": {
+          "disk": { "type": "string", "minLength": 1 },
+          "tripped": { "type": "boolean" },
+          "count": { "type": "integer", "minimum": 0 },
+          "paths": {
+            "description": "What it holds, in byte order.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }],
+              "properties": {
+                "path": { "type": "string" },
+                "path_b64": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,253 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.6, \u00a715.12",
+  "description": "A copy gone of a file another copy of which moved will be a rename: the guard neither counts nor lists it, a reject takes its row with the others, and the rename goes on.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\nfiles = 1\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/b"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/c"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t2",
+      "path": "media/a",
+      "to": "media/a2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [
+          {
+            "disk": "t1",
+            "count": 2
+          }
+        ],
+        "waiting": 4,
+        "next_due": "2026-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "disk": "t1",
+            "tripped": true,
+            "count": 2,
+            "paths": [
+              {
+                "path": "b"
+              },
+              {
+                "path": "c"
+              }
+            ]
+          },
+          {
+            "disk": "t2",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "reject",
+        "--disk",
+        "t1"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, CAST(c.old_lpath AS TEXT) FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "a",
+          "t2",
+          null
+        ],
+        [
+          "b",
+          "t2",
+          null
+        ],
+        [
+          "c",
+          "t2",
+          null
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "renamed",
+            "to": "a2"
+          }
+        ],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, CAST(c.old_lpath AS TEXT) FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "a2",
+          "t2",
+          null
+        ],
+        [
+          "b",
+          "t2",
+          null
+        ],
+        [
+          "c",
+          "t2",
+          null
+        ]
+      ]
+    }
+  ]
+}

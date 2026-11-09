@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -269,6 +270,21 @@ func linked(row *catalog.KnownCopy) func(*fsx.Stat) bool {
 		known.CtimeNS = sql.NullInt64{Int64: found.CtimeNS, Valid: true}
 		return watch.Unchanged(&found, &known)
 	}
+}
+
+// IsSameFile says whether a look is of the file a row speaks of (specs.md §15.1).
+func IsSameFile(row *catalog.KnownCopy, st *fsx.Stat) bool {
+	return st.Kind == fsx.KindFile && isSameAsRow(row, st)
+}
+
+// IsUntouched says whether a look found what a row says (specs.md §15.10).
+func IsUntouched(row *catalog.KnownCopy, st *fsx.Stat) bool {
+	return untouched(row)(st)
+}
+
+// TimeOf gives a change time as the catalog holds it, with nothing valid in it if it cannot.
+func TimeOf(t fsx.Time) sql.NullInt64 {
+	return timeOf(t)
 }
 
 // timeOf gives a change time as the catalog holds it, with nothing valid in it if it cannot.
@@ -621,6 +637,241 @@ func (d *Disk) FromTrash(op *Op) (*Moved, error) {
 	}
 	d.machine.Checkpoint("source-synced")
 	return d.movedFrom(target.Dir, newName, &seen)
+}
+
+// isSameAsRow says whether a look is of the file a row speaks of (specs.md §15.1).
+func isSameAsRow(row *catalog.KnownCopy, st *fsx.Stat) bool {
+	found, err := watch.FileFrom(row.Path, st)
+	if err != nil {
+		return false
+	}
+	look, known := watch.FoundLook(&found), watch.RowLook(row)
+	return solver.SameFile(&known, &look)
+}
+
+// sameFileAs knows a copy by its identity, edited or not (specs.md §15.1): a rename loses nothing.
+func sameFileAs(row *catalog.KnownCopy) func(*fsx.Stat) bool {
+	return func(st *fsx.Stat) bool { return isSameAsRow(row, st) }
+}
+
+// RenameFile moves a copy to where its operation says, both logical paths on this disk, and says once
+// that is durable (specs.md §15.12). The target's parents are there by now, each an operation of its own.
+func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, error) {
+	if err := d.Verify(); err != nil {
+		return nil, nil, err
+	}
+	src := d.rootPlace(op.Path)
+	dst := d.rootPlace(op.Path2)
+	source, err := d.open(src[:len(src)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return nil, nil, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return nil, nil, classify(err)
+	}
+	defer source.close()
+	target, err := d.open(dst[:len(dst)-1])
+	switch {
+	case fsx.IsNotAFolder(err):
+		return nil, nil, fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case err != nil:
+		return nil, nil, classify(err)
+	}
+	defer target.close()
+	name, newName := src[len(src)-1], dst[len(dst)-1]
+	seen, err := holds(source.Dir, name, sameFileAs(row))
+	if err != nil {
+		return nil, nil, err
+	}
+	sourceTime, err := source.Info()
+	if err != nil {
+		return nil, nil, classify(err)
+	}
+	targetTime, err := target.Info()
+	if err != nil {
+		return nil, nil, classify(err)
+	}
+	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, sameFileAs(row)); err != nil {
+		return nil, nil, err
+	}
+	if _, err := holds(target.Dir, newName, byKey(op.FileKey)); err != nil {
+		return nil, nil, err
+	}
+	d.machine.Checkpoint("moved")
+	if err := target.Sync(); err != nil {
+		return nil, nil, lost(err)
+	}
+	d.machine.Checkpoint("target-synced")
+	if err := d.restoreBoth(source.Dir, target.Dir, sourceTime.Mtime, targetTime.Mtime); err != nil {
+		return nil, nil, err
+	}
+	if err := source.Sync(); err != nil {
+		return nil, nil, lost(err)
+	}
+	d.machine.Checkpoint("source-synced")
+	moved, err := d.movedFrom(target.Dir, newName, &seen)
+	if err != nil {
+		return nil, nil, err
+	}
+	return moved, &seen, nil
+}
+
+// restoreBoth gives both folders of a move their times back. They may be one folder, and then the time
+// it had before is the one to give.
+func (d *Disk) restoreBoth(source, target fsx.Dir, sourceTime, targetTime fsx.Time) error {
+	if err := restoreTime(target, targetTime); err != nil {
+		return err
+	}
+	if err := restoreTime(source, sourceTime); err != nil {
+		return err
+	}
+	if err := target.Sync(); err != nil {
+		return lost(err)
+	}
+	return nil
+}
+
+// RenameFolder moves a folder and everything below it to where its operation says (specs.md §15.12).
+// Where the flag is refused, and a folder has no link, it is a look at the target and a plain rename,
+// whose only risk, measured, is replacing an empty folder that appeared since the look.
+func (d *Disk) RenameFolder(op *Op) error {
+	if err := d.Verify(); err != nil {
+		return err
+	}
+	src := d.rootPlace(op.Path)
+	dst := d.rootPlace(op.Path2)
+	source, err := d.open(src[:len(src)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return classify(err)
+	}
+	defer source.close()
+	target, err := d.open(dst[:len(dst)-1])
+	switch {
+	case fsx.IsNotAFolder(err):
+		return fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case err != nil:
+		return classify(err)
+	}
+	defer target.close()
+	name, newName := src[len(src)-1], dst[len(dst)-1]
+	if _, err := holdsFolder(source.Dir, name, op.FileKey); err != nil {
+		return err
+	}
+	sourceTime, err := source.Info()
+	if err != nil {
+		return classify(err)
+	}
+	targetTime, err := target.Info()
+	if err != nil {
+		return classify(err)
+	}
+	if err := moveFolderNoReplace(source.Dir, name, target.Dir, newName); err != nil {
+		return err
+	}
+	if _, err := holdsFolder(target.Dir, newName, op.FileKey); err != nil {
+		return err
+	}
+	d.machine.Checkpoint("moved")
+	if err := target.Sync(); err != nil {
+		return lost(err)
+	}
+	d.machine.Checkpoint("target-synced")
+	if err := d.restoreBoth(source.Dir, target.Dir, sourceTime.Mtime, targetTime.Mtime); err != nil {
+		return err
+	}
+	if err := source.Sync(); err != nil {
+		return lost(err)
+	}
+	d.machine.Checkpoint("source-synced")
+	return nil
+}
+
+func holdsFolder(dir fsx.Dir, name, fileKey string) (fsx.Stat, error) {
+	st, err := dir.Stat(name)
+	switch {
+	case fsx.IsAbsent(err):
+		return st, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return st, classify(err)
+	case st.Kind != fsx.KindDir || keyOf(&st) != fileKey:
+		return st, ErrGone
+	}
+	return st, nil
+}
+
+func moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string) error {
+	err := source.Rename(name, target, newName)
+	switch {
+	case err == nil:
+		return nil
+	case fsx.IsAbsent(err):
+		return fmt.Errorf("%w: %w", ErrGone, err)
+	case fsx.IsExisting(err):
+		return fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case !fsx.IsFlagRefused(err):
+		return classify(err)
+	}
+	switch _, err := target.Stat(newName); {
+	case err == nil:
+		return fmt.Errorf("%w: %q", ErrPathTaken, newName)
+	case !fsx.IsAbsent(err):
+		return classify(err)
+	}
+	err = source.RenamePlain(name, target, newName)
+	switch {
+	case err == nil:
+		return nil
+	case fsx.IsAbsent(err):
+		return fmt.Errorf("%w: %w", ErrGone, err)
+	case fsx.IsExisting(err), fsx.IsNotEmpty(err), fsx.IsNotAFolder(err):
+		return fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case fsx.IsNameRefused(err):
+		return fmt.Errorf("%w: %w", ErrNameRefused, err)
+	default:
+		return classify(err)
+	}
+}
+
+// OwnFiles gives what this disk's own trash and tmp hold of those inodes: a copy that is there was an
+// interrupted operation of Atoll's, not a user's deletion (specs.md §15.5).
+func (d *Disk) OwnFiles(ctx context.Context, inodes map[string]bool) (map[string][]solver.FileLook, error) {
+	out := map[string][]solver.FileLook{}
+	for _, folder := range []string{layout.TrashFolder, layout.TmpFolder} {
+		dir, err := d.open(components(d.config.Workdir, folder))
+		switch {
+		case fsx.IsAbsent(err):
+			continue
+		case err != nil:
+			// That disk's trouble, as a walk of it that fails is: nothing can be said of what is absent.
+			return nil, lost(err)
+		}
+		walked, err := watch.Walk(ctx, dir.Dir)
+		dir.close()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrDiskLost, err)
+		}
+		for i := range walked.Files {
+			if f := &walked.Files[i]; inodes[f.FileKey] {
+				out[f.FileKey] = append(out[f.FileKey], watch.FoundLook(f))
+			}
+		}
+	}
+	return out, nil
+}
+
+// FolderInfo looks at a folder below the root, to make one like it, and says nil for anything else.
+func (d *Disk) FolderInfo(logical string) (*fsx.Stat, error) {
+	st, there, err := d.stat(d.rootPlace(logical))
+	if err != nil {
+		return nil, err
+	}
+	if !there || st.Kind != fsx.KindDir {
+		return nil, nil //nolint:nilnil // no folder to be like is an answer
+	}
+	return &st, nil
 }
 
 // restoreTime gives a folder its time back. Only a disk that is gone makes it matter: a folder's

@@ -11,6 +11,9 @@ import (
 // TrashFolder is the trash, below the work folder of a disk (specs.md §6).
 const TrashFolder = "trash"
 
+// TmpFolder holds copies in progress, below the work folder of a disk (specs.md §6).
+const TmpFolder = "tmp"
+
 // TrashPath gives the location of a copy inside the trash: the UTC date of the operation, its id,
 // then the logical path, byte for byte (specs.md §17). An error means that the id is not positive,
 // or that the path is not well-formed, which could lead out of the operation's folder.

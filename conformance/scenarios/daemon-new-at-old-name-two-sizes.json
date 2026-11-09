@@ -1,0 +1,266 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.7, \u00a715.12",
+  "description": "Two new files of two sizes at the old name of a file that left: one has its row there, and the other is found by the next look, as a conflict. The catalog never holds two sizes as one file with nothing to say so.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/p",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/p",
+      "to": "media/q"
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/p",
+      "text": "aa"
+    },
+    {
+      "do": "write",
+      "disk": "t3",
+      "path": "media/p",
+      "text": "bbb"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 1,
+        "next_due": "2026-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "p",
+          "conflict"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "p",
+            "decision": "renamed",
+            "to": "q"
+          }
+        ],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, CAST(c.old_lpath AS TEXT) FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "p",
+          "t2",
+          null
+        ],
+        [
+          "q",
+          "t1",
+          null
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, CAST(c.old_lpath AS TEXT) FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "p",
+          "t2",
+          null
+        ],
+        [
+          "p",
+          "t3",
+          null
+        ],
+        [
+          "q",
+          "t1",
+          null
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT state FROM files WHERE CAST(lpath AS TEXT) = 'p'",
+      "rows": [
+        [
+          "conflict"
+        ]
+      ]
+    }
+  ]
+}

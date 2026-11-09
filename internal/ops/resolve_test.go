@@ -32,6 +32,10 @@ func resolveVector(v *recoveryVector) (Decision, error) {
 		if moves {
 			return ResolveRestore(*v.Target, *v.Source)
 		}
+	case "rename":
+		if moves {
+			return ResolveRename(*v.Target, *v.Source)
+		}
 	case "unlink":
 		if v.Source != nil && v.Target == nil {
 			return ResolveUnlink(*v.Source)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/solver"
@@ -19,16 +20,30 @@ type FoundFile struct {
 	FileKey string
 	Nlink   int64
 	Mode    int64
+	// What comparing a walk with the rows says of it: the next file with its inode, how many rows moved to
+	// it, and that one did. They are here, and not in maps, as a rename of a whole pool has one of each for
+	// every file.
+	sameInode *FoundFile
+	claims    int
+	isTarget  bool
+	// rowless says that no row holds its name, straddled that it was renamed while the walk went, and home
+	// that the row at its name is this file.
+	rowless   bool
+	straddled bool
+	home      bool
 }
 
 // FoundEntry is a folder, symlink or other file a walk found. Kind is never solver.EntryIgnored
-// for a regular file: whether a rule ignores one is decided later.
+// for a regular file: whether a rule ignores one is decided later. A folder has its identity
+// (specs.md §15.12).
 type FoundEntry struct {
 	Path    string
 	Kind    solver.EntryKind
 	Mode    int64
 	MtimeNS int64
 	Target  *string
+	FileKey *string
+	BtimeNS *int64
 }
 
 // Walked is what one walk found (specs.md §15.10).
@@ -87,7 +102,11 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, mountID uint64,
 			}
 			w.Files = append(w.Files, file)
 		case fsx.KindDir:
-			w.Entries = append(w.Entries, FoundEntry{Path: path, Kind: solver.EntryDir, Mode: int64(st.Mode), MtimeNS: mtime})
+			found := FoundEntry{Path: path, Kind: solver.EntryDir, Mode: int64(st.Mode), MtimeNS: mtime}
+			if err := setIdentity(&found, &st); err != nil {
+				return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
+			}
+			w.Entries = append(w.Entries, found)
 			if st.MountID != mountID {
 				w.OtherMounts = append(w.OtherMounts, path)
 				continue
@@ -127,6 +146,22 @@ func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, mountID uint
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = below.Close()
 	return walkErr
+}
+
+// setIdentity gives a folder what tells it from another: a rename keeps both (specs.md §15.12).
+func setIdentity(e *FoundEntry, st *fsx.Stat) error {
+	key := strconv.FormatUint(st.Ino, 10)
+	e.FileKey = &key
+	if st.HasBirth {
+		birth, ok, err := solver.CreationTimeNS(st.Birth.Sec, st.Birth.Nsec)
+		if err != nil {
+			return fmt.Errorf("creation time: %w", err)
+		}
+		if ok {
+			e.BtimeNS = &birth
+		}
+	}
+	return nil
 }
 
 // FileFrom says what a walk would say of a regular file.

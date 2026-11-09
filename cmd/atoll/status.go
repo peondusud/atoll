@@ -87,6 +87,8 @@ type statusCopy struct {
 	CreatedBy string  `json:"created_by"`
 	FirstSeen string  `json:"first_seen"`
 	Verified  *string `json:"verified"`
+	OldPath   string  `json:"old_path,omitempty"`
+	OldB64    string  `json:"old_path_b64,omitempty"`
 }
 
 // statusFile is one file of api/schemas/status.schema.json.
@@ -234,10 +236,14 @@ func statusFileFrom(f *catalog.FileRow) *statusFile {
 	}
 	for i := range f.Copies {
 		c := &f.Copies[i]
-		file.Copies = append(file.Copies, statusCopy{
+		item := statusCopy{
 			Disk: c.Disk, State: c.State, Size: nullInt(c.Size), Mtime: nullTime(c.MtimeNS), Created: nullTime(c.BtimeNS),
 			CreatedBy: c.CreatedBy, FirstSeen: timeText(c.FirstSeenNS), Verified: nullTime(c.VerifiedNS),
-		})
+		}
+		if c.OldPath != nil {
+			item.OldPath, item.OldB64 = encodePath(*c.OldPath)
+		}
+		file.Copies = append(file.Copies, item)
 	}
 	return file
 }

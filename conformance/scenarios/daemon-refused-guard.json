@@ -1,0 +1,334 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.3, \u00a715.6",
+  "description": "The guard holds what a refused rename would send, on a pool small enough for it. Rejected, that copy only ever renames, once the name is accepted.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "01D9F3A2B4C5E6F7",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"01D9F3A2B4C5E6F7\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ntfs\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/a:b"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "a:b",
+            "outcome": "name-refused"
+          }
+        ],
+        "guards": [
+          {
+            "disk": "t2",
+            "count": 1
+          }
+        ],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "disk": "t1",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
+            "disk": "t2",
+            "tripped": true,
+            "count": 1,
+            "paths": [
+              {
+                "path": "a"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "reject",
+        "--disk",
+        "t2",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t2",
+        "done": true,
+        "up_to": "2026-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, reason, state FROM jobs",
+      "rows": [
+        [
+          "trash",
+          "renamed",
+          "canceled"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "a:b",
+            "outcome": "name-refused"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a:b",
+      "to": "media/ab"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a:b",
+            "decision": "renamed",
+            "to": "ab"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "ab",
+            "outcome": "renamed"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/ab",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

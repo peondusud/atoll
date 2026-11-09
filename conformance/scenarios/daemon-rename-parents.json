@@ -1,0 +1,232 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a76.1, \u00a715.12, \u00a717.4",
+  "description": "Missing parents of the target are operations of their own, recorded as Atoll's.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "mkdir",
+      "disk": "t1",
+      "path": "media/d/e"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/d/e/a"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "renamed",
+            "to": "d/e/a"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "d/e/a",
+            "outcome": "renamed"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, disk_id, kind, CAST(path AS TEXT), CAST(path2 AS TEXT), state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "t2",
+          "mkdir",
+          "d",
+          null,
+          "done"
+        ],
+        [
+          2,
+          "t2",
+          "mkdir",
+          "d/e",
+          null,
+          "done"
+        ],
+        [
+          3,
+          "t2",
+          "rename",
+          "a",
+          "d/e/a",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, created_by FROM entries WHERE disk_id = 't2' ORDER BY lpath",
+      "rows": [
+        [
+          "d",
+          "t2",
+          "atoll"
+        ],
+        [
+          "d/e",
+          "t2",
+          "atoll"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/d/e/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1,
+            "folders": 2,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "moved": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1,
+            "folders": 2,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "moved": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    }
+  ]
+}

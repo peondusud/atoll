@@ -81,6 +81,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverUnlink(ctx, db, op, nowNS)
 	case catalog.OpMkdir:
 		return d.recoverMkdir(ctx, db, op, nowNS)
+	case catalog.OpRename:
+		return d.recoverRename(ctx, db, op, nowNS, out)
 	default:
 		return fmt.Errorf("reprise: operation %d: no reprise for %q", op.ID, op.Kind)
 	}
@@ -235,10 +237,92 @@ func (d *Disk) Undo(ctx context.Context, db *sql.DB, op *Op, warn bool, nowNS in
 	if err := catalog.Undo(ctx, db, op, warn, nowNS); err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
-	if op.Path2 != "" {
+	if op.Path2 != "" && op.Kind != catalog.OpRename {
 		d.CleanTrash(op.Path2)
 	}
 	return nil
+}
+
+// recoverRename resolves a rename left planned, as §17.2 does a restore: the target is a logical path,
+// so what is found there stays. Finishing keeps old_lpath when the file has moved on meanwhile, so that
+// a rename the user made since still reaches this copy (specs.md §17.2).
+func (d *Disk) recoverRename(ctx context.Context, db *sql.DB, op *Op, nowNS int64, out *Recovered) error {
+	src, dst := d.rootPlace(op.Path), d.rootPlace(op.Path2)
+	if err := d.syncWay(dst); err != nil {
+		return err
+	}
+	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	source, _, err := d.seenRenamed(src, op, &row)
+	if err != nil {
+		return err
+	}
+	target, _, err := d.seenRenamed(dst, op, &row)
+	if err != nil {
+		return err
+	}
+	decision, err := ResolveRename(target, source)
+	if err != nil {
+		return err
+	}
+	if !decision.Finish {
+		return d.undoMove(ctx, db, op, src, dst, decision.Warn, nowNS)
+	}
+	if err := d.finishNames(src, decision.RemoveSource, op.FileKey); err != nil {
+		return err
+	}
+	target, st, err := d.seenRenamed(dst, op, &row)
+	if err != nil {
+		return err
+	}
+	if target != SeenSame {
+		return d.undoMove(ctx, db, op, src, dst, true, nowNS)
+	}
+	if st.Kind == fsx.KindDir {
+		if err := catalog.FinishFolderRename(ctx, db, op, 0); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+	} else if err := catalog.FinishRename(ctx, db, op, renameDone(&row, &st), linksOf(&st)); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	out.Finished = true
+	return nil
+}
+
+// seenRenamed says what a name holds for a rename: the inode, and the identity of §15.1 where a row says
+// it, so that a file that took the inode again is another file. A folder has only the inode to go by.
+func (d *Disk) seenRenamed(path []string, op *Op, row *catalog.KnownCopy) (Seen, fsx.Stat, error) {
+	st, there, err := d.stat(path)
+	switch {
+	case err != nil:
+		return "", st, err
+	case !there:
+		return SeenAbsent, st, nil
+	case keyOf(&st) != op.FileKey:
+		return SeenOther, st, nil
+	case st.Kind == fsx.KindDir:
+		return SeenSame, st, nil
+	case st.Kind != fsx.KindFile:
+		return SeenOther, st, nil
+	}
+	if row.FileKey.Valid && !isSameAsRow(row, &st) {
+		return SeenOther, st, nil
+	}
+	return SeenSame, st, nil
+}
+
+// renameDone says what a row records once a reprise finds a file at its target: what a look found, with
+// the change time only when its size and date are what the row says, so that an edit still reads as one.
+// The move hid whether an edit came before it, so the copy is no longer known to hold what it did: read
+// again, a mismatch is a conflict (specs.md §15.12).
+func renameDone(row *catalog.KnownCopy, st *fsx.Stat) *catalog.RenameDone {
+	done := &catalog.RenameDone{Nlink: int64(st.Nlink), Unverify: true}
+	if changed, err := editedInPlace(row, st); err == nil && !changed {
+		done.Ctime = timeOf(st.Ctime)
+	}
+	return done
 }
 
 // moveBack puts a file back where it was, as it is not what the operation looked at.
@@ -402,7 +486,18 @@ func (d *Disk) FinishMkdir(ctx context.Context, db *sql.DB, op *Op, st *fsx.Stat
 	if err != nil {
 		return fmt.Errorf("folder: %w", err)
 	}
-	row := catalog.EntryRow{Path: op.Path, Mode: int64(st.Mode), MtimeNS: mtime}
+	// Its identity from the start: a rename of it before the next look is a folder renamed like any other.
+	key := strconv.FormatUint(st.Ino, 10)
+	row := catalog.EntryRow{Path: op.Path, Mode: int64(st.Mode), MtimeNS: mtime, FileKey: &key}
+	if st.HasBirth {
+		birth, ok, err := solver.CreationTimeNS(st.Birth.Sec, st.Birth.Nsec)
+		if err != nil {
+			return fmt.Errorf("folder: %w", err)
+		}
+		if ok {
+			row.BtimeNS = &birth
+		}
+	}
 	if err := catalog.FinishMkdir(ctx, db, op, &row); err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}

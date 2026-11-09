@@ -91,7 +91,7 @@ docs/research/         research reports behind open design decisions (not contra
 14. Atoll's own view presents the in-sync copy with the oldest creation time, never a stale, corrupt or unavailable copy. With mergerfs, move stale and corrupt copies out of `<root>/` (to the trash) as soon as they are found.
 15. Never alter a file name. A name incompatible with a target filesystem → another disk, or the `name-incompatible` state. The logical key is the exact path, never normalized; NFC/NFD and case folding serve only to detect collisions (`lpath_key`) and to match rules (specs.md §11.3), never to name or identify a file.
 16. No automatic disk adoption.
-17. Every operation that moves or deletes offers `--dry-run` and asks for confirmation (`--yes`).
+17. Every operation that moves or deletes offers `--dry-run` and asks for confirmation (`--yes`). The daemon takes no `--yes`: starting it is the consent, and the mass-deletion guard is the safety (specs.md §15.12).
 18. Only the `solver` decides placement. No other module moves files on its own initiative.
 
 ## Rust-rewrite readiness

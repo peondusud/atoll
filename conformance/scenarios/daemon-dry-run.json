@@ -1,0 +1,228 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.12, \u00a725",
+  "description": "A dry run answers as if everything it sees were due, writes nothing to a disk or to what a pass remembers, and exits with 0.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        },
+        {
+          "path": "media/d",
+          "text": "d"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        },
+        {
+          "path": "media/d",
+          "text": "d"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/b"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/c",
+      "text": "1"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/d"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": true,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "renamed",
+            "to": "b"
+          },
+          {
+            "path": "d",
+            "decision": "deleted"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "b",
+            "outcome": "to-rename"
+          },
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "d",
+            "reason": "deleted",
+            "outcome": "to-trash"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--dry-run"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, file_id, gone_ns, gone_kind FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          1,
+          null,
+          null
+        ],
+        [
+          "t1",
+          2,
+          null,
+          null
+        ],
+        [
+          "t2",
+          1,
+          null,
+          null
+        ],
+        [
+          "t2",
+          2,
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM events",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT) FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a"
+        ],
+        [
+          "d"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        },
+        {
+          "path": "media/d",
+          "text": "d"
+        }
+      ]
+    }
+  ]
+}
