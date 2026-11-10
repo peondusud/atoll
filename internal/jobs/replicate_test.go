@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
+
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 func (b *bench) replicate(path string, opts ReplicateOptions) ([]ReplicateItem, *ReplicateSummary) {
@@ -126,7 +129,16 @@ func TestReplicateQueuesFirst(t *testing.T) {
 	if items, _ := b.replicate("a", ReplicateOptions{}); len(items) != 0 {
 		t.Errorf("queued again: %+v", items)
 	}
-	b.scan(false)
+	// A full scan reads nothing of it, and finds nothing missing.
+	full, err := watch.Scan(b.t.Context(), b.db, b.config, b, watch.Options{Full: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range full.Disks {
+		if d := &full.Disks[i]; len(d.Unreadable)+len(d.Absent) != 0 {
+			t.Errorf("%s: %+v", d.ID, d)
+		}
+	}
 	out := b.settle()
 	if len(out.Decisions)+len(out.Operations) != 0 {
 		t.Errorf("a pass acted: %+v", out)
@@ -188,6 +200,32 @@ func TestReplicateFailures(t *testing.T) {
 		// Until a scan records what the source is now, it is not what its row says.
 		{"a source changed after the copy", at("copied", func(b *bench) { b.write("t1", "a", "changed!") }), "changed", "undone", 0, true, "changed"},
 		{"a source changed before", func(b *bench) { b.write("t1", "a", "other") }, "changed", "undone", 0, true, "changed"},
+		{"a disk lost when its cache is dropped", failOn("t2", "dropcache", syscall.EIO), "io-error", "planned", 1, true, OutcomeReplicated},
+		// The part is synced once made, and again once its times are restored: this is the second.
+		{"a disk lost at the part's last sync", func(b *bench) {
+			syncs := 0
+			b.fail[b.dirs["t2"]] = func(call, _ string) error {
+				if call == "filesync" {
+					if syncs++; syncs == 2 {
+						return syscall.EIO
+					}
+				}
+				return nil
+			}
+		}, "io-error", "planned", 1, true, OutcomeReplicated},
+		{"a source edited in place at the same size", at("copied", func(b *bench) { b.write("t1", "a", "CONTENT") }), "changed", "undone", 0, true, "changed"},
+		{"a part longer than its source", at("copied", func(b *bench) {
+			f, err := os.OpenFile(filepath.Join(b.dirs["t2"], "Atoll", "tmp", "1.part"), os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				b.t.Fatal(err)
+			}
+			_, _ = f.Write([]byte("more"))
+			_ = f.Close()
+		}), "io-error", "undone", 0, true, OutcomeReplicated},
+		{"a source that no longer qualifies", func(b *bench) {
+			b.replicate("a", ReplicateOptions{})
+			b.exec("UPDATE copies SET state = 'stale' WHERE disk_id = 't1'")
+		}, "changed", "", 0, false, ""},
 		{"a copy that reads back wrong", at("copied", func(b *bench) {
 			if err := os.WriteFile(filepath.Join(b.dirs["t2"], "Atoll", "tmp", "1.part"), []byte("CONTENT"), 0o600); err != nil {
 				b.t.Fatal(err)
@@ -202,7 +240,7 @@ func TestReplicateFailures(t *testing.T) {
 			if sum.Failed != 1 {
 				t.Errorf("%+v", sum)
 			}
-			if got := b.text("SELECT state FROM ops WHERE kind = 'create' ORDER BY id LIMIT 1"); got != tc.state {
+			if got := b.text("SELECT COALESCE((SELECT state FROM ops WHERE kind = 'create' ORDER BY id LIMIT 1), '')"); got != tc.state {
 				t.Errorf("the operation is %q", got)
 			}
 			if parts := b.parts("t2"); len(parts) != tc.parts {
@@ -235,7 +273,185 @@ func TestReplicateFailures(t *testing.T) {
 			if got := b.count("SELECT count(*) FROM ops WHERE state = 'planned'"); got != 0 {
 				t.Errorf("%d operations left planned", got)
 			}
+			// A copy made, by this run or by its reprise, is verified: its hashes were recorded before it moved.
+			if b.exists("t2", "media/a") && tc.outcome != OutcomeConflict {
+				if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND verified_ns IS NOT NULL AND created_by = 'atoll'"); got != 1 {
+					t.Errorf("the copy made is not verified")
+				}
+			}
 		})
+	}
+}
+
+// A source that changed waits for settle before its job runs again (specs.md §14.1).
+func TestAChangedSourceWaitsForSettle(t *testing.T) {
+	b := replicatePool(t)
+	b.at["copied"] = func() { b.write("t1", "a", "changed!") }
+	b.replicate("a", ReplicateOptions{Now: true})
+	if got := b.count("SELECT count(*) FROM jobs WHERE not_before_ns = ?", b.now+600_000_000_000); got != 1 {
+		t.Errorf("%d jobs waiting for settle", got)
+	}
+}
+
+// A source whose bytes do not read as its file's hash is not copied: what it holds is not the file's
+// version (specs.md §14.2).
+func TestASourceThatDoesNotReadAsItsFile(t *testing.T) {
+	b := replicatePool(t)
+	b.scan(true)
+	b.exec("UPDATE files SET blake3 = zeroblob(32)")
+	items, _ := b.replicate("a", ReplicateOptions{Now: true})
+	only(t, items, "changed")
+	if b.exists("t2", "media/a") || len(b.parts("t2")) != 0 {
+		t.Error("the copy was kept")
+	}
+}
+
+// The parents of a copy are made like the same folders on the source's disk, each as an operation of its
+// own (specs.md §14.2).
+func TestAParentIsMadeLikeTheSources(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "p/a", "content")
+	if err := os.Chmod(filepath.Join(b.dirs["t1"], "media", "p"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	b.scan(false)
+	items, _ := b.replicate("p", ReplicateOptions{Now: true})
+	if len(items) != 1 || items[0].Outcome != OutcomeReplicated {
+		t.Fatalf("%+v", items)
+	}
+	st, err := os.Stat(filepath.Join(b.dirs["t2"], "media", "p"))
+	if err != nil || st.Mode().Perm() != 0o750 {
+		t.Errorf("%v, %v", st, err)
+	}
+	if got := b.count("SELECT count(*) FROM ops WHERE kind = 'mkdir' AND state = 'done' AND CAST(path AS TEXT) = 'p'"); got != 1 {
+		t.Errorf("%d folders journaled", got)
+	}
+}
+
+// A copy in progress is private, and the folder it lands in keeps its date (specs.md §6.1, item 8, §14.2).
+func TestAPartIsPrivateAndTheFolderKeepsItsDate(t *testing.T) {
+	b := replicatePool(t)
+	media := filepath.Join(b.dirs["t2"], "media")
+	when := time.Unix(1400000000, 0)
+	if err := os.Chtimes(media, when, when); err != nil {
+		t.Fatal(err)
+	}
+	b.at["copied"] = func() {
+		st, err := os.Stat(filepath.Join(b.dirs["t2"], "Atoll", "tmp", "1.part"))
+		if err != nil || st.Mode().Perm() != 0o600 {
+			t.Errorf("the part: %v, %v", st, err)
+		}
+	}
+	b.replicate("a", ReplicateOptions{Now: true})
+	if st, err := os.Stat(media); err != nil || !st.ModTime().Equal(when) {
+		t.Errorf("the folder: %v, %v", st, err)
+	}
+}
+
+// A job keeps its part from one run to the next, so that the next resumes it without reading the source
+// again; a part that an operation done or undone names, and that no job owns, goes when a command that
+// writes opens its disk, and nothing else in tmp/ is touched (specs.md §14.2).
+func TestPartsBetweenRuns(t *testing.T) {
+	t.Run("kept", func(t *testing.T) {
+		b := newBench(t, "t1", "t2")
+		if err := os.WriteFile(filepath.Join(b.dirs["t1"], "media", "a"), bytes.Repeat([]byte("x"), 2*4<<20+10), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		b.scan(false)
+		once := true
+		b.fail[b.dirs["t2"]] = func(call, _ string) error {
+			if call == "settimes" && once {
+				once = false
+				return syscall.EACCES
+			}
+			return nil
+		}
+		items, _ := b.replicate("a", ReplicateOptions{Now: true})
+		only(t, items, "io-error")
+		reads := 0
+		b.fail[b.dirs["t1"]] = func(call, _ string) error {
+			if call == "read" {
+				reads++
+			}
+			return nil
+		}
+		items, _ = b.replicate("a", ReplicateOptions{Now: true})
+		only(t, items, OutcomeReplicated)
+		if reads != 0 {
+			t.Errorf("the source was read %d times", reads)
+		}
+	})
+	t.Run("orphaned", func(t *testing.T) {
+		b := replicatePool(t)
+		tmp := filepath.Join(b.dirs["t2"], "Atoll", "tmp")
+		if err := os.MkdirAll(tmp, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"7.part", "x.part", "someone's"} {
+			if err := os.WriteFile(filepath.Join(tmp, name), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b.exec("INSERT INTO ops(id, disk_id, kind, path, path2, started_ns, state) VALUES (7, 't2', 'create', CAST('z' AS BLOB), CAST('7.part' AS BLOB), 1, 'undone')")
+		items, _ := b.replicate("a", ReplicateOptions{Now: true})
+		only(t, items, OutcomeReplicated)
+		if got := b.parts("t2"); len(got) != 2 || got[0] != "someone's" || got[1] != "x.part" {
+			t.Errorf("tmp/ holds %q", got)
+		}
+	})
+}
+
+// A job whose operation the reprise could not conclude waits: here both names lead to the copy, and the part's
+// name is one unlink cannot remove, as ntfs3 leaves after a device fails between the syncs of the two
+// folders. The copy at the target is the job's own, never a conflict (specs.md §17.2).
+func TestAJobWaitsForItsOperation(t *testing.T) {
+	b := replicatePool(t)
+	refused := func(call, name string) error {
+		if call == "rename" {
+			return syscall.EINVAL
+		}
+		return nil
+	}
+	b.fail[b.dirs["t2"]] = refused
+	b.replicateStopping("a", "linked")
+	b.fail[b.dirs["t2"]] = func(call, name string) error {
+		if call == "unlink" && name == "1.part" {
+			return syscall.ENOENT
+		}
+		return refused(call, name)
+	}
+	items, _ := b.replicate("a", ReplicateOptions{Now: true})
+	only(t, items, "io-error")
+	if got := b.text("SELECT state FROM ops WHERE kind = 'create'"); got != "planned" {
+		t.Errorf("the operation is %q", got)
+	}
+	if got := b.count("SELECT count(*) FROM jobs") + b.count("SELECT count(*) FROM copies WHERE state = 'pending'"); got != 2 {
+		t.Errorf("%d of the job and its pending copy left", got)
+	}
+	if got := b.read("t2", "a"); got != "content" {
+		t.Errorf("%q", got)
+	}
+	// Once the volume is repaired, the reprise finishes it.
+	b.fail[b.dirs["t2"]] = refused
+	items, _ = b.replicate("a", ReplicateOptions{Now: true})
+	if len(items) != 0 || b.text("SELECT state FROM ops WHERE kind = 'create'") != "done" {
+		t.Errorf("%+v", items)
+	}
+}
+
+// A copy is synced at its new name, then its folder, then the folder of its part (specs.md §14.2).
+func TestTheSyncsOfACopy(t *testing.T) {
+	b := replicatePool(t)
+	syncs := b.recordSyncs("t2")
+	b.replicate("a", ReplicateOptions{Now: true})
+	at := -1
+	for i, s := range *syncs {
+		if s == "entry a" {
+			at = i
+		}
+	}
+	if at < 0 || len(*syncs) < at+3 || (*syncs)[at+1] != "media" || (*syncs)[at+2] != "tmp" {
+		t.Errorf("%q", *syncs)
 	}
 }
 
@@ -360,8 +576,77 @@ func TestReplicateReleasesManualFiles(t *testing.T) {
 	}
 	items, _ := b.replicate("a", ReplicateOptions{Now: true})
 	only(t, items, OutcomeReplicated)
-	if b.exists("t2", "media/b") {
-		t.Error("a file beside the path was copied")
+	if b.exists("t2", "media/b") || b.count("SELECT count(*) FROM jobs") != 0 {
+		t.Error("a file beside the path was queued")
+	}
+}
+
+// --force runs what --now runs (specs.md §14.3).
+func TestReplicateForceRuns(t *testing.T) {
+	b := replicatePool(t)
+	items, _ := b.replicate("a", ReplicateOptions{Force: true})
+	only(t, items, OutcomeReplicated)
+}
+
+// The chunk hashes are recorded 64 MiB at a time as the copy goes, so that a copy stopped past them resumes
+// from there (specs.md §14.2).
+func TestChunksAreRecordedAsTheCopyGoes(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	if err := os.WriteFile(filepath.Join(b.dirs["t1"], "media", "a"), bytes.Repeat([]byte("y"), 17*4<<20+10), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b.scan(false)
+	reads := 0
+	b.fail[b.dirs["t1"]] = func(call, _ string) error {
+		if call == "read" {
+			if reads++; reads == 17 {
+				return syscall.EACCES
+			}
+		}
+		return nil
+	}
+	items, _ := b.replicate("a", ReplicateOptions{Now: true})
+	only(t, items, "io-error")
+	reads = 0
+	b.fail[b.dirs["t1"]] = func(call, _ string) error {
+		if call == "read" {
+			reads++
+		}
+		return nil
+	}
+	items, _ = b.replicate("a", ReplicateOptions{Now: true})
+	only(t, items, OutcomeReplicated)
+	if reads != 2 {
+		t.Errorf("the source was read %d times: from chunk %d", reads, 18-reads)
+	}
+}
+
+// A walk that meets an operation create the reprise could not conclude leaves the copy at its target to that
+// reprise: it is not a file of the user's, and the job and its pending copy stay (specs.md §17.2).
+func TestAWalkLeavesAPlannedCopyAlone(t *testing.T) {
+	b := replicatePool(t)
+	refused := func(call, name string) error {
+		if call == "rename" {
+			return syscall.EINVAL
+		}
+		return nil
+	}
+	b.fail[b.dirs["t2"]] = refused
+	b.replicateStopping("a", "linked")
+	b.fail[b.dirs["t2"]] = func(call, name string) error {
+		if call == "unlink" && name == "1.part" {
+			return syscall.ENOENT
+		}
+		return refused(call, name)
+	}
+	b.pass()
+	if got := b.count("SELECT count(*) FROM jobs") + b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND state = 'pending'"); got != 2 {
+		t.Errorf("%d of the job and its pending copy left", got)
+	}
+	b.fail[b.dirs["t2"]] = refused
+	b.replicate("a", ReplicateOptions{Now: true})
+	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND state = 'ok' AND verified_ns IS NOT NULL"); got != 1 {
+		t.Errorf("%d copies verified", got)
 	}
 }
 

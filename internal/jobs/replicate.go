@@ -225,6 +225,11 @@ func (e *errDropped) Error() string { return e.outcome }
 // run runs one job as one operation create (specs.md §14.2). An error is one of the catalog, which ends
 // the command; what a disk answers is an outcome.
 func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string, error) {
+	// Still running after the reprise, a job's operation is one the reprise could not conclude: what is at
+	// its target may be its own copy, and nothing may be decided of it until that operation is (§17.2).
+	if job.State == catalog.JobRunning {
+		return trash.OutcomeIOError, nil
+	}
 	dst, src, outcome, err := r.handles(ctx, job)
 	if err != nil || outcome != "" {
 		return outcome, err
