@@ -1,0 +1,169 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14.1, §15.12",
+  "description": "A dry run lists the copy queued already, then the one the plan would queue, as to-replicate, and queues and copies nothing. A real pass then runs them in that order, which is not the order of their paths.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "size": 2048,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "b",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "bytes": 2048,
+        "copies": [
+          {
+            "path": "b",
+            "disk": "t2",
+            "source": "t1",
+            "size": 2048,
+            "outcome": "queued"
+          }
+        ]
+      }
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": true,
+        "disks": [
+          {"id": "t1", "state": "online", "reason": null, "message": null, "walked": true},
+          {"id": "t2", "state": "online", "reason": null, "message": null, "walked": true}
+        ],
+        "decisions": [],
+        "operations": [
+          {"disk": "t2", "kind": "replicate", "path": "b", "source": "t1", "outcome": "to-replicate"},
+          {"disk": "t2", "kind": "replicate", "path": "a", "source": "t1", "outcome": "to-replicate"}
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), j.state FROM jobs j JOIN files f ON f.id = j.file_id",
+      "rows": [
+        [
+          "b",
+          "queued"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {"id": "t1", "state": "online", "reason": null, "message": null, "walked": true},
+          {"id": "t2", "state": "online", "reason": null, "message": null, "walked": true}
+        ],
+        "decisions": [],
+        "operations": [
+          {"disk": "t2", "kind": "replicate", "path": "b", "source": "t1", "outcome": "replicated"},
+          {"disk": "t2", "kind": "replicate", "path": "a", "source": "t1", "outcome": "replicated"}
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, CAST(path AS TEXT), state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "b",
+          "done"
+        ],
+        [
+          2,
+          "a",
+          "done"
+        ]
+      ]
+    }
+  ]
+}

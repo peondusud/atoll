@@ -2,6 +2,7 @@ package solver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -203,6 +204,7 @@ func TestPlanVectors(t *testing.T) {
 		if resultsErr != nil || !reflect.DeepEqual(results, plan.Results) {
 			t.Errorf("vector %d (%s): PlanResults gives %s, %v, want %s", i, v.Note, show(results), resultsErr, show(plan.Results))
 		}
+		checkPlanEach(t, v, &plan)
 		if want := wantJobs(t, v.Jobs); !slices.Equal(plan.Jobs, want) && (len(plan.Jobs) > 0 || len(want) > 0) {
 			t.Errorf("vector %d (%s): jobs\n%+v, want\n%+v", i, v.Note, plan.Jobs, want)
 		}
@@ -215,6 +217,49 @@ func TestPlanVectors(t *testing.T) {
 			}
 		}
 	}
+}
+
+// checkPlanEach says whether PlanEach, on an input of its own, gives MakePlan's jobs in MakePlan's order, each call
+// the jobs of one kind of the file it names, and MakePlan's results.
+func checkPlanEach(t *testing.T, v planVector, plan *Plan) {
+	t.Helper()
+	in, err := v.input()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jobs []Job
+	results, err := PlanEach(in, func(file int, given []Job) error {
+		for _, j := range given {
+			if j.Path != in.Files[file].Path || j.Kind != given[0].Kind {
+				t.Errorf("%s: a call for %q of kind %s holds %+v", v.Note, in.Files[file].Path, given[0].Kind, j)
+			}
+		}
+		jobs = append(jobs, given...)
+		return nil
+	})
+	if err != nil || !reflect.DeepEqual(results, plan.Results) || !slices.Equal(jobs, plan.Jobs) {
+		t.Errorf("%s: PlanEach gives %+v and %s, %v; want %+v and %s", v.Note, jobs, show(results), err, plan.Jobs, show(plan.Results))
+	}
+}
+
+// An error from what PlanEach hands the jobs to ends the plan with it.
+func TestPlanEachStops(t *testing.T) {
+	for _, v := range vectors.Load[planVector](t, "plan.json") {
+		if len(v.Jobs) < 2 {
+			continue
+		}
+		in, err := v.input()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stop := errors.New("stop")
+		calls := 0
+		if _, err := PlanEach(in, func(int, []Job) error { calls++; return stop }); !errors.Is(err, stop) || calls != 1 {
+			t.Errorf("%s: %v after %d calls", v.Note, err, calls)
+		}
+		return
+	}
+	t.Fatal("no vector with two jobs")
 }
 
 func show(v any) string {

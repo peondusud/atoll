@@ -406,9 +406,10 @@ func Unchanged(f *FoundFile, k *catalog.KnownCopy) bool {
 // themselves cost more than the plan's input (specs.md §26). update is set when the file already
 // changed, whatever the plan says.
 type settled struct {
-	id     int64
-	state  string
-	update *catalog.FileUpdate
+	id        int64
+	state     string
+	firstSeen int64
+	update    *catalog.FileUpdate
 }
 
 // Settle gives each file its original, its policy and what the plan says, on the whole catalog.
@@ -416,12 +417,14 @@ func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error 
 	return SettleFor(ctx, db, c, now, nil)
 }
 
-// Replicate is what atoll replicate asks of a plan (specs.md §14.3).
+// Replicate is what atoll replicate and the daemon ask of a plan (specs.md §14.1, §14.3).
 type Replicate struct {
-	// Below says whether a file is at or below the path asked for. Those no longer wait for atoll
-	// replicate, and only their jobs are given.
-	Below func(path string) bool
-	// Queue gets their jobs, in plan order, before anything of the plan is written.
+	// Release says whether a manual file no longer waits for atoll replicate; nil releases none.
+	Release func(path string) bool
+	// Queue gets every copy the plan wants of a file not in conflict, in plan order, a batch at a time, before
+	// anything of the plan is written: at 200,000 files, all of them at once would cost more than the plan
+	// (specs.md §26). The copies of one file come together, in one batch. The batch is reused after the call,
+	// so a caller copies what it keeps.
 	Queue func(jobs []PlannedJob) error
 	// DryRun writes nothing of the plan.
 	DryRun bool
@@ -430,9 +433,10 @@ type Replicate struct {
 // PlannedJob is a job of the plan, with what queueing it needs of its file.
 type PlannedJob struct {
 	solver.Job
-	FileID   int64
-	Size     int64
-	Priority int64
+	FileID      int64
+	Size        int64
+	Priority    int64
+	FirstSeenNS int64
 }
 
 // SettleFor is Settle, and with a Replicate, also what atoll replicate asks of the plan. A file in
@@ -455,11 +459,11 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 		return err
 	}
 	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries)}
-	var below func(string) bool
+	var release func(string) bool
 	if rep != nil {
-		below = rep.Below
+		release = rep.Release
 	}
-	remembered, err := filesForPlan(ctx, db, c, diskList, &input, below)
+	remembered, err := filesForPlan(ctx, db, c, diskList, &input, release)
 	if err != nil {
 		return err
 	}
@@ -468,10 +472,9 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 		// No job runs here: the plan's results are all a scan or a pass keeps of it.
 		results, err = solver.PlanResults(input)
 	} else {
-		var plan solver.Plan
-		if plan, err = solver.MakePlan(input); err == nil {
-			results = plan.Results
-			err = rep.Queue(jobsBelow(plan.Jobs, input.Files, remembered, rep.Below))
+		q := &copyQueue{queue: rep.Queue, files: input.Files, remembered: remembered}
+		if results, err = solver.PlanEach(input, q.add); err == nil {
+			err = q.flush()
 		}
 	}
 	if err != nil {
@@ -490,23 +493,41 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	return nil
 }
 
-// jobsBelow gives the replicate jobs of the files below a path, leaving out those of a file in conflict.
-func jobsBelow(jobs []solver.Job, files []solver.File, remembered []settled, below func(string) bool) []PlannedJob {
-	at := make(map[string]int, len(files))
-	for i := range files {
-		if below(files[i].Path) {
-			at[files[i].Path] = i
-		}
+// copyBatch is how many copies Queue gets at a time, at least: a file's copies are never split.
+const copyBatch = 1000
+
+// copyQueue hands the replicate jobs of the plan to Queue as the plan makes them, leaving out those of a file in
+// conflict.
+type copyQueue struct {
+	queue      func(jobs []PlannedJob) error
+	files      []solver.File
+	remembered []settled
+	batch      []PlannedJob
+}
+
+func (q *copyQueue) add(i int, jobs []solver.Job) error {
+	if q.remembered[i].state == string(solver.StateConflict) {
+		return nil
 	}
-	var out []PlannedJob
 	for _, job := range jobs {
-		i, ok := at[job.Path]
-		if !ok || job.Kind != solver.JobReplicate || remembered[i].state == string(solver.StateConflict) {
+		if job.Kind != solver.JobReplicate {
 			continue
 		}
-		out = append(out, PlannedJob{Job: job, FileID: remembered[i].id, Size: files[i].Size, Priority: int64(files[i].Placement.Priority)})
+		q.batch = append(q.batch, PlannedJob{Job: job, FileID: q.remembered[i].id, Size: q.files[i].Size, Priority: int64(q.files[i].Placement.Priority), FirstSeenNS: q.remembered[i].firstSeen})
 	}
-	return out
+	if len(q.batch) >= copyBatch {
+		return q.flush()
+	}
+	return nil
+}
+
+func (q *copyQueue) flush() error {
+	if len(q.batch) == 0 {
+		return nil
+	}
+	err := q.queue(q.batch)
+	q.batch = q.batch[:0]
+	return err
 }
 
 func minFreeOf(c *config.Config) (value.MinFree, error) {
@@ -604,7 +625,7 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			input.Files = append(input.Files, solver.File{
 				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Copies: copies,
 			})
-			entry := settled{id: f.ID, state: f.State}
+			entry := settled{id: f.ID, state: f.State, firstSeen: f.FirstSeenNS}
 			if fileChanged(f, &update) {
 				entry.update = &update
 			}

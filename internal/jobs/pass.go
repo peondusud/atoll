@@ -32,6 +32,7 @@ const (
 	KindRename         = "rename"
 	KindFolder         = "folder"
 	KindTrash          = "trash"
+	KindReplicate      = "replicate"
 	reasonDeleted      = "deleted"
 	reasonRenamed      = "renamed"
 )
@@ -43,13 +44,15 @@ type Decision struct {
 	To   string
 }
 
-// Operation is what ran, or with a dry run what would run, on a disk.
+// Operation is what ran, or with a dry run what would run, on a disk. A copy's Disk is its target, and
+// Source the disk it is read from.
 type Operation struct {
 	Disk    string
 	Kind    string
 	Path    string
 	To      string
 	Reason  string
+	Source  string
 	Outcome string
 }
 
@@ -123,9 +126,14 @@ type pass struct {
 	stuck map[string]map[int64]bool
 	// the folders found renamed that copies came with, as the rows said before any decision of this pass
 	realMoves map[folderKey]bool
-	out       *Outcome
-	sink      Sink
-	sinkErr   error
+	// the files whose copy waits for settle, and when the first of them is due
+	copiesWaiting int64
+	copiesDue     sql.NullInt64
+	// settled says that the copies worked out each file, and that nothing ran since
+	settled bool
+	out     *Outcome
+	sink    Sink
+	sinkErr error
 }
 
 type folderKey struct {
@@ -161,7 +169,7 @@ func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, a
 	}
 	defer session.Close()
 	p.session = session
-	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.decide, p.decideFolders, p.work, p.cleanJobs, p.finish} {
+	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.decide, p.decideFolders, p.work, p.cleanJobs, p.copies, p.finish} {
 		if err := step(ctx); err != nil {
 			return nil, err
 		}
@@ -1172,14 +1180,17 @@ func (p *pass) finish(ctx context.Context) error {
 	}
 	// What the walks found has served, and working out each file again reads them all.
 	p.seen, p.moves = nil, nil
-	if err := p.session.Settle(ctx); err != nil {
-		return fmt.Errorf("%w", err)
+	if !p.settled {
+		if err := p.session.Settle(ctx); err != nil {
+			return fmt.Errorf("%w", err)
+		}
 	}
 	count, next, err := catalog.Waiting(ctx, p.db, p.debounce.Nanoseconds(), p.now)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
-	p.out.Waiting, p.out.NextDue = count, next
+	// The copies that wait for settle count too, so that a timer knows when to run the next pass (§15.12).
+	p.out.Waiting, p.out.NextDue = count+p.copiesWaiting, earliest(next, p.copiesDue)
 	p.out.Partial = p.out.Partial || p.session.Lost()
 	return nil
 }

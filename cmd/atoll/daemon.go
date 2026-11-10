@@ -48,6 +48,7 @@ type daemonOperation struct {
 	To      string `json:"to,omitempty"`
 	ToB64   string `json:"to_b64,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	Source  string `json:"source,omitempty"`
 	Outcome string `json:"outcome"`
 }
 
@@ -169,7 +170,7 @@ func daemonDecisionOf(d *jobs.Decision) daemonDecision {
 }
 
 func daemonOperationOf(op *jobs.Operation) daemonOperation {
-	item := daemonOperation{Disk: op.Disk, Kind: op.Kind, Reason: op.Reason, Outcome: op.Outcome}
+	item := daemonOperation{Disk: op.Disk, Kind: op.Kind, Reason: op.Reason, Source: op.Source, Outcome: op.Outcome}
 	item.Path, item.PathB64 = encodePath(op.Path)
 	if op.To != "" {
 		item.To, item.ToB64 = encodePath(op.To)
@@ -317,6 +318,9 @@ func (t *textDaemon) Operation(op *jobs.Operation) error {
 	line := op.Disk + ": " + op.Kind + " " + shownPath(op.Path)
 	if op.To != "" {
 		line += " -> " + shownPath(op.To)
+	}
+	if op.Source != "" {
+		line += " (from " + op.Source + ")"
 	}
 	return writeText(t.w, line+": "+op.Outcome+"\n")
 }
