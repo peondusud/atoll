@@ -140,6 +140,60 @@ func ReplicateJobs(ctx context.Context, db *sql.DB, path string) ([]ReplicateJob
 	return scanReplicateJobs(rows)
 }
 
+// duePage is how many due jobs a DueReader reads at a time: at 200,000 jobs, the whole queue at once
+// would cost more than the plan (specs.md §26).
+const duePage = 1000
+
+// DueReader reads the replicate jobs that are due, a page at a time, highest priority first, then in the
+// order they were queued (specs.md §14.1). It reads past each job it gives, whatever becomes of it, so
+// that a job put back in the queue waits for the next pass.
+type DueReader struct {
+	db           *sql.DB
+	nowNS        int64
+	started      bool
+	priority, id int64
+}
+
+// NewDueReader reads the jobs due at a time.
+func NewDueReader(db *sql.DB, nowNS int64) *DueReader {
+	return &DueReader{db: db, nowNS: nowNS}
+}
+
+// Next gives the next due jobs, and none at the end.
+func (r *DueReader) Next(ctx context.Context) ([]ReplicateJob, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT `+replicateColumns+`
+		FROM jobs j JOIN files f ON f.id = j.file_id
+		WHERE j.kind = 'replicate' AND j.state IN ('queued', 'running')
+			AND (j.not_before_ns IS NULL OR j.not_before_ns <= ?1)
+			AND (NOT ?2 OR j.priority < ?3 OR (j.priority = ?3 AND j.id > ?4))
+		ORDER BY j.priority DESC, j.id LIMIT ?5`, r.nowNS, r.started, r.priority, r.id, duePage)
+	if err != nil {
+		return nil, fmt.Errorf("jobs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	list, err := scanReplicateJobs(rows)
+	if err != nil {
+		return nil, err
+	}
+	if n := len(list); n > 0 {
+		r.started, r.priority, r.id = true, list[n-1].Priority, list[n-1].ID
+	}
+	return list, nil
+}
+
+// CopiesLater counts the replicate jobs still to run that are not yet due, and says when the first is
+// (specs.md §15.12): what DueReader leaves for later.
+func CopiesLater(ctx context.Context, db *sql.DB, nowNS int64) (count int64, next sql.NullInt64, err error) {
+	err = db.QueryRowContext(ctx, `
+		SELECT count(*), min(not_before_ns) FROM jobs
+		WHERE kind = 'replicate' AND state IN ('queued', 'running') AND not_before_ns > ?`, nowNS).Scan(&count, &next)
+	if err != nil {
+		return 0, sql.NullInt64{}, fmt.Errorf("jobs: %w", err)
+	}
+	return count, next, nil
+}
+
 // JobOfPart gives the replicate job that owns a part on a disk, and nil when none does.
 func JobOfPart(ctx context.Context, db *sql.DB, disk, part string) (*ReplicateJob, error) {
 	rows, err := db.QueryContext(ctx, `

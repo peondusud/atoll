@@ -1,0 +1,172 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14.1, §15.12",
+  "description": "A pass runs the copies due by priority, highest first, then in the order they were queued: a copy queued earlier waits for one a rule gives a higher priority. A dry run lists them in that order too, though only one is queued yet.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "size": 2048,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"first\"\npath = \"b\"\npriority = 10\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": true,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "b",
+            "source": "t1",
+            "outcome": "to-replicate"
+          },
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "a",
+            "source": "t1",
+            "outcome": "to-replicate"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "b",
+            "source": "t1",
+            "outcome": "replicated"
+          },
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "a",
+            "source": "t1",
+            "outcome": "replicated"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, CAST(path AS TEXT) FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "b"
+        ],
+        [
+          2,
+          "a"
+        ]
+      ]
+    }
+  ]
+}

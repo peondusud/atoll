@@ -36,6 +36,8 @@ type bench struct {
 	at       map[string]func()
 	points   []string
 	now      int64
+	// base is the configuration's text up to the tables a test adds after the disks.
+	base string
 }
 
 func (b *bench) Mount(mount string) disks.MountSeen {
@@ -137,6 +139,7 @@ func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 		fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3%d\"\nmount = %q\nfs = \"ext4\"\n", id, i, dir)
 	}
 	text.WriteString("[deletes.mass_guard]\npercent = \"100%\"\n")
+	b.base = text.String()
 	text.WriteString(more)
 	c, err := config.Parse([]byte(text.String()))
 	if err != nil {

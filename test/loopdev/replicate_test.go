@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -127,6 +128,39 @@ func TestReplicateOnEachDriver(t *testing.T) {
 			b.scan(false)
 			if got := b.text("SELECT count(*) FROM copies WHERE gone_ns IS NOT NULL OR state <> 'ok'"); got != "0" {
 				t.Errorf("%s copies otherwise after a scan", got)
+			}
+		})
+	}
+}
+
+// TestAPassCopiesOnEachDriver: a copy queued runs in the next pass of the daemon, at the lowest best-effort I/O
+// priority, on every driver, as a copy atoll replicate makes does (specs.md §14, §14.1, §15.12).
+func TestAPassCopiesOnEachDriver(t *testing.T) {
+	needRoot(t)
+	for _, tc := range trashDrivers {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, v, tc.driver, at, options...)
+			b := newPassBench(t, v, at)
+			data := threeChunks()
+			when := time.Unix(1500000000, 0)
+			writeBytes(t, b.keep, "big", data, when)
+			b.scan(false)
+			if _, err := jobs.Replicate(b.t.Context(), b.db, b.config, b.machine, jobs.ReplicateOptions{}, func(*jobs.ReplicateItem) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			out := b.pass()
+			want := []jobs.Operation{{Disk: "v", Kind: jobs.KindReplicate, Path: "big", Source: "k", Outcome: jobs.OutcomeReplicated}}
+			if !slices.Equal(out.Operations, want) || out.Partial {
+				t.Errorf("%+v, partial %v", out.Operations, out.Partial)
+			}
+			dropCaches(t)
+			wantCopy(t, at, "big", data, when)
+			emptyTmp(t, at)
+			if got := b.text("SELECT count(*) FROM jobs"); got != "0" {
+				t.Errorf("%s jobs left", got)
 			}
 		})
 	}

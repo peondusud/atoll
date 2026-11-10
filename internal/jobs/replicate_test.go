@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -121,7 +122,8 @@ func TestReplicateMakesTheCopy(t *testing.T) {
 }
 
 // Without --now a copy is only queued, and its pending copy is nothing on its disk: a scan does not find it
-// gone, and a pass decides nothing of it. Queued again, nothing new comes (specs.md §14.1, §14.3).
+// gone, and a pass decides nothing of it, then runs it, as it is due. Queued again, nothing new comes
+// (specs.md §14.1, §14.3, §15.12).
 func TestReplicateQueuesFirst(t *testing.T) {
 	b := replicatePool(t)
 	items, _ := b.replicate("a", ReplicateOptions{})
@@ -139,21 +141,26 @@ func TestReplicateQueuesFirst(t *testing.T) {
 			t.Errorf("%s: %+v", d.ID, d)
 		}
 	}
-	out := b.settle()
-	if len(out.Decisions)+len(out.Operations) != 0 {
-		t.Errorf("a pass acted: %+v", out)
+	if b.exists("t2", "media/a") {
+		t.Error("copied without --now")
+	}
+	out := b.pass()
+	want := []Operation{{Disk: "t2", Kind: KindReplicate, Path: "a", Source: "t1", Outcome: OutcomeReplicated}}
+	if len(out.Decisions) != 0 || !slices.Equal(out.Operations, want) {
+		t.Errorf("decisions %+v, operations %+v, want %+v", out.Decisions, out.Operations, want)
 	}
 	if got := b.count("SELECT count(*) FROM copies WHERE gone_ns IS NOT NULL"); got != 0 {
 		t.Errorf("%d clocks", got)
 	}
-	if got := b.count("SELECT count(*) FROM copies WHERE state = 'pending'") + b.count("SELECT count(*) FROM jobs WHERE state = 'queued'"); got != 2 {
-		t.Errorf("the queue went: %d", got)
+	if got := b.count("SELECT count(*) FROM copies WHERE state = 'pending'") + b.count("SELECT count(*) FROM jobs"); got != 0 {
+		t.Errorf("%d left of the queue", got)
 	}
-	if b.exists("t2", "media/a") {
-		t.Error("copied without --now")
+	if !b.exists("t2", "media/a") {
+		t.Error("the pass did not copy it")
 	}
-	items, _ = b.replicate("a", ReplicateOptions{Now: true})
-	only(t, items, OutcomeReplicated)
+	if items, _ := b.replicate("a", ReplicateOptions{Now: true}); len(items) != 0 {
+		t.Errorf("copied again: %+v", items)
+	}
 }
 
 // A dry run writes nothing, and lists what is queued already besides what it would queue.

@@ -64,23 +64,36 @@
             "then": {
               "oneOf": [{ "required": ["to"] }, { "required": ["to_b64"] }],
               "properties": { "outcome": { "enum": ["renamed", "to-rename", "already-there", "changed", "path-taken", "name-refused", "io-error", "disk-unavailable"] } },
-              "not": { "required": ["reason"] }
-            },
-            "else": {
+              "not": { "anyOf": [{ "required": ["reason"] }, { "required": ["source"] }] }
+            }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "trash" } } },
+            "then": {
               "required": ["reason"],
               "properties": { "outcome": { "enum": ["trashed", "to-trash", "changed", "name-refused", "io-error", "held", "canceled", "disk-unavailable"] } },
-              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }] }
+              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["source"] }] }
+            }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "replicate" } } },
+            "then": {
+              "description": "A copy (specs.md §14.1): disk is its target.",
+              "required": ["source"],
+              "properties": { "outcome": { "enum": ["replicated", "to-replicate", "changed", "conflict", "path-taken", "name-refused", "no-room", "io-error", "disk-unavailable"] } },
+              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["reason"] }] }
             }
           }
         ],
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["rename", "folder", "trash"] },
+          "kind": { "enum": ["rename", "folder", "trash", "replicate"] },
           "path": { "type": "string" },
           "path_b64": { "type": "string" },
           "to": { "type": "string" },
           "to_b64": { "type": "string" },
           "reason": { "enum": ["deleted", "renamed"] },
+          "source": { "type": "string", "minLength": 1 },
           "outcome": { "type": "string" }
         }
       }

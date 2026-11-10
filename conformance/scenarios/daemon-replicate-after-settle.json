@@ -1,0 +1,204 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14, §14.1, §15.12",
+  "description": "A file below its level waits for settle since it was first seen: the first pass queues nothing and says when the copy is due, a pass before then still waits, and the first pass after it queues the copy and runs it. Each pass after that has nothing to do.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {"id": "t1", "state": "online", "reason": null, "message": null, "walked": true},
+          {"id": "t2", "state": "online", "reason": null, "message": null, "walked": true}
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 1,
+        "next_due": "2026-01-01T00:10:00.000000000Z"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT (SELECT count(*) FROM jobs), (SELECT count(*) FROM copies WHERE state = 'pending')",
+      "rows": [
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "9m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {"id": "t1", "state": "online", "reason": null, "message": null, "walked": true},
+          {"id": "t2", "state": "online", "reason": null, "message": null, "walked": true}
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 1,
+        "next_due": "2026-01-01T00:10:00.000000000Z"
+      }
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {"id": "t1", "state": "online", "reason": null, "message": null, "walked": true},
+          {"id": "t2", "state": "online", "reason": null, "message": null, "walked": true}
+        ],
+        "decisions": [],
+        "operations": [
+          {"disk": "t2", "kind": "replicate", "path": "a", "source": "t1", "outcome": "replicated"}
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state, verified_ns IS NOT NULL FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "user",
+          "ok",
+          1
+        ],
+        [
+          "t2",
+          "atoll",
+          "ok",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files",
+      "rows": [
+        [
+          "a",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, state FROM ops",
+      "rows": [
+        [
+          "create",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT (SELECT count(*) FROM jobs), (SELECT count(*) FROM job_chunks)",
+      "rows": [
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {"id": "t1", "state": "online", "reason": null, "message": null, "walked": true},
+          {"id": "t2", "state": "online", "reason": null, "message": null, "walked": true}
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    }
+  ]
+}

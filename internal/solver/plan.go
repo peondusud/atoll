@@ -136,22 +136,30 @@ type Plan struct {
 // the order of the lists in the input does not matter. An error means that the input
 // is not valid.
 func MakePlan(in Input) (Plan, error) {
-	return makePlan(in, true)
+	return makePlan(in, nil)
 }
 
 // PlanResults gives the results of the plan MakePlan makes, and no job. A caller that runs no job then holds none: at
 // 200,000 files each with a copy to make, the list weighs about 13 MiB, and more while it grows (specs.md §26).
 func PlanResults(in Input) ([]Result, error) {
-	plan, err := makePlan(in, false)
+	return PlanEach(in, func(int, []Job) error { return nil })
+}
+
+// PlanEach gives the results of the plan MakePlan makes, and hands its jobs to each as they are made, with the
+// place in in.Files of the file they are of. It keeps none of them: the jobs of one file, of one kind, come in one
+// call, in the order of MakePlan's list, and the slice is reused after the call. An error from each ends the plan
+// with that error.
+func PlanEach(in Input, each func(file int, jobs []Job) error) ([]Result, error) {
+	plan, err := makePlan(in, each)
 	if err != nil {
 		return nil, err
 	}
 	return plan.Results, nil
 }
 
-// makePlan makes the plan. Without keepJobs, each file's jobs go once given: what a job does to the disks, the
-// planner has recorded already.
-func makePlan(in Input, keepJobs bool) (Plan, error) {
+// makePlan makes the plan. With each, every file's jobs go to it once made, and are not kept: what a job does to
+// the disks, the planner has recorded already.
+func makePlan(in Input, each func(file int, jobs []Job) error) (Plan, error) {
 	p, err := newPlanner(in)
 	if err != nil {
 		return Plan{}, err
@@ -159,22 +167,28 @@ func makePlan(in Input, keepJobs bool) (Plan, error) {
 	order := slices.Clone(p.files)
 	slices.SortFunc(order, compareFiles)
 	var plan Plan
+	give := func(f *planFile) error {
+		if each == nil || len(plan.Jobs) == 0 {
+			return nil
+		}
+		err := each(int(f.index), plan.Jobs)
+		plan.Jobs = plan.Jobs[:0]
+		return err
+	}
 	for _, f := range order {
-		plan.Jobs, err = p.refresh(f, plan.Jobs)
-		if err != nil {
+		if plan.Jobs, err = p.refresh(f, plan.Jobs); err != nil {
 			return Plan{}, err
 		}
-		if !keepJobs {
-			plan.Jobs = plan.Jobs[:0]
+		if err := give(f); err != nil {
+			return Plan{}, err
 		}
 	}
 	for _, f := range order {
-		plan.Jobs, err = p.create(f, plan.Jobs)
-		if err != nil {
+		if plan.Jobs, err = p.create(f, plan.Jobs); err != nil {
 			return Plan{}, err
 		}
-		if !keepJobs {
-			plan.Jobs = plan.Jobs[:0]
+		if err := give(f); err != nil {
+			return Plan{}, err
 		}
 	}
 	// Counted first: grown one by one, a result for each of 200,000 files is for a moment twice its size.
@@ -221,6 +235,7 @@ type planFile struct {
 	jobs     int         // jobs planned
 	pending  int         // pending copies kept
 	reached  int         // copies that count, on a disk that is not missing
+	index    int32       // its place in the input's files
 	lost     bool        // it holds a copy that does not count
 	overflow bool        // a copy went to a disk the rule did not list
 	refused  nameRefusal // what the searches for a disk met
@@ -335,7 +350,7 @@ func (p *planner) addFiles(in Input) error {
 		if p.byPath[f.Path] != nil {
 			return fmt.Errorf("plan: path %q appears twice", f.Path)
 		}
-		pf := &planFile{File: f, level: f.Placement.Replicas + 1}
+		pf := &planFile{File: f, level: f.Placement.Replicas + 1, index: int32(i)} //nolint:gosec // far fewer files than 2^31
 		p.byPath[f.Path] = pf
 		p.files = append(p.files, pf)
 		if err := p.addCopies(pf); err != nil {

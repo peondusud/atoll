@@ -78,7 +78,7 @@ func Replicate(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer session.Close()
-	r := &replicator{db: db, config: c, machine: m, session: session, now: m.Now(), sum: sum, each: each}
+	r := &replicator{db: db, config: c, machine: m, session: session, now: m.Now(), sum: sum, each: each, force: opts.Force}
 	if err := r.positions(ctx); err != nil {
 		return nil, err
 	}
@@ -95,16 +95,13 @@ func Replicate(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 		}
 	}
 	var planned []watch.PlannedJob
-	rep := &watch.Replicate{Below: below, DryRun: !apply, Queue: func(jobs []watch.PlannedJob) error {
-		planned = jobs
+	rep := &watch.Replicate{Release: below, DryRun: !apply, Queue: func(jobs []watch.PlannedJob) error {
+		jobs = slices.DeleteFunc(jobs, func(j watch.PlannedJob) bool { return !below(j.Path) })
+		planned = append(planned, jobs...)
 		if !apply {
 			return nil
 		}
-		list := make([]catalog.Queue, 0, len(jobs))
-		for i := range jobs {
-			list = append(list, catalog.Queue{FileID: jobs[i].FileID, Src: jobs[i].Src, Dst: jobs[i].Dst, Priority: jobs[i].Priority})
-		}
-		return catalog.QueueReplicate(ctx, db, r.now, list)
+		return queue(ctx, db, r.now, jobs)
 	}}
 	if err := watch.SettleFor(ctx, db, c, r.now, rep); err != nil {
 		return nil, fmt.Errorf("%w", err)
@@ -127,6 +124,18 @@ func Replicate(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 	return sum, nil
 }
 
+// queue queues copies the plan wants, each a job and its pending copy (specs.md §14.1).
+func queue(ctx context.Context, db *sql.DB, now int64, jobs []watch.PlannedJob) error {
+	list := make([]catalog.Queue, 0, len(jobs))
+	for i := range jobs {
+		list = append(list, catalog.Queue{FileID: jobs[i].FileID, Src: jobs[i].Src, Dst: jobs[i].Dst, Priority: jobs[i].Priority})
+	}
+	if err := catalog.QueueReplicate(ctx, db, now, list); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	return nil
+}
+
 type replicator struct {
 	db       *sql.DB
 	config   *config.Config
@@ -136,6 +145,8 @@ type replicator struct {
 	sum      *ReplicateSummary
 	each     func(*ReplicateItem) error
 	position map[string]int
+	// force runs the copies at the disk's normal I/O priority (specs.md §14).
+	force bool
 }
 
 func (r *replicator) positions(ctx context.Context) error {
@@ -269,6 +280,14 @@ func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string
 	}
 	r.machine.Checkpoint("journaled")
 	c := &copier{r: r, job: job, op: op, dst: dst, src: src, row: row, hash: file.Hash}
+	if !r.force {
+		restore, err := fsx.LowIOPriority()
+		if err != nil {
+			slog.Warn("a copy runs at the disk's normal I/O priority", "error", err)
+		} else {
+			defer restore()
+		}
+	}
 	moved, err := c.copy(ctx, resume)
 	if err == nil {
 		return r.commit(ctx, job, op, moved)
