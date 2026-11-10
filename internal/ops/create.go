@@ -3,6 +3,7 @@ package ops
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
@@ -202,6 +203,51 @@ func (d *Disk) PlacePart(op *Op, logical string) (*Moved, error) {
 	}
 	d.machine.Checkpoint("source-synced")
 	return d.movedFrom(target.Dir, newName, &seen)
+}
+
+// What stands at a copy's target (specs.md §14.1).
+const (
+	TargetFree     = ""
+	TargetTaken    = "taken"    // something is at the path itself: a conflict once copied
+	TargetNoFolder = "nofolder" // a parent of the path is not a folder
+)
+
+// LookAtTarget says what stands at a logical path where a copy will land, and which of its parent folders
+// are missing, from the top.
+func (d *Disk) LookAtTarget(logical string) (string, []string, error) {
+	parts := strings.Split(logical, "/")
+	dir, err := d.open(components(d.config.Root))
+	if err != nil {
+		return TargetFree, nil, classify(err)
+	}
+	defer dir.close()
+	for i, name := range parts {
+		st, err := dir.Stat(name)
+		switch {
+		case fsx.IsAbsent(err):
+			var missing []string
+			for j := i; j < len(parts)-1; j++ {
+				missing = append(missing, strings.Join(parts[:j+1], "/"))
+			}
+			return TargetFree, missing, nil
+		case err != nil:
+			return TargetFree, nil, classify(err)
+		case i == len(parts)-1:
+			return TargetTaken, nil, nil
+		case st.Kind != fsx.KindDir:
+			return TargetNoFolder, nil, nil
+		}
+		next, err := dir.OpenDir(name)
+		if err != nil {
+			return TargetFree, nil, classify(err)
+		}
+		dir.opened = append(dir.opened, next)
+		dir.Dir = next
+		if err := d.sameMount(next); err != nil {
+			return TargetFree, nil, err
+		}
+	}
+	return TargetFree, nil, nil
 }
 
 // DropPart removes a part, and is fine with one already gone.

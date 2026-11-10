@@ -85,6 +85,15 @@ func Replicate(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 	below := func(path string) bool {
 		return opts.Path == "" || path == opts.Path || strings.HasPrefix(path, opts.Path+"/")
 	}
+	if opts.Force && apply {
+		readable := func(id string) bool {
+			handle, err := session.Handle(ctx, id)
+			return err == nil && handle != nil && session.Readable(id)
+		}
+		if err := watch.ReadReplicas(ctx, db, c, m, r.now, readable, below); err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+	}
 	var planned []watch.PlannedJob
 	rep := &watch.Replicate{Below: below, DryRun: !apply, Queue: func(jobs []watch.PlannedJob) error {
 		planned = jobs
@@ -231,6 +240,22 @@ func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string
 			return "", fmt.Errorf("catalog: %w", err)
 		}
 		return trash.OutcomeChanged, nil
+	}
+	// What visibly stands in the way ends the job before anything is copied; what comes after the look is
+	// found at the rename.
+	switch target, _, err := dst.LookAtTarget(job.Path); {
+	case errors.Is(err, ops.ErrDiskLost):
+		if err := r.session.Lose(ctx, job.Dst, err); err != nil {
+			return "", fmt.Errorf("%w", err)
+		}
+		return trash.OutcomeIOError, nil
+	case err != nil:
+		return trash.OutcomeIOError, nil //nolint:nilerr // a look that fails is this job's outcome
+	case target != ops.TargetFree:
+		if err := catalog.EndJob(ctx, r.db, job); err != nil {
+			return "", fmt.Errorf("catalog: %w", err)
+		}
+		return obstacleOutcome(target), nil
 	}
 	resume := job.Part != ""
 	op, err := catalog.BeginCreate(ctx, r.db, job, r.now)
@@ -491,7 +516,7 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 		}
 		if _, err := part.WriteAt(buf[:n], off); err != nil {
 			if isNoRoom(err) {
-				return c.drop(ctx, OutcomeNoRoom, false)
+				return c.drop(ctx, OutcomeNoRoom, true)
 			}
 			return classifyDisk(err)
 		}
@@ -572,9 +597,12 @@ func (c *copier) verify(ctx context.Context, part *ops.Part, size int64) ([]byte
 // place resolves the target and moves the part there: each missing parent made as an operation mkdir of
 // its own, with the mode and owner of the same folder on the source disk (specs.md §14.2).
 func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
-	_, missing, err := c.dst.LookAt(c.job.Path)
+	target, missing, err := c.dst.LookAtTarget(c.job.Path)
 	if err != nil {
 		return nil, err
+	}
+	if target != ops.TargetFree {
+		return nil, c.drop(ctx, obstacleOutcome(target), false)
 	}
 	for _, folder := range missing {
 		like, err := c.src.FolderInfo(folder)
@@ -620,6 +648,15 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 	default:
 		return nil, err
 	}
+}
+
+// obstacleOutcome says what a copy ends with when its target is not free: something at the path itself is
+// a conflict, which the next walk reports, and a parent that is not a folder takes the path.
+func obstacleOutcome(target string) string {
+	if target == ops.TargetTaken {
+		return OutcomeConflict
+	}
+	return trash.OutcomePathTaken
 }
 
 // drop drops a copy: its part goes, its operation is undone, and its job goes back in the queue when

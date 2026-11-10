@@ -835,6 +835,66 @@ type copyHash struct {
 	chunks []byte
 }
 
+// ReadReplicas re-reads the copies Atoll made of the files below a path, as a full scan reads a copy, on
+// the disks it may read: what atoll replicate --force does besides --now (specs.md §14.3).
+func ReadReplicas(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, now int64, readable func(id string) bool, below func(string) bool) error {
+	readers := make(map[string]*diskReader, len(c.Disks))
+	defer func() {
+		for _, r := range readers {
+			r.close()
+		}
+	}()
+	order := make(map[string]int, len(c.Disks))
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		order[d.ID] = i
+		if !readable(d.ID) {
+			continue
+		}
+		reader := &diskReader{report: &Report{ID: d.ID}, skip: map[string]bool{}, notReached: map[string]bool{}}
+		root, err := m.OpenRoot(d.Mount, d.Root)
+		if err != nil {
+			reader.fail(err)
+		}
+		reader.root = root
+		readers[d.ID] = reader
+	}
+	files := catalog.NewFileReader(db)
+	for {
+		page, err := files.Next(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for i := range page {
+			f := page[i]
+			if !below(f.Path) {
+				continue
+			}
+			f.Copies = slices.DeleteFunc(f.Copies, func(c catalog.CopyRow) bool { return c.CreatedBy != "atoll" })
+			if len(f.Copies) == 0 {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("replicate: %w", err)
+			}
+			if err := hashFile(ctx, db, &f, readers, order, now); err != nil {
+				return err
+			}
+		}
+	}
+	for _, r := range readers {
+		if r.failed {
+			if err := catalog.SetDiskState(ctx, db, r.report.ID, string(disks.Missing)); err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[string]*diskReader, order map[string]int, now int64) error {
 	copies := make([]*catalog.CopyRow, 0, len(f.Copies))
 	for i := range f.Copies {

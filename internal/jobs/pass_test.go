@@ -117,6 +117,12 @@ func (b *bench) OpenTop(mount string) (fsx.Dir, error) {
 
 func newBench(t *testing.T, ids ...string) *bench {
 	t.Helper()
+	return newBenchWith(t, "", ids...)
+}
+
+// newBenchWith is newBench with more of the configuration: tables that come after the disks.
+func newBenchWith(t *testing.T, more string, ids ...string) *bench {
+	t.Helper()
 	top := t.TempDir()
 	var text strings.Builder
 	fmt.Fprintf(&text, "pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(top, "catalog.db"), filepath.Join(top, "pool"))
@@ -131,6 +137,7 @@ func newBench(t *testing.T, ids ...string) *bench {
 		fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3%d\"\nmount = %q\nfs = \"ext4\"\n", id, i, dir)
 	}
 	text.WriteString("[deletes.mass_guard]\npercent = \"100%\"\n")
+	text.WriteString(more)
 	c, err := config.Parse([]byte(text.String()))
 	if err != nil {
 		t.Fatal(err)
