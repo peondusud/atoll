@@ -218,7 +218,7 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 
 ### `copy_verdict.json` — what a look found of one copy (§15.1, §15.12)
 
-A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a creation time.
+A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a creation time. An empty `inode` matches no inode, in a row as in a candidate.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -235,10 +235,10 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `direct` | string | `deletes.direct` |
-| `files` | array of objects | `path`, `state`, `follow` when a folder renamed gives it a new path, and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held` and `size` |
+| `files` | array of objects | `path`, `state` (one of §4), `follow` when a folder renamed gives it a new path, and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held` and `size`, 0 when absent |
 | `taken` | array of strings | optional: the paths held by files outside this step |
 | `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone` or `trash`), with `target` for `other-target` |
-| `error` | boolean | `true` on an unknown word, a path or disk that appears twice, or a `moved` with no target |
+| `error` | boolean | `true` on an unknown word, a path that appears twice, a disk or a position that appears twice in one file, or a `moved` with no target |
 
 ### `guard.json` — whether the guard of a disk trips (§15.6, §29.5)
 
