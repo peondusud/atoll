@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `test/loopdev` in qemu: `make test-qemu`
+
+Commit "Run test/loopdev in qemu, with only Docker on the host", on `test-in-qemu`.
+
+- The maintainer's decision: the throwaway qemu scripts that found the ntfs3 loss go into the repository, so that `test/loopdev` runs on the maintainer's Windows machine.
+- What it does: `make qemu-build` builds `test/loopdev` static, with `go.mod` and `conformance/` beside it, as the tests look for them above their folder. `test/qemu/run.sh`, in a throwaway `debian:13` container, makes an initramfs of that container's files for Debian's kernel and for a mainline one (v7.3.1 from kernel.ubuntu.com), boots each in qemu with no network, and runs the tests there as root. Its exit code is the worst of the guests'. `make test-qemu` does both on Linux, with KVM when there is one; `test/qemu/README.md` gives the two Docker commands for Windows, and what can be chosen: kernels, tests, counts.
+- Verified from PowerShell on this machine, exactly as the README says: the whole of `test/loopdev` passes on Linux 6.12.116 and 7.3.1, `TestNameCorpus` included, which the throwaway scripts could not run. Without KVM, a whole run took about 20 minutes. A first try showed the exit code at work: qemu refused its options, and the run ended with 2, each guest reported as having said nothing. Both scripts pass shellcheck, and a run with the variables (`RUN`, `VERBOSE`) after its fixes passed again on both kernels.
+
 ## Names made durable on NTFS (specs.md §14, §15.12, §17.1, §17.2)
 
 Commit "Sync what a move names before its folder", on `propagate-renames-deletions` (pull request #3). Found by running `test/loopdev`'s rename tests in qemu, which the propagation work had left for later.

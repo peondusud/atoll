@@ -4,7 +4,7 @@ GO            ?= go
 GOLANGCI_LINT ?= golangci-lint
 BIN           := bin/atoll
 
-.PHONY: all build test test-race conformance test-integration test-loopdev lint clean
+.PHONY: all build test test-race conformance test-integration test-loopdev qemu-build test-qemu lint clean
 
 all: build
 
@@ -34,6 +34,20 @@ test-integration:
 # Needs root: ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey.
 test-loopdev:
 	$(GO) test -count=1 -tags loopdev ./test/...
+
+# What test-qemu boots: the loopdev tests, static, with what they read above their folder.
+qemu-build:
+	rm -rf bin/qemu
+	mkdir -p bin/qemu/repo
+	CGO_ENABLED=0 $(GO) test -c -tags loopdev -o bin/qemu/loopdev.test ./test/loopdev
+	cp go.mod bin/qemu/repo/
+	cp -r conformance bin/qemu/repo/
+
+# test-loopdev as root in qemu, on Debian's kernel and a mainline one, with neither root nor ntfs3 on
+# the host: only Docker (test/qemu/README.md).
+test-qemu: qemu-build
+	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e COUNT -e VERBOSE \
+		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
 
 # The conformance build holds code the delivered binary does not, so it gets a run of its own.
 lint:

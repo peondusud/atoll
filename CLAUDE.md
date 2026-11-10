@@ -42,6 +42,7 @@ go test -race ./...     # mandatory before any commit touching jobs, ops, watch,
 make conformance        # black-box runner: conformance/scenarios against a conformance build
 make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
+make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
 golangci-lint run ./...
 ./bin/atoll --config ./dev/atoll.toml daemon --foreground
 ```
@@ -69,7 +70,7 @@ internal/trash/  internal/notify/  internal/alerts/  internal/cache/
 api/                   openapi.yaml, schemas/ for --json outputs
 schema/                migrations/NNNN_name.sql, config.schema.json
 conformance/           vectors/, scenarios/, corpus/names/, runner/ (language-neutral)
-test/                  integration, faults, break glass
+test/                  integration, faults, break glass, loopdev, and qemu to run loopdev anywhere
 deploy/                systemd units, sample configuration
 docs/research/         research reports behind open design decisions (not contracts)
 ```
@@ -123,7 +124,7 @@ docs/research/         research reports behind open design decisions (not contra
 - Break-glass test in CI, on a pool with no stale copy and no conflict: daemon stopped and removed, plain mergerfs mounted from `mergerfs-config` → identical listing and content, no hidden file, test library unchanged.
 - Failed-mount test: an empty mount point yields `missing`, never deletions, and nothing is written there.
 - No test touches real disks, except `sudo make test-loopdev` or the `hwlab` hardware bench.
-- FUSE, loop-device and device-mapper tests need privileges: run them on a local machine or a CI runner that allows them; cloud sessions may not.
+- FUSE, loop-device and device-mapper tests need privileges: run them on a local machine or a CI runner that allows them, or in qemu with `make test-qemu`, which needs only Docker; cloud sessions may not.
 
 ## Conventions
 - Errors: `fmt.Errorf("context: %w", err)`. No `panic` outside initialization.
