@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.6",
+  "spec": "specs.md §15.6",
   "description": "Copies come back and a scan clears their clocks: until a pass finds that the hold ended, its event stands, and the list agrees with what confirm and reject act on.",
   "disks": [
     {
@@ -195,8 +195,8 @@
         "decisions": [],
         "operations": [],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 3,
+        "next_due": "${ANY}"
       }
     },
     {

@@ -98,6 +98,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
 | Point | Reached |
 |---|---|
 | `decided` | once a pass has committed what it decided about a page of files, before anything runs on a disk (`specs.md` §15.12) |
+| `modified` | once a pass has committed a modification of one file, before anything runs on a disk (`specs.md` §15.4) |
 | `journaled` | once a `trash`, `restore`, `rename`, `create` or purge operation is committed `planned`, before anything is written to a disk |
 | `copied` | once a `create` has copied the whole source into its `.part` and recorded every chunk hash, before the source is looked at again and the times are restored |
 | `verified` | once a `create` has re-read its `.part` against the chunk hashes and recorded the whole-file hash, before the target is resolved |

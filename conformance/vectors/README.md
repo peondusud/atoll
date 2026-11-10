@@ -240,6 +240,15 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone` or `trash`), with `target` for `other-target` |
 | `error` | boolean | `true` on an unknown word, a path that appears twice, a disk or a position that appears twice in one file, or a `moved` with no target |
 
+### `modification.json` — what a pass decides about a file a copy of which changed (§15.4)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `file` | object | `state` (one of §4), `size`, `hash` when it has one, and `running` when a job of it is running |
+| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `verdict`, `other` when a `replaced` copy holds what is no regular file or the file another copy of its disk moved to, `state`, `size` (what its look found for a changed copy, what its row says otherwise), `due` when a changed copy's `settle` has passed, `readable` when its disk can be read, and `hash` when it has been read. Booleans are `false` when absent |
+| `decision` | object | `kind` (`none`, `wait`, `read`, `modified`, `metadata` or `conflict`), and when they apply, by position: `read`, the copies to read before deciding; `changed`; `stale`, the copies a modification makes stale; `reference`, the copy read to compare with where the file had no hash; `hash`, what the file's hash becomes |
+| `error` | boolean | `true` on an unknown word, a pending copy, a disk or a position that appears twice, or `other` on a copy not `replaced` |
+
 ### `guard.json` — whether the guard of a disk trips (§15.6, §29.5)
 
 | Field | Type | Meaning |

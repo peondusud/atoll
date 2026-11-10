@@ -529,8 +529,13 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 	if handle == nil {
 		return outcomeUnavailable, nil
 	}
+	// A stale copy holds a version that came before the file's hash.
+	hash := f.Hash
+	if reason == catalog.ReasonOverwritten {
+		hash = nil
+	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
-		Disk: c.Disk, Path: place, FileKey: c.FileKey.String, Size: c.Size, Hash: f.Hash, Reason: reason,
+		Disk: c.Disk, Path: place, FileKey: c.FileKey.String, Size: c.Size, Hash: hash, Reason: reason,
 		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention),
 	})
 	if err != nil {

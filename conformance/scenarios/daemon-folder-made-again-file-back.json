@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.10, \u00a715.12",
+  "spec": "specs.md §15.10, §15.12",
   "description": "A folder made again at the old name, with a file moved back into it: that row holds its file, so this is no folder renamed. What moved out follows, one by one, and the other disk keeps its folder.",
   "disks": [
     {
@@ -128,8 +128,8 @@
           }
         ],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     },
     {

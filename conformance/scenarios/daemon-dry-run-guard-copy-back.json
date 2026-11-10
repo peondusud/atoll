@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.6, \u00a715.12",
+  "spec": "specs.md §15.6, §15.12",
   "description": "A guard holds what stays gone, and a copy it held comes back below a folder then renamed: nothing holds that one now, in a dry run as in a real pass, though a dry run's rows still say gone.",
   "disks": [
     {
@@ -158,6 +158,10 @@
             "path": "d/x",
             "decision": "renamed",
             "to": "e/x"
+          },
+          {
+            "path": "d/x",
+            "decision": "metadata"
           }
         ],
         "operations": [

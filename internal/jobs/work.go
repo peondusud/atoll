@@ -874,6 +874,14 @@ func (p *pass) jobStands(ctx context.Context, d *config.Disk, job *catalog.Trash
 		}
 		return refused && !bad && c.VerifiedNS.Valid && p.goodAtTarget(f, d.ID), nil
 	}
+	// A copy no longer stale, a file whose versions are all kept, or one with nothing left to refresh it from: the
+	// stale copy is then what is left of it, and stays (specs.md §15.4).
+	if job.Reason == catalog.ReasonOverwritten {
+		source := slices.ContainsFunc(f.Copies, func(o catalog.CopyRow) bool {
+			return o.State == string(solver.CopyOK) || o.State == string(solver.CopySurplus)
+		})
+		return c.State == string(solver.CopyStale) && !bad && source, nil
+	}
 	covered, err := catalog.JobDisks(ctx, p.db, f.ID)
 	if err != nil {
 		return false, fmt.Errorf("catalog: %w", err)
@@ -896,7 +904,7 @@ func (p *pass) stillStands(ctx context.Context, d *config.Disk, job *catalog.Tra
 	if err != nil || stands {
 		return stands, err
 	}
-	if job.Reason == reasonRenamed {
+	if job.Reason == reasonRenamed || job.Reason == catalog.ReasonOverwritten {
 		err = catalog.DropJob(ctx, p.db, job.ID)
 	} else {
 		err = catalog.DropFileJobs(ctx, p.db, f.ID)
@@ -1021,6 +1029,8 @@ type diskPlan struct {
 	folders []catalog.FolderJob
 	renames []catalog.RenameRow
 	trashes []Operation
+	// overwrites come after the trash jobs decided before them, as their jobs do (specs.md §15.4)
+	overwrites []overwrite
 	// decided holds the files whose copy here a decision of this dry run spoke for: what the catalog says
 	// of that copy no longer holds. dropped holds those whose queued job has nothing left to do, and emptied
 	// counts, by folder renamed, the copies a decision took from below it.
@@ -1213,7 +1223,7 @@ func (p *pass) queuedTrashes(ctx context.Context, d *config.Disk, writable bool)
 			case !stands:
 				outcome = OutcomeCanceled
 				// A real pass drops every job of the file here, and the later disks have nothing to say of it.
-				if writable && job.Reason != reasonRenamed {
+				if writable && job.Reason != reasonRenamed && job.Reason != catalog.ReasonOverwritten {
 					p.jobsDropped[job.FileID] = true
 				}
 			case !isAsItsRow(p.verdictOf(f, c)):
@@ -1238,6 +1248,9 @@ func (p *pass) listUnavailable(id string, plan *diskPlan) {
 			op.Outcome = OutcomeUnavailable
 		}
 		p.operated(op)
+	}
+	for i := range plan.overwrites {
+		p.operated(plan.overwrites[i].operation(id, true))
 	}
 }
 
@@ -1287,14 +1300,22 @@ func (p *pass) listOn(ctx context.Context, d *config.Disk, handle *ops.Disk, pla
 			rest = append(rest, plannedRename{row: r, outcome: outcome, goOn: goOn})
 		}
 	}
+	// The jobs a refused rename queues come after those of the modifications, which are queued before the work.
+	decided := len(plan.trashes)
 	for _, left := range p.renameRounds(d.ID, rest, whole) {
 		p.operated(Operation{Disk: d.ID, Kind: KindRename, Path: left.row.Place, To: left.row.Target, Outcome: left.outcome})
 		if g := p.guards[d.ID]; left.outcome == trash.OutcomeNameRefused && g != nil && !g.tripped && g.wishes[left.row.FileID] && !onlyAFolderCan(d, left.row.Place, left.row.Target) {
 			plan.trashes = append(plan.trashes, Operation{Disk: d.ID, Kind: KindTrash, Path: left.row.Place, Reason: reasonRenamed, Outcome: OutcomeToTrash})
 		}
 	}
-	for i := range plan.trashes {
+	for i := range plan.trashes[:decided] {
 		p.operated(plan.trashes[i])
+	}
+	for i := range plan.overwrites {
+		p.operated(plan.overwrites[i].operation(d.ID, false))
+	}
+	for i := range plan.trashes[decided:] {
+		p.operated(plan.trashes[decided+i])
 	}
 	return nil
 }

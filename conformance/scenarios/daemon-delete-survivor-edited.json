@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.4, \u00a715.5, \u00a715.12",
+  "spec": "specs.md §15.4, §15.5, §15.12",
   "description": "A replacement: gone on one disk and changed on the other is never a deletion.",
   "disks": [
     {
@@ -106,8 +106,8 @@
         ],
         "operations": [],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     },
     {

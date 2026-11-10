@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.5, \u00a715.12",
+  "spec": "specs.md §15.5, §15.12",
   "description": "Changed while it was away, it is a modification: it stays, and the job goes.",
   "disks": [
     {
@@ -127,8 +127,8 @@
           }
         ],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     },
     {
