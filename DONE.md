@@ -20,7 +20,7 @@ Commits "Specify the copy pipeline and atoll replicate", "Copy a file with atoll
   - `no-room` ended its job instead of putting it back in the queue (a unit test);
   - on ntfs3, a device that failed at `target-synced` left two names to the copy, the reprise rightly concluded nothing, and the run then judged the job anyway: its own copy at the target read as a conflict, and the job and its pending copy went. A job still `running` after the reprise now waits (qemu, Linux 6.12 and 7.3).
 - Measured in qemu, Linux 6.12.116 and 7.3.1: a file of three chunks and one below a private folder copied both ways between ext4 and each of ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g, read back through a cold cache; and a device failing at each of the six points of a copy on ext4, XFS, ntfs3 and ntfs-3g, then the next run resuming or finishing it.
-- Decided without the maintainer, to confirm:
+- Also decided in the work, and confirmed by the maintainer:
   - no `failed` state yet: `conflict`, `path-taken` and `name-refused` end the job with its pending copy, and the next plan decides again; `io-error`, `changed` and `no-room` put it back, `changed` not before `settle`;
   - a file in `conflict` is never queued, and lines are given for jobs only;
   - the outcome `queued`, for a run that only queues;
