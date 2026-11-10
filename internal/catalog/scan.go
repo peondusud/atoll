@@ -74,7 +74,9 @@ func mergeKnown(settled, behind *sql.Rows, fn func(*KnownCopy)) error {
 		if err := scanKnown(rows, k, &place, more...); err != nil {
 			return false, err
 		}
-		k.Path, k.FilePath = string(place), string(place)
+		// One string for both, where they are the same: a pass holds every copy of a disk at once.
+		k.Path = string(place)
+		k.FilePath = k.Path
 		if isBehind {
 			k.FilePath = string(file)
 		}
@@ -511,6 +513,15 @@ type FileUpdate struct {
 	Original       sql.NullString
 }
 
+// FileCount counts the file rows.
+func FileCount(ctx context.Context, db *sql.DB) (int, error) {
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM files").Scan(&count); err != nil {
+		return 0, fmt.Errorf("files: %w", err)
+	}
+	return count, nil
+}
+
 // CopyMark is a new state for a copy.
 type CopyMark struct {
 	FileID int64
@@ -525,7 +536,7 @@ type StateChange struct {
 }
 
 // ApplyPlan writes what the plan and the policies say, in one transaction.
-func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []FileUpdate, states []StateChange, marks []CopyMark) error {
+func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate, states []StateChange, marks []CopyMark) error {
 	if len(files) == 0 && len(states) == 0 && len(marks) == 0 {
 		return nil
 	}
@@ -537,8 +548,7 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []FileUpdate,
 			return fmt.Errorf("prepare: %w", err)
 		}
 		defer func() { _ = update.Close() }()
-		for i := range files {
-			f := &files[i]
+		for _, f := range files {
 			if _, err := update.ExecContext(ctx, f.Size, f.MtimeNS, f.ReplicasTarget, f.Rule, f.Mode, f.State, f.Original, nowNS, f.ID); err != nil {
 				return fmt.Errorf("file %d: %w", f.ID, err)
 			}

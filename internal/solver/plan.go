@@ -136,6 +136,22 @@ type Plan struct {
 // the order of the lists in the input does not matter. An error means that the input
 // is not valid.
 func MakePlan(in Input) (Plan, error) {
+	return makePlan(in, true)
+}
+
+// PlanResults gives the results of the plan MakePlan makes, and no job. A caller that runs no job then holds none: at
+// 200,000 files each with a copy to make, the list weighs about 13 MiB, and more while it grows (specs.md §26).
+func PlanResults(in Input) ([]Result, error) {
+	plan, err := makePlan(in, false)
+	if err != nil {
+		return nil, err
+	}
+	return plan.Results, nil
+}
+
+// makePlan makes the plan. Without keepJobs, each file's jobs go once given: what a job does to the disks, the
+// planner has recorded already.
+func makePlan(in Input, keepJobs bool) (Plan, error) {
 	p, err := newPlanner(in)
 	if err != nil {
 		return Plan{}, err
@@ -148,12 +164,28 @@ func MakePlan(in Input) (Plan, error) {
 		if err != nil {
 			return Plan{}, err
 		}
+		if !keepJobs {
+			plan.Jobs = plan.Jobs[:0]
+		}
 	}
 	for _, f := range order {
 		plan.Jobs, err = p.create(f, plan.Jobs)
 		if err != nil {
 			return Plan{}, err
 		}
+		if !keepJobs {
+			plan.Jobs = plan.Jobs[:0]
+		}
+	}
+	// Counted first: grown one by one, a result for each of 200,000 files is for a moment twice its size.
+	count := 0
+	for _, f := range p.files {
+		if r := p.result(f); r.States != nil || f.marks != nil {
+			count++
+		}
+	}
+	if count > 0 {
+		plan.Results = make([]Result, 0, count)
 	}
 	for _, f := range p.files {
 		if r := p.result(f); r.States != nil || f.marks != nil {

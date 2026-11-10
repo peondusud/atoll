@@ -63,11 +63,60 @@ type compared struct {
 	clocks []catalog.CopyClock
 }
 
+// openRow is a row whose copy is not where it says, until resolve says what became of it. A rename of a whole disk
+// holds one for each of its copies, so its row is kept compact (specs.md §26).
 type openRow struct {
-	k       catalog.KnownCopy
+	k       knownRow
 	at      *FoundFile
 	verdict solver.CopyVerdict
 	target  *FoundFile
+}
+
+// knownRow is a catalog.KnownCopy without the room each nullable field takes: 120 bytes instead of 168.
+type knownRow struct {
+	path, filePath, fileKey, goneKind       string
+	fileID, size, mtime, ctime, btime, gone int64
+	valid                                   uint8
+}
+
+// What valid says holds a value.
+const (
+	validSize uint8 = 1 << iota
+	validMtime
+	validCtime
+	validBtime
+	validGone
+	validKey
+	validKind
+)
+
+func compactRow(k *catalog.KnownCopy) knownRow {
+	r := knownRow{path: k.Path, filePath: k.FilePath, fileKey: k.FileKey.String, goneKind: k.GoneKind.String, fileID: k.FileID,
+		size: k.Size.Int64, mtime: k.MtimeNS.Int64, ctime: k.CtimeNS.Int64, btime: k.BtimeNS.Int64, gone: k.GoneNS.Int64}
+	for _, f := range []struct {
+		valid bool
+		bit   uint8
+	}{{k.Size.Valid, validSize}, {k.MtimeNS.Valid, validMtime}, {k.CtimeNS.Valid, validCtime}, {k.BtimeNS.Valid, validBtime},
+		{k.GoneNS.Valid, validGone}, {k.FileKey.Valid, validKey}, {k.GoneKind.Valid, validKind}} {
+		if f.valid {
+			r.valid |= f.bit
+		}
+	}
+	return r
+}
+
+// known gives the row as the catalog had it.
+func (r *knownRow) known() catalog.KnownCopy {
+	return catalog.KnownCopy{
+		Path: r.path, FilePath: r.filePath, FileID: r.fileID,
+		Size:     sql.NullInt64{Int64: r.size, Valid: r.valid&validSize != 0},
+		MtimeNS:  sql.NullInt64{Int64: r.mtime, Valid: r.valid&validMtime != 0},
+		CtimeNS:  sql.NullInt64{Int64: r.ctime, Valid: r.valid&validCtime != 0},
+		BtimeNS:  sql.NullInt64{Int64: r.btime, Valid: r.valid&validBtime != 0},
+		GoneNS:   sql.NullInt64{Int64: r.gone, Valid: r.valid&validGone != 0},
+		FileKey:  sql.NullString{String: r.fileKey, Valid: r.valid&validKey != 0},
+		GoneKind: sql.NullString{String: r.goneKind, Valid: r.valid&validKind != 0},
+	}
 }
 
 // RowLook says what a row says of a file, to compare with a look.
@@ -147,7 +196,7 @@ func (c *compared) row(k *catalog.KnownCopy, at *FoundFile) {
 		}
 		c.others = append(c.others, at)
 	}
-	c.open = append(c.open, &openRow{k: *k, at: at})
+	c.open = append(c.open, &openRow{k: compactRow(k), at: at})
 }
 
 // markStraddled finds a file renamed while the walk went: found at a name no row holds, with one link, and
@@ -218,35 +267,39 @@ func (c *compared) resolve(ctx context.Context, db *sql.DB, d *config.Disk, w *W
 	}
 	gone := map[string]bool{}
 	for _, o := range c.open {
-		in := solver.VerdictInput{Row: RowLook(&o.k)}
+		known := o.k.known()
+		in := solver.VerdictInput{Row: RowLook(&known)}
 		if o.at != nil {
 			at := FoundLook(o.at)
 			in.AtName = &at
-		} else if entries[o.k.Path] || atOrBelow(links, o.k.Path) {
+		} else if entries[o.k.path] || atOrBelow(links, o.k.path) {
 			in.AtName = &solver.FileLook{}
 		}
-		for f := index[o.k.FileKey.String]; f != nil; f = f.sameInode {
+		for f := index[o.k.fileKey]; f != nil; f = f.sameInode {
 			if f != o.at {
 				in.Candidates = append(in.Candidates, solver.NamedLook{Name: f.Path, Look: FoundLook(f)})
 			}
 		}
 		v, target := solver.VerdictOf(&in)
-		if v == solver.VerdictGone && carriedOutOfReach(c.r.FolderMoves, c.notReached, o.k.Path) {
+		if v == solver.VerdictGone && carriedOutOfReach(c.r.FolderMoves, c.notReached, o.k.path) {
 			v = solver.VerdictUnknown
 		}
 		o.verdict = v
 		if v == solver.VerdictMoved {
-			o.target = findFile(index[o.k.FileKey.String], target)
+			o.target = findFile(index[o.k.fileKey], target)
 			o.target.claims++
 		}
 		if v == solver.VerdictGone {
-			gone[o.k.FileKey.String] = true
+			gone[o.k.fileKey] = true
 		}
 	}
 	own, err := c.ownFiles(d, look, gone)
 	if err != nil {
 		return err
 	}
+	// A list grown copy by copy is twice the size of what it holds for a moment, once a disk holds 200,000.
+	c.r.Seen = slices.Grow(c.r.Seen, len(c.open))
+	c.clocks = slices.Grow(c.clocks, len(c.open))
 	for _, o := range c.open {
 		c.finish(o, own)
 	}
@@ -287,36 +340,37 @@ func (c *compared) ownFiles(d *config.Disk, look *Look, gone map[string]bool) (m
 
 func (c *compared) finish(o *openRow, own map[string][]solver.FileLook) {
 	v, target := o.verdict, o.target
-	seen := CopySeen{FileID: o.k.FileID}
+	k := o.k.known()
+	seen := CopySeen{FileID: k.FileID}
 	switch {
 	case v == solver.VerdictMoved && target.claims > 1:
 		// Two rows say that one name is theirs, as hard links seen as two files can.
 		v = solver.VerdictUncertain
 	case v == solver.VerdictMoved:
 		seen.Target, seen.CtimeNS, seen.Nlink = target.Path, target.CtimeNS, target.Nlink
-		seen.SameDate = o.k.Size.Valid && o.k.Size.Int64 == target.Size && o.k.MtimeNS.Valid && o.k.MtimeNS.Int64 == target.MtimeNS
+		seen.SameDate = k.Size.Valid && k.Size.Int64 == target.Size && k.MtimeNS.Valid && k.MtimeNS.Int64 == target.MtimeNS
 		target.isTarget = true
 		if !c.quiet {
-			c.r.Moved = append(c.r.Moved, MovedCopy{Path: o.k.Path, To: target.Path})
+			c.r.Moved = append(c.r.Moved, MovedCopy{Path: k.Path, To: target.Path})
 		}
-	case v == solver.VerdictGone && isOwn(&o.k, own):
+	case v == solver.VerdictGone && isOwn(&k, own):
 		v = solver.VerdictOwn
-	case v == solver.VerdictGone && o.k.GoneKind.String == string(solver.VerdictUncertain):
+	case v == solver.VerdictGone && k.GoneKind.String == string(solver.VerdictUncertain):
 		// Its names got rows of their own, and they say no more than the first look did (specs.md §15.12).
 		v = solver.VerdictUncertain
 	}
 	seen.Verdict = v
 	switch v {
 	case solver.VerdictReplaced:
-		c.r.Changed = append(c.r.Changed, o.k.Path)
+		c.r.Changed = append(c.r.Changed, k.Path)
 	case solver.VerdictGone, solver.VerdictUncertain, solver.VerdictOwn:
 		if !c.quiet {
-			c.r.Absent = append(c.r.Absent, o.k.Path)
+			c.r.Absent = append(c.r.Absent, k.Path)
 		}
 	case solver.VerdictThere, solver.VerdictEdited, solver.VerdictMoved, solver.VerdictUnknown:
 	}
 	c.r.Seen = append(c.r.Seen, seen)
-	c.clock(&o.k, v)
+	c.clock(&k, v)
 }
 
 func isOwn(k *catalog.KnownCopy, own map[string][]solver.FileLook) bool {

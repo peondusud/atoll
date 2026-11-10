@@ -96,6 +96,9 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 		if err != nil {
 			return nil, err
 		}
+		// What the look found of each copy is for a pass to decide on, and a scan reports none of it: held through
+		// the plan, it is one more entry for each copy of a disk renamed whole (specs.md §26).
+		report.Seen = nil
 		out.Disks = append(out.Disks, *report)
 	}
 	if err := Settle(ctx, db, c, now); err != nil {
@@ -431,11 +434,12 @@ func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error 
 	if err != nil {
 		return err
 	}
-	plan, err := solver.MakePlan(input)
+	// No job runs yet: the plan's results are all a scan or a pass keeps of it.
+	results, err := solver.PlanResults(input)
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
 	}
-	changed, states, marks, err := applyResults(input.Files, remembered, plan.Results)
+	changed, states, marks, err := applyResults(input.Files, remembered, results)
 	if err != nil {
 		return err
 	}
@@ -500,7 +504,13 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 		state[diskList[i].ID] = solver.DiskState(diskList[i].State)
 	}
 	placements := map[placementKey]*solver.Placement{}
-	var remembered []settled
+	// Sized once: grown file by file, each list is for a moment both its old size and its new one.
+	count, err := catalog.FileCount(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	input.Files = slices.Grow(input.Files, count)
+	remembered := make([]settled, 0, count)
 	reader := catalog.NewFileReader(db)
 	for {
 		page, err := reader.Next(ctx)
@@ -617,8 +627,9 @@ func originalOf(f *catalog.FileRow, position map[string]int, state map[string]so
 // applyResults gives each file the state the plan says, with conflict and corrupt kept, as they
 // come from elsewhere (specs.md §13.4), and keeps only what changed. Files and results are both by
 // path in byte order, so it is a merge.
-func applyResults(files []solver.File, remembered []settled, results []solver.Result) ([]catalog.FileUpdate, []catalog.StateChange, []catalog.CopyMark, error) {
-	var changed []catalog.FileUpdate
+func applyResults(files []solver.File, remembered []settled, results []solver.Result) ([]*catalog.FileUpdate, []catalog.StateChange, []catalog.CopyMark, error) {
+	// The updates are remembered already: a copy of each would hold them twice.
+	var changed []*catalog.FileUpdate
 	var states []catalog.StateChange
 	var marks []catalog.CopyMark
 	next := 0
@@ -646,7 +657,7 @@ func applyResults(files []solver.File, remembered []settled, results []solver.Re
 		switch {
 		case r.update != nil:
 			r.update.State = string(shown)
-			changed = append(changed, *r.update)
+			changed = append(changed, r.update)
 		case r.state != string(shown):
 			states = append(states, catalog.StateChange{ID: r.id, State: string(shown)})
 		}

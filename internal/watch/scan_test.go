@@ -1345,3 +1345,26 @@ func TestAWalkWrittenWhole(t *testing.T) {
 		t.Errorf("%d new", got)
 	}
 }
+
+// An open row gives back the row it was made from, field by field, whichever of them the catalog left NULL.
+func TestAnOpenRowKeepsItsRow(t *testing.T) {
+	full := catalog.KnownCopy{Path: "D/x", FilePath: "E/x", FileID: 7, Size: sql.NullInt64{Int64: 1, Valid: true},
+		MtimeNS: sql.NullInt64{Int64: 2, Valid: true}, CtimeNS: sql.NullInt64{Int64: 3, Valid: true}, BtimeNS: sql.NullInt64{Int64: 4, Valid: true},
+		GoneNS: sql.NullInt64{Int64: 5, Valid: true}, FileKey: sql.NullString{String: "6", Valid: true}, GoneKind: sql.NullString{String: "moved", Valid: true}}
+	rows := []catalog.KnownCopy{full, {Path: "a", FilePath: "a", FileID: 1}}
+	for bit := range 7 {
+		k := full
+		for i, valid := range []*bool{&k.Size.Valid, &k.MtimeNS.Valid, &k.CtimeNS.Valid, &k.BtimeNS.Valid, &k.GoneNS.Valid, &k.FileKey.Valid, &k.GoneKind.Valid} {
+			if i == bit {
+				*valid = false
+			}
+		}
+		rows = append(rows, k)
+	}
+	for _, k := range rows {
+		r := compactRow(&k)
+		if got := r.known(); got != k {
+			t.Errorf("%+v gives back %+v", k, got)
+		}
+	}
+}
