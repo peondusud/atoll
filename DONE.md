@@ -2,6 +2,36 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Propagation: `atoll daemon --until-idle` and `atoll guard` (specs.md §15.1, §15.3, §15.6, §15.10, §15.12, §17.2, §25)
+
+Commits "Propagate renames and deletions, with atoll daemon and atoll guard", "Hold a folder back while one renamed inside it waits", "Test what the mutation runs left standing, and fix a dry run" and "State a folder rotation while one waits as a limit", on `propagate-renames-deletions` (pull request #3).
+
+- The maintainer's decisions:
+  - the command is `daemon --until-idle`, which does all the work that is due once and exits, so a timer can run it until the watcher exists. It takes no `--yes`: starting it is the consent, and the mass-deletion guard is the safety (invariant 17 now says so);
+  - no modifications yet: a copy `edited` or `replaced` is only reported until the copy pipeline (§14);
+  - a deletion sends to the trash only the copies that hold the same content;
+  - the copies below a folder follow it only when its rename is real;
+  - a copy that moved is read again before it counts as verified, and the chunks go with the hash;
+  - the guard holds the copies of its disk seen before it tripped;
+  - a rotation on one disk while the folder that left waits is a stated limit (below).
+- What it does: each pass looks at every disk, gives each copy a verdict (`copy_verdict.json`), and decides a file once every copy that moved or went has done so for `deletes.debounce` (`propagation.json`). A rename made on one disk is carried to the others; a folder renamed is one operation on each other disk where it can be, and its copies follow one by one where it cannot. A deletion sends the other copies to the trash. `atoll guard list`, `confirm --disk` and `reject --disk` answer the guard of §15.6 (`guard.json`). Renames and folders are journaled like the trash, with their reprise and crash points.
+- Contracts, as agreed: `schema/migrations/0002_propagation.sql` (`gone_ns`, `gone_kind`, `old_lpath` and `old_lpath_key` on copies, `file_key` and `btime_ns` on entries), `api/schemas/daemon`, `guard-list` and `guard-answer`, `moved` and `path_taken` in `scan`, `old_path` in `status`.
+- Eleven adversarial reviews of the code, as each round left it, confirmed 62, 44, 32, 32, 23, 22, 13, 18, 16, 7 and 2 findings, each fixed with a failing test first or stated in the spec as a limit. None since the sixth round lost data; the one in the sixth sent a copy to the trash. The eleventh found a folder decided while one renamed inside it waited, which left what only another disk held below the inner one there for good, and a dry run that gave a queued trash job the guard of another source.
+- Mutations: 381 of 390 caught on the code before the third commit. With the run before it, 20 mutants were left. 15 now have a test, each seen to fail under its mutant. One was a bug: since a fix of the eleventh round, a dry run hid the trash job of a refused rename once its file was decided deleted, which the real pass keeps and lists. 3 are equivalent: in `cannotLeave` a copy that stays always has its row on its file, in the dry run's guard a gone copy is never something left beside itself, and a folder around one that waits for its own copies counts the same copies. One is left, tied to the limit below.
+- A limit found while testing the mutants, stated with the maintainer: `mv Dx N; mv D Dx` on one disk, while Dx waits for a copy below it on another disk, gives D's entries Dx's name, so the next look reads Dx as a folder made at N, and what only other disks hold below Dx stays there, in the folder now named Dx. Nothing is lost (`daemon-folder-rotation-while-waiting`). The fix is in [TODO.md](TODO.md). Without a wait the rotation works, and so does a swap of two folders on one disk.
+- Decided without the maintainer, to confirm:
+  - a copy found moved, then gone, restarts its clock;
+  - `guard confirm` restarts the clock of the rows it leaves out, and `guard reject` also takes the rows of copies that have not yet followed a rename;
+  - a file's hash goes when no copy left is verified;
+  - a disk the configuration no longer lists gets no line and no exit 4 for what waits on it, until `disk remove` exists;
+  - a moved copy on a disk out of reach waits without being counted in `waiting`, as counting it would change what that field means;
+  - on NTFS, a collision with a name that has no row yet is a stated limit: the next walk reports it;
+  - the dry run's differences from a real pass are a class of limits in §15.12;
+  - a trash job queued for a deletion stands when its file is decided again, and the job of a refused rename stands beside a deletion's: two clauses in the Deletion row of §15.12;
+  - a disk's folder renames are decided in the order of their jobs. Nothing says in what order two disks acted, so across disks a copy decided below a folder's old name is below it like any other, and the next look finds it `moved`.
+- Verified: `go test ./...`, the race detector, lint on both builds, 443 scenarios (269 new) and every vector.
+- Not run: `test/loopdev`'s rename tests in qemu (they compile and lint), the older mutation lists, the real outputs of `daemon` and `guard` against their schemas, and the port written from the documents alone. Not measured again: memory, which before the last seven rounds peaked at about 205 and 208 MiB in the worst passes on 200,000 files, past the 200 MB of §26.
+
 ## The journal and the trash: `atoll prune` and `atoll trash` (specs.md §6.1, §9, §10, §15.10, §17, §25)
 
 Commit "Send surplus copies to the trash, with atoll prune and atoll trash", on `main`. The first code that writes to a disk.
