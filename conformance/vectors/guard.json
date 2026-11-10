@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §15.6, §29.5",
+  "description": "Whether the guard of a disk trips: when the count is more than files, or when count_percent * 100 > percent * rows, compared exactly.",
+  "cases": [
+    {"note": "nothing gone", "count": 0, "count_percent": 0, "rows": 1000, "files": 100, "percent": "5%", "tripped": false},
+    {"note": "nothing gone, on an empty disk", "count": 0, "count_percent": 0, "rows": 0, "files": 100, "percent": "5%", "tripped": false},
+    {"note": "at the limit of files", "count": 100, "count_percent": 100, "rows": 100000, "files": 100, "percent": "5%", "tripped": false},
+    {"note": "past the limit of files", "count": 101, "count_percent": 0, "rows": 100000, "files": 100, "percent": "5%", "tripped": true},
+    {"note": "past files, counted toward files only", "count": 101, "count_percent": 1, "rows": 100000, "files": 100, "percent": "5%", "tripped": true},
+    {"note": "at the limit of the share: 50 of 1000", "count": 50, "count_percent": 50, "rows": 1000, "files": 100, "percent": "5%", "tripped": false},
+    {"note": "past the limit of the share: 51 of 1000", "count": 51, "count_percent": 51, "rows": 1000, "files": 100, "percent": "5%", "tripped": true},
+    {"note": "20 copies: one is exactly 5%", "count": 1, "count_percent": 1, "rows": 20, "files": 100, "percent": "5%", "tripped": false},
+    {"note": "19 copies: one is past 5%", "count": 1, "count_percent": 1, "rows": 19, "files": 100, "percent": "5%", "tripped": true},
+    {"note": "one copy, one gone", "count": 1, "count_percent": 1, "rows": 1, "files": 100, "percent": "5%", "tripped": true},
+    {"note": "something gone from rows that say none", "count": 1, "count_percent": 1, "rows": 0, "files": 100, "percent": "5%", "tripped": true},
+    {"note": "what has nothing left to send counts toward files only: a small pool", "count": 1, "count_percent": 0, "rows": 1, "files": 100, "percent": "5%", "tripped": false},
+    {"note": "the same with many", "count": 100, "count_percent": 0, "rows": 100, "files": 100, "percent": "5%", "tripped": false},
+    {"note": "a fraction: 25 of 1000 is exactly 2.5%", "count": 25, "count_percent": 25, "rows": 1000, "files": 100, "percent": "2.5%", "tripped": false},
+    {"note": "a fraction: 26 of 1000 is past 2.5%", "count": 26, "count_percent": 26, "rows": 1000, "files": 100, "percent": "2.5%", "tripped": true},
+    {"note": "a fraction no float holds: 1 of 3 is below 33.34%", "count": 1, "count_percent": 1, "rows": 3, "files": 100, "percent": "33.34%", "tripped": false},
+    {"note": "a fraction no float holds: 1 of 3 is past 33.33%", "count": 1, "count_percent": 1, "rows": 3, "files": 100, "percent": "33.33%", "tripped": true},
+    {"note": "0% trips on anything", "count": 1, "count_percent": 1, "rows": 1000000, "files": 100, "percent": "0%", "tripped": true},
+    {"note": "0% with nothing", "count": 0, "count_percent": 0, "rows": 1000000, "files": 100, "percent": "0%", "tripped": false},
+    {"note": "100% never trips by share", "count": 1000, "count_percent": 1000, "rows": 1000, "files": 10000, "percent": "100%", "tripped": false},
+    {"note": "100% and more gone than rows", "count": 1001, "count_percent": 1001, "rows": 1000, "files": 10000, "percent": "100%", "tripped": true},
+    {"note": "0 files: anything counted trips", "count": 1, "count_percent": 0, "rows": 1000, "files": 0, "percent": "5%", "tripped": true},
+    {"note": "sizes that do not fit in 64 bits when multiplied", "count": 9000000000000000000, "count_percent": 9000000000000000000, "rows": 9223372036854775807, "files": 9223372036854775807, "percent": "100%", "tripped": false}
+  ]
+}

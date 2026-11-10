@@ -1,0 +1,183 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.12",
+  "description": "What waits for a disk away comes in the order a pass would run it: folders by their old path, whatever order they were renamed in.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a/x",
+          "text": "1"
+        },
+        {
+          "path": "media/z/x",
+          "text": "2"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a/x",
+          "text": "1"
+        },
+        {
+          "path": "media/z/x",
+          "text": "2"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "unmount",
+      "disk": "t2"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/z",
+      "to": "media/zz"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/aa"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "missing",
+            "reason": "not-mounted",
+            "message": "${ANY}",
+            "walked": false
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a/x",
+            "decision": "renamed",
+            "to": "aa/x"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "folder",
+            "path": "a",
+            "to": "aa",
+            "outcome": "disk-unavailable"
+          },
+          {
+            "disk": "t2",
+            "kind": "folder",
+            "path": "z",
+            "to": "zz",
+            "outcome": "disk-unavailable"
+          },
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a/x",
+            "to": "aa/x",
+            "outcome": "disk-unavailable"
+          },
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "z/x",
+            "to": "zz/x",
+            "outcome": "disk-unavailable"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    }
+  ]
+}

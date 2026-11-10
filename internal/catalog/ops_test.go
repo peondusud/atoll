@@ -35,6 +35,32 @@ func openForOps(t *testing.T) *testDB {
 	return &testDB{t: t, db: db}
 }
 
+// A restore takes the row of a file that sat behind at that path. With no copy left its file goes, as it would
+// otherwise hold its own path for good.
+func TestARestoreOverTheLastRowOfAFileBehind(t *testing.T) {
+	b := openForOps(t)
+	b.exec(`INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u1', 'a', 'ext4', '/a', 'media', 'Atoll', 'data', 0, '[]', 'online')`)
+	b.exec("INSERT INTO files(id, lpath, size, mtime_ns, replicas_target, mode, state, first_seen_ns, updated_ns) VALUES (1, ?, 1, 1, 1, 'deferred', 'ok', 1, 1)", []byte("E/x"))
+	b.exec("INSERT INTO copies(file_id, disk_id, old_lpath, old_lpath_key, file_key, nlink, size, mtime_ns, ctime_ns, created_by, first_seen_ns, state) VALUES (1, 'u1', ?, ?, '7', 1, 1, 1, 1, 'user', 1, 'ok')", []byte("D/x"), keyOf("D/x"))
+	op := &Op{ID: 1, Disk: "u1", Kind: OpRestore, Path: "D/x", Path2: "t/x"}
+	if err := FinishRestore(t.Context(), b.sql(), op, 5, &NewCopy{Path: "D/x", Size: 1, MtimeNS: 1, CtimeNS: 1, FileKey: "9", Nlink: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := b.db.QueryRowContext(t.Context(), "SELECT count(*) FROM files WHERE CAST(lpath AS TEXT) = 'E/x'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("%d files left with no copy", count)
+	}
+	if err := b.db.QueryRowContext(t.Context(), "SELECT count(*) FROM copies c JOIN files f ON f.id = c.file_id WHERE CAST(f.lpath AS TEXT) = 'D/x'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Errorf("%d copies of what came back", count)
+	}
+}
+
 // What happened to a file on one disk says nothing of a file with the same inode number on another, and
 // a name that recorded another change time keeps it, for the next scan to report.
 func TestLinksOfAFile(t *testing.T) {

@@ -1,0 +1,164 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.6",
+  "description": "The guard holds a copy gone at a name its file has left, and does not count it: the list names it where it sat.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "media/c",
+          "text": "3"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\nfiles = 1\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "unmount",
+      "disk": "t2"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/z"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "mount",
+      "disk": "t2"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/a"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/b"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/c"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "disk": "t1",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
+            "disk": "t2",
+            "tripped": true,
+            "count": 2,
+            "paths": [
+              {
+                "path": "a"
+              },
+              {
+                "path": "b"
+              },
+              {
+                "path": "c"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

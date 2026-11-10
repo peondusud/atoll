@@ -81,7 +81,7 @@ docs/research/         research reports behind open design decisions (not contra
 4. EIO, ENOTCONN and ENODEV mean "disk unknown", never "file absent". An empty mount point is a missing disk, never a mass deletion. A missing disk is never considered empty.
 5. No hidden files or folders. Nothing written outside pool disks except the catalog and the configuration.
 6. A replica has exactly the same relative path and name, byte for byte, as its source. It keeps the source's modification time, as far as the target filesystem can hold it (specs.md §14), never its creation time.
-7. Copy pipeline: `<workdir>/tmp/` on the target disk → chunk hashes → restore metadata → fsync → re-read without cache and verify → rename without replacing (`RENAME_NOREPLACE`, or `link` + `unlink`) → fsync folder → restore parent folder times → catalog commit. Resolve the destination at commit time, under the per-path lock.
+7. Copy pipeline: `<workdir>/tmp/` on the target disk → chunk hashes → restore metadata → fsync → re-read without cache and verify → rename without replacing (`RENAME_NOREPLACE`, or `link` + `unlink`) → fsync the file at its new name, then its folder → restore parent folder times → catalog commit. Resolve the destination at commit time, under the per-path lock.
 8. Identify a disk by its FS UUID or 64-bit NTFS serial; never by `/dev/sdX`, drive letter, Windows volume GUID or USB serial. Refuse two disks with the same identifier, and two pool filesystems on one physical disk.
 9. Decide content changes from hashes and change times, never from the modification time alone. Corruption requires unchanged size, modification time and change time, and a mismatch confirmed by a second read without cache. Compare times at the coarser precision of the filesystems involved.
 10. A replacement (a copy replaced on one disk and removed from the others) is a modification, never a deletion. A deletion propagates only to copies unchanged since they were last in sync, and only to the trash; the mass-deletion guard pauses propagation.
@@ -91,7 +91,7 @@ docs/research/         research reports behind open design decisions (not contra
 14. Atoll's own view presents the in-sync copy with the oldest creation time, never a stale, corrupt or unavailable copy. With mergerfs, move stale and corrupt copies out of `<root>/` (to the trash) as soon as they are found.
 15. Never alter a file name. A name incompatible with a target filesystem → another disk, or the `name-incompatible` state. The logical key is the exact path, never normalized; NFC/NFD and case folding serve only to detect collisions (`lpath_key`) and to match rules (specs.md §11.3), never to name or identify a file.
 16. No automatic disk adoption.
-17. Every operation that moves or deletes offers `--dry-run` and asks for confirmation (`--yes`).
+17. Every operation that moves or deletes offers `--dry-run` and asks for confirmation (`--yes`). The daemon takes no `--yes`: starting it is the consent, and the mass-deletion guard is the safety (specs.md §15.12).
 18. Only the `solver` decides placement. No other module moves files on its own initiative.
 
 ## Rust-rewrite readiness

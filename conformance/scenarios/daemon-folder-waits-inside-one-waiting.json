@@ -1,0 +1,296 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.12",
+  "description": "mv D/s F; mv D E on one disk, where only D/s held copies, and a copy that went with D/s goes from there before D/s is decided: D/s waits for it, and D with it, as its entries would carry D/s's row away. Once D/s is decided, what only the other disk holds below it follows it.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/D/s/x",
+          "text": "x"
+        },
+        {
+          "path": "media/D/s/w",
+          "text": "w"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/D/s/x",
+          "text": "x"
+        },
+        {
+          "path": "media/D/s/w",
+          "text": "w"
+        },
+        {
+          "path": "media/D/s/v",
+          "text": "v"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/D/s",
+      "to": "media/F"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/D",
+      "to": "media/E"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "20s"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/F/w"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "D/s/x",
+            "decision": "renamed",
+            "to": "F/x"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "D/s/x",
+            "to": "F/x",
+            "outcome": "renamed"
+          }
+        ],
+        "guards": [],
+        "waiting": 1,
+        "next_due": "2026-01-01T00:01:50.000000000Z"
+      }
+    },
+    {
+      "do": "advance",
+      "by": "20s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "D/s/w",
+            "decision": "kept"
+          },
+          {
+            "path": "D/s/v",
+            "decision": "renamed",
+            "to": "F/v"
+          },
+          {
+            "path": "D/s/w",
+            "decision": "renamed",
+            "to": "F/w"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "D/s/v",
+            "to": "F/v",
+            "outcome": "renamed"
+          },
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "D/s/w",
+            "to": "F/w",
+            "outcome": "renamed"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT) FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "F/v"
+        ],
+        [
+          "F/w"
+        ],
+        [
+          "F/x"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/F/x",
+          "text": "x"
+        },
+        {
+          "path": "media/F/v",
+          "text": "v"
+        },
+        {
+          "path": "media/F/w",
+          "text": "w"
+        },
+        {
+          "path": "media/D/s",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

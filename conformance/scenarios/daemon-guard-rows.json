@@ -1,0 +1,480 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.6",
+  "description": "One copy of ten is more than 5%, whatever else landed in the same look: rows are those a pass began with.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/f0",
+          "text": "x"
+        },
+        {
+          "path": "media/f1",
+          "text": "x"
+        },
+        {
+          "path": "media/f2",
+          "text": "x"
+        },
+        {
+          "path": "media/f3",
+          "text": "x"
+        },
+        {
+          "path": "media/f4",
+          "text": "x"
+        },
+        {
+          "path": "media/f5",
+          "text": "x"
+        },
+        {
+          "path": "media/f6",
+          "text": "x"
+        },
+        {
+          "path": "media/f7",
+          "text": "x"
+        },
+        {
+          "path": "media/f8",
+          "text": "x"
+        },
+        {
+          "path": "media/f9",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/f0",
+          "text": "x"
+        },
+        {
+          "path": "media/f1",
+          "text": "x"
+        },
+        {
+          "path": "media/f2",
+          "text": "x"
+        },
+        {
+          "path": "media/f3",
+          "text": "x"
+        },
+        {
+          "path": "media/f4",
+          "text": "x"
+        },
+        {
+          "path": "media/f5",
+          "text": "x"
+        },
+        {
+          "path": "media/f6",
+          "text": "x"
+        },
+        {
+          "path": "media/f7",
+          "text": "x"
+        },
+        {
+          "path": "media/f8",
+          "text": "x"
+        },
+        {
+          "path": "media/f9",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/f0"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n00",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n01",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n02",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n03",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n04",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n05",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n06",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n07",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n08",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n09",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n10",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n11",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n12",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n13",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n14",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n15",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n16",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n17",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n18",
+      "text": "n"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/n19",
+      "text": "n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [
+          {
+            "disk": "t1",
+            "count": 1
+          }
+        ],
+        "waiting": 1,
+        "next_due": "2026-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM copies WHERE disk_id = 't1'",
+      "rows": [
+        [
+          30
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind FROM events ORDER BY id",
+      "rows": [
+        [
+          "guard"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "disk": "t1",
+            "tripped": true,
+            "count": 1,
+            "paths": [
+              {
+                "path": "f0"
+              }
+            ]
+          },
+          {
+            "disk": "t2",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          }
+        ]
+      }
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [
+          {
+            "disk": "t1",
+            "count": 1
+          }
+        ],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind FROM events ORDER BY id",
+      "rows": [
+        [
+          "guard"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/f0",
+          "text": "x"
+        },
+        {
+          "path": "media/f1",
+          "text": "x"
+        },
+        {
+          "path": "media/f2",
+          "text": "x"
+        },
+        {
+          "path": "media/f3",
+          "text": "x"
+        },
+        {
+          "path": "media/f4",
+          "text": "x"
+        },
+        {
+          "path": "media/f5",
+          "text": "x"
+        },
+        {
+          "path": "media/f6",
+          "text": "x"
+        },
+        {
+          "path": "media/f7",
+          "text": "x"
+        },
+        {
+          "path": "media/f8",
+          "text": "x"
+        },
+        {
+          "path": "media/f9",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "confirm",
+        "--disk",
+        "t1",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t1",
+        "done": true,
+        "up_to": "2026-01-01T00:01:00.000000000Z"
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "f0",
+            "decision": "kept"
+          }
+        ],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    }
+  ]
+}

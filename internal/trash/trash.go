@@ -27,6 +27,7 @@ import (
 const (
 	OutcomeTrashed       = "trashed"
 	OutcomeRestored      = "restored"
+	OutcomeRenamed       = "renamed"
 	OutcomeToRestore     = "to-restore"
 	OutcomePurged        = "purged"
 	OutcomeToPurge       = "to-purge"
@@ -59,6 +60,7 @@ type Session struct {
 	now       int64
 	retention time.Duration
 	slots     map[string]*slot
+	verdicts  []disks.Verdict
 	changed   bool
 	lost      bool
 	// reprised holds, by path, the restore this run's reprise finished: an entry from before it is
@@ -80,7 +82,7 @@ func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, ap
 		return nil, fmt.Errorf("trash.retention: %w", err)
 	}
 	s.retention = retention
-	if _, err := watch.CheckDisks(ctx, db, c, m, s.now); err != nil {
+	if s.verdicts, err = watch.CheckDisks(ctx, db, c, m, s.now); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	rows, err := catalog.Disks(ctx, db)
@@ -102,6 +104,71 @@ func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, ap
 		}
 	}
 	return s, nil
+}
+
+// VerdictOf says what the mount check found of a disk of the configuration, by its order there.
+func (s *Session) VerdictOf(i int) disks.Verdict {
+	return s.verdicts[i]
+}
+
+// Readable says whether a disk can still be looked at in this session.
+func (s *Session) Readable(id string) bool {
+	sl := s.slots[id]
+	return sl != nil && readable(sl.state)
+}
+
+// Writable says whether a disk can still be written to in this session.
+func (s *Session) Writable(id string) bool {
+	return s.writable(id)
+}
+
+// Handle gives a handle on a disk, confirmed if this session writes, and nil when it cannot be reached.
+func (s *Session) Handle(ctx context.Context, id string) (*ops.Disk, error) {
+	return s.open(ctx, id)
+}
+
+// Lose records that a disk cannot be relied on any more.
+func (s *Session) Lose(ctx context.Context, id string, why error) error {
+	return s.lose(ctx, id, why)
+}
+
+// MarkMissing says that a look found a disk missing.
+func (s *Session) MarkMissing(ctx context.Context, id string) error {
+	sl := s.slots[id]
+	if sl == nil {
+		return nil
+	}
+	sl.state = solver.DiskMissing
+	sl.tried = true
+	if sl.handle != nil {
+		sl.handle.Close()
+		sl.handle = nil
+	}
+	if !s.apply {
+		return nil
+	}
+	if err := catalog.SetDiskState(ctx, s.db, id, string(disks.Missing)); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	return nil
+}
+
+// MarkChanged says that something moved, so that each file is worked out again.
+func (s *Session) MarkChanged() {
+	s.changed = true
+}
+
+// Lost says that a disk could not be relied on, or an operation stayed planned, in this run.
+func (s *Session) Lost() bool {
+	return s.lost
+}
+
+// Settle works out the original, policy and state of each file, whatever happened.
+func (s *Session) Settle(ctx context.Context) error {
+	if err := watch.Settle(ctx, s.db, s.config, s.now); err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	return nil
 }
 
 // Close lets go of the disks.
@@ -221,6 +288,9 @@ func (s *Session) lose(ctx context.Context, id string, why error) error {
 	if sl.handle != nil {
 		sl.handle.Close()
 		sl.handle = nil
+	}
+	if !s.apply {
+		return nil
 	}
 	if err := catalog.SetDiskState(ctx, s.db, id, string(disks.Missing)); err != nil {
 		return fmt.Errorf("catalog: %w", err)
@@ -345,7 +415,7 @@ func (s *Session) pruneFile(ctx context.Context, f *catalog.FileRow, position ma
 		c := copyOn(f, r.Disk)
 		outcome := string(r.Outcome)
 		if r.Outcome == solver.PruneToTrash && s.apply {
-			if outcome, err = s.send(ctx, f, c); err != nil {
+			if outcome, err = s.Send(ctx, f, c, reasonSurplus); err != nil {
 				return err
 			}
 		}
@@ -392,6 +462,10 @@ func copyOn(f *catalog.FileRow, disk string) *catalog.CopyRow {
 // unchanged looks at a copy, and says whether it is what its row says. A copy that cannot be looked
 // at is not, as nothing can be said of it.
 func (s *Session) unchanged(ctx context.Context, path string, c *catalog.CopyRow) (bool, error) {
+	if c.OldPath != nil {
+		// It has not followed a rename yet: it waits for that (specs.md §17.3).
+		return false, nil
+	}
 	handle, err := s.open(ctx, c.Disk)
 	if err != nil || handle == nil {
 		return false, err
@@ -415,8 +489,9 @@ func (s *Session) unchanged(ctx context.Context, path string, c *catalog.CopyRow
 	return watch.Unchanged(&found, &catalog.KnownCopy{Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey}), nil
 }
 
-// send sends one copy to the trash, and says what became of it (specs.md §17.1).
-func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow) (string, error) {
+// Send sends one copy to the trash, and says what became of it (specs.md §17.1).
+func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, error) {
+	place := c.Place(f)
 	handle, err := s.open(ctx, c.Disk)
 	if err != nil {
 		return "", err
@@ -425,14 +500,14 @@ func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 		return outcomeUnavailable, nil
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
-		Disk: c.Disk, Path: f.Path, FileKey: c.FileKey.String, Size: c.Size, Hash: f.Hash, Reason: reasonSurplus,
+		Disk: c.Disk, Path: place, FileKey: c.FileKey.String, Size: c.Size, Hash: f.Hash, Reason: reason,
 		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention),
 	})
 	if err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	s.machine.Checkpoint("journaled")
-	moved, moveErr := handle.ToTrash(op, &catalog.KnownCopy{Path: f.Path, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey})
+	moved, moveErr := handle.ToTrash(op, &catalog.KnownCopy{Path: place, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey})
 	if moveErr == nil {
 		if err := catalog.FinishTrash(ctx, s.db, op, nil, moved.Links()); err != nil {
 			return "", fmt.Errorf("catalog: %w", err)
@@ -440,6 +515,11 @@ func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 		s.changed = true
 		return OutcomeTrashed, nil
 	}
+	return s.afterFailedMove(ctx, handle, op, moveErr)
+}
+
+// AfterFailedMove is afterFailedMove for what else moves things.
+func (s *Session) AfterFailedMove(ctx context.Context, handle *ops.Disk, op *ops.Op, moveErr error) (string, error) {
 	return s.afterFailedMove(ctx, handle, op, moveErr)
 }
 
@@ -468,8 +548,11 @@ func (s *Session) afterFailedMove(ctx context.Context, handle *ops.Disk, op *ops
 	}
 	if finished {
 		s.changed = true
-		if op.Kind == catalog.OpRestore {
+		switch op.Kind {
+		case catalog.OpRestore:
 			return OutcomeRestored, nil
+		case catalog.OpRename:
+			return OutcomeRenamed, nil
 		}
 		return OutcomeTrashed, nil
 	}
@@ -482,7 +565,7 @@ func failedOutcome(op *ops.Op, moveErr error) string {
 	switch {
 	case errors.Is(moveErr, ops.ErrNameRefused):
 		return OutcomeNameRefused
-	case errors.Is(moveErr, ops.ErrPathTaken) && op.Kind == catalog.OpRestore:
+	case errors.Is(moveErr, ops.ErrPathTaken) && (op.Kind == catalog.OpRestore || op.Kind == catalog.OpRename):
 		return OutcomePathTaken
 	case errors.Is(moveErr, ops.ErrGone):
 		return OutcomeChanged
@@ -554,6 +637,13 @@ func (s *Session) restoreEntry(ctx context.Context, e *catalog.TrashEntry) (stri
 		slog.Warn("a path cannot be looked at", "disk", e.Disk, "error", err)
 		return OutcomeIOError, nil
 	case taken:
+		return OutcomePathTaken, nil
+	}
+	behind, err := catalog.TakenByRename(ctx, s.db, e.Disk, e.Path)
+	if err != nil {
+		return "", fmt.Errorf("catalog: %w", err)
+	}
+	if behind {
 		return OutcomePathTaken, nil
 	}
 	collides, err := s.collides(ctx, e)

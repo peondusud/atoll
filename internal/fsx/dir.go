@@ -15,6 +15,10 @@ import (
 // ErrNotARegularFile says that a name no longer leads to a regular file.
 var ErrNotARegularFile = errors.New("not a regular file")
 
+// ErrNotOpened says that SyncEntry could not open what a name leads to, and so synced nothing: why is in
+// the error it wraps beside it.
+var ErrNotOpened = errors.New("not opened")
+
 // Kind says what a name is.
 type Kind int8
 
@@ -70,6 +74,9 @@ type Dir interface {
 	// Rename moves a name to another folder of the same filesystem, and never replaces anything:
 	// renameat2 with RENAME_NOREPLACE.
 	Rename(name string, to Dir, newName string) error
+	// RenamePlain moves a name with a plain rename, which replaces an empty folder at the target: for a
+	// folder on a driver that refuses the flag, as a folder has no link (specs.md §15.12).
+	RenamePlain(name string, to Dir, newName string) error
 	// Link gives a file a second name, in a folder of the same filesystem.
 	Link(name string, to Dir, newName string) error
 	// Unlink removes the name of a file, and Rmdir an empty folder.
@@ -77,6 +84,11 @@ type Dir interface {
 	Rmdir(name string) error
 	// Sync makes what was done to the names of this folder durable.
 	Sync() error
+	// SyncEntry makes durable what the file or folder a name leads to records of itself, its own names
+	// included: on NTFS each keeps them in its own record, which ntfs3 does not write when only the folder
+	// is synced, so that a device failing then leaves neither name (measured). A name it cannot open gives
+	// ErrNotOpened.
+	SyncEntry(name string) error
 	// SetMtime sets the modification time of the folder itself.
 	SetMtime(t Time) error
 	Close() error
@@ -230,6 +242,17 @@ func (d *realDir) Rename(name string, to Dir, newName string) error {
 	return nil
 }
 
+func (d *realDir) RenamePlain(name string, to Dir, newName string) error {
+	target, err := realOf(to)
+	if err != nil {
+		return err
+	}
+	if err := unix.Renameat(d.fd(), name, target.fd(), newName); err != nil {
+		return fmt.Errorf("rename %q: %w", name, err)
+	}
+	return nil
+}
+
 func (d *realDir) Link(name string, to Dir, newName string) error {
 	target, err := realOf(to)
 	if err != nil {
@@ -258,6 +281,23 @@ func (d *realDir) Rmdir(name string) error {
 func (d *realDir) Sync() error {
 	if err := unix.Fsync(d.fd()); err != nil {
 		return fmt.Errorf("fsync %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
+func (d *realDir) SyncEntry(name string) error {
+	// O_NONBLOCK: a name that has become a FIFO must not hang this. A folder opens as a file does.
+	fd, err := unix.Openat(d.fd(), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open %q: %w: %w", name, ErrNotOpened, err)
+	}
+	synced := unix.Fsync(fd)
+	closed := unix.Close(fd)
+	switch {
+	case synced != nil:
+		return fmt.Errorf("fsync %q: %w", name, synced)
+	case closed != nil:
+		return fmt.Errorf("close %q: %w", name, closed)
 	}
 	return nil
 }
@@ -403,6 +443,12 @@ func IsFlagRefused(err error) bool {
 // windows_names, on ntfs3, ntfs-3g and lowntfs-3g).
 func IsNameRefused(err error) bool {
 	return errors.Is(err, unix.EINVAL)
+}
+
+// IsDenied says whether the process may not do what it asked: a permission, which says nothing about the
+// disk.
+func IsDenied(err error) bool {
+	return errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM)
 }
 
 // IsExisting says whether a name was already taken.

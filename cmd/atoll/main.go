@@ -70,6 +70,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPrune(configPath, args[1:], stdout, stderr)
 	case "trash":
 		return runTrash(configPath, args[1:], stdout, stderr)
+	case "daemon":
+		return runDaemon(configPath, args[1:], stdout, stderr)
+	case "guard":
+		return runGuard(configPath, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}

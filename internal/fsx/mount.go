@@ -45,6 +45,11 @@ func IsNotAFolder(err error) bool {
 	return errors.Is(err, unix.ENOTDIR)
 }
 
+// IsNotEmpty says that a folder at a target holds something, which a rename does not replace.
+func IsNotEmpty(err error) bool {
+	return errors.Is(err, unix.ENOTEMPTY)
+}
+
 // IsDeviceGone says whether an error from opening a device means that it is no longer there.
 func IsDeviceGone(err error) bool {
 	return IsAbsent(err) || errors.Is(err, unix.ENXIO) || errors.Is(err, unix.ENODEV)

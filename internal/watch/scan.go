@@ -42,9 +42,24 @@ type Report struct {
 	Known       int
 	Hashed      int
 	Changed     []string
+	Moved       []MovedCopy
 	Absent      []string
+	PathTaken   []string
 	Unreadable  []string
 	OtherMounts []string
+	// Seen holds the verdict about each copy that is not as its row says, by file id, and FolderMoves
+	// the folders renamed: what a pass decides on (specs.md §15.12).
+	Seen        []CopySeen
+	FolderMoves []FolderMove
+	// UnfoundFolders holds the folders found at neither name whose rows stay for the copies below them. What their
+	// rows say of a name is on its way out.
+	UnfoundFolders []string
+}
+
+// MovedCopy is a copy found at a new name.
+type MovedCopy struct {
+	Path string
+	To   string
 }
 
 // Outcome is what a scan says.
@@ -77,10 +92,13 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 		if opts.Disk != "" && d.ID != opts.Disk {
 			continue
 		}
-		report, err := walkDisk(ctx, db, c, m, d, verdicts[i], now)
+		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Write: true})
 		if err != nil {
 			return nil, err
 		}
+		// What the look found of each copy is for a pass to decide on, and a scan reports none of it: held through
+		// the plan, it is one more entry for each copy of a disk renamed whole (specs.md §26).
+		report.Seen = nil
 		out.Disks = append(out.Disks, *report)
 	}
 	if err := Settle(ctx, db, c, now); err != nil {
@@ -116,9 +134,10 @@ func CheckDisks(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 }
 
 func sortPaths(r *Report) {
-	for _, list := range [][]string{r.Changed, r.Absent, r.Unreadable, r.OtherMounts} {
+	for _, list := range [][]string{r.Changed, r.Absent, r.PathTaken, r.Unreadable, r.OtherMounts} {
 		slices.Sort(list)
 	}
+	slices.SortFunc(r.Moved, func(a, b MovedCopy) int { return cmp.Compare(a.Path, b.Path) })
 }
 
 // diskRows says what to record of each disk. One that passed its check and cannot say how full it is
@@ -145,9 +164,21 @@ func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now i
 	return rows
 }
 
-// walkDisk walks one disk and writes what it found, whole or not at all.
-func walkDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, d *config.Disk, verdict disks.Verdict, now int64) (*Report, error) {
-	r := &Report{ID: d.ID, Verdict: verdict, Changed: []string{}, Absent: []string{}, Unreadable: []string{}, OtherMounts: []string{}}
+// Look says what a look at a disk may do besides reading it. Write says that it records what it found.
+// Own and Confirm are a pass's: a scan has neither (specs.md §15.12).
+type Look struct {
+	Write bool
+	// Planned holds the paths of operations left planned on this disk, which the reprise could not reach.
+	Planned []string
+	// Own gives what the disk's own trash and tmp hold of those inodes.
+	Own func(d *config.Disk, inodes map[string]bool) (map[string][]solver.FileLook, error)
+	// Confirm is asked before anything is concluded from an absence. It says false for a disk that fails.
+	Confirm func(ctx context.Context, d *config.Disk) (bool, error)
+}
+
+// LookAtDisk walks one disk and writes what it found, whole or not at all.
+func LookAtDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, d *config.Disk, verdict disks.Verdict, now int64, look *Look) (*Report, error) {
+	r := &Report{ID: d.ID, Verdict: verdict, Changed: []string{}, Moved: []MovedCopy{}, Absent: []string{}, PathTaken: []string{}, Unreadable: []string{}, OtherMounts: []string{}}
 	if verdict.State == disks.Missing {
 		return r, nil
 	}
@@ -155,22 +186,42 @@ func walkDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine
 	switch {
 	case errors.Is(err, ErrInterrupted):
 		r.Verdict = disks.Verdict{State: disks.Missing, Reason: disks.IOError, Message: err.Error()}
-		if err := catalog.SetDiskState(ctx, db, d.ID, string(disks.Missing)); err != nil {
-			return nil, fmt.Errorf("catalog: %w", err)
+		if look.Write {
+			if err := catalog.SetDiskState(ctx, db, d.ID, string(disks.Missing)); err != nil {
+				return nil, fmt.Errorf("catalog: %w", err)
+			}
 		}
 		return r, nil
 	case err != nil:
 		return nil, err
 	}
-	newCopies, entries, err := compareWalk(ctx, db, c, d.ID, walked, r)
+	found, err := compareWalk(ctx, db, c, d, walked, r, look, now)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	if err := catalog.WriteWalk(ctx, db, d.ID, now, newCopies, entries); err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
+	if look.Confirm != nil && needsConfirming(r) {
+		ok, err := look.Confirm(ctx, d)
+		if err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+		if !ok {
+			return &Report{ID: d.ID, Verdict: disks.Verdict{State: disks.Missing, Reason: disks.IOError, Message: "the disk failed its confirmation"},
+				Changed: []string{}, Moved: []MovedCopy{}, Absent: []string{}, PathTaken: []string{}, Unreadable: []string{}, OtherMounts: []string{}}, nil
+		}
+	}
+	if look.Write {
+		if err := catalog.WriteWalk(ctx, db, d.ID, now, found); err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
 	}
 	r.Walked = true
 	return r, nil
+}
+
+func needsConfirming(r *Report) bool {
+	return slices.ContainsFunc(r.Seen, func(s CopySeen) bool {
+		return s.Verdict == solver.VerdictMoved || s.Verdict == solver.VerdictGone || s.Verdict == solver.VerdictUncertain || s.Verdict == solver.VerdictOwn
+	})
 }
 
 func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, error) {
@@ -185,62 +236,71 @@ func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, er
 }
 
 // compareWalk says what a walk means against what the catalog knows, and fills the report. Both
-// sides are in the byte order of paths, so it is a merge, and nothing needs to be looked up.
-func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, disk string, w *Walked, r *Report) ([]catalog.NewCopy, []catalog.EntryRow, error) {
+// sides are in the byte order of paths, so it is a merge. Only what is not where its row says is looked
+// up, and only what no row claims is indexed for that.
+func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Disk, w *Walked, r *Report, look *Look, now int64) (*catalog.Walk, error) {
 	r.Unreadable = w.Unreadable
 	r.OtherMounts = w.OtherMounts
 	slices.SortFunc(w.Files, func(a, b FoundFile) int { return cmp.Compare(a.Path, b.Path) })
-	var newCopies []catalog.NewCopy
-	entries := make([]catalog.EntryRow, 0, len(w.Entries))
 	found := func(f *FoundFile) {
 		r.Files++
 		r.Bytes += f.Size
 	}
-	fresh := func(f *FoundFile) {
-		size := f.Size
-		policy := c.Policy(f.Path, &size)
-		if policy.Action == rules.Ignore {
-			entries = append(entries, catalog.EntryRow{Path: f.Path, Kind: string(solver.EntryIgnored), Mode: f.Mode, MtimeNS: f.MtimeNS})
-			r.Ignored++
-			return
-		}
-		newCopies = append(newCopies, catalog.NewCopy{
-			Path: f.Path, Size: f.Size, MtimeNS: f.MtimeNS, CtimeNS: f.CtimeNS, BtimeNS: f.BtimeNS, FileKey: f.FileKey, Nlink: f.Nlink,
-		})
-		r.New++
-		found(f)
-	}
-	notReached := pathSet(w.Unreadable, w.OtherMounts)
+	cmpr := compared{notReached: pathSet(w.Unreadable, w.OtherMounts, look.Planned), planned: pathSet(look.Planned), r: r, found: found, quiet: look.Own != nil}
 	next := 0
-	err := catalog.EachKnownCopy(ctx, db, disk, func(k *catalog.KnownCopy) {
+	err := catalog.EachKnownCopy(ctx, db, d.ID, func(k *catalog.KnownCopy) {
 		for next < len(w.Files) && w.Files[next].Path < k.Path {
-			fresh(&w.Files[next])
+			w.Files[next].rowless = true
+			cmpr.rowless = append(cmpr.rowless, &w.Files[next])
 			next++
 		}
-		if next == len(w.Files) || w.Files[next].Path != k.Path {
-			if !atOrBelow(notReached, k.Path) {
-				r.Absent = append(r.Absent, k.Path)
-			}
-			return
+		var at *FoundFile
+		if next < len(w.Files) && w.Files[next].Path == k.Path {
+			at = &w.Files[next]
+			next++
 		}
-		f := &w.Files[next]
-		next++
-		found(f)
-		if Unchanged(f, k) {
-			r.Known++
-		} else {
-			r.Changed = append(r.Changed, f.Path)
-		}
+		cmpr.row(k, at)
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 	for ; next < len(w.Files); next++ {
-		fresh(&w.Files[next])
+		w.Files[next].rowless = true
+		cmpr.rowless = append(cmpr.rowless, &w.Files[next])
+	}
+	if err := cmpr.markStraddled(ctx, db, d, w); err != nil {
+		return nil, err
+	}
+	out := &catalog.Walk{}
+	// A name the walk could not read may be a folder renamed since it was listed, which only says so by its
+	// row: this look may find the new name, and the next look otherwise.
+	tops, err := moveFolders(ctx, db, d.ID, w, r, out, pathSet(w.OtherMounts, look.Planned))
+	if err != nil {
+		return nil, err
+	}
+	if err := cmpr.resolve(ctx, db, d, w, look); err != nil {
+		return nil, err
+	}
+	out.Clocks = cmpr.clocks
+	planned := pathSet(look.Planned)
+	if err := keepPlanned(ctx, db, d.ID, pathSet(look.Planned, w.Unreadable), out); err != nil {
+		return nil, err
+	}
+	for _, f := range cmpr.rowless {
+		switch {
+		case f.isTarget:
+			found(f)
+		case cmpr.behind[f.Path]:
+			found(f)
+			r.PathTaken = append(r.PathTaken, f.Path)
+		case atOrBelow(planned, f.Path), f.straddled:
+			found(f)
+		default:
+			freshFile(c, f, r, out, tops, found)
+		}
 	}
 	for i := range w.Entries {
 		e := &w.Entries[i]
-		entries = append(entries, catalog.EntryRow{Path: e.Path, Kind: string(e.Kind), Mode: e.Mode, MtimeNS: e.MtimeNS, Target: e.Target})
 		switch e.Kind {
 		case solver.EntryDir:
 			r.Folders++
@@ -249,8 +309,57 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, disk string,
 		case solver.EntryIgnored:
 			r.Ignored++
 		}
+		if !atOrBelow(tops, e.Path) && !atOrBelow(out.Kept, e.Path) {
+			out.Entries = append(out.Entries, catalog.EntryRow{Path: e.Path, Kind: string(e.Kind), Mode: e.Mode, MtimeNS: e.MtimeNS, Target: e.Target, FileKey: e.FileKey, BtimeNS: e.BtimeNS})
+		}
 	}
-	return newCopies, entries, nil
+	return out, nil
+}
+
+// keepPlanned keeps the entries at or below the names of an operation left planned, which only its reprise
+// can tell of, and those a walk could not read, which it says nothing of.
+func keepPlanned(ctx context.Context, db *sql.DB, disk string, planned map[string]bool, out *catalog.Walk) error {
+	if len(planned) == 0 {
+		return nil
+	}
+	if out.Kept == nil {
+		out.Kept = map[string]bool{}
+	}
+	for path := range planned {
+		out.Kept[path] = true
+		below, err := catalog.EntriesBelow(ctx, db, disk, path)
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		for _, p := range below {
+			out.Kept[p] = true
+		}
+	}
+	return nil
+}
+
+func freshFile(c *config.Config, f *FoundFile, r *Report, out *catalog.Walk, tops map[string]bool, found func(*FoundFile)) {
+	size := f.Size
+	policy := c.Policy(f.Path, &size)
+	if policy.Action == rules.Ignore {
+		if !atOrBelow(tops, f.Path) && !atOrBelow(out.Kept, f.Path) {
+			out.Entries = append(out.Entries, catalog.EntryRow{Path: f.Path, Kind: string(solver.EntryIgnored), Mode: f.Mode, MtimeNS: f.MtimeNS})
+		}
+		r.Ignored++
+		return
+	}
+	// Below a folder renamed and not yet decided, nothing gets a row: what says that a copy moved with the
+	// folder is that one sits below its new name, and a new file must not pass for that. Nor in a folder made
+	// again at its old name, where it would read as a copy left behind, and the folder would wait for good.
+	if atOrBelow(tops, f.Path) || isStrictlyBelow(out.Kept, f.Path) {
+		found(f)
+		return
+	}
+	out.Copies = append(out.Copies, catalog.NewCopy{
+		Path: f.Path, Size: f.Size, MtimeNS: f.MtimeNS, CtimeNS: f.CtimeNS, BtimeNS: f.BtimeNS, FileKey: f.FileKey, Nlink: f.Nlink,
+	})
+	r.New++
+	found(f)
 }
 
 // pathSet makes one set of several lists of paths.
@@ -262,6 +371,12 @@ func pathSet(lists ...[]string) map[string]bool {
 		}
 	}
 	return set
+}
+
+// isStrictlyBelow says whether a path is below a folder in the set.
+func isStrictlyBelow(set map[string]bool, path string) bool {
+	at := strings.LastIndexByte(path, '/')
+	return at >= 0 && atOrBelow(set, path[:at])
 }
 
 // atOrBelow says whether a path is in the set, or below a folder that is.
@@ -319,11 +434,12 @@ func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error 
 	if err != nil {
 		return err
 	}
-	plan, err := solver.MakePlan(input)
+	// No job runs yet: the plan's results are all a scan or a pass keeps of it.
+	results, err := solver.PlanResults(input)
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
 	}
-	changed, states, marks, err := applyResults(input.Files, remembered, plan.Results)
+	changed, states, marks, err := applyResults(input.Files, remembered, results)
 	if err != nil {
 		return err
 	}
@@ -388,7 +504,13 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 		state[diskList[i].ID] = solver.DiskState(diskList[i].State)
 	}
 	placements := map[placementKey]*solver.Placement{}
-	var remembered []settled
+	// Sized once: grown file by file, each list is for a moment both its old size and its new one.
+	count, err := catalog.FileCount(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	input.Files = slices.Grow(input.Files, count)
+	remembered := make([]settled, 0, count)
 	reader := catalog.NewFileReader(db)
 	for {
 		page, err := reader.Next(ctx)
@@ -412,7 +534,11 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			copies := make([]solver.Copy, 0, len(f.Copies))
 			for j := range f.Copies {
 				cp := &f.Copies[j]
-				copies = append(copies, solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS})
+				plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS}
+				if cp.OldPath != nil {
+					plan.OldPath = *cp.OldPath
+				}
+				copies = append(copies, plan)
 			}
 			input.Files = append(input.Files, solver.File{
 				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: update.Mode == "manual", Copies: copies,
@@ -501,8 +627,9 @@ func originalOf(f *catalog.FileRow, position map[string]int, state map[string]so
 // applyResults gives each file the state the plan says, with conflict and corrupt kept, as they
 // come from elsewhere (specs.md §13.4), and keeps only what changed. Files and results are both by
 // path in byte order, so it is a merge.
-func applyResults(files []solver.File, remembered []settled, results []solver.Result) ([]catalog.FileUpdate, []catalog.StateChange, []catalog.CopyMark, error) {
-	var changed []catalog.FileUpdate
+func applyResults(files []solver.File, remembered []settled, results []solver.Result) ([]*catalog.FileUpdate, []catalog.StateChange, []catalog.CopyMark, error) {
+	// The updates are remembered already: a copy of each would hold them twice.
+	var changed []*catalog.FileUpdate
 	var states []catalog.StateChange
 	var marks []catalog.CopyMark
 	next := 0
@@ -530,7 +657,7 @@ func applyResults(files []solver.File, remembered []settled, results []solver.Re
 		switch {
 		case r.update != nil:
 			r.update.State = string(shown)
-			changed = append(changed, *r.update)
+			changed = append(changed, r.update)
 		case r.state != string(shown):
 			states = append(states, catalog.StateChange{ID: r.id, State: string(shown)})
 		}
@@ -557,7 +684,7 @@ func hashCopies(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 		if !report.Walked {
 			continue
 		}
-		reader := &diskReader{report: report, skip: pathSet(report.Changed, report.Absent), notReached: pathSet(report.Unreadable, report.OtherMounts)}
+		reader := &diskReader{report: report, skip: pathSet(report.Changed, report.Absent, movedFrom(report)), notReached: pathSet(report.Unreadable, report.OtherMounts)}
 		if d := diskOf(c, report.ID); d != nil {
 			reader.root, err = m.OpenRoot(d.Mount, d.Root)
 			if err != nil {
@@ -596,6 +723,14 @@ func hashCopies(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 		}
 	}
 	return nil
+}
+
+func movedFrom(r *Report) []string {
+	list := make([]string, 0, len(r.Moved))
+	for i := range r.Moved {
+		list = append(list, r.Moved[i].Path)
+	}
+	return list
 }
 
 func diskOf(c *config.Config, id string) *config.Disk {
@@ -645,10 +780,11 @@ func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[s
 	var read []copyHash
 	for _, cp := range copies {
 		reader := readers[cp.Disk]
-		if reader == nil || reader.failed || reader.skip[f.Path] || atOrBelow(reader.notReached, f.Path) {
+		place := cp.Place(f)
+		if reader == nil || reader.failed || reader.skip[place] || atOrBelow(reader.notReached, place) || carriedOutOfReach(reader.report.FolderMoves, reader.notReached, place) {
 			continue
 		}
-		hash, ok, err := readCopy(ctx, reader, f.Path, cp)
+		hash, ok, err := readCopy(ctx, reader, place, cp)
 		if err != nil {
 			return err
 		}
@@ -678,7 +814,7 @@ func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[s
 		case read[i].cp.VerifiedNS.Valid:
 			// Whether this is a modification or corruption is for the scrub (specs.md §16). Until
 			// then nothing may rely on it: prune counts verified copies as what stays.
-			readers[read[i].cp.Disk].report.Changed = append(readers[read[i].cp.Disk].report.Changed, f.Path)
+			readers[read[i].cp.Disk].report.Changed = append(readers[read[i].cp.Disk].report.Changed, read[i].cp.Place(f))
 			write.Unverified = append(write.Unverified, read[i].cp.Disk)
 		default:
 			write.Conflict = true

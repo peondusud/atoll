@@ -7,38 +7,104 @@ import (
 	"fmt"
 )
 
-// KnownCopy is what the catalog holds about one copy, to compare with a walk.
+// KnownCopy is what the catalog holds about one copy, to compare with a walk. Path is where it sits,
+// and FilePath its file's path: they differ while it has not followed a rename (specs.md §15.12).
 type KnownCopy struct {
-	Path    string
-	Size    sql.NullInt64
-	MtimeNS sql.NullInt64
-	CtimeNS sql.NullInt64
-	FileKey sql.NullString
+	Path     string
+	FilePath string
+	FileID   int64
+	Size     sql.NullInt64
+	MtimeNS  sql.NullInt64
+	CtimeNS  sql.NullInt64
+	BtimeNS  sql.NullInt64
+	FileKey  sql.NullString
+	GoneNS   sql.NullInt64
+	GoneKind sql.NullString
 }
 
-// EachKnownCopy gives the copies a disk is known to hold, by path in byte order, and keeps none:
-// at 200,000 files a map of them took about 40 MB (specs.md §26). CROSS JOIN keeps files as the
-// outer table, whose index on lpath is the order wanted, so that nothing has to be sorted.
+const knownColumns = "f.id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key, c.gone_ns, c.gone_kind"
+
+func scanKnown(rows *sql.Rows, k *KnownCopy, path *[]byte, more ...any) error {
+	dest := append([]any{path, &k.FileID, &k.Size, &k.MtimeNS, &k.CtimeNS, &k.BtimeNS, &k.FileKey, &k.GoneNS, &k.GoneKind}, more...)
+	if err := rows.Scan(dest...); err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	return nil
+}
+
+// EachKnownCopy gives the copies a disk is known to hold, by where they sit in byte order, and keeps
+// none: at 200,000 files a map of them took about 40 MB (specs.md §26). CROSS JOIN keeps files as the
+// outer table, whose index on lpath is the order wanted, so that nothing has to be sorted. The few
+// that have not followed a rename come from their own index, and the two are merged.
 func EachKnownCopy(ctx context.Context, db *sql.DB, disk string, fn func(*KnownCopy)) error {
-	rows, err := db.QueryContext(ctx, `
-		SELECT f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.file_key
+	settled, err := db.QueryContext(ctx, `
+		SELECT f.lpath, `+knownColumns+`
 		FROM files f CROSS JOIN copies c ON c.file_id = f.id AND c.disk_id = ?
+		WHERE c.old_lpath IS NULL
 		ORDER BY f.lpath`, disk)
 	if err != nil {
 		return fmt.Errorf("copies of %q: %w", disk, err)
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var p []byte
-		var k KnownCopy
-		if err := rows.Scan(&p, &k.Size, &k.MtimeNS, &k.CtimeNS, &k.FileKey); err != nil {
-			return fmt.Errorf("copies of %q: %w", disk, err)
-		}
-		k.Path = string(p)
-		fn(&k)
-	}
-	if err := rows.Err(); err != nil {
+	defer func() { _ = settled.Close() }()
+	behind, err := db.QueryContext(ctx, `
+		SELECT c.old_lpath, `+knownColumns+`, f.lpath
+		FROM copies c JOIN files f ON f.id = c.file_id
+		WHERE c.disk_id = ? AND c.old_lpath IS NOT NULL
+		ORDER BY c.old_lpath`, disk)
+	if err != nil {
 		return fmt.Errorf("copies of %q: %w", disk, err)
+	}
+	defer func() { _ = behind.Close() }()
+	if err := mergeKnown(settled, behind, fn); err != nil {
+		return fmt.Errorf("copies of %q: %w", disk, err)
+	}
+	return nil
+}
+
+func mergeKnown(settled, behind *sql.Rows, fn func(*KnownCopy)) error {
+	next := func(rows *sql.Rows, k *KnownCopy, isBehind bool) (bool, error) {
+		if !rows.Next() {
+			return false, rows.Err()
+		}
+		var place, file []byte
+		more := []any{}
+		if isBehind {
+			more = append(more, &file)
+		}
+		if err := scanKnown(rows, k, &place, more...); err != nil {
+			return false, err
+		}
+		// One string for both, where they are the same: a pass holds every copy of a disk at once.
+		k.Path = string(place)
+		k.FilePath = k.Path
+		if isBehind {
+			k.FilePath = string(file)
+		}
+		return true, nil
+	}
+	var a, b KnownCopy
+	hasA, err := next(settled, &a, false)
+	if err != nil {
+		return err
+	}
+	hasB, err := next(behind, &b, true)
+	if err != nil {
+		return err
+	}
+	for hasA || hasB {
+		if hasA && (!hasB || a.Path <= b.Path) {
+			fn(&a)
+			a = KnownCopy{}
+			if hasA, err = next(settled, &a, false); err != nil {
+				return err
+			}
+			continue
+		}
+		fn(&b)
+		b = KnownCopy{}
+		if hasB, err = next(behind, &b, true); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -54,27 +120,78 @@ type NewCopy struct {
 	Nlink   int64
 }
 
-// EntryRow is a folder, symlink or ignored file a walk found.
+// EntryRow is a folder, symlink or ignored file a walk found. A folder has its identity (specs.md
+// §15.12).
 type EntryRow struct {
 	Path    string
 	Kind    string
 	Mode    int64
 	MtimeNS int64
 	Target  *string
+	FileKey *string
+	BtimeNS *int64
+}
+
+// CopyClock is what a look says of a copy's clock: Kind empty means found, which clears it.
+type CopyClock struct {
+	FileID int64
+	Kind   string
+}
+
+// Walk is what one walk found. Kept holds the rows of folders that stay though the walk did not find
+// them, as they were renamed and not yet decided (specs.md §15.12).
+type Walk struct {
+	Copies  []NewCopy
+	Entries []EntryRow
+	Clocks  []CopyClock
+	Kept    map[string]bool
 }
 
 // WriteWalk writes what the walk of one disk found, in one transaction, so a walk is written whole
 // or not at all (specs.md §15.10). Files new to the catalog take their ids in the order given. A
 // copy of another size than its file makes that file a conflict.
-func WriteWalk(ctx context.Context, db *sql.DB, disk string, nowNS int64, copies []NewCopy, entries []EntryRow) error {
+func WriteWalk(ctx context.Context, db *sql.DB, disk string, nowNS int64, w *Walk) error {
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
-		if err := writeCopies(ctx, tx, disk, nowNS, copies); err != nil {
+		if err := writeCopies(ctx, tx, disk, nowNS, w.Copies); err != nil {
 			return err
 		}
-		return writeEntries(ctx, tx, disk, entries)
+		if err := writeClocks(ctx, tx, disk, nowNS, w.Clocks); err != nil {
+			return err
+		}
+		return writeEntries(ctx, tx, disk, w.Entries, w.Kept)
 	})
 	if err != nil {
 		return fmt.Errorf("walk of %q: %w", disk, err)
+	}
+	return nil
+}
+
+// writeClocks starts or keeps the clock of what a name no longer holds, and clears the others.
+func writeClocks(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, clocks []CopyClock) error {
+	if len(clocks) == 0 {
+		return nil
+	}
+	// A copy moved that turns gone starts again: until now its name was known, so it only disappeared now, and
+	// must wait a debounce of its own and answer to the guard (specs.md §15.12).
+	start, err := tx.PrepareContext(ctx, "UPDATE copies SET gone_ns = CASE WHEN gone_ns IS NULL OR (gone_kind = 'moved' AND ?2 = 'gone') THEN ?1 ELSE gone_ns END, gone_kind = ?2 WHERE file_id = ?3 AND disk_id = ?4")
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer func() { _ = start.Close() }()
+	clear, err := tx.PrepareContext(ctx, "UPDATE copies SET gone_ns = NULL, gone_kind = NULL WHERE file_id = ? AND disk_id = ?")
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer func() { _ = clear.Close() }()
+	for _, c := range clocks {
+		if c.Kind == "" {
+			_, err = clear.ExecContext(ctx, c.FileID, disk)
+		} else {
+			_, err = start.ExecContext(ctx, nowNS, c.Kind, c.FileID, disk)
+		}
+		if err != nil {
+			return fmt.Errorf("clock of file %d: %w", c.FileID, err)
+		}
 	}
 	return nil
 }
@@ -138,8 +255,11 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 
 // writeEntries makes the entries of a disk match a walk. A folder Atoll created stays its own, as
 // only it may remove it (specs.md §6.1).
-func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryRow) error {
-	seen := make(map[string]bool, len(entries))
+func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryRow, kept map[string]bool) error {
+	seen := make(map[string]bool, len(entries)+len(kept))
+	for p := range kept {
+		seen[p] = true
+	}
 	for i := range entries {
 		e := &entries[i]
 		seen[e.Path] = true
@@ -148,11 +268,12 @@ func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryR
 			target = []byte(*e.Target)
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 'user')
+			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, ?)
 			ON CONFLICT(lpath, disk_id) DO UPDATE SET
-				kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, target = excluded.target`,
-			[]byte(e.Path), keyOf(e.Path), disk, e.Kind, e.Mode, e.MtimeNS, target)
+				kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, target = excluded.target,
+				file_key = excluded.file_key, btime_ns = excluded.btime_ns`,
+			[]byte(e.Path), keyOf(e.Path), disk, e.Kind, e.Mode, e.MtimeNS, target, e.FileKey, e.BtimeNS)
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", e.Path, err)
 		}
@@ -183,7 +304,8 @@ func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryR
 	return nil
 }
 
-// CopyRow is one copy of a file.
+// CopyRow is one copy of a file. OldPath, when it has one, is where it sits, as it has not followed
+// its file's rename yet (specs.md §15.12).
 type CopyRow struct {
 	Disk        string
 	CreatedBy   string
@@ -195,6 +317,18 @@ type CopyRow struct {
 	FirstSeenNS int64
 	VerifiedNS  sql.NullInt64
 	FileKey     sql.NullString
+	Nlink       sql.NullInt64
+	OldPath     *string
+	GoneNS      sql.NullInt64
+	GoneKind    sql.NullString
+}
+
+// Place says where a copy of a file sits.
+func (c *CopyRow) Place(f *FileRow) string {
+	if c.OldPath != nil {
+		return *c.OldPath
+	}
+	return f.Path
 }
 
 // FileRow is one file, with its copies.
@@ -248,16 +382,31 @@ func (r *FileReader) shareNull(raw []byte) sql.NullString {
 
 // Next gives the next files, and none at the end. What it gives is the caller's.
 func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns,
-			c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state, c.file_key
-		FROM (SELECT * FROM files WHERE lpath > ? ORDER BY lpath LIMIT ?) f
-		LEFT JOIN copies c ON c.file_id = f.id
-		ORDER BY f.lpath, c.disk_id`, r.after, filePageSize)
+	return r.page(ctx, "SELECT * FROM files WHERE lpath > ? ORDER BY lpath LIMIT ?")
+}
+
+// fileColumns are what readFiles scans.
+const fileColumns = `f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns,
+	c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state, c.file_key,
+	c.nlink, c.old_lpath, c.gone_ns, c.gone_kind`
+
+func (r *FileReader) page(ctx context.Context, files string) ([]FileRow, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT "+fileColumns+" FROM ("+files+") f LEFT JOIN copies c ON c.file_id = f.id ORDER BY f.lpath, c.disk_id", r.after, filePageSize)
 	if err != nil {
 		return nil, fmt.Errorf("files: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	list, err := r.readFiles(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(list) > 0 {
+		r.after = []byte(list[len(list)-1].Path)
+	}
+	return list, nil
+}
+
+func (r *FileReader) readFiles(rows *sql.Rows) ([]FileRow, error) {
 	files := []FileRow{}
 	// RawBytes: most of these are shared, and copying each first is what took the memory.
 	var p, rule, mode, state, original, disk, createdBy, copyState sql.RawBytes
@@ -265,8 +414,10 @@ func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 		var f FileRow
 		var c CopyRow
 		var firstSeen sql.NullInt64
+		var old []byte
 		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original, &f.FirstSeenNS,
-			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &c.VerifiedNS, &copyState, &c.FileKey)
+			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &c.VerifiedNS, &copyState, &c.FileKey,
+			&c.Nlink, &old, &c.GoneNS, &c.GoneKind)
 		if err != nil {
 			return nil, fmt.Errorf("files: %w", err)
 		}
@@ -279,15 +430,16 @@ func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 		if disk != nil {
 			c.Disk, c.CreatedBy, c.State = r.share(disk), r.share(createdBy), r.share(copyState)
 			c.FirstSeenNS = firstSeen.Int64
+			if old != nil {
+				place := string(old)
+				c.OldPath = &place
+			}
 			last := &files[len(files)-1]
 			last.Copies = append(last.Copies, c)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("files: %w", err)
-	}
-	if len(files) > 0 {
-		r.after = []byte(files[len(files)-1].Path)
 	}
 	return files, nil
 }
@@ -361,6 +513,15 @@ type FileUpdate struct {
 	Original       sql.NullString
 }
 
+// FileCount counts the file rows.
+func FileCount(ctx context.Context, db *sql.DB) (int, error) {
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM files").Scan(&count); err != nil {
+		return 0, fmt.Errorf("files: %w", err)
+	}
+	return count, nil
+}
+
 // CopyMark is a new state for a copy.
 type CopyMark struct {
 	FileID int64
@@ -375,7 +536,7 @@ type StateChange struct {
 }
 
 // ApplyPlan writes what the plan and the policies say, in one transaction.
-func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []FileUpdate, states []StateChange, marks []CopyMark) error {
+func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate, states []StateChange, marks []CopyMark) error {
 	if len(files) == 0 && len(states) == 0 && len(marks) == 0 {
 		return nil
 	}
@@ -387,8 +548,7 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []FileUpdate,
 			return fmt.Errorf("prepare: %w", err)
 		}
 		defer func() { _ = update.Close() }()
-		for i := range files {
-			f := &files[i]
+		for _, f := range files {
 			if _, err := update.ExecContext(ctx, f.Size, f.MtimeNS, f.ReplicasTarget, f.Rule, f.Mode, f.State, f.Original, nowNS, f.ID); err != nil {
 				return fmt.Errorf("file %d: %w", f.ID, err)
 			}

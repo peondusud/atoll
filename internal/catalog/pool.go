@@ -118,6 +118,9 @@ func recomputeKeys(ctx context.Context, tx *sql.Tx) error {
 			return fmt.Errorf("keys of %s: %w", table, err)
 		}
 	}
+	if err := recomputeOldKeys(ctx, tx); err != nil {
+		return fmt.Errorf("keys of copies: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key, value) VALUES ('lpath_key_version', ?)", names.CollisionKeyVersion); err != nil {
 		return fmt.Errorf("meta: %w", err)
 	}
@@ -144,6 +147,31 @@ func recomputeTable(ctx context.Context, tx *sql.Tx, table string) error {
 	}
 	for _, p := range paths {
 		if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET lpath_key = ? WHERE lpath = ?", keyOf(string(p)), p); err != nil {
+			return fmt.Errorf("write: %w", err)
+		}
+	}
+	return nil
+}
+
+func recomputeOldKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "SELECT DISTINCT old_lpath FROM copies WHERE old_lpath IS NOT NULL")
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var paths [][]byte
+	for rows.Next() {
+		var p []byte
+		if err := rows.Scan(&p); err != nil {
+			return fmt.Errorf("read: %w", err)
+		}
+		paths = append(paths, p)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	for _, p := range paths {
+		if _, err := tx.ExecContext(ctx, "UPDATE copies SET old_lpath_key = ? WHERE old_lpath = ?", keyOf(string(p)), p); err != nil {
 			return fmt.Errorf("write: %w", err)
 		}
 	}

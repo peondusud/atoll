@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/guard-answer.schema.json",
+  "title": "atoll guard confirm --json, atoll guard reject --json",
+  "description": "What a confirm or a reject did (specs.md §15.6). done is false, and up_to null, with no guard event since the last one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disk", "done", "up_to"],
+  "if": { "properties": { "done": { "const": true } } },
+  "then": { "properties": { "up_to": { "type": "string" } } },
+  "else": { "properties": { "up_to": { "type": "null" } } },
+  "properties": {
+    "disk": { "type": "string", "minLength": 1 },
+    "done": { "type": "boolean" },
+    "up_to": { "description": "In UTC with nine digits of fraction, or null.", "type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{9}Z$" }
+  }
+}

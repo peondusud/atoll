@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/daemon.schema.json",
+  "title": "atoll daemon --until-idle --json",
+  "description": "What a pass did (specs.md §15.12). Disks are in the order of the configuration; decisions in the order decided: by old path in byte order within a page, a file that holds a target of one of a page's files taken into that page and listed in that order, and what follows a folder after those; and operations in the order they ran, or with --dry-run would run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dry_run", "disks", "decisions", "operations", "guards", "waiting", "next_due"],
+  "properties": {
+    "dry_run": { "type": "boolean" },
+    "disks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state", "reason", "message", "walked"],
+        "allOf": [
+          { "if": { "properties": { "state": { "const": "online" } } }, "then": { "properties": { "reason": { "type": "null" }, "message": { "type": "null" } } } },
+          { "if": { "properties": { "state": { "const": "readonly" } } }, "then": { "properties": { "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "casefold", "ascii-ci", "ignore-case", "read-only-mount"] }, "message": { "type": "string" } } } },
+          { "if": { "properties": { "state": { "const": "missing" } } }, "then": { "properties": { "reason": { "enum": ["not-mounted", "io-error", "partial-mount", "wrong-filesystem", "device-gone", "device-unreadable", "wrong-identifier", "no-root"] }, "message": { "type": "string" } } } }
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "state": { "enum": ["online", "readonly", "missing"] },
+          "reason": { "description": "From the closed list of specs.md §10. null when online.", "type": ["string", "null"] },
+          "message": { "description": "For a reader, translated, and no contract. null when online.", "type": ["string", "null"] },
+          "walked": { "type": "boolean" }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decision"],
+        "allOf": [
+          { "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }] },
+          {
+            "if": { "properties": { "decision": { "enum": ["renamed", "path-taken"] } } },
+            "then": { "oneOf": [{ "required": ["to"] }, { "required": ["to_b64"] }] },
+            "else": { "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }] } }
+          }
+        ],
+        "properties": {
+          "path": { "type": "string" },
+          "path_b64": { "type": "string" },
+          "decision": { "enum": ["renamed", "path-taken", "deleted", "kept", "gone"] },
+          "to": { "type": "string" },
+          "to_b64": { "type": "string" }
+        }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["disk", "kind", "outcome"],
+        "allOf": [
+          { "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }] },
+          {
+            "if": { "properties": { "kind": { "enum": ["rename", "folder"] } } },
+            "then": {
+              "oneOf": [{ "required": ["to"] }, { "required": ["to_b64"] }],
+              "properties": { "outcome": { "enum": ["renamed", "to-rename", "already-there", "changed", "path-taken", "name-refused", "io-error", "disk-unavailable"] } },
+              "not": { "required": ["reason"] }
+            },
+            "else": {
+              "required": ["reason"],
+              "properties": { "outcome": { "enum": ["trashed", "to-trash", "changed", "name-refused", "io-error", "held", "canceled", "disk-unavailable"] } },
+              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }] }
+            }
+          }
+        ],
+        "properties": {
+          "disk": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["rename", "folder", "trash"] },
+          "path": { "type": "string" },
+          "path_b64": { "type": "string" },
+          "to": { "type": "string" },
+          "to_b64": { "type": "string" },
+          "reason": { "enum": ["deleted", "renamed"] },
+          "outcome": { "type": "string" }
+        }
+      }
+    },
+    "guards": {
+      "description": "The disks whose mass-deletion guard is tripped (specs.md §15.6), by position.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["disk", "count"],
+        "properties": {
+          "disk": { "type": "string", "minLength": 1 },
+          "count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "waiting": { "description": "Copies not yet due.", "type": "integer", "minimum": 0 },
+    "next_due": { "description": "When the first of them is due, in UTC with nine digits of fraction, or null.", "type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{9}Z$" }
+  }
+}

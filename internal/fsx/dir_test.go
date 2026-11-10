@@ -138,6 +138,69 @@ func TestStatSaysWhatStatxSays(t *testing.T) {
 	}
 }
 
+// TestSyncEntry: a file and a folder are synced by their name. A name that leads nowhere, to a symlink, or
+// to what Atoll may not open says it was not opened, with why, so that only a failed fsync reads as a disk
+// lost. The fault wrapper names the entry.
+func TestSyncEntry(t *testing.T) {
+	top := t.TempDir()
+	if err := os.WriteFile(filepath.Join(top, "file"), []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(top, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("file", filepath.Join(top, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(top, "closed"), []byte("abc"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	for _, name := range []string{"file", "sub"} {
+		if err := dir.SyncEntry(name); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"absent", "link"} {
+		if err := dir.SyncEntry(name); !errors.Is(err, ErrNotOpened) || !IsUnreadableName(err) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if os.Getuid() != 0 {
+		if err := dir.SyncEntry("closed"); !errors.Is(err, ErrNotOpened) || !IsDenied(err) {
+			t.Errorf("closed: %v", err)
+		}
+	}
+	// A FIFO opens without waiting, and its fsync fails: what that says is the fsync's, not the open's.
+	if err := syscall.Mkfifo(filepath.Join(top, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.SyncEntry("pipe"); !errors.Is(err, syscall.EINVAL) || errors.Is(err, ErrNotOpened) {
+		t.Errorf("pipe: %v", err)
+	}
+	var calls []string
+	faulty := Fault(dir, func(call, name string) error {
+		calls = append(calls, call+" "+name)
+		if name == "sub" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	if err := faulty.SyncEntry("file"); err != nil {
+		t.Errorf("file: %v", err)
+	}
+	if err := faulty.SyncEntry("sub"); !errors.Is(err, syscall.EIO) || errors.Is(err, ErrNotOpened) {
+		t.Errorf("sub: %v", err)
+	}
+	if !slices.Equal(calls, []string{"syncentry file", "syncentry sub"}) {
+		t.Errorf("calls %q", calls)
+	}
+}
+
 func TestOpenFileRefusesAFifoWithoutWaiting(t *testing.T) {
 	top := t.TempDir()
 	if err := syscall.Mkfifo(filepath.Join(top, "pipe"), 0o644); err != nil {

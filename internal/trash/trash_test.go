@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1054,12 +1055,26 @@ func TestAnEditBeforeTheMove(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	check := func(t *testing.T, b *bench, items []PruneItem) {
+	mtime := func(t *testing.T, b *bench) time.Time {
+		t.Helper()
+		info, err := os.Stat(source(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.ModTime()
+	}
+	setMtime := func(t *testing.T, b *bench, at time.Time) {
+		t.Helper()
+		if err := os.Chtimes(source(b), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(t *testing.T, b *bench, items []PruneItem, text string) {
 		t.Helper()
 		if len(items) != 1 || items[0].Outcome != OutcomeChanged {
 			t.Fatalf("%+v", items)
 		}
-		if got := b.sourceText(); got != "edited" {
+		if got := b.sourceText(); got != text {
 			t.Errorf("%q", got)
 		}
 		if got := b.text("SELECT state FROM ops"); got != "undone" {
@@ -1083,7 +1098,7 @@ func TestAnEditBeforeTheMove(t *testing.T) {
 			return nil
 		}
 		items, _ := b.prune()
-		check(t, b, items)
+		check(t, b, items, "edited")
 	})
 	t.Run("a change of nothing but the change time", func(t *testing.T) {
 		b := newBench(t)
@@ -1106,28 +1121,56 @@ func TestAnEditBeforeTheMove(t *testing.T) {
 			t.Error("the copy went")
 		}
 	})
-	t.Run("between the link and the unlink", func(t *testing.T) {
-		b := newBench(t)
-		syncs := 0
-		b.fail[b.dirs["t3"]] = func(call, _ string) error {
-			switch call {
-			case "rename":
-				return syscall.EINVAL
-			case "sync":
-				syncs++
-				if syncs == syncsOfAFirstMove-1 {
-					edit(t, b)
-				}
+	// The link moved the change time, so between the link and the unlink only the size, the modification
+	// time and the inode tell what was linked from what took its place, and each must tell alone.
+	for _, tc := range []struct {
+		name   string
+		change func(t *testing.T, b *bench)
+		text   string
+	}{
+		{"between the link and the unlink", edit, "edited"},
+		{"between the link and the unlink, keeping the modification time", func(t *testing.T, b *bench) {
+			at := mtime(t, b)
+			edit(t, b)
+			setMtime(t, b, at)
+		}, "edited"},
+		{"between the link and the unlink, of the same size", func(t *testing.T, b *bench) {
+			at := mtime(t, b)
+			if err := os.WriteFile(source(b), []byte("y"), 0o644); err != nil {
+				t.Fatal(err)
 			}
-			return nil
-		}
-		items, _ := b.prune()
-		check(t, b, items)
-	})
+			setMtime(t, b, at.Add(time.Second))
+		}, "y"},
+		{"replaced between the link and the unlink, of the same size and modification time", func(t *testing.T, b *bench) {
+			at := mtime(t, b)
+			b.replace(source(b), "y")
+			setMtime(t, b, at)
+		}, "y"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t)
+			syncs := 0
+			b.fail[b.dirs["t3"]] = func(call, _ string) error {
+				switch call {
+				case "rename":
+					return syscall.EINVAL
+				case "sync":
+					syncs++
+					if syncs == syncsOfAFirstMove-1 {
+						tc.change(t, b)
+					}
+				}
+				return nil
+			}
+			items, _ := b.prune()
+			check(t, b, items, tc.text)
+		})
+	}
 }
 
-// The fsyncs of each kind of operation, in order: the target before the source, so that the file has a
-// name at every moment (specs.md §17.1).
+// The fsyncs of each kind of operation, in order: a file at the name it now has, or a folder just made,
+// before the folder that holds it, as on NTFS its own record holds its names too, and the target before the
+// source, so that the file has a name at every moment (specs.md §17.1).
 func TestTheOrderOfSyncs(t *testing.T) {
 	record := func(b *bench, link bool) *[]string {
 		names := &[]string{}
@@ -1135,6 +1178,8 @@ func TestTheOrderOfSyncs(t *testing.T) {
 			switch {
 			case call == "sync":
 				*names = append(*names, name)
+			case call == "syncentry":
+				*names = append(*names, "entry "+name)
 			case call == "rename" && link:
 				return syscall.EINVAL
 			}
@@ -1153,16 +1198,18 @@ func TestTheOrderOfSyncs(t *testing.T) {
 			b := newBench(t)
 			names := record(b, link)
 			b.prune()
-			want := []string{"", "Atoll", "trash", day, "1", "media"}
+			// Each folder made is synced, then its parent, before anything goes through it.
+			folders := []string{"entry Atoll", "", "entry trash", "Atoll", "entry " + day, "trash", "entry 1", day}
+			want := append(slices.Clone(folders), "entry a", "1", "media")
 			if link {
-				want = []string{"", "Atoll", "trash", day, "1", "1", "media"}
+				want = append(slices.Clone(folders), "entry a", "1", "entry a", "1", "media")
 			}
 			check(t, *names, want...)
 			names = record(b, link)
 			b.restored("a")
-			want = []string{"media", "1"}
+			want = []string{"entry a", "media", "1"}
 			if link {
-				want = []string{"media", "media", "1"}
+				want = []string{"entry a", "media", "entry a", "media", "1"}
 			}
 			check(t, *names, want...)
 		})
@@ -1174,6 +1221,169 @@ func TestTheOrderOfSyncs(t *testing.T) {
 		b.purgedAll()
 		check(t, *names, "1")
 	})
+	t.Run("a restore that makes a folder", func(t *testing.T) {
+		b := newBench(t)
+		b.addFiles("d/x")
+		b.prune()
+		if err := os.RemoveAll(filepath.Join(b.dirs["t3"], "media", "d")); err != nil {
+			t.Fatal(err)
+		}
+		names := record(b, false)
+		if outcomes, _ := b.restored("d/x"); len(outcomes) != 1 || outcomes[0] != OutcomeRestored {
+			t.Fatalf("%+v", outcomes)
+		}
+		if len(*names) < 4 {
+			t.Fatalf("%q", *names)
+		}
+		check(t, (*names)[:4], "entry d", "media", "entry x", "d")
+	})
+}
+
+// The sync of the file at its new name counts as any fsync: one that fails leaves the operation planned and
+// the disk lost, and the reprise that finishes the move syncs the file again, as the crash or the failure
+// may have come before that (specs.md §17.1, §17.2).
+func TestTheSyncOfTheMovedFileCounts(t *testing.T) {
+	for _, link := range []bool{false, true} {
+		t.Run(fmt.Sprintf("link %v", link), func(t *testing.T) {
+			b := newBench(t)
+			b.fail[b.dirs["t3"]] = func(call, name string) error {
+				switch {
+				case call == "syncentry" && name == "a":
+					return syscall.EIO
+				case call == "rename" && link:
+					return syscall.EINVAL
+				}
+				return nil
+			}
+			items, summary := b.prune()
+			if len(items) != 1 || items[0].Outcome != OutcomeIOError || !summary.DiskLost {
+				t.Fatalf("%+v, %+v", items, summary)
+			}
+			if got := b.text("SELECT state FROM ops"); got != "planned" {
+				t.Errorf("the operation is %q", got)
+			}
+			entries := 0
+			b.fail[b.dirs["t3"]] = func(call, name string) error {
+				if call == "syncentry" && name == "a" {
+					entries++
+				}
+				return nil
+			}
+			b.prune()
+			if got := b.text("SELECT state FROM ops WHERE id = 1"); got != "done" {
+				t.Errorf("the operation is %q", got)
+			}
+			if entries == 0 {
+				t.Error("the reprise did not sync the file")
+			}
+			if data, err := os.ReadFile(b.inTrash(1, "a")); err != nil || string(data) != "x" {
+				t.Errorf("in the trash: %q, %v", data, err)
+			}
+		})
+	}
+}
+
+// A reprise that takes one of two names away syncs the file at the name it keeps before the folder of the
+// name that went: its own record lost a name (specs.md §17.2). Whether the move finishes, or is undone as
+// the file was edited in place.
+func TestAReprisesSyncsTheFileAfterANameGoes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		edit  bool
+		state string
+	}{
+		{"finished", false, "done"},
+		{"undone", true, "undone"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t)
+			b.leaveBothNames()
+			if tc.edit {
+				if err := os.WriteFile(filepath.Join(b.dirs["t3"], "media", "a"), []byte("edited"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var calls []string
+			b.fail[b.dirs["t3"]] = func(call, name string) error {
+				switch call {
+				case "unlink", "syncentry", "sync":
+					calls = append(calls, call+" "+name)
+				}
+				return nil
+			}
+			b.prune()
+			if got := b.text("SELECT state FROM ops WHERE id = 1"); got != tc.state {
+				t.Fatalf("the operation is %q", got)
+			}
+			at := slices.Index(calls, "unlink a")
+			if at < 0 || len(calls) < at+3 || !slices.Equal(calls[at+1:at+3], []string{"syncentry a", "sync media"}) {
+				t.Errorf("%q", calls)
+			}
+		})
+	}
+}
+
+// A name that unlink says is not there, while a look right after still finds the file at it, is a name its
+// record no longer holds: ntfs3 leaves that when a device fails between the syncs of a move's two folders,
+// and then answers unlink with ENOENT and removes nothing (measured). The reprise concludes nothing, and
+// the operation stays planned until a repair of the volume says more (specs.md §17.2).
+func TestANameThatUnlinkCannotRemove(t *testing.T) {
+	b := newBench(t)
+	b.leaveBothNames()
+	stuck := true
+	b.fail[b.dirs["t3"]] = func(call, name string) error {
+		if call == "unlink" && name == "a" && stuck {
+			return syscall.ENOENT
+		}
+		return nil
+	}
+	b.prune()
+	if got := b.text("SELECT state FROM ops WHERE id = 1"); got != "planned" {
+		t.Errorf("the operation is %q", got)
+	}
+	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't3'"); got != 1 {
+		t.Errorf("%d rows on t3", got)
+	}
+	if !b.sourceThere() {
+		t.Error("the source's name went")
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't3'"); got != "online" {
+		t.Errorf("the disk is %q", got)
+	}
+	stuck = false
+	b.prune()
+	if got := b.text("SELECT state FROM ops WHERE id = 1"); got != "done" {
+		t.Errorf("once repaired, the operation is %q", got)
+	}
+}
+
+// What the sync of a moved file cannot open: a name gone, or one Atoll may not open, says nothing about the
+// disk, and the move goes on with its folder's sync; any other error from the open is judged as any call's.
+func TestAMovedFileThatCannotBeOpenedToSync(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		outcome string
+		lost    bool
+	}{
+		{"gone", syscall.ENOENT, OutcomeTrashed, false},
+		{"not allowed", syscall.EACCES, OutcomeTrashed, false},
+		{"a device gone", syscall.EIO, OutcomeIOError, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t)
+			b.fail[b.dirs["t3"]] = func(call, name string) error {
+				if call == "syncentry" && name == "a" {
+					return fmt.Errorf("%w: %w", fsx.ErrNotOpened, tc.err)
+				}
+				return nil
+			}
+			items, summary := b.prune()
+			if len(items) != 1 || items[0].Outcome != tc.outcome || summary.DiskLost != tc.lost {
+				t.Errorf("%+v, %+v", items, summary)
+			}
+		})
+	}
 }
 
 // A move back that fails on its first fsync leaves the file's name in the trash: it never has no name.
@@ -1198,6 +1408,40 @@ func TestAMoveBackIsDurableBeforeItsNameGoes(t *testing.T) {
 	}
 	if got := b.text("SELECT state FROM ops"); got != "planned" {
 		t.Errorf("the operation is %q", got)
+	}
+}
+
+// A move back syncs the file at the name it gets back before that name's folder, on both paths, as its own
+// record holds its names (specs.md §17.2).
+func TestAMoveBackSyncsTheFileFirst(t *testing.T) {
+	for _, link := range []bool{false, true} {
+		t.Run(fmt.Sprintf("link %v", link), func(t *testing.T) {
+			b := newBench(t)
+			b.failNth("t3", "sync", syncsOfAFirstMove, syscall.EIO)
+			b.prune()
+			b.replace(b.inTrash(1, "a"), "foreign")
+			var calls []string
+			b.fail[b.dirs["t3"]] = func(call, name string) error {
+				switch call {
+				case "rename", "link", "unlink", "syncentry", "sync":
+					calls = append(calls, call+" "+name)
+				}
+				if link && call == "rename" {
+					return syscall.EINVAL
+				}
+				return nil
+			}
+			s := b.opened()
+			s.Close()
+			want := []string{"rename a", "syncentry a", "sync media", "sync 1"}
+			if link {
+				want = []string{"rename a", "link a", "syncentry a", "sync media", "unlink a", "syncentry a", "sync media", "sync 1"}
+			}
+			at := slices.Index(calls, "rename a")
+			if at < 0 || len(calls) < at+len(want) || !slices.Equal(calls[at:at+len(want)], want) {
+				t.Errorf("%q", calls)
+			}
+		})
 	}
 }
 

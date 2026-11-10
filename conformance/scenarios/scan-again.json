@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a715.1, \u00a715.10",
-  "description": "A second scan: what changed or went away is reported and its row stays, what is new is added, and a copy on another disk joins its file. Rows of folders follow the disk, as they say only what is there.",
+  "description": "A second scan: what changed or went away is reported and its row stays, a rename is reported and its new name gets no row, what is new is added, and a copy on another disk joins its file. Rows of folders follow the disk, as they say only what is there.",
   "disks": [
     {
       "id": "t1",
@@ -81,6 +81,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -100,6 +102,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }
@@ -135,6 +139,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -154,6 +160,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }
@@ -220,7 +228,7 @@
             "folders": 1,
             "symlinks": 0,
             "ignored": 0,
-            "new": 2,
+            "new": 1,
             "known": 1,
             "hashed": 0,
             "changed": [
@@ -234,11 +242,15 @@
             "absent": [
               {
                 "path": "a"
-              },
-              {
-                "path": "b"
               }
             ],
+            "moved": [
+              {
+                "path": "b",
+                "to": "b2"
+              }
+            ],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -258,6 +270,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }
@@ -301,12 +315,6 @@
         ],
         [
           6,
-          "b2",
-          1,
-          1767226200000000000
-        ],
-        [
-          7,
           "e",
           1,
           1767226200000000000
@@ -358,12 +366,6 @@
           "t1",
           1,
           1767226200000000000
-        ],
-        [
-          7,
-          "t1",
-          1,
-          1767226200000000000
         ]
       ]
     },
@@ -409,7 +411,7 @@
             "symlinks": 0,
             "ignored": 0,
             "new": 0,
-            "known": 3,
+            "known": 2,
             "hashed": 0,
             "changed": [
               {
@@ -422,11 +424,15 @@
             "absent": [
               {
                 "path": "a"
-              },
-              {
-                "path": "b"
               }
             ],
+            "moved": [
+              {
+                "path": "b",
+                "to": "b2"
+              }
+            ],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           },
@@ -446,6 +452,8 @@
             "hashed": 0,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }

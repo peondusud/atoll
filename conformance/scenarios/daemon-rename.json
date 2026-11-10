@@ -1,0 +1,377 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.3, \u00a715.12, \u00a717.1",
+  "description": "A rename on one disk waits its debounce, then reaches the other with one journaled operation. The file keeps its id, hash and history, the copy renamed directly loses its verification, as the move hides any edit made before it, and the copy Atoll renamed keeps it. A scan then finds both as their rows say.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/b"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 1,
+        "next_due": "2026-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/b",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, gone_ns, gone_kind FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          1767225660000000000,
+          "moved"
+        ],
+        [
+          "t2",
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, CAST(c.old_lpath AS TEXT) FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "a",
+          "t1",
+          null
+        ],
+        [
+          "a",
+          "t2",
+          null
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "renamed",
+            "to": "b"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "b",
+            "outcome": "renamed"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/b",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/b",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, CAST(lpath AS TEXT), blake3 IS NOT NULL, first_seen_ns FROM files",
+      "rows": [
+        [
+          1,
+          "b",
+          1,
+          1767225600000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, verified_ns IS NOT NULL, gone_ns, old_lpath FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "user",
+          0,
+          null,
+          null
+        ],
+        [
+          "t2",
+          "user",
+          1,
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, disk_id, kind, CAST(path AS TEXT), CAST(path2 AS TEXT), state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "t2",
+          "rename",
+          "a",
+          "b",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT level, kind, json_extract(data, '$.disk'), json_extract(data, '$.path') FROM events ORDER BY id",
+      "rows": [
+        [
+          "info",
+          "rename",
+          "t2",
+          "a"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "b",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "moved": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "absent": [],
+            "moved": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    }
+  ]
+}

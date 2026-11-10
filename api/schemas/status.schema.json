@@ -81,10 +81,14 @@
       }
     },
     "copy": {
+      "description": "One copy. old_path, or old_path_b64 when it is not valid UTF-8, says where it sits when it has not followed its file's rename yet (specs.md §15.12).",
       "type": "object",
       "additionalProperties": false,
       "required": ["disk", "state", "size", "mtime", "created", "created_by", "first_seen", "verified"],
+      "not": { "required": ["old_path", "old_path_b64"] },
       "properties": {
+        "old_path": { "type": "string" },
+        "old_path_b64": { "type": "string" },
         "disk": { "type": "string", "minLength": 1 },
         "state": { "enum": ["ok", "pending", "stale", "corrupt", "unavailable", "surplus"] },
         "size": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }] },

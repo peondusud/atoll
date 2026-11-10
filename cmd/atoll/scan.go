@@ -80,25 +80,46 @@ func pathItems(list []string) []pathItem {
 	return out
 }
 
+// movedItem is a copy found at a new name.
+type movedItem struct {
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	To      string `json:"to,omitempty"`
+	ToB64   string `json:"to_b64,omitempty"`
+}
+
+func movedItems(list []watch.MovedCopy) []movedItem {
+	out := make([]movedItem, 0, len(list))
+	for i := range list {
+		var item movedItem
+		item.Path, item.PathB64 = encodePath(list[i].Path)
+		item.To, item.ToB64 = encodePath(list[i].To)
+		out = append(out, item)
+	}
+	return out
+}
+
 // scanDisk is one disk of api/schemas/scan.schema.json.
 type scanDisk struct {
-	ID          string     `json:"id"`
-	State       string     `json:"state"`
-	Reason      *string    `json:"reason"`
-	Message     *string    `json:"message"`
-	Walked      bool       `json:"walked"`
-	Files       int        `json:"files"`
-	Bytes       int64      `json:"bytes"`
-	Folders     int        `json:"folders"`
-	Symlinks    int        `json:"symlinks"`
-	Ignored     int        `json:"ignored"`
-	New         int        `json:"new"`
-	Known       int        `json:"known"`
-	Hashed      int        `json:"hashed"`
-	Changed     []pathItem `json:"changed"`
-	Absent      []pathItem `json:"absent"`
-	Unreadable  []pathItem `json:"unreadable"`
-	OtherMounts []pathItem `json:"other_mounts"`
+	ID          string      `json:"id"`
+	State       string      `json:"state"`
+	Reason      *string     `json:"reason"`
+	Message     *string     `json:"message"`
+	Walked      bool        `json:"walked"`
+	Files       int         `json:"files"`
+	Bytes       int64       `json:"bytes"`
+	Folders     int         `json:"folders"`
+	Symlinks    int         `json:"symlinks"`
+	Ignored     int         `json:"ignored"`
+	New         int         `json:"new"`
+	Known       int         `json:"known"`
+	Hashed      int         `json:"hashed"`
+	Changed     []pathItem  `json:"changed"`
+	Moved       []movedItem `json:"moved"`
+	Absent      []pathItem  `json:"absent"`
+	PathTaken   []pathItem  `json:"path_taken"`
+	Unreadable  []pathItem  `json:"unreadable"`
+	OtherMounts []pathItem  `json:"other_mounts"`
 }
 
 // scanOutput is the output of api/schemas/scan.schema.json.
@@ -182,7 +203,8 @@ func scanOutputFrom(o *watch.Outcome) scanOutput {
 			ID: r.ID, State: string(r.Verdict.State), Walked: r.Walked,
 			Files: r.Files, Bytes: r.Bytes, Folders: r.Folders, Symlinks: r.Symlinks, Ignored: r.Ignored,
 			New: r.New, Known: r.Known, Hashed: r.Hashed,
-			Changed: pathItems(r.Changed), Absent: pathItems(r.Absent), Unreadable: pathItems(r.Unreadable), OtherMounts: pathItems(r.OtherMounts),
+			Changed: pathItems(r.Changed), Moved: movedItems(r.Moved), Absent: pathItems(r.Absent), PathTaken: pathItems(r.PathTaken),
+			Unreadable: pathItems(r.Unreadable), OtherMounts: pathItems(r.OtherMounts),
 		}
 		if r.Verdict.State != disks.Online {
 			reason, message := string(r.Verdict.Reason), r.Verdict.Message
@@ -207,7 +229,12 @@ func printScan(w io.Writer, out scanOutput) error {
 				d.Files, d.Bytes, d.Folders, d.Symlinks, d.Ignored, d.New, d.Known, d.Hashed)
 		}
 		printPaths(&text, "  changed", d.Changed)
+		for j := range d.Moved {
+			m := &d.Moved[j]
+			fmt.Fprintf(&text, "  moved: %s -> %s\n", shownB64(m.Path, m.PathB64), shownB64(m.To, m.ToB64))
+		}
 		printPaths(&text, "  absent", d.Absent)
+		printPaths(&text, "  path taken", d.PathTaken)
 		printPaths(&text, "  unreadable", d.Unreadable)
 		printPaths(&text, "  on another mount", d.OtherMounts)
 	}

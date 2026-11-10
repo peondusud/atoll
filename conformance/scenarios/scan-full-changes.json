@@ -57,6 +57,8 @@
             "hashed": 3,
             "changed": [],
             "absent": [],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }
@@ -118,6 +120,8 @@
                 "path": "gone"
               }
             ],
+            "moved": [],
+            "path_taken": [],
             "unreadable": [],
             "other_mounts": []
           }

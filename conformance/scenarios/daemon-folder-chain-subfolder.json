@@ -1,0 +1,301 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.12",
+  "description": "mv S2 S3; mv S1 S2 with a subfolder of S1 read as moved: S2 left before it came, so S2 is decided first. What sat below S2 follows to S3, what sat below S1/sub to S2/sub, each once, and each job is what the user did.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/S1/sub/x",
+          "text": "x"
+        },
+        {
+          "path": "media/S2/b",
+          "text": "b"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/S1/sub/x",
+          "text": "x"
+        },
+        {
+          "path": "media/S2/b",
+          "text": "b"
+        },
+        {
+          "path": "media/S1/sub/z",
+          "text": "z"
+        },
+        {
+          "path": "media/S2/sub/w",
+          "text": "w"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/S2",
+      "to": "media/S3"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/S1",
+      "to": "media/S2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 2,
+        "next_due": "2026-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "S1/sub/x",
+            "decision": "renamed",
+            "to": "S2/sub/x"
+          },
+          {
+            "path": "S2/b",
+            "decision": "renamed",
+            "to": "S3/b"
+          },
+          {
+            "path": "S2/sub/w",
+            "decision": "renamed",
+            "to": "S3/sub/w"
+          },
+          {
+            "path": "S1/sub/z",
+            "decision": "renamed",
+            "to": "S2/sub/z"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "folder",
+            "path": "S2",
+            "to": "S3",
+            "outcome": "renamed"
+          },
+          {
+            "disk": "t2",
+            "kind": "folder",
+            "path": "S1/sub",
+            "to": "S2/sub",
+            "outcome": "renamed"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/S3/b",
+          "text": "b"
+        },
+        {
+          "path": "media/S3/sub/w",
+          "text": "w"
+        },
+        {
+          "path": "media/S2/sub/x",
+          "text": "x"
+        },
+        {
+          "path": "media/S2/sub/z",
+          "text": "z"
+        },
+        {
+          "path": "media/S1",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/S3/b",
+          "text": "b"
+        },
+        {
+          "path": "media/S2/sub/x",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/S3/b",
+          "text": "b"
+        },
+        {
+          "path": "media/S3/sub/w",
+          "text": "w"
+        },
+        {
+          "path": "media/S2/sub/x",
+          "text": "x"
+        },
+        {
+          "path": "media/S2/sub/z",
+          "text": "z"
+        },
+        {
+          "path": "media/S1",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

@@ -44,6 +44,7 @@ type copyVector struct {
 	State       *string `json:"state"`
 	CreatedBy   *string `json:"created_by"`
 	FirstSeenNS int64   `json:"first_seen_ns"`
+	OldPath     string  `json:"old_path"`
 }
 
 type policyVector struct {
@@ -131,7 +132,7 @@ func (v *planVector) input() (Input, error) {
 		for _, c := range f.Copies {
 			file.Copies = append(file.Copies, Copy{
 				Disk: c.Disk, State: CopyState(or(c.State, "ok")),
-				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS,
+				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS, OldPath: c.OldPath,
 			})
 		}
 		in.Files = append(in.Files, file)
@@ -183,8 +184,14 @@ func TestPlanVectors(t *testing.T) {
 		if err == nil {
 			plan, err = MakePlan(in)
 		}
+		// What a caller that runs no job asks, on an input of its own: the same results, or the same refusal.
+		again, resultsErr := v.input()
+		var results []Result
+		if resultsErr == nil {
+			results, resultsErr = PlanResults(again)
+		}
 		if v.Error {
-			if err == nil {
+			if err == nil || resultsErr == nil {
 				t.Errorf("vector %d (%s): got a plan, want an error", i, v.Note)
 			}
 			continue
@@ -192,6 +199,9 @@ func TestPlanVectors(t *testing.T) {
 		if err != nil {
 			t.Errorf("vector %d (%s): %v", i, v.Note, err)
 			continue
+		}
+		if resultsErr != nil || !reflect.DeepEqual(results, plan.Results) {
+			t.Errorf("vector %d (%s): PlanResults gives %s, %v, want %s", i, v.Note, show(results), resultsErr, show(plan.Results))
 		}
 		if want := wantJobs(t, v.Jobs); !slices.Equal(plan.Jobs, want) && (len(plan.Jobs) > 0 || len(want) > 0) {
 			t.Errorf("vector %d (%s): jobs\n%+v, want\n%+v", i, v.Note, plan.Jobs, want)
