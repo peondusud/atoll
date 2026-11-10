@@ -43,6 +43,9 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - **Measure the time again after a series of fixes, not only the memory.** Seven review rounds made three passes 15 times slower with every test green. Only rerunning the memory measurement, which prints the time beside it, showed it.
 - **When a mutant survives, read what both versions do.** One survivor led to a case where the code and the mutant gave the same wrong result, a rotation on one disk while the folder that left waits: no test of the mutant could have told them apart, and neither was right.
 - **A panic exits with 2, the code of a usage error.** So a scenario cannot tell a refused command line from a crash on it: `--path` with no value passes either way. Keep one test that calls `run` in process for each command that takes a value.
+- **A skip can hide a loss.** The tests of a dying device skipped ntfs3 whenever a name and its record disagreed, as only a repair can judge that. Three of those skips, and the one failure nobody had run, were one fixable cause: a sync that did not reach the file's own record. Before a test skips a case, look at what the case leaves on disk.
+- **Judge a surviving mutant with every test before writing one.** Of six survivors of the older lists, three were caught as soon as the judge ran every package: their list's judge had left out the packages that use the function. The three that were left were real, and led to a test of the link path.
+- **A mutation that does not compile tests nothing.** Fourteen mutations of the older lists left a variable or an import unused and counted as broken. Rewritten to keep it used, `&& false` or `x[:0]`, each was caught.
 
 ## Unicode and normalization
 
@@ -104,6 +107,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
   - With Docker stopped, renaming both parent folders and creating them again empty works, since a rename never opens the children. The cause in Windows or Docker is not established.
 - A container uses Docker Desktop's kernel (Linux 6.6, WSL2), which has no ntfs3, and no package can add it. That is no reason to stop: a Debian container boots any kernel in qemu in under a minute, even without KVM, from an initramfs built from its own files with `rdinit=/init`. Extract a mainline `.deb` into a separate folder: over `/`, tar could replace the `/lib` symlink.
 - Kernel boolean mount options take `0`, `1`, `no`, `yes`, `false` or `true`: `ads=off` is a bad value.
+- A loop disk in the guest's tmpfs makes every `fsync` nearly free, so it measures only what the calls cost. Measure a sync on qemu's USB disks, whose flushes reach the image file on the host, and give a busy writer a region it rewrites, or it fills the disk and stops being busy.
 - This machine runs Windows 11, so a Windows question can often be measured here rather than called unmeasured. Check the setting first: with `LongPathsEnabled` = 1, the first programs tried passed at 300 units and showed nothing about the limit; other programs stop at exactly 259.
 - The Write tool, too, can turn `\u` escapes into raw characters. In a vector file, check the bytes: NFC and NFD forms look the same once raw.
 - A Bash heredoc in this harness halves backslashes: a `\\n` in a Python patch reached the file as a real line break, and the script failed to parse. Write any script that holds a backslash with the Write tool.
