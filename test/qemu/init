@@ -1,0 +1,22 @@
+#!/bin/bash
+# PID 1 of the qemu guest that run.sh boots: the least a kernel needs, the tests of test/loopdev from
+# their own folder, a line that says how they ended, and off.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+mkdir -p /proc /sys /dev /tmp /run
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+exec </dev/console >/dev/console 2>&1
+# The loop images of the tests live here, in the guest's memory.
+mount -t tmpfs -o size=2g tmpfs /tmp
+# sd_mod by hand, as no udev loads it: without it the disk scsi_debug makes has no block device.
+for m in loop ext4 xfs btrfs ntfs3 fuse dm_mod dm_flakey sd_mod; do
+	modprobe "$m" 2>/dev/null || echo "no module $m in this kernel"
+done
+echo "kernel: $(uname -r)"
+mapfile -t args </opt/atoll/args
+cd /opt/atoll/repo/test/loopdev && /opt/atoll/loopdev.test "${args[@]}"
+echo "ATOLL-QEMU-EXIT=$?"
+sync
+echo o >/proc/sysrq-trigger
+sleep 10
