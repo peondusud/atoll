@@ -499,6 +499,36 @@ func EntriesBelow(ctx context.Context, db *sql.DB, disk, folder string) ([]strin
 	return list, nil
 }
 
+// What reads below a folder: ?1 the disk and ?2, ?3 the bounds of folderRange, unless said otherwise. Each reads the files
+// by the range of their paths, then each copy by its key, or the copies of a disk by their old path. Led by the disk,
+// as SQLite chooses with no statistics, it read every copy of that disk, and a pass asks once for each folder a disk
+// lost: about 800 folders and 200,000 copies took two minutes (specs.md §26). CROSS JOIN keeps the files first.
+const (
+	copiesBelowSQL = `
+		SELECT (SELECT count(*) FROM files f CROSS JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3)
+			+ (SELECT count(*) FROM copies WHERE disk_id = ?1 AND old_lpath >= ?2 AND old_lpath < ?3)`
+	settledBelowSQL = `
+		SELECT (SELECT count(*) FROM files f CROSS JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.gone_ns IS NULL AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3)
+			+ (SELECT count(*) FROM copies WHERE disk_id = ?1 AND gone_ns IS NULL AND old_lpath >= ?2 AND old_lpath < ?3)`
+	atOwnPathBelowSQL = `
+		SELECT f.lpath FROM files f CROSS JOIN copies c ON c.file_id = f.id
+		WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3 ORDER BY f.lpath`
+	// ?1, ?2 the bounds, and ?3 the disk left out.
+	disksBelowSQL = `
+		SELECT c.disk_id AS d FROM copies c JOIN files f ON f.id = c.file_id WHERE c.old_lpath IS NULL AND f.lpath >= ?1 AND f.lpath < ?2 AND c.disk_id <> ?3
+		UNION SELECT id FROM disks WHERE id <> ?3 AND EXISTS(SELECT 1 FROM copies o WHERE o.disk_id = disks.id AND o.old_lpath >= ?1 AND o.old_lpath < ?2)
+		UNION SELECT disk_id FROM entries WHERE lpath >= ?1 AND lpath < ?2 AND disk_id <> ?3
+		ORDER BY d`
+	// ?4 for a reprise.
+	folderRowsSQL = `
+		SELECT c.file_id, c.old_lpath, f.lpath FROM copies c JOIN files f ON f.id = c.file_id
+		WHERE c.disk_id = ?1 AND (c.gone_ns IS NULL OR (?4 AND c.gone_kind = 'moved')) AND c.old_lpath >= ?2 AND c.old_lpath < ?3
+		UNION ALL
+		SELECT c.file_id, f.lpath, f.lpath FROM files f CROSS JOIN copies c ON c.file_id = f.id
+		WHERE ?4 AND c.disk_id = ?1 AND (c.gone_ns IS NULL OR c.gone_kind = 'moved') AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3
+			AND EXISTS(SELECT 1 FROM copies o WHERE o.file_id = c.file_id AND o.disk_id <> c.disk_id AND o.old_lpath IS NULL)`
+)
+
 // rewriteEntries gives the entries of a disk at or below a folder the new folder's path, as what a
 // rename does to them.
 func rewriteEntries(ctx context.Context, tx *sql.Tx, disk, from, to string) error {
@@ -527,9 +557,7 @@ func rewriteEntries(ctx context.Context, tx *sql.Tx, disk, from, to string) erro
 func CopiesBelow(ctx context.Context, db *sql.DB, disk, folder string) (int64, error) {
 	lo, hi := folderRange(folder)
 	var count int64
-	err := db.QueryRowContext(ctx, `
-		SELECT (SELECT count(*) FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3)
-			+ (SELECT count(*) FROM copies WHERE disk_id = ?1 AND old_lpath >= ?2 AND old_lpath < ?3)`, disk, lo, hi).Scan(&count)
+	err := db.QueryRowContext(ctx, copiesBelowSQL, disk, lo, hi).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("copies: %w", err)
 	}
@@ -541,9 +569,7 @@ func CopiesBelow(ctx context.Context, db *sql.DB, disk, folder string) (int64, e
 func SettledBelow(ctx context.Context, db *sql.DB, disk, folder string) (int64, error) {
 	lo, hi := folderRange(folder)
 	var count int64
-	err := db.QueryRowContext(ctx, `
-		SELECT (SELECT count(*) FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ?1 AND c.gone_ns IS NULL AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3)
-			+ (SELECT count(*) FROM copies WHERE disk_id = ?1 AND gone_ns IS NULL AND old_lpath >= ?2 AND old_lpath < ?3)`, disk, lo, hi).Scan(&count)
+	err := db.QueryRowContext(ctx, settledBelowSQL, disk, lo, hi).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("copies: %w", err)
 	}
@@ -553,9 +579,7 @@ func SettledBelow(ctx context.Context, db *sql.DB, disk, folder string) (int64, 
 // AtOwnPathBelow gives the paths of the copies of a disk that sit at their file's path, below a folder.
 func AtOwnPathBelow(ctx context.Context, db *sql.DB, disk, folder string) ([]string, error) {
 	lo, hi := folderRange(folder)
-	rows, err := db.QueryContext(ctx, `
-		SELECT f.lpath FROM copies c JOIN files f ON f.id = c.file_id
-		WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3 ORDER BY f.lpath`, disk, lo, hi)
+	rows, err := db.QueryContext(ctx, atOwnPathBelowSQL, disk, lo, hi)
 	if err != nil {
 		return nil, fmt.Errorf("copies: %w", err)
 	}
@@ -591,11 +615,7 @@ func folderRange(folder string) (lo, hi []byte) {
 // DisksBelow gives the disks that hold a copy or an entry below a folder, but for one.
 func DisksBelow(ctx context.Context, db *sql.DB, folder, except string) ([]string, error) {
 	lo, hi := folderRange(folder)
-	rows, err := db.QueryContext(ctx, `
-		SELECT c.disk_id AS d FROM copies c JOIN files f ON f.id = c.file_id WHERE c.old_lpath IS NULL AND f.lpath >= ?1 AND f.lpath < ?2 AND c.disk_id <> ?3
-		UNION SELECT disk_id FROM copies WHERE old_lpath >= ?1 AND old_lpath < ?2 AND disk_id <> ?3
-		UNION SELECT disk_id FROM entries WHERE lpath >= ?1 AND lpath < ?2 AND disk_id <> ?3
-		ORDER BY d`, lo, hi, except)
+	rows, err := db.QueryContext(ctx, disksBelowSQL, lo, hi, except)
 	if err != nil {
 		return nil, fmt.Errorf("disks: %w", err)
 	}
@@ -980,10 +1000,7 @@ func folderRows(ctx context.Context, tx *sql.Tx, disk, from, to string, reprise 
 		}
 		r.place, r.file = string(place), string(file)
 		return r, nil
-	}, `
-		SELECT c.file_id, COALESCE(c.old_lpath, f.lpath), f.lpath FROM copies c JOIN files f ON f.id = c.file_id
-		WHERE c.disk_id = ?1 AND (c.gone_ns IS NULL OR (?4 AND c.gone_kind = 'moved')) AND ((c.old_lpath >= ?2 AND c.old_lpath < ?3) OR (?4 AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3
-			AND EXISTS(SELECT 1 FROM copies o WHERE o.file_id = c.file_id AND o.disk_id <> c.disk_id AND o.old_lpath IS NULL)))`, disk, lo, hi, reprise)
+	}, folderRowsSQL, disk, lo, hi, reprise)
 	if err != nil {
 		return fmt.Errorf("copies: %w", err)
 	}

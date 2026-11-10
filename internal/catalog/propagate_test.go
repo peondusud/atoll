@@ -1,6 +1,9 @@
 package catalog
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func newPropagationDB(t *testing.T) *testDB {
 	t.Helper()
@@ -102,4 +105,55 @@ func TestAFolderJobNoLongerQueuedIsNotThatJob(t *testing.T) {
 			}
 		})
 	}
+}
+
+// What reads below a folder searches the files by the range of their paths, or the copies of a disk by their old
+// path: never every copy of a disk, which a pass asks once for each folder a disk lost (specs.md §26). SQLite has no
+// statistics here, so the plan is what every catalog gets.
+func TestQueriesBelowAFolderReadOnlyWhatIsBelowIt(t *testing.T) {
+	b := openForOps(t)
+	lo, hi := folderRange("a")
+	for _, q := range []struct {
+		name, sql string
+		args      []any
+	}{
+		{"CopiesBelow", copiesBelowSQL, []any{"u1", lo, hi}},
+		{"SettledBelow", settledBelowSQL, []any{"u1", lo, hi}},
+		{"AtOwnPathBelow", atOwnPathBelowSQL, []any{"u1", lo, hi}},
+		{"DisksBelow", disksBelowSQL, []any{lo, hi, "u1"}},
+		{"folderRows", folderRowsSQL, []any{"u1", lo, hi, false}},
+		{"folderRows in a reprise", folderRowsSQL, []any{"u1", lo, hi, true}},
+	} {
+		plan := queryPlan(t, b, q.sql, q.args...)
+		for _, line := range plan {
+			// The disks themselves are a handful of rows, and a constant row reads no table.
+			scans := strings.HasPrefix(line, "SCAN") && !strings.HasPrefix(line, "SCAN disks") && line != "SCAN CONSTANT ROW"
+			if scans || strings.Contains(line, "copies_by_disk") {
+				t.Errorf("%s: %q in %q", q.name, line, plan)
+			}
+		}
+	}
+}
+
+// queryPlan gives the lines of what SQLite says it would do for a query.
+func queryPlan(t *testing.T, b *testDB, query string, args ...any) []string {
+	t.Helper()
+	rows, err := b.db.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return plan
 }

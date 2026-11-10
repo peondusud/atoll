@@ -39,6 +39,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - **Reviews converge, and the worst finding can come late.** 85, then 48, 33 and 3 confirmed findings, with the data loss in the third round, on code that two rounds had already called fixed. Stop on an empty or small round, not on a good feeling. A port written from the documents found what no review did: 5 scenarios in its last run failed on sentences that read two ways. Propagation took eleven rounds, from 62 confirmed findings to 2 with a rise from 13 to 18 on the way, and the copy sent to the trash came in the sixth.
 - **A test is written for a mutant only once it fails under it.** A test added for `keepPlanned` passed with that line mutated: when a copy sits below a folder a walk cannot read, `moveFolders` keeps the rows anyway, so the case that needs `keepPlanned` is a folder with no copy below. Only the next full run showed it. Run each new test under its own mutant before counting it.
 - **A fix can leave an older line wrong, and its mutant then survives.** After a dry run learned to keep a queued deletion job, the line that hid every queued job of a file decided again was left over, hiding only a refused rename's job, which the real pass lists. The surviving mutant that removed it was the fix. Rerun the mutations of the code around each fix.
+- **Measure the time again after a series of fixes, not only the memory.** Seven review rounds made three passes 15 times slower with every test green. Only rerunning the memory measurement, which prints the time beside it, showed it.
 - **When a mutant survives, read what both versions do.** One survivor led to a case where the code and the mutant gave the same wrong result, a rotation on one disk while the folder that left waits: no test of the mutant could have told them apart, and neither was right.
 - **A panic exits with 2, the code of a usage error.** So a scenario cannot tell a refused command line from a crash on it: `--path` with no value passes either way. Keep one test that calls `run` in process for each command that takes a value.
 
@@ -58,6 +59,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - A commit that changes one column rewrites the whole row, so a large BLOB in a row taxes every state change: 780 KB of WAL instead of 5 KB. Keep large BLOBs out of rows that change.
 - To measure what a commit writes, turn `wal_autocheckpoint` off. Otherwise the WAL is recycled, and its size says far less than what was written: the first run showed 117 KB for what was really 780 KB.
 - In a table that is not `STRICT`, a Go string written to a `BLOB` column is stored as `TEXT` with no error, which Rust cannot read back when the bytes are not UTF-8.
+- With no statistics, SQLite leads a join by an equality on an indexed column, even where a range on another table's unique index reads a thousandth as much. `copies_by_disk` read every copy of a disk, once for each folder that disk lost, and a pass on 200,000 files went from 8 s to two minutes, with its memory unchanged. `CROSS JOIN` keeps the order, and a test of `EXPLAIN QUERY PLAN` pins it.
 
 ## TOML
 

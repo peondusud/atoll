@@ -34,7 +34,7 @@ Every item here is a **decision**:
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
 - **decision**: a nested btrfs subvolume below the root has its own inode numbers, so `file_key` does not identify a file there, and what happens to a hard-linked file can write another file's row, which then reads as changed. Also, nothing can move from it to the trash, as `rename` gives `EXDEV`. Should a walk treat a folder on another device like a folder on another mount?
 - `catalog rebuild` must start `ops.id` past the ids in each disk's trash, as must `atoll init` over a catalog that went missing, so that a new operation's folder does not meet an old one (§17): both restart `sqlite_sequence`. Until then such a meeting costs one `io-error`, and the next run takes another id.
-- Memory of the daemon on 200,000 files (§26): `atoll scan` stays under the limit, and a daemon holds more than a scan does. The worst passes of `daemon --until-idle` peaked at about 205 and 208 MiB, past the limit, before the last seven review rounds, and have not been measured since.
+- Memory of the daemon on 200,000 files (§26): `atoll scan` stays under the limit, and a daemon holds more than a scan does. The worst passes of `daemon --until-idle` peak at about 212 and 211 MiB, past the limit: a rename through the view of a folder holding everything, and every copy of a disk gone at once.
 - What the mount check of §10 leaves to do for disks:
   - the check every 30 s in the daemon, which must wake no disk (§18), and the alert when a disk becomes `missing` or `readonly`;
   - `Atoll/disk.toml`, `atoll disk show`, and the inode size in the ext4 superblock, which gives `time_precision_ns`;
