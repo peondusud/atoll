@@ -179,6 +179,10 @@ func finishCopy(ctx context.Context, tx *sql.Tx, op *Op) error {
 	case err != nil:
 		return fmt.Errorf("copy: %w", err)
 	}
+	// A stale copy keeps what it held, for the copy that takes its place (specs.md §15.4).
+	if refreshed, err := refreshStale(ctx, tx, op, fileID); err != nil || refreshed {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM copies WHERE file_id = ? AND disk_id = ?", fileID, op.Disk); err != nil {
 		return fmt.Errorf("copy: %w", err)
 	}

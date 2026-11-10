@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
 )
 
@@ -159,6 +160,63 @@ func TestAPassCopiesOnEachDriver(t *testing.T) {
 			dropCaches(t)
 			wantCopy(t, at, "big", data, when)
 			emptyTmp(t, at)
+			if got := b.text("SELECT count(*) FROM jobs"); got != "0" {
+				t.Errorf("%s jobs left", got)
+			}
+		})
+	}
+}
+
+// later is a machine whose clock is ahead of the real one, so that a change the kernel just timed is past settle.
+type later struct {
+	disks.Machine
+	by time.Duration
+}
+
+func (l *later) Now() int64 { return l.Machine.Now() + l.by.Nanoseconds() }
+
+// TestAPassRefreshesOnEachDriver: a copy edited elsewhere makes the copy on every driver stale; the pass sends it to
+// that disk's trash, and the copy that takes its place is the new version (specs.md §15.4, §17.1).
+func TestAPassRefreshesOnEachDriver(t *testing.T) {
+	needRoot(t)
+	for _, tc := range trashDrivers {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, v, tc.driver, at, options...)
+			b := newPassBench(t, v, at)
+			data := threeChunks()
+			when := time.Unix(1500000000, 0)
+			writeBytes(t, b.keep, "big", data, when)
+			b.scan(false)
+			if _, err := jobs.Replicate(b.t.Context(), b.db, b.config, b.machine, jobs.ReplicateOptions{}, func(*jobs.ReplicateItem) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			b.pass()
+			edited := slices.Clone(data)
+			edited[4<<20+7] ^= 0xff
+			newer := time.Unix(1600000000, 0)
+			writeBytes(t, b.keep, "big", edited, newer)
+			b.machine = &later{Machine: b.machine, by: 11 * time.Minute}
+			out := b.pass()
+			want := []jobs.Operation{
+				{Disk: "v", Kind: jobs.KindTrash, Path: "big", Reason: "overwritten", Outcome: "trashed"},
+				{Disk: "v", Kind: jobs.KindReplicate, Path: "big", Source: "k", Outcome: jobs.OutcomeReplicated},
+			}
+			if !slices.Equal(out.Decisions, []jobs.Decision{{Path: "big", Kind: "modified"}}) || !slices.Equal(out.Operations, want) || out.Partial {
+				t.Errorf("%+v, %+v, partial %v", out.Decisions, out.Operations, out.Partial)
+			}
+			dropCaches(t)
+			wantCopy(t, at, "big", edited, newer)
+			emptyTmp(t, at)
+			old, err := filepath.Glob(filepath.Join(at, "Atoll", "trash", "*", "*", "big"))
+			if err != nil || len(old) != 1 {
+				t.Fatalf("in the trash: %v, %v", old, err)
+			}
+			if got, err := os.ReadFile(old[0]); err != nil || !bytes.Equal(got, data) {
+				t.Errorf("the trash holds %d bytes, %v", len(got), err)
+			}
 			if got := b.text("SELECT count(*) FROM jobs"); got != "0" {
 				t.Errorf("%s jobs left", got)
 			}

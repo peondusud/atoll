@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.12",
+  "spec": "specs.md §15.12",
   "description": "Another file at the old name on the other disk does not follow: it stays where it is.",
   "disks": [
     {
@@ -123,8 +123,8 @@
           }
         ],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     },
     {

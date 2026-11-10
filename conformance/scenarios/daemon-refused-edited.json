@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.3, \u00a715.7",
+  "spec": "specs.md §15.3, §15.7",
   "description": "An edited copy whose rename is refused stays where it is: a conflict, every version kept.",
   "disks": [
     {
@@ -116,8 +116,8 @@
           }
         ],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     },
     {

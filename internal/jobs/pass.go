@@ -126,7 +126,9 @@ type pass struct {
 	stuck map[string]map[int64]bool
 	// the folders found renamed that copies came with, as the rows said before any decision of this pass
 	realMoves map[folderKey]bool
-	// the files whose copy waits for settle, and when the first of them is due
+	// by disk, the names a copy of another file was found moved to, while modifications are decided
+	targets map[string]map[string]bool
+	// the files whose copy waits for settle, and the changed copies not yet due, and when the first of them is due
 	copiesWaiting int64
 	copiesDue     sql.NullInt64
 	// settled says that the copies worked out each file, and that nothing ran since
@@ -169,7 +171,7 @@ func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, a
 	}
 	defer session.Close()
 	p.session = session
-	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.decide, p.decideFolders, p.work, p.cleanJobs, p.copies, p.finish} {
+	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.decide, p.decideFolders, p.modify, p.work, p.cleanJobs, p.copies, p.finish} {
 		if err := step(ctx); err != nil {
 			return nil, err
 		}

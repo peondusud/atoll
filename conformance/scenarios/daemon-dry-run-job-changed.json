@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.12",
-  "description": "A job whose copy changed while it was away: a dry run says changed, as a real pass does.",
+  "spec": "specs.md §15.4, §15.12",
+  "description": "A job whose copy changed while it was away: a real pass, for which that change is not yet due, says changed; a dry run, for which everything is due, decides the modification instead, which drops the job.",
   "disks": [
     {
       "id": "t1",
@@ -117,16 +117,13 @@
             "walked": true
           }
         ],
-        "decisions": [],
-        "operations": [
+        "decisions": [
           {
-            "disk": "t2",
-            "kind": "trash",
             "path": "a",
-            "reason": "deleted",
-            "outcome": "changed"
+            "decision": "modified"
           }
         ],
+        "operations": [],
         "guards": [],
         "waiting": 0,
         "next_due": null
@@ -168,8 +165,8 @@
           }
         ],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     }
   ]

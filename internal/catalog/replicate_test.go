@@ -197,6 +197,19 @@ func TestAJobEnds(t *testing.T) {
 	if got := b.count("SELECT count(*) FROM jobs") + b.count("SELECT count(*) FROM copies WHERE state = 'pending'"); got != 0 {
 		t.Errorf("%d left", got)
 	}
+	if got := b.count("SELECT count(*) FROM files"); got != 1 {
+		t.Errorf("%d files, with their source", got)
+	}
+	// A file whose pending copy was all there was of it, as a stale copy once in the trash can be, goes with it
+	// (specs.md §15.4).
+	b, job = newReplicateDB(t)
+	b.exec("DELETE FROM copies WHERE state <> 'pending'")
+	if err := EndJob(t.Context(), b.sql(), job); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.count("SELECT count(*) FROM files"); got != 0 {
+		t.Errorf("%d files with no copy", got)
+	}
 	b, _ = newReplicateDB(t)
 	err := inTransaction(t.Context(), b.sql(), func(tx *sql.Tx) error {
 		return writeCopies(t.Context(), tx, "u2", 70, []NewCopy{{Path: "a", Size: 1, MtimeNS: 1, CtimeNS: 1, FileKey: "5", Nlink: 1}})

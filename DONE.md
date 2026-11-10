@@ -2,6 +2,33 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Modifications: a copy edited or replaced (specs.md §15.4, §15.12)
+
+Commit "Decide modifications in each pass of the daemon", on `modifications`.
+
+- The maintainer's decisions:
+  - a changed copy waits for `settle` counted from its change time, as its walk found it: no new column, and a file still being written is not read;
+  - a file never hashed whose copy changed and kept its size is compared by reading a copy that did not change, two reads for a `touch`, rather than re-copied whole;
+  - two pull requests: the content first; then metadata-only changes applied to the other copies (`utimens`, `chmod`), until when only the row of the copy that changed follows it;
+  - no guard against modifications in mass yet: the copies overwritten stay in the trash for `retention`, and [TODO.md](TODO.md) records the risk.
+- What it does: after the decisions of propagation, each pass looks at every file a copy of which is `edited`, or `replaced` by a regular file, by path in byte order, one file to a transaction. A pure function (`solver.Modify`, `conformance/vectors/modification.json`) says what to read, then what it means: another size is `modified` with nothing read; the same size is read, and compared with the file's hash or, with none, with a copy that did not change: the same content is `metadata`, another is `modified`, two contents among the changed copies, or a stale copy changed, a `conflict`. `modified` makes the changed copies the user's and the current version, every other copy `stale`, drops every queued job of the file, and queues a trash job `overwritten` for each stale copy. The work of the same pass sends it to the trash, and its row then becomes a pending copy with a `replicate` job from the copy that changed, which the same pass runs, whatever the mode or `settle`: the room and the name stay held, and no new kind of job is needed. A read runs at the lowest best-effort level, as a copy does.
+- Also decided in the work, to confirm:
+  - a file waits, with no line, while a copy of it is moved, gone, uncertain or own, or its row says moved and this look could not get to it, while a job of it is `running`, and while a changed copy is not due, which counts in `waiting`; a file in conflict counts in nothing;
+  - a copy replaced by what is no regular file, or by the file another copy of its disk moved to (an overwriting move), is no modification: the file waits, and the limits of §15.12 stand;
+  - the dry run counts every change as due, as it does every absence, reads what a real pass would, and lists the trash jobs that would follow, not the copy that only the next pass lists;
+  - a `modified` event, with the disk of the first changed copy; the trash entry of an overwritten copy has no hash, as it holds a version the file's hash no longer describes;
+  - a conflict writes nothing to a disk, and its changed copies lose `verified_ns`;
+  - an overwrite gives way to a deletion decided later, and goes, `canceled`, when the file has no copy `ok` or `surplus` left: the stale copy is then all that is left of it, and stays;
+  - a replicate job that ends with no copy of its file left takes the file with it.
+- What it meant for the scenarios written before: 15 of them have a copy edited, which the conformance build's clock, behind the real one, finds not yet due. Each counts one more in `waiting`, and `next_due`, a real time nobody can write down, reads `${ANY}` where it was `null`. Two dry runs, for which everything is due, now decide the modification too, and in one of them that drops the job whose `changed` it was written for: its description says so. 14 new `daemon-modify-*` scenarios run with a clock past the real one, so that what the kernel times is past `settle`; the wait itself is pinned in Go, with the bench's clock set from the real change time.
+- Found by testing:
+  - an overwrite would have sent to the trash the stale copy of a file whose only current copy was then deleted, which was all that was left of it (a unit test, while writing the tests of a stale copy's job);
+  - the test of the read's I/O priority kept the first value it saw unless it was 0, which is what a thread with no priority set reads: it kept the copy's read that followed, and passed with the priority removed (a mutation);
+  - the chunks of a file that a metadata change gives a hash were checked nowhere (a mutation); the size a modification wrote was written again by the end of the pass, and went (a mutation).
+- Memory, measured on 200,000 empty files on both of two disks, every copy on one of them touched, then rewritten (§26): the pass where every copy was touched peaks at 175 MiB, in 202 s, nearly all of it one transaction a file; its dry run at 153 MiB. The dry run where every copy was rewritten first peaked at 188 MiB, close to the 190.7 MiB of the budget, as it kept a whole operation for each trash job it would list, and a map of the files changed: a place and a flag for each, and a sorted list, bring it to 174 MiB. The pass that rewrites them all, stopped at the first trash job, peaks at 157 MiB, in 250 s.
+- Verified: `go test ./...`, the race detector, lint on the default, conformance and loopdev builds, 479 scenarios (14 new), and `test/loopdev` in qemu on Linux 6.12.116 and 7.3.1, with a copy edited on ext4 and the stale copy on each of ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g sent to that disk's trash and refreshed, read back through a cold cache. Of 84 mutations of the new code, 80 are caught. The 4 left are second guards: a copy replaced by what is no regular file waits at the gate and again at the look before the read; the look checks the kind of file and its change time; the reprise of an overwrite reads its reason from the trash before it looks for the job of that reason; and an overwrite stands only for a stale copy, which only a stale copy has.
+- Left for later, in [TODO.md](TODO.md): metadata-only changes applied to the other copies; a guard against modifications in mass; the overwriting move, the swap of two names and a copy replaced by what is no regular file; `deletes.direct = "restore"`.
+
 ## The daemon runs the copies: the `deferred` mode (specs.md §12.3, §14, §14.1, §15.12)
 
 Commit "Run the due copies in each pass of the daemon", on `daemon-replicates`.

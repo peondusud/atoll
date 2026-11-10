@@ -26,6 +26,9 @@ type CopySeen struct {
 	Nlink    int64
 	SameDate bool
 	AsRow    bool
+	// Regular says that a copy replaced is replaced by a regular file: only that is a modification (specs.md §15.4).
+	// CtimeNS is then that file's change time, as it is an edited copy's.
+	Regular bool
 }
 
 // folderID is what makes a folder the same one.
@@ -190,7 +193,7 @@ func (c *compared) row(k *catalog.KnownCopy, at *FoundFile) {
 		if v == solver.VerdictEdited {
 			at.home = true
 			c.r.Changed = append(c.r.Changed, k.Path)
-			c.r.Seen = append(c.r.Seen, CopySeen{FileID: k.FileID, Verdict: v})
+			c.r.Seen = append(c.r.Seen, CopySeen{FileID: k.FileID, Verdict: v, CtimeNS: at.CtimeNS})
 			c.clock(k, v)
 			return
 		}
@@ -363,6 +366,9 @@ func (c *compared) finish(o *openRow, own map[string][]solver.FileLook) {
 	switch v {
 	case solver.VerdictReplaced:
 		c.r.Changed = append(c.r.Changed, k.Path)
+		if o.at != nil {
+			seen.CtimeNS, seen.Regular = o.at.CtimeNS, true
+		}
 	case solver.VerdictGone, solver.VerdictUncertain, solver.VerdictOwn:
 		if !c.quiet {
 			c.r.Absent = append(c.r.Absent, k.Path)

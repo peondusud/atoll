@@ -278,6 +278,11 @@ func applyRow(ctx context.Context, tx *sql.Tx, nowNS int64, c *FileChange, r *Ro
 			return fmt.Errorf("keep: %w", err)
 		}
 	case r.Trash:
+		// A copy deleted has nothing left to be refreshed from: its overwrite gives way to the deletion (specs.md §15.4).
+		if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE kind = 'trash' AND file_id = ? AND dst_disk = ? AND state = ? AND reason = ?",
+			c.ID, r.Disk, JobQueued, ReasonOverwritten); err != nil {
+			return fmt.Errorf("job: %w", err)
+		}
 		// A file decided again with a job still queued: that job stands, with what it was asked for.
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO jobs(kind, file_id, src_disk, dst_disk, state, reason) SELECT 'trash', ?1, ?2, ?3, ?4, ?5

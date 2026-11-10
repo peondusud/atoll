@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.12",
+  "spec": "specs.md §15.12",
   "description": "An edited copy still follows: an inode and a creation time say that it is the file, nothing is lost, and the next look reports the edit.",
   "disks": [
     {
@@ -115,8 +115,8 @@
           }
         ],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     },
     {

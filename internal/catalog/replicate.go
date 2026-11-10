@@ -539,10 +539,14 @@ func Requeue(ctx context.Context, db *sql.DB, job *ReplicateJob, keepPart bool) 
 }
 
 // EndJob ends a job that will not run again, with its pending copy, so that the next plan decides again
-// (specs.md §14.1).
+// (specs.md §14.1). A file with no copy left goes with it: what a stale copy held, once in the trash, may have been
+// all there was of it (specs.md §15.4).
 func EndJob(ctx context.Context, db *sql.DB, job *ReplicateJob) error {
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
-		return cancelPending(ctx, tx, job.FileID, job.Dst)
+		if err := cancelPending(ctx, tx, job.FileID, job.Dst); err != nil {
+			return err
+		}
+		return dropFileIfEmpty(ctx, tx, job.FileID)
 	})
 	if err != nil {
 		return fmt.Errorf("job %d: %w", job.ID, err)

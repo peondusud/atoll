@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.3, \u00a715.6",
+  "spec": "specs.md §15.3, §15.6",
   "description": "An edited copy is never sent to the trash, so the guard does not count it.",
   "disks": [
     {
@@ -128,8 +128,8 @@
           }
         ],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     },
     {

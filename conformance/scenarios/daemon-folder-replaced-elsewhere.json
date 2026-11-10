@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.12",
+  "spec": "specs.md §15.12",
   "description": "A folder renamed and a file replaced elsewhere: what cannot leave holds a folder back only below it, and what is not due still does.",
   "disks": [
     {
@@ -106,7 +106,7 @@
         "decisions": [],
         "operations": [],
         "guards": [],
-        "waiting": 1,
+        "waiting": 2,
         "next_due": "2026-01-01T00:01:30.000000000Z"
       }
     },
@@ -188,8 +188,8 @@
           }
         ],
         "guards": [],
-        "waiting": 0,
-        "next_due": null
+        "waiting": 1,
+        "next_due": "${ANY}"
       }
     },
     {
