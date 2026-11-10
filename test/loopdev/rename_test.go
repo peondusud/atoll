@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -313,7 +314,95 @@ func TestDeletionsOnEachDriver(t *testing.T) {
 
 // TestADeviceThatFailsDuringARename: whatever a driver answered while the device was dead, once it is
 // back the next pass finds the copy at one name, and the catalog says that name (specs.md §15.12, §17.2).
+// To another folder, ntfs3 can be left with both names leading to the file, which has one link: the
+// reprise then concludes nothing, and the operation stays planned until a repair of the volume.
 func TestADeviceThatFailsDuringARename(t *testing.T) {
+	needRoot(t)
+	for _, tc := range failingDrivers {
+		for _, to := range []string{"b", "s/b"} {
+			for _, point := range []string{"journaled", "moved", "target-synced"} {
+				t.Run(tc.name+"/"+to+"/"+point, func(t *testing.T) {
+					options := driverOptions(t, tc.driver)
+					m := newMapped(t, tc.fs)
+					at := mountPoint(t)
+					mountVolume(t, m.volume, tc.driver, at, options...)
+					b := newPassBench(t, m.volume, at)
+					write(t, b.keep, "a", "content")
+					write(t, at, "a", "content")
+					b.scan(false)
+					must(t, "sync")
+					rename(t, b.keep, "a", to)
+					b.pass()
+					time.Sleep(shortDebounce)
+					real := b.machine
+					b.machine = &failingAt{Machine: real, point: point, fire: func() { m.fail(t) }}
+					out := b.pass()
+					t.Logf("while it was dead: %+v", out.Operations)
+					state := b.text("SELECT COALESCE(max(state), '') FROM ops WHERE kind = 'rename'")
+					if state == "done" && point == "journaled" {
+						t.Error("done, with the device dead before the move")
+					}
+					bringBack(t, m, tc.driver, at, options)
+					b.machine = real
+					after := b.settle()
+					dropCaches(t)
+					source, target := filepath.Join(at, "media", "a"), filepath.Join(at, "media", filepath.FromSlash(to))
+					if tc.driver == "ntfs3" {
+						skipWhereNamesDisagree(t, source, target)
+						if concludesNothing(t, b.text("SELECT COALESCE(max(state), '') FROM ops WHERE kind = 'rename'"), source, target) {
+							return
+						}
+					}
+					renameLeft(t, b, after, source, target)
+				})
+			}
+		}
+	}
+}
+
+// renameLeft requires what a rename that a device failure interrupted must leave once it is resolved: the
+// file at its target, nothing at its source, and nothing planned or behind.
+func renameLeft(t *testing.T, b *passBench, after *jobs.Outcome, source, target string) {
+	t.Helper()
+	if got := b.text("SELECT count(*) FROM ops WHERE state = 'planned'"); got != "0" {
+		t.Errorf("%s operations left planned: %+v", got, after)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "content" {
+		t.Errorf("at the target: %q, %v (%+v)", data, err, after)
+	}
+	if _, err := os.Lstat(source); !os.IsNotExist(err) {
+		t.Errorf("at the source: %v", err)
+	}
+	if got := b.text("SELECT count(*) FROM copies WHERE old_lpath IS NOT NULL"); got != "0" {
+		t.Errorf("%s rows behind: %+v", got, after)
+	}
+}
+
+// concludesNothing says whether two names lead to one file that has a single link: a name its record no
+// longer holds, which ntfs3 leaves when a device fails between the syncs of a move's two folders
+// (measured). The reprise must then have concluded nothing, and the content be whole at both names.
+func concludesNothing(t *testing.T, state, a, b string) bool {
+	t.Helper()
+	var sa, sb syscall.Stat_t
+	if syscall.Lstat(a, &sa) != nil || syscall.Lstat(b, &sb) != nil || sa.Ino != sb.Ino || sa.Nlink != 1 {
+		return false
+	}
+	t.Logf("a name and its record disagree: %s and %s", a, b)
+	if state != "planned" {
+		t.Errorf("the operation is %q, on names that disagree", state)
+	}
+	for _, path := range []string{a, b} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != "content" {
+			t.Errorf("%s: %q, %v", path, data, err)
+		}
+	}
+	return true
+}
+
+// TestADeviceThatFailsDuringAFolderRename: the same for a folder renamed whole, with a file that only the
+// driver's disk holds. On NTFS a folder's own record holds its name, as a file's does (specs.md §15.12).
+func TestADeviceThatFailsDuringAFolderRename(t *testing.T) {
 	needRoot(t)
 	for _, tc := range failingDrivers {
 		for _, point := range []string{"journaled", "moved", "target-synced"} {
@@ -323,11 +412,14 @@ func TestADeviceThatFailsDuringARename(t *testing.T) {
 				at := mountPoint(t)
 				mountVolume(t, m.volume, tc.driver, at, options...)
 				b := newPassBench(t, m.volume, at)
-				write(t, b.keep, "a", "content")
-				write(t, at, "a", "content")
+				write(t, b.keep, "d/x", "x")
+				write(t, at, "d/x", "x")
+				write(t, at, "d/y", "y")
 				b.scan(false)
 				must(t, "sync")
-				rename(t, b.keep, "a", "b")
+				if err := os.Rename(filepath.Join(b.keep, "media", "d"), filepath.Join(b.keep, "media", "e")); err != nil {
+					t.Fatal(err)
+				}
 				b.pass()
 				time.Sleep(shortDebounce)
 				real := b.machine
@@ -338,48 +430,62 @@ func TestADeviceThatFailsDuringARename(t *testing.T) {
 				if state == "done" && point == "journaled" {
 					t.Error("done, with the device dead before the move")
 				}
-				_ = exec.CommandContext(context.Background(), "umount", "-l", at).Run()
-				time.Sleep(time.Second)
-				if strings.HasSuffix(tc.driver, "3g") {
-					_ = exec.CommandContext(context.Background(), "pkill", "-9", "-f", tc.driver+" "+m.device+" ").Run()
-					time.Sleep(time.Second)
-				}
-				m.heal(t)
-				if tc.driver == "ntfs3" {
-					options = append(options, "force")
-				}
-				if err := remount(t, m.volume, tc.driver, at, options); err != nil {
-					t.Skipf("the volume did not mount again: %v", err)
-				}
+				bringBack(t, m, tc.driver, at, options)
 				b.machine = real
 				after := b.settle()
 				dropCaches(t)
-				source, target := filepath.Join(at, "media", "a"), filepath.Join(at, "media", "b")
+				old, renamed := filepath.Join(at, "media", "d"), filepath.Join(at, "media", "e")
 				if tc.driver == "ntfs3" {
-					for _, path := range []string{source, target} {
-						file, err := os.Open(path)
-						if err != nil && !os.IsNotExist(err) {
-							t.Skipf("a name and its record disagree: %v", err)
-						}
-						if err == nil {
-							_ = file.Close()
-						}
-					}
+					skipWhereNamesDisagree(t, old, renamed, filepath.Join(renamed, "x"), filepath.Join(renamed, "y"))
 				}
 				if got := b.text("SELECT count(*) FROM ops WHERE state = 'planned'"); got != "0" {
 					t.Errorf("%s operations left planned: %+v", got, after)
 				}
-				data, err := os.ReadFile(target)
-				if err != nil || string(data) != "content" {
-					t.Errorf("at the target: %q, %v (%+v)", data, err, after)
-				}
-				if _, err := os.Lstat(source); !os.IsNotExist(err) {
-					t.Errorf("at the source: %v", err)
+				wantContent(t, at, "e/x", "x")
+				wantContent(t, at, "e/y", "y")
+				if _, err := os.Lstat(old); !os.IsNotExist(err) {
+					t.Errorf("the old folder: %v (%+v)", err, after)
 				}
 				if got := b.text("SELECT count(*) FROM copies WHERE old_lpath IS NOT NULL"); got != "0" {
 					t.Errorf("%s rows behind: %+v", got, after)
 				}
 			})
+		}
+	}
+}
+
+// bringBack does what a user does after a USB drop: what is left of the mount goes, the device comes back,
+// and the volume is mounted again. One that does not mount skips the test.
+func bringBack(t *testing.T, m *mappedVolume, driver, at string, options []string) {
+	t.Helper()
+	_ = exec.CommandContext(context.Background(), "umount", "-l", at).Run()
+	time.Sleep(time.Second)
+	if strings.HasSuffix(driver, "3g") {
+		_ = exec.CommandContext(context.Background(), "pkill", "-9", "-f", driver+" "+m.device+" ").Run()
+		time.Sleep(time.Second)
+	}
+	m.heal(t)
+	// Dirty, ntfs3 refuses to mount without force.
+	if driver == "ntfs3" {
+		options = append(slices.Clone(options), "force")
+	}
+	if err := remount(t, m.volume, driver, at, options); err != nil {
+		t.Skipf("the volume did not mount again: %v", err)
+	}
+}
+
+// skipWhereNamesDisagree: ntfs3 keeps no journal of its own, and writes lost with the device can leave a
+// name and its record that disagree, which it answers with ESTALE or EINVAL (measured). Atoll concludes
+// nothing from that, and only a repair can say more.
+func skipWhereNamesDisagree(t *testing.T, paths ...string) {
+	t.Helper()
+	for _, path := range paths {
+		file, err := os.Open(path)
+		if err != nil && !os.IsNotExist(err) {
+			t.Skipf("a name and its record disagree: %v", err)
+		}
+		if err == nil {
+			_ = file.Close()
 		}
 	}
 }

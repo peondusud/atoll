@@ -662,6 +662,9 @@ func deviceFailure(t *testing.T, fs names.Filesystem, driver, point string, op i
 				_ = file.Close()
 			}
 		}
+		if concludesNothing(t, b.text("SELECT state FROM ops WHERE id = ?", op), source, inTrash) {
+			return
+		}
 	}
 	_, sourceErr := os.Lstat(source)
 	entries, err := catalog.TrashEntries(t.Context(), b.db)

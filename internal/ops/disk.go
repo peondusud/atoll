@@ -31,6 +31,9 @@ var (
 	ErrGone = errors.New("the name no longer holds that file")
 	// ErrOtherMount says that a folder on the way is another mount, which no check confirmed.
 	ErrOtherMount = errors.New("another mount on the way")
+	// ErrNamesDisagree says that a name leads to a file whose record no longer holds it, so that unlink
+	// cannot remove it: only a repair of the volume can say which name is the file's (specs.md §17.2).
+	ErrNamesDisagree = errors.New("a name and its file's record disagree: the volume needs a repair")
 )
 
 // Disk is a disk open for writing, through a handle on its top, which a mount check found to be the
@@ -80,6 +83,27 @@ func (d *Disk) Verify() error {
 
 func lost(err error) error {
 	return fmt.Errorf("%w: %w", ErrDiskLost, err)
+}
+
+// syncEntry makes durable what a file or folder that was moved records of its own names, before its folder
+// is synced: on NTFS it holds them in its own record, which ntfs3 leaves unwritten when only the folder is
+// synced (measured, specs.md §17.1). A failed fsync is a disk lost, as any is. A name that no longer leads
+// to it has nothing of this operation's to sync, and one Atoll may not open keeps its folder's sync alone.
+func syncEntry(dir fsx.Dir, name string) error {
+	err := dir.SyncEntry(name)
+	switch {
+	case err == nil:
+		return nil
+	case !errors.Is(err, fsx.ErrNotOpened):
+		return lost(err)
+	case fsx.IsUnreadableName(err):
+		return nil
+	case fsx.IsDenied(err):
+		slog.Warn("a moved file cannot be opened to sync it: only its folder is synced", "name", name, "error", err)
+		return nil
+	default:
+		return classify(err)
+	}
 }
 
 // classify keeps what says the disk is gone apart from what says only this write failed.
@@ -199,6 +223,10 @@ func (d *Disk) makeFolder(parent fsx.Dir, name string, like map[int]fsx.Stat, le
 		if err := adopt(parent, name, &st); err != nil {
 			return err
 		}
+	}
+	// The new folder first: its own record holds its name, as a moved file's does (measured on ntfs3).
+	if err := syncEntry(parent, name); err != nil {
+		return err
 	}
 	if err := parent.Sync(); err != nil {
 		return lost(err)
@@ -394,6 +422,9 @@ func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) 
 		}
 	}
 	d.machine.Checkpoint("folder-made")
+	if err := syncEntry(parent.Dir, name); err != nil {
+		return fsx.Stat{}, err
+	}
 	if err := restoreTime(parent, before.Mtime); err != nil {
 		return fsx.Stat{}, err
 	}
@@ -449,6 +480,9 @@ func (d *Disk) moveNoReplace(source fsx.Dir, name string, target fsx.Dir, newNam
 		return classify(err)
 	}
 	d.machine.Checkpoint("linked")
+	if err := syncEntry(target, newName); err != nil {
+		return err
+	}
 	if err := target.Sync(); err != nil {
 		return lost(err)
 	}
@@ -541,6 +575,9 @@ func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
 		return nil, err
 	}
 	d.machine.Checkpoint("moved")
+	if err := syncEntry(target.Dir, newName); err != nil {
+		return nil, err
+	}
 	if err := target.Sync(); err != nil {
 		return nil, lost(err)
 	}
@@ -625,6 +662,9 @@ func (d *Disk) FromTrash(op *Op) (*Moved, error) {
 		return nil, err
 	}
 	d.machine.Checkpoint("moved")
+	if err := syncEntry(target.Dir, newName); err != nil {
+		return nil, err
+	}
 	if err := restoreTime(target.Dir, before.Mtime); err != nil {
 		return nil, err
 	}
@@ -698,6 +738,9 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 		return nil, nil, err
 	}
 	d.machine.Checkpoint("moved")
+	if err := syncEntry(target.Dir, newName); err != nil {
+		return nil, nil, err
+	}
 	if err := target.Sync(); err != nil {
 		return nil, nil, lost(err)
 	}
@@ -775,6 +818,9 @@ func (d *Disk) RenameFolder(op *Op) error {
 		return err
 	}
 	d.machine.Checkpoint("moved")
+	if err := syncEntry(target.Dir, newName); err != nil {
+		return err
+	}
 	if err := target.Sync(); err != nil {
 		return lost(err)
 	}

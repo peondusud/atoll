@@ -301,6 +301,7 @@ func TestAFaultDuringARename(t *testing.T) {
 		{"the move, with no such file", "rename", syscall.ENOENT, "changed", false},
 		{"the move, with a file there", "rename", syscall.EEXIST, "path-taken", false},
 		{"the sync", "sync", syscall.EIO, "io-error", true},
+		{"the sync of the file", "syncentry", syscall.EIO, "io-error", true},
 		{"a look", "stat", syscall.EIO, "io-error", true},
 		{"a look, on a device gone", "stat", syscall.ENODEV, "io-error", true},
 	}
@@ -366,6 +367,74 @@ func TestACrashAtEachPointOfARename(t *testing.T) {
 				t.Errorf("%d rows behind", got)
 			}
 		})
+	}
+}
+
+// recordSyncs records the syncs on one disk: a folder's by its name, and a file's or a folder's own as
+// "entry" and the name.
+func (b *bench) recordSyncs(id string) *[]string {
+	syncs := &[]string{}
+	b.fail[b.dirs[id]] = func(call, name string) error {
+		switch call {
+		case "sync":
+			*syncs = append(*syncs, name)
+		case "syncentry":
+			*syncs = append(*syncs, "entry "+name)
+		}
+		return nil
+	}
+	return syncs
+}
+
+// A file or a folder renamed is synced at its new name before its folder: on NTFS its own record holds its
+// names too, and ntfs3 does not write it when it syncs the folder, so that a device failing then left
+// neither name (measured, specs.md §15.12, §17.1).
+func TestTheMovedEntryIsSyncedBeforeItsFolder(t *testing.T) {
+	for _, tc := range []struct {
+		name, from, to string
+		kind           string
+	}{
+		{"a file", "a", "b", KindRename},
+		{"a folder", "d", "e", KindFolder},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t, "t1", "t2")
+			for _, id := range []string{"t1", "t2"} {
+				b.write(id, "a", "x")
+				b.write(id, "d/x", "x")
+			}
+			b.scan(true)
+			b.rename("t1", tc.from, tc.to)
+			b.pass()
+			b.now += 30_000_000_000
+			syncs := b.recordSyncs("t2")
+			out := b.pass()
+			if got := outcomeOf(out, tc.kind, tc.from); got != OutcomeRenamed {
+				t.Fatalf("outcome %q (%+v)", got, out.Operations)
+			}
+			at := slices.Index(*syncs, "entry "+tc.to)
+			if at < 0 || at+1 >= len(*syncs) || (*syncs)[at+1] != "media" {
+				t.Errorf("syncs %q", *syncs)
+			}
+		})
+	}
+}
+
+// A reprise that finds the move done syncs the file at its new name too, as the crash may have come before
+// that sync (specs.md §17.2).
+func TestAReprisesSyncsTheMovedEntry(t *testing.T) {
+	b := pool(t)
+	b.rename("t1", "a", "b")
+	b.pass()
+	b.now += 30_000_000_000
+	b.crashAt("moved")
+	syncs := b.recordSyncs("t2")
+	b.pass()
+	if got := b.count("SELECT count(*) FROM ops WHERE state = 'done'"); got != 1 {
+		t.Fatalf("%d operations done", got)
+	}
+	if !slices.Contains(*syncs, "entry b") {
+		t.Errorf("syncs %q", *syncs)
 	}
 }
 

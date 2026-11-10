@@ -116,6 +116,14 @@ func (d *faultDir) Sync() error {
 	return d.Dir.Sync()
 }
 
+// SyncEntry is about the name it syncs.
+func (d *faultDir) SyncEntry(name string) error {
+	if err := d.fail("syncentry", name); err != nil {
+		return err
+	}
+	return d.Dir.SyncEntry(name)
+}
+
 func (d *faultDir) SetMtime(t Time) error {
 	if err := d.fail("setmtime", d.name); err != nil {
 		return err

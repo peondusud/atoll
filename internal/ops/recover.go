@@ -144,7 +144,7 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	if !decision.Finish {
 		return d.undoMove(ctx, db, op, src, dst, decision.Warn, nowNS)
 	}
-	if err := d.finishNames(src, decision.RemoveSource, op.FileKey); err != nil {
+	if err := d.finishNames(src, dst, decision.RemoveSource, op.FileKey); err != nil {
 		return err
 	}
 	// Looked at again, as the source's name going moved its change time and link count.
@@ -195,7 +195,7 @@ func (d *Disk) recoverRestore(ctx context.Context, db *sql.DB, op *Op, nowNS int
 	if !decision.Finish {
 		return d.undoMove(ctx, db, op, src, dst, decision.Warn, nowNS)
 	}
-	if err := d.finishNames(src, decision.RemoveSource, op.FileKey); err != nil {
+	if err := d.finishNames(src, dst, decision.RemoveSource, op.FileKey); err != nil {
 		return err
 	}
 	// Looked at again, as for a copy going to the trash: what is there now is what gets recorded.
@@ -220,8 +220,12 @@ func (d *Disk) recoverRestore(ctx context.Context, db *sql.DB, op *Op, nowNS int
 }
 
 // undoMove says that a move did not happen, once what it left is durable: a name that went back, or
-// one that went (specs.md §17.2). The way to the target was synced first.
+// one that went, and so the file at the source, whose own record holds its names (specs.md §17.2). The
+// way to the target was synced first.
 func (d *Disk) undoMove(ctx context.Context, db *sql.DB, op *Op, src, dst []string, warn bool, nowNS int64) error {
+	if err := d.syncEntryAt(src); err != nil {
+		return err
+	}
 	if err := d.syncFolder(src[:len(src)-1]); err != nil {
 		return err
 	}
@@ -270,7 +274,7 @@ func (d *Disk) recoverRename(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if !decision.Finish {
 		return d.undoMove(ctx, db, op, src, dst, decision.Warn, nowNS)
 	}
-	if err := d.finishNames(src, decision.RemoveSource, op.FileKey); err != nil {
+	if err := d.finishNames(src, dst, decision.RemoveSource, op.FileKey); err != nil {
 		return err
 	}
 	target, st, err := d.seenRenamed(dst, op, &row)
@@ -337,12 +341,16 @@ func (d *Disk) moveBack(from, to []string) error {
 		return classify(err)
 	}
 	defer target.close()
-	if err := source.Rename(from[len(from)-1], target.Dir, to[len(to)-1]); err != nil {
+	name := to[len(to)-1]
+	if err := source.Rename(from[len(from)-1], target.Dir, name); err != nil {
 		if !fsx.IsFlagRefused(err) {
 			return classify(err)
 		}
-		if err := source.Link(from[len(from)-1], target.Dir, to[len(to)-1]); err != nil {
+		if err := source.Link(from[len(from)-1], target.Dir, name); err != nil {
 			return classify(err)
+		}
+		if err := syncEntry(target.Dir, name); err != nil {
+			return err
 		}
 		if err := target.Sync(); err != nil {
 			return lost(err)
@@ -350,6 +358,9 @@ func (d *Disk) moveBack(from, to []string) error {
 		if err := source.Unlink(from[len(from)-1]); err != nil {
 			return classify(err)
 		}
+	}
+	if err := syncEntry(target.Dir, name); err != nil {
+		return err
 	}
 	if err := target.Sync(); err != nil {
 		return lost(err)
@@ -383,15 +394,28 @@ func (d *Disk) dropName(path []string, fileKey string) error {
 	if err != nil {
 		return classify(err)
 	}
-	if err := parent.Unlink(name); err != nil && !fsx.IsAbsent(err) {
+	switch err := parent.Unlink(name); {
+	case err == nil:
+	case fsx.IsAbsent(err):
+		// Gone since the look, or a name its record no longer holds, which ntfs3 leaves when a device
+		// fails between the syncs of a move's two folders, and answers with ENOENT, removing nothing
+		// (measured). Only a look can tell, and then nothing can be concluded.
+		if _, err := holds(parent.Dir, name, byKey(fileKey)); err == nil {
+			return fmt.Errorf("%w: %q", ErrNamesDisagree, name)
+		}
+	default:
 		return classify(err)
 	}
 	return restoreTime(parent.Dir, before.Mtime)
 }
 
-// syncWay syncs every folder from the top of the disk to the one that holds a name: the operation
-// does not say which of them were made.
+// syncWay syncs what a name leads to, if anything, then every folder from the one that holds it to the
+// top of the disk: the operation does not say which of them were made, nor whether the move reached
+// the sync of what it moved.
 func (d *Disk) syncWay(path []string) error {
+	if err := d.syncEntryAt(path); err != nil {
+		return err
+	}
 	for end := len(path) - 1; end >= 0; end-- {
 		if err := d.syncFolder(path[:end]); err != nil {
 			return err
@@ -401,14 +425,31 @@ func (d *Disk) syncWay(path []string) error {
 }
 
 // finishNames takes the source's name away, the way to the target being durable, and makes that durable
-// before anything is committed on the strength of it.
-func (d *Disk) finishNames(src []string, removeSource bool, fileKey string) error {
+// before anything is committed on the strength of it: the file at the target, whose own record lost a
+// name, then the source's folder.
+func (d *Disk) finishNames(src, dst []string, removeSource bool, fileKey string) error {
 	if removeSource {
 		if err := d.dropName(src, fileKey); err != nil {
 			return err
 		}
+		if err := d.syncEntryAt(dst); err != nil {
+			return err
+		}
 	}
 	return d.syncFolder(src[:len(src)-1])
+}
+
+// syncEntryAt syncs what a path leads to, when there is something there.
+func (d *Disk) syncEntryAt(path []string) error {
+	parent, err := d.open(path[:len(path)-1])
+	switch {
+	case fsx.IsAbsent(err):
+		return nil
+	case err != nil:
+		return classify(err)
+	}
+	defer parent.close()
+	return syncEntry(parent.Dir, path[len(path)-1])
 }
 
 func (d *Disk) syncFolder(path []string) error {
