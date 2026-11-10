@@ -264,9 +264,39 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 				return nil, fmt.Errorf("catalog: %w", err)
 			}
 		}
+		if s.writable(id) {
+			if err := s.cleanTmp(ctx, id, handle); err != nil {
+				handle.Close()
+				return nil, err
+			}
+		}
 	}
 	sl.handle = handle
 	return handle, nil
+}
+
+// cleanTmp removes what copies done or undone left in the disk's tmp/, now that a command that writes has
+// it open, so that no disk is woken for this alone (specs.md §14.2). A disk that fails there is lost; any
+// other failure leaves the parts for the next time.
+func (s *Session) cleanTmp(ctx context.Context, id string, handle *ops.Disk) error {
+	named, err := catalog.PartOps(ctx, s.db, id)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	if len(named) == 0 {
+		return nil
+	}
+	keep, err := catalog.PartsInUse(ctx, s.db, id)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	switch err := handle.CleanTmp(named, keep); {
+	case errors.Is(err, ops.ErrDiskLost):
+		return s.lose(ctx, id, err)
+	case err != nil:
+		slog.Warn("parts stay in tmp/", "disk", id, "error", err)
+	}
+	return nil
 }
 
 func readable(state solver.DiskState) bool {

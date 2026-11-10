@@ -116,6 +116,29 @@ func (d *faultDir) Sync() error {
 	return d.Dir.Sync()
 }
 
+// CreateFile and OpenWritable are about the name they open, and so is every call on what they open.
+func (d *faultDir) CreateFile(name string, mode uint32) (WritableFile, error) {
+	if err := d.fail("create", name); err != nil {
+		return nil, err
+	}
+	f, err := d.Dir.CreateFile(name, mode)
+	if err != nil {
+		return nil, err
+	}
+	return &faultWritable{WritableFile: f, name: name, fail: d.fail}, nil
+}
+
+func (d *faultDir) OpenWritable(name string) (WritableFile, error) {
+	if err := d.fail("openwrite", name); err != nil {
+		return nil, err
+	}
+	f, err := d.Dir.OpenWritable(name)
+	if err != nil {
+		return nil, err
+	}
+	return &faultWritable{WritableFile: f, name: name, fail: d.fail}, nil
+}
+
 // SyncEntry is about the name it syncs.
 func (d *faultDir) SyncEntry(name string) error {
 	if err := d.fail("syncentry", name); err != nil {
@@ -144,9 +167,92 @@ func (f *faultFile) Read(p []byte) (int, error) {
 	return f.File.Read(p)
 }
 
+func (f *faultFile) ReadAt(p []byte, off int64) (int, error) {
+	if err := f.fail("read", f.name); err != nil {
+		return 0, err
+	}
+	return f.File.ReadAt(p, off)
+}
+
 func (f *faultFile) Info() (Stat, error) {
 	if err := f.fail("fileinfo", f.name); err != nil {
 		return Stat{}, err
 	}
 	return f.File.Info()
+}
+
+type faultWritable struct {
+	WritableFile
+	name string
+	fail func(call, name string) error
+}
+
+func (f *faultWritable) Write(p []byte) (int, error) {
+	if err := f.fail("write", f.name); err != nil {
+		return 0, err
+	}
+	return f.WritableFile.Write(p)
+}
+
+func (f *faultWritable) WriteAt(p []byte, off int64) (int, error) {
+	if err := f.fail("write", f.name); err != nil {
+		return 0, err
+	}
+	return f.WritableFile.WriteAt(p, off)
+}
+
+func (f *faultWritable) ReadAt(p []byte, off int64) (int, error) {
+	if err := f.fail("readback", f.name); err != nil {
+		return 0, err
+	}
+	return f.WritableFile.ReadAt(p, off)
+}
+
+func (f *faultWritable) Info() (Stat, error) {
+	if err := f.fail("fileinfo", f.name); err != nil {
+		return Stat{}, err
+	}
+	return f.WritableFile.Info()
+}
+
+func (f *faultWritable) Truncate(size int64) error {
+	if err := f.fail("truncate", f.name); err != nil {
+		return err
+	}
+	return f.WritableFile.Truncate(size)
+}
+
+func (f *faultWritable) Sync() error {
+	if err := f.fail("filesync", f.name); err != nil {
+		return err
+	}
+	return f.WritableFile.Sync()
+}
+
+func (f *faultWritable) SetTimes(atime, mtime Time) error {
+	if err := f.fail("settimes", f.name); err != nil {
+		return err
+	}
+	return f.WritableFile.SetTimes(atime, mtime)
+}
+
+func (f *faultWritable) SetMode(mode uint32) error {
+	if err := f.fail("setmode", f.name); err != nil {
+		return err
+	}
+	return f.WritableFile.SetMode(mode)
+}
+
+func (f *faultWritable) SetOwner(uid, gid uint32) error {
+	if err := f.fail("setowner", f.name); err != nil {
+		return err
+	}
+	return f.WritableFile.SetOwner(uid, gid)
+}
+
+func (f *faultWritable) DropCache() error {
+	if err := f.fail("dropcache", f.name); err != nil {
+		return err
+	}
+	return f.WritableFile.DropCache()
 }

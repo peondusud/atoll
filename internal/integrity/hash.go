@@ -84,6 +84,12 @@ func HashReader(ctx context.Context, r io.Reader) (file [HashSize]byte, chunks [
 	}
 }
 
+// ChunkSum is the hash of one chunk on its own, as a Hasher records it: what a copy checks a chunk
+// against, one at a time (specs.md §14, §16).
+func ChunkSum(chunk []byte) [HashSize]byte {
+	return blake3.Sum256(chunk)
+}
+
 // Sum returns the whole-file hash and the chunk hashes so far, concatenated. A
 // file has as many chunks as it takes to hold its bytes: none when it is empty,
 // and no empty chunk after a size that is an exact multiple. Sum changes nothing,

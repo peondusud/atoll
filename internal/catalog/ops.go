@@ -20,6 +20,7 @@ const (
 	OpUnlink  = "unlink"
 	OpMkdir   = "mkdir"
 	OpRename  = "rename"
+	OpCreate  = "create"
 )
 
 // Op is one operation of the journal.
@@ -51,11 +52,16 @@ type eventData struct {
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	Source  string `json:"source,omitempty"`
 }
 
 // writeEvent writes an event, in the transaction of the operation it speaks of, so before it runs.
 func writeEvent(ctx context.Context, tx *sql.Tx, nowNS int64, level, kind string, op *Op, reason string) error {
-	data := eventData{Op: op.ID, Disk: op.Disk, Reason: reason}
+	return writeEventData(ctx, tx, nowNS, level, kind, op, eventData{Reason: reason})
+}
+
+func writeEventData(ctx context.Context, tx *sql.Tx, nowNS int64, level, kind string, op *Op, data eventData) error {
+	data.Op, data.Disk = op.ID, op.Disk
 	if utf8.ValidString(op.Path) {
 		data.Path = op.Path
 	} else {
@@ -182,8 +188,12 @@ func finishCopy(ctx context.Context, tx *sql.Tx, op *Op) error {
 	return dropFileIfEmpty(ctx, tx, fileID)
 }
 
-// dropFileIfEmpty removes a file with no copy left, with its chunks and jobs.
+// dropFileIfEmpty removes a file with no copy left, with its chunks and jobs. A pending copy is nothing
+// on a disk, and has no source left to be made from: it goes with its file (specs.md §14.1).
 func dropFileIfEmpty(ctx context.Context, tx *sql.Tx, fileID int64) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM copies WHERE file_id = ?1 AND state = 'pending' AND NOT EXISTS(SELECT 1 FROM copies o WHERE o.file_id = ?1 AND o.state <> 'pending')", fileID); err != nil {
+		return fmt.Errorf("pending copies: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE id = ?1 AND NOT EXISTS(SELECT 1 FROM copies WHERE file_id = ?1)", fileID); err != nil {
 		return fmt.Errorf("file: %w", err)
 	}

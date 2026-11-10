@@ -68,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStatus(configPath, args[1:], stdout, stderr)
 	case "prune":
 		return runPrune(configPath, args[1:], stdout, stderr)
+	case "replicate":
+		return runReplicate(configPath, args[1:], stdout, stderr)
 	case "trash":
 		return runTrash(configPath, args[1:], stdout, stderr)
 	case "daemon":

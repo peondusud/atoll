@@ -2,6 +2,7 @@ package fsx
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -217,6 +218,126 @@ func TestOpenFileRefusesAFifoWithoutWaiting(t *testing.T) {
 	st, err := dir.Stat("pipe")
 	if err != nil || st.Kind != KindOther {
 		t.Errorf("Stat: %+v, %v", st, err)
+	}
+}
+
+// TestWritableFile: a copy in progress is made by its name and never over one that exists, written,
+// read back at any offset, given its times, mode and owner through its handle, and opened again to
+// resume it. A symlink, a folder or a FIFO at the name is never opened for writing (specs.md §14.2).
+func TestWritableFile(t *testing.T) {
+	top := t.TempDir()
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	f, err := dir.CreateFile("1.part", 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte("hello world")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("W"), 6); err != nil {
+		t.Fatal(err)
+	}
+	when := Time{Sec: 1600000000, Nsec: 123456789}
+	if err := f.SetTimes(when, when); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetMode(0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetOwner(uint32(os.Getuid()), uint32(os.Getgid())); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DropCache(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := f.Info()
+	if err != nil || st.Kind != KindFile || st.Size != 11 || st.Mode != 0o640 || st.Mtime != when {
+		t.Errorf("%+v, %v", st, err)
+	}
+	back := make([]byte, 5)
+	if n, err := f.ReadAt(back, 6); n != 5 || err != nil || string(back) != "World" {
+		t.Errorf("read back %q, %d, %v", back, n, err)
+	}
+	if _, err := f.ReadAt(back, 9); !errors.Is(err, io.EOF) {
+		t.Errorf("past the end: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.CreateFile("1.part", 0o600); !IsExisting(err) {
+		t.Errorf("made over one that exists: %v", err)
+	}
+	again, err := dir.OpenWritable("1.part")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := again.Truncate(5); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := again.Info(); err != nil || st.Size != 5 || st.Ino == 0 {
+		t.Errorf("truncated: %+v, %v", st, err)
+	}
+	_ = again.Close()
+	if err := os.Symlink("1.part", filepath.Join(top, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(top, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(top, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dir.OpenWritable("link"); !IsUnreadableName(err) {
+		t.Errorf("a symlink: %v", err)
+	}
+	for _, name := range []string{"sub", "pipe"} {
+		if w, err := dir.OpenWritable(name); err == nil || (name == "pipe" && !errors.Is(err, ErrNotARegularFile)) {
+			if w != nil {
+				_ = w.Close()
+			}
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// What a resume reads of the source: any offset of a file opened for reading.
+	r, err := dir.OpenFile("1.part")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.Close() }()
+	if n, err := r.ReadAt(back[:2], 3); n != 2 || err != nil || string(back[:2]) != "lo" {
+		t.Errorf("ReadAt: %q, %d, %v", back[:2], n, err)
+	}
+	var calls []string
+	faulty := Fault(dir, func(call, name string) error {
+		calls = append(calls, call+" "+name)
+		if call == "filesync" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	w, err := faulty.CreateFile("2.part", 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Sync(); !errors.Is(err, syscall.EIO) {
+		t.Errorf("sync: %v", err)
+	}
+	_ = w.Close()
+	if w, err := faulty.OpenWritable("2.part"); err == nil {
+		_ = w.Close()
+	}
+	if !slices.Equal(calls, []string{"create 2.part", "write 2.part", "filesync 2.part", "openwrite 2.part"}) {
+		t.Errorf("calls %q", calls)
 	}
 }
 
