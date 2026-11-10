@@ -1134,16 +1134,16 @@ const movedHere = `SELECT 1 FROM copies o WHERE o.file_id = c.file_id AND o.gone
 // as what landed since must not dilute a hold that stands (specs.md §15.6).
 func CopiesBefore(ctx context.Context, db *sql.DB, disk string, ns int64) (int64, error) {
 	var count int64
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM copies WHERE disk_id = ? AND first_seen_ns < ?", disk, ns).Scan(&count); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM copies WHERE disk_id = ? AND first_seen_ns < ? AND state <> 'pending'", disk, ns).Scan(&count); err != nil {
 		return 0, fmt.Errorf("copies of %q: %w", disk, err)
 	}
 	return count, nil
 }
 
-// CopyCount counts the copies on a disk.
+// CopyCount counts the copies on a disk, which a pending copy is not yet (specs.md §14.1).
 func CopyCount(ctx context.Context, db *sql.DB, disk string) (int64, error) {
 	var count int64
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM copies WHERE disk_id = ?", disk).Scan(&count); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM copies WHERE disk_id = ? AND state <> 'pending'", disk).Scan(&count); err != nil {
 		return 0, fmt.Errorf("copies of %q: %w", disk, err)
 	}
 	return count, nil

@@ -379,13 +379,19 @@ func renameLeft(t *testing.T, b *passBench, after *jobs.Outcome, source, target 
 	}
 }
 
+// namesDisagree says whether two names lead to one file that has a single link: one of them is a name its
+// record no longer holds (measured on ntfs3).
+func namesDisagree(a, b string) bool {
+	var sa, sb syscall.Stat_t
+	return syscall.Lstat(a, &sa) == nil && syscall.Lstat(b, &sb) == nil && sa.Ino == sb.Ino && sa.Nlink == 1
+}
+
 // concludesNothing says whether two names lead to one file that has a single link: a name its record no
 // longer holds, which ntfs3 leaves when a device fails between the syncs of a move's two folders
 // (measured). The reprise must then have concluded nothing, and the content be whole at both names.
 func concludesNothing(t *testing.T, state, a, b string) bool {
 	t.Helper()
-	var sa, sb syscall.Stat_t
-	if syscall.Lstat(a, &sa) != nil || syscall.Lstat(b, &sb) != nil || sa.Ino != sb.Ino || sa.Nlink != 1 {
+	if !namesDisagree(a, b) {
 		return false
 	}
 	t.Logf("a name and its record disagree: %s and %s", a, b)

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/replicate.schema.json",
+  "title": "atoll replicate --json",
+  "description": "Each job queued or run below the path, by path in byte order, then by the target's position (specs.md §14.3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "applied",
+    "bytes",
+    "copies"
+  ],
+  "properties": {
+    "applied": {
+      "type": "boolean",
+      "description": "Whether it was allowed to write: false with --dry-run."
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The sizes of the copies to-replicate or replicated."
+    },
+    "copies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/copy"
+      }
+    }
+  },
+  "$defs": {
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "source",
+        "size",
+        "outcome"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "disk": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The target."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The disk the copy is read from."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcome": {
+          "description": "specs.md §14.1. queued: queued, to run when it is due, without --now or --force.",
+          "enum": [
+            "replicated",
+            "queued",
+            "to-replicate",
+            "changed",
+            "conflict",
+            "path-taken",
+            "name-refused",
+            "no-room",
+            "disk-unavailable",
+            "io-error"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,172 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14.2, §17.2",
+  "description": "A crash at source-synced, once the name moved: the reprise finds the copy at its name and finishes the operation with the hashes the job recorded, and the run has nothing left to do.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a",
+        "--now"
+      ],
+      "crash_at": "source-synced",
+      "exit": 137
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, disk_id, kind, CAST(path AS TEXT), CAST(path2 AS TEXT), file_key IS NOT NULL, started_ns, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "t2",
+          "create",
+          "a",
+          "1.part",
+          1,
+          1767225600000000000,
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a",
+        "--now",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "bytes": 0,
+        "copies": []
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, disk_id, kind, CAST(path AS TEXT), CAST(path2 AS TEXT), file_key IS NOT NULL, started_ns, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "t2",
+          "create",
+          "a",
+          "1.part",
+          1,
+          1767225600000000000,
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state, file_key IS NOT NULL FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "user",
+          "ok",
+          1
+        ],
+        [
+          "t2",
+          "atoll",
+          "ok",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state, lower(hex(blake3)) FROM files",
+      "rows": [
+        [
+          "a",
+          "ok",
+          "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT (SELECT count(*) FROM jobs), (SELECT count(*) FROM job_chunks)",
+      "rows": [
+        [
+          0,
+          0
+        ]
+      ]
+    }
+  ]
+}

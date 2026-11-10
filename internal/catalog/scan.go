@@ -32,15 +32,15 @@ func scanKnown(rows *sql.Rows, k *KnownCopy, path *[]byte, more ...any) error {
 	return nil
 }
 
-// EachKnownCopy gives the copies a disk is known to hold, by where they sit in byte order, and keeps
-// none: at 200,000 files a map of them took about 40 MB (specs.md §26). CROSS JOIN keeps files as the
+// EachKnownCopy gives the copies a disk is known to hold, by where they sit in byte order. A pending
+// copy is not one: the disk holds nothing of it yet (specs.md §14.1). It keeps none: at 200,000 files a map of them took about 40 MB (specs.md §26). CROSS JOIN keeps files as the
 // outer table, whose index on lpath is the order wanted, so that nothing has to be sorted. The few
 // that have not followed a rename come from their own index, and the two are merged.
 func EachKnownCopy(ctx context.Context, db *sql.DB, disk string, fn func(*KnownCopy)) error {
 	settled, err := db.QueryContext(ctx, `
 		SELECT f.lpath, `+knownColumns+`
 		FROM files f CROSS JOIN copies c ON c.file_id = f.id AND c.disk_id = ?
-		WHERE c.old_lpath IS NULL
+		WHERE c.old_lpath IS NULL AND c.state <> 'pending'
 		ORDER BY f.lpath`, disk)
 	if err != nil {
 		return fmt.Errorf("copies of %q: %w", disk, err)
@@ -49,7 +49,7 @@ func EachKnownCopy(ctx context.Context, db *sql.DB, disk string, fn func(*KnownC
 	behind, err := db.QueryContext(ctx, `
 		SELECT c.old_lpath, `+knownColumns+`, f.lpath
 		FROM copies c JOIN files f ON f.id = c.file_id
-		WHERE c.disk_id = ? AND c.old_lpath IS NOT NULL
+		WHERE c.disk_id = ? AND c.old_lpath IS NOT NULL AND c.state <> 'pending'
 		ORDER BY c.old_lpath`, disk)
 	if err != nil {
 		return fmt.Errorf("copies of %q: %w", disk, err)
@@ -224,6 +224,18 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 		return fmt.Errorf("prepare: %w", err)
 	}
 	defer func() { _ = addCopy.Close() }()
+	// What took the place of a pending copy is the file's copy on that disk now, and the job that would
+	// have made one goes with it: its rename would meet this file (specs.md §14.1).
+	dropPending, err := tx.PrepareContext(ctx, "DELETE FROM copies WHERE file_id = ? AND disk_id = ? AND state = 'pending'")
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer func() { _ = dropPending.Close() }()
+	dropJob, err := tx.PrepareContext(ctx, "DELETE FROM jobs WHERE kind = 'replicate' AND file_id = ? AND dst_disk = ?")
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer func() { _ = dropJob.Close() }()
 	for i := range copies {
 		c := &copies[i]
 		var id, size int64
@@ -245,6 +257,12 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 			}
 		default:
 			return fmt.Errorf("%q: file: %w", c.Path, err)
+		}
+		if _, err := dropPending.ExecContext(ctx, id, disk); err != nil {
+			return fmt.Errorf("%q: pending copy: %w", c.Path, err)
+		}
+		if _, err := dropJob.ExecContext(ctx, id, disk); err != nil {
+			return fmt.Errorf("%q: job: %w", c.Path, err)
 		}
 		if _, err := addCopy.ExecContext(ctx, id, disk, c.FileKey, c.Nlink, c.Size, c.MtimeNS, c.CtimeNS, c.BtimeNS, nowNS); err != nil {
 			return fmt.Errorf("%q: copy: %w", c.Path, err)
@@ -522,12 +540,16 @@ func FileCount(ctx context.Context, db *sql.DB) (int, error) {
 	return count, nil
 }
 
-// CopyMark is a new state for a copy.
+// CopyMark is a new state for a copy, or MarkCanceled.
 type CopyMark struct {
 	FileID int64
 	Disk   string
 	State  string
 }
+
+// MarkCanceled cancels a pending copy that a plan no longer keeps: its row goes, with its job (specs.md
+// §14.1).
+const MarkCanceled = "canceled"
 
 // StateChange is a new state for a file, and nothing else.
 type StateChange struct {
@@ -569,6 +591,12 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate
 		}
 		defer func() { _ = mark.Close() }()
 		for _, m := range marks {
+			if m.State == MarkCanceled {
+				if err := cancelPending(ctx, tx, m.FileID, m.Disk); err != nil {
+					return err
+				}
+				continue
+			}
 			if _, err := mark.ExecContext(ctx, m.State, m.FileID, m.Disk); err != nil {
 				return fmt.Errorf("copy of file %d on %q: %w", m.FileID, m.Disk, err)
 			}

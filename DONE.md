@@ -2,9 +2,42 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The copy pipeline: `atoll replicate` (specs.md §9, §14, §14.1, §14.2, §14.3, §17.2)
+
+Commits "Specify the copy pipeline and atoll replicate", "Copy a file with atoll replicate", "Test what each failure of a copy leaves, and re-read replicas with --force", "Close what the mutations of the copy pipeline found" and "Record the copy pipeline in DONE.md and LESSONS.md", on `copy-pipeline`.
+
+- The maintainer's decisions:
+  - `atoll replicate <path> [--now | --force] [--dry-run]` first; the daemon and the `deferred` mode come next;
+  - a queued copy is a `replicate` job and a `copies` row `pending` on its target, which holds its room and its name for later plans;
+  - `api/schemas/replicate.schema.json` has prune's shape and exit codes, and the command takes no `--yes`, as it creates and moves nothing.
+- What it does:
+  - `atoll replicate` plans as a scan does, with the `manual` files below the path released, and queues their copies. With `--now` it runs every job of those files; `--force` also re-reads first the copies Atoll made of them, as `scan --full` does.
+  - Each job is one operation `create`: a look at the target, the part `<op id>.part` made in `<workdir>/tmp/` with mode 0600, the copy with its chunk hashes recorded every 64 MiB, a look at the source again, its times and attributes restored, the re-read without cache against the chunk hashes, the whole hash recorded before anything moves, the parents made like the source's folders, the rename without replacing, each name synced before its folder, and one transaction that makes the copy `ok`, verified, gives the file its hash when it had none and verifies the source.
+  - A resume keeps the chunks of its part that still match their hashes and reads the source from the first one that does not. The reprise of a `create` follows a table of its own, and `tmp/` loses what operations done or undone left when a command that writes opens the disk.
+  - A pending copy is nothing on its disk: a walk is not told of it, the propagation does not see it, `--full` reads nothing of it, the guard does not count it. It follows its file's rename, goes with its last copy, and a plan cancels it with its job when it no longer keeps it. A file found where one was pending takes its place.
+- Found by testing:
+  - a resume truncated its part to whole chunks, so the last short chunk grew to 4 MiB and the copy read back wrong (a scenario);
+  - `no-room` ended its job instead of putting it back in the queue (a unit test);
+  - on ntfs3, a device that failed at `target-synced` left two names to the copy, the reprise rightly concluded nothing, and the run then judged the job anyway: its own copy at the target read as a conflict, and the job and its pending copy went. A job still `running` after the reprise now waits (qemu, Linux 6.12 and 7.3).
+- Measured in qemu, Linux 6.12.116 and 7.3.1: a file of three chunks and one below a private folder copied both ways between ext4 and each of ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g, read back through a cold cache; and a device failing at each of the six points of a copy on ext4, XFS, ntfs3 and ntfs-3g, then the next run resuming or finishing it.
+- Also decided in the work, and confirmed by the maintainer:
+  - no `failed` state yet: `conflict`, `path-taken` and `name-refused` end the job with its pending copy, and the next plan decides again; `io-error`, `changed` and `no-room` put it back, `changed` not before `settle`;
+  - a file in `conflict` is never queued, and lines are given for jobs only;
+  - the outcome `queued`, for a run that only queues;
+  - the job's payload `{"part", "blake3"}`, and the event `replicate`, with `source`;
+  - a look at the target before anything is copied, so that a large file is not copied only to meet a taken path at the rename;
+  - `--force` re-reads the copies Atoll made, before it plans;
+  - `no-room` drops the part, as it would hold the room it lacks;
+  - `tmp/` is cleaned when a command that writes opens a disk, so that no disk is woken for it;
+  - with `replication.enabled = false`, nothing is queued or copied, it says so on standard error, and exits with 0;
+  - `--now` ignores `not_before_ns` as well as the window.
+- Memory and time, measured on 200,000 empty files all on one of two disks (§26): `atoll replicate` on the folder that holds them peaks at about 175 MiB for a dry run and 178 MiB for queuing every copy, in 8 s; with every copy pending a scan peaks at 179 MiB and a pass at 180 MiB, `status` at 21 MiB; 500 copies with `--now` take 9 s. All under the 190.7 MiB of 200 MB.
+- Left for later, in [TODO.md](TODO.md): the daemon, which runs due jobs; `max_parallel_per_disk` and the low I/O priority; refresh jobs; the creation time on Windows.
+- Verified: `go test ./...`, the race detector, lint on the default, conformance and loopdev builds, 456 scenarios (13 new), and `test/loopdev` in qemu on both kernels. Of 54 mutations of the pipeline, 53 are caught; the last makes a source that shrinks during the read go on, which the look after the copy then finds changed.
+
 ## `test/loopdev` in qemu: `make test-qemu`
 
-Commit "Run test/loopdev in qemu, with only Docker on the host", on `test-in-qemu`.
+Commit "Run test/loopdev in qemu, with only Docker on the host", on `test-in-qemu` (pull request #4).
 
 - The maintainer's decision: the throwaway qemu scripts that found the ntfs3 loss go into the repository, so that `test/loopdev` runs on the maintainer's Windows machine.
 - What it does: `make qemu-build` builds `test/loopdev` static, with `go.mod` and `conformance/` beside it, as the tests look for them above their folder. `test/qemu/run.sh`, in a throwaway `debian:13` container, makes an initramfs of that container's files for Debian's kernel and for a mainline one (v7.3.1 from kernel.ubuntu.com), boots each in qemu with no network, and runs the tests there as root. Its exit code is the worst of the guests'. `make test-qemu` does both on Linux, with KVM when there is one; `test/qemu/README.md` gives the two Docker commands for Windows, and what can be chosen: kernels, tests, counts.

@@ -1,0 +1,127 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14, §14.1, §14.2",
+  "description": "A file put at the target since the last scan is a conflict: nothing is copied or journaled, the file there stays as it is, and the job ends with its pending copy. The next scan finds it as the file's copy on that disk, and then nothing is queued.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/a",
+      "text": "theirs"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a",
+        "--now",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "applied": true,
+        "bytes": 0,
+        "copies": [
+          {
+            "path": "a",
+            "disk": "t2",
+            "source": "t1",
+            "size": 1024,
+            "outcome": "conflict"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "theirs"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT (SELECT count(*) FROM jobs), (SELECT count(*) FROM ops), (SELECT count(*) FROM copies WHERE state = 'pending')",
+      "rows": [
+        [
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a",
+        "--now",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "bytes": 0,
+        "copies": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files",
+      "rows": [
+        [
+          "a",
+          "conflict"
+        ]
+      ]
+    }
+  ]
+}

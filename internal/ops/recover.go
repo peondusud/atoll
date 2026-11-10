@@ -83,6 +83,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverMkdir(ctx, db, op, nowNS)
 	case catalog.OpRename:
 		return d.recoverRename(ctx, db, op, nowNS, out)
+	case catalog.OpCreate:
+		return d.recoverCreate(ctx, db, op, nowNS, out)
 	default:
 		return fmt.Errorf("reprise: operation %d: no reprise for %q", op.ID, op.Kind)
 	}
@@ -241,9 +243,72 @@ func (d *Disk) Undo(ctx context.Context, db *sql.DB, op *Op, warn bool, nowNS in
 	if err := catalog.Undo(ctx, db, op, warn, nowNS); err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
-	if op.Path2 != "" && op.Kind != catalog.OpRename {
+	if op.Path2 != "" && op.Kind != catalog.OpRename && op.Kind != catalog.OpCreate {
 		d.CleanTrash(op.Path2)
 	}
+	return nil
+}
+
+// recoverCreate resolves a copy left planned, by the table of specs.md §14.2: the target is the file's
+// path now, and the source the part, both compared by inode with the operation's.
+func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int64, out *Recovered) error {
+	job, err := catalog.JobOfPart(ctx, db, op.Disk, op.Path2)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	target := op.Path
+	if job != nil {
+		target = job.Path
+	}
+	dst, part := d.rootPlace(target), d.tmpPlace(op.Path2)
+	// First, as these can be long, and nothing long may come between the looks and what they decide.
+	if err := d.syncWay(dst); err != nil {
+		return err
+	}
+	if err := d.syncFolder(part[:len(part)-1]); err != nil {
+		return err
+	}
+	atTarget, _, err := d.seen(dst, op)
+	if err != nil {
+		return err
+	}
+	inTmp, _, err := d.seen(part, op)
+	if err != nil {
+		return err
+	}
+	if atTarget != SeenSame {
+		if err := d.undoMove(ctx, db, op, part, dst, false, nowNS); err != nil {
+			return err
+		}
+		switch {
+		case job != nil:
+			if err := catalog.Requeue(ctx, db, job, inTmp == SeenSame); err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+		case inTmp == SeenSame:
+			return d.DropPart(op.Path2)
+		}
+		return nil
+	}
+	if err := d.finishNames(part, dst, inTmp == SeenSame, op.FileKey); err != nil {
+		return err
+	}
+	// Looked at again: what is there now is what gets recorded.
+	atTarget, st, err := d.seen(dst, op)
+	if err != nil {
+		return err
+	}
+	if atTarget != SeenSame {
+		return d.undoMove(ctx, db, op, part, dst, true, nowNS)
+	}
+	found, err := watch.FileFrom(target, &st)
+	if err != nil {
+		return fmt.Errorf("reprise: %w", err)
+	}
+	if err := catalog.FinishCreate(ctx, db, op, job, NewCopyOf(&found), nowNS); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	out.Finished = true
 	return nil
 }
 

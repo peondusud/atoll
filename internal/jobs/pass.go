@@ -271,7 +271,7 @@ func plannedOn(list []catalog.Op, disk string) []string {
 		switch op.Kind {
 		case catalog.OpRename:
 			paths = append(paths, op.Path, op.Path2)
-		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir:
+		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpCreate:
 			paths = append(paths, op.Path)
 		}
 	}
@@ -490,6 +490,11 @@ func (p *pass) propFile(f *catalog.FileRow, follow string, positions map[string]
 	file := solver.PropFile{Path: f.Path, State: solver.State(f.State), Follow: follow}
 	for i := range f.Copies {
 		c := &f.Copies[i]
+		// A pending copy is nothing on its disk yet: it neither moves nor goes, and its job finds the
+		// file's path when it runs (specs.md §14.1, §14.2).
+		if c.State == string(solver.CopyPending) {
+			continue
+		}
 		s := p.verdictOf(f, c)
 		gone := p.goneSince(c, s.Verdict)
 		verdict, due := s.Verdict, p.isDue(c)

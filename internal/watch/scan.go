@@ -413,6 +413,31 @@ type settled struct {
 
 // Settle gives each file its original, its policy and what the plan says, on the whole catalog.
 func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error {
+	return SettleFor(ctx, db, c, now, nil)
+}
+
+// Replicate is what atoll replicate asks of a plan (specs.md §14.3).
+type Replicate struct {
+	// Below says whether a file is at or below the path asked for. Those no longer wait for atoll
+	// replicate, and only their jobs are given.
+	Below func(path string) bool
+	// Queue gets their jobs, in plan order, before anything of the plan is written.
+	Queue func(jobs []PlannedJob) error
+	// DryRun writes nothing of the plan.
+	DryRun bool
+}
+
+// PlannedJob is a job of the plan, with what queueing it needs of its file.
+type PlannedJob struct {
+	solver.Job
+	FileID   int64
+	Size     int64
+	Priority int64
+}
+
+// SettleFor is Settle, and with a Replicate, also what atoll replicate asks of the plan. A file in
+// conflict is never given a job, as nothing says which version to copy (specs.md §14.1).
+func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate) error {
 	diskList, err := catalog.Disks(ctx, db)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
@@ -430,14 +455,30 @@ func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error 
 		return err
 	}
 	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries)}
-	remembered, err := filesForPlan(ctx, db, c, diskList, &input)
+	var below func(string) bool
+	if rep != nil {
+		below = rep.Below
+	}
+	remembered, err := filesForPlan(ctx, db, c, diskList, &input, below)
 	if err != nil {
 		return err
 	}
-	// No job runs yet: the plan's results are all a scan or a pass keeps of it.
-	results, err := solver.PlanResults(input)
+	var results []solver.Result
+	if rep == nil {
+		// No job runs here: the plan's results are all a scan or a pass keeps of it.
+		results, err = solver.PlanResults(input)
+	} else {
+		var plan solver.Plan
+		if plan, err = solver.MakePlan(input); err == nil {
+			results = plan.Results
+			err = rep.Queue(jobsBelow(plan.Jobs, input.Files, remembered, rep.Below))
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
+	}
+	if rep != nil && rep.DryRun {
+		return nil
 	}
 	changed, states, marks, err := applyResults(input.Files, remembered, results)
 	if err != nil {
@@ -447,6 +488,25 @@ func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error 
 		return fmt.Errorf("catalog: %w", err)
 	}
 	return nil
+}
+
+// jobsBelow gives the replicate jobs of the files below a path, leaving out those of a file in conflict.
+func jobsBelow(jobs []solver.Job, files []solver.File, remembered []settled, below func(string) bool) []PlannedJob {
+	at := make(map[string]int, len(files))
+	for i := range files {
+		if below(files[i].Path) {
+			at[files[i].Path] = i
+		}
+	}
+	var out []PlannedJob
+	for _, job := range jobs {
+		i, ok := at[job.Path]
+		if !ok || job.Kind != solver.JobReplicate || remembered[i].state == string(solver.StateConflict) {
+			continue
+		}
+		out = append(out, PlannedJob{Job: job, FileID: remembered[i].id, Size: files[i].Size, Priority: int64(files[i].Placement.Priority)})
+	}
+	return out
 }
 
 func minFreeOf(c *config.Config) (value.MinFree, error) {
@@ -496,7 +556,7 @@ func planEntries(list []catalog.EntryKey) []solver.Entry {
 
 // filesForPlan works out each file's original and policy, gives the plan what it needs of them, and
 // says what else must be remembered of each, in the same order.
-func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input) ([]settled, error) {
+func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input, released func(string) bool) ([]settled, error) {
 	position := make(map[string]int, len(diskList))
 	state := make(map[string]solver.DiskState, len(diskList))
 	for i := range diskList {
@@ -540,8 +600,9 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 				}
 				copies = append(copies, plan)
 			}
+			hold := update.Mode == "manual" && (released == nil || !released(f.Path))
 			input.Files = append(input.Files, solver.File{
-				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: update.Mode == "manual", Copies: copies,
+				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Copies: copies,
 			})
 			entry := settled{id: f.ID, state: f.State}
 			if fileChanged(f, &update) {
@@ -648,6 +709,9 @@ func applyResults(files []solver.File, remembered []settled, results []solver.Re
 			}
 			for _, disk := range result.Back {
 				marks = append(marks, catalog.CopyMark{FileID: r.id, Disk: disk, State: string(solver.CopyOK)})
+			}
+			for _, disk := range result.Cancel {
+				marks = append(marks, catalog.CopyMark{FileID: r.id, Disk: disk, State: catalog.MarkCanceled})
 			}
 		}
 		shown, err := solver.ShownState(applying)
@@ -771,10 +835,73 @@ type copyHash struct {
 	chunks []byte
 }
 
+// ReadReplicas re-reads the copies Atoll made of the files below a path, as a full scan reads a copy, on
+// the disks it may read: what atoll replicate --force does besides --now (specs.md §14.3).
+func ReadReplicas(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, now int64, readable func(id string) bool, below func(string) bool) error {
+	readers := make(map[string]*diskReader, len(c.Disks))
+	defer func() {
+		for _, r := range readers {
+			r.close()
+		}
+	}()
+	order := make(map[string]int, len(c.Disks))
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		order[d.ID] = i
+		if !readable(d.ID) {
+			continue
+		}
+		reader := &diskReader{report: &Report{ID: d.ID}, skip: map[string]bool{}, notReached: map[string]bool{}}
+		root, err := m.OpenRoot(d.Mount, d.Root)
+		if err != nil {
+			reader.fail(err)
+		}
+		reader.root = root
+		readers[d.ID] = reader
+	}
+	files := catalog.NewFileReader(db)
+	for {
+		page, err := files.Next(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for i := range page {
+			f := page[i]
+			if !below(f.Path) {
+				continue
+			}
+			f.Copies = slices.DeleteFunc(f.Copies, func(c catalog.CopyRow) bool { return c.CreatedBy != "atoll" })
+			if len(f.Copies) == 0 {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("replicate: %w", err)
+			}
+			if err := hashFile(ctx, db, &f, readers, order, now); err != nil {
+				return err
+			}
+		}
+	}
+	for _, r := range readers {
+		if r.failed {
+			if err := catalog.SetDiskState(ctx, db, r.report.ID, string(disks.Missing)); err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[string]*diskReader, order map[string]int, now int64) error {
 	copies := make([]*catalog.CopyRow, 0, len(f.Copies))
 	for i := range f.Copies {
-		copies = append(copies, &f.Copies[i])
+		// A pending copy has nothing on its disk to read yet (specs.md §14.1).
+		if f.Copies[i].State != string(solver.CopyPending) {
+			copies = append(copies, &f.Copies[i])
+		}
 	}
 	slices.SortFunc(copies, func(a, b *catalog.CopyRow) int { return cmp.Compare(order[a.Disk], order[b.Disk]) })
 	var read []copyHash

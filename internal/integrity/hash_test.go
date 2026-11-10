@@ -104,6 +104,31 @@ func TestHasherVectors(t *testing.T) {
 // What Sum returns belongs to the caller: changing it changes nothing in the
 // Hasher. Both sizes matter: appending a short chunk's hash can hide a shared array
 // behind a new one, so only an exact multiple would return it as it is.
+// ChunkSum gives what a Hasher records for each chunk, so that a copy checked one chunk at a time is checked
+// against the same hashes.
+func TestChunkSumIsAHashersChunk(t *testing.T) {
+	data := make([]byte, 2*ChunkSize+1000)
+	for i := range data {
+		data[i] = byte(i % 251)
+	}
+	h, err := NewHasher(ChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	_, chunks := h.Sum()
+	var want []byte
+	for at := 0; at < len(data); at += ChunkSize {
+		sum := ChunkSum(data[at:min(at+ChunkSize, len(data))])
+		want = append(want, sum[:]...)
+	}
+	if !bytes.Equal(chunks, want) {
+		t.Errorf("chunks differ: %d bytes, want %d", len(chunks), len(want))
+	}
+}
+
 func TestSumIsACopy(t *testing.T) {
 	for _, size := range []int{6, 8} {
 		h, err := NewHasher(4)

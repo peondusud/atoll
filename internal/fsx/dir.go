@@ -54,6 +54,9 @@ type Time struct {
 	Nsec int64
 }
 
+// OmitTime, given to SetTimes, leaves that time as it is.
+var OmitTime = Time{Nsec: unix.UTIME_OMIT}
+
 // Dir is a handle on a folder of a disk. Everything below it is reached through handles, never
 // through a path from the top, so that a folder renamed during a walk, or a mount that changed,
 // cannot lead elsewhere (invariant 3), and a deep tree has no path limit. No method follows a
@@ -89,6 +92,11 @@ type Dir interface {
 	// is synced, so that a device failing then leaves neither name (measured). A name it cannot open gives
 	// ErrNotOpened.
 	SyncEntry(name string) error
+	// CreateFile makes a regular file with a mode, less the umask, and fails on a name that exists: a
+	// copy in progress (specs.md §14.2). Nothing else on a pool disk is ever opened for writing.
+	CreateFile(name string, mode uint32) (WritableFile, error)
+	// OpenWritable opens a regular file for reading and writing, to resume a copy in progress.
+	OpenWritable(name string) (WritableFile, error)
 	// SetMtime sets the modification time of the folder itself.
 	SetMtime(t Time) error
 	Close() error
@@ -97,7 +105,30 @@ type Dir interface {
 // File is a regular file open for reading.
 type File interface {
 	io.Reader
+	// ReaderAt serves a resume, which reads the source from the first chunk it still needs.
+	io.ReaderAt
 	Info() (Stat, error)
+	Close() error
+}
+
+// WritableFile is a copy in progress, open for reading and writing through its own handle, so that
+// nothing done to it can reach another file by a name.
+type WritableFile interface {
+	io.Writer
+	io.WriterAt
+	io.ReaderAt
+	Info() (Stat, error)
+	Truncate(size int64) error
+	// Sync is fsync of the file.
+	Sync() error
+	// SetTimes sets the access and modification times, as futimens does.
+	SetTimes(atime, mtime Time) error
+	// SetMode and SetOwner set the permission bits and the owner, as fchmod and fchown do.
+	SetMode(mode uint32) error
+	SetOwner(uid, gid uint32) error
+	// DropCache asks the kernel to forget the file's pages, so that the next read comes from the disk,
+	// as a verification needs (specs.md §14, step 5). Only clean pages go: sync first.
+	DropCache() error
 	Close() error
 }
 
@@ -302,6 +333,31 @@ func (d *realDir) SyncEntry(name string) error {
 	return nil
 }
 
+func (d *realDir) CreateFile(name string, mode uint32) (WritableFile, error) {
+	fd, err := unix.Openat(d.fd(), name, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, mode)
+	if err != nil {
+		return nil, fmt.Errorf("create %q: %w", name, err)
+	}
+	return &realWritable{file: os.NewFile(uintptr(fd), name)}, nil
+}
+
+func (d *realDir) OpenWritable(name string) (WritableFile, error) {
+	// O_NONBLOCK: a name that has become a FIFO must not hang this. It changes nothing for a regular file.
+	fd, err := unix.Openat(d.fd(), name, unix.O_RDWR|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open %q: %w", name, err)
+	}
+	f := &realWritable{file: os.NewFile(uintptr(fd), name)}
+	st, err := f.Info()
+	if err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	if st.Kind != KindFile {
+		return nil, errors.Join(fmt.Errorf("open %q: %w", name, ErrNotARegularFile), f.Close())
+	}
+	return f, nil
+}
+
 func (d *realDir) SetMtime(t Time) error {
 	times := []unix.Timespec{{Nsec: unix.UTIME_OMIT}, {Sec: t.Sec, Nsec: t.Nsec}}
 	if err := unix.UtimesNanoAt(d.fd(), ".", times, 0); err != nil {
@@ -339,8 +395,96 @@ func (f *realFile) Read(p []byte) (int, error) {
 	return f.file.Read(p) // not wrapped: io.EOF must stay as it is
 }
 
+func (f *realFile) ReadAt(p []byte, off int64) (int, error) {
+	return f.file.ReadAt(p, off) // not wrapped: io.EOF must stay as it is
+}
+
 func (f *realFile) Info() (Stat, error) {
 	return statx(int(f.file.Fd()), "", unix.AT_EMPTY_PATH)
+}
+
+type realWritable struct {
+	file *os.File
+}
+
+func (f *realWritable) fd() int {
+	return int(f.file.Fd())
+}
+
+func (f *realWritable) Write(p []byte) (int, error) {
+	n, err := f.file.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write %q: %w", f.file.Name(), err)
+	}
+	return n, nil
+}
+
+func (f *realWritable) WriteAt(p []byte, off int64) (int, error) {
+	n, err := f.file.WriteAt(p, off)
+	if err != nil {
+		return n, fmt.Errorf("write %q: %w", f.file.Name(), err)
+	}
+	return n, nil
+}
+
+func (f *realWritable) ReadAt(p []byte, off int64) (int, error) {
+	return f.file.ReadAt(p, off) // not wrapped: io.EOF must stay as it is
+}
+
+func (f *realWritable) Info() (Stat, error) {
+	return statx(f.fd(), "", unix.AT_EMPTY_PATH)
+}
+
+func (f *realWritable) Truncate(size int64) error {
+	if err := unix.Ftruncate(f.fd(), size); err != nil {
+		return fmt.Errorf("truncate %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+func (f *realWritable) Sync() error {
+	if err := unix.Fsync(f.fd()); err != nil {
+		return fmt.Errorf("fsync %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+// SetTimes goes through /proc, as utimensat takes no empty name for a handle: the name there is the
+// handle's own, so nothing else can be reached by it.
+func (f *realWritable) SetTimes(atime, mtime Time) error {
+	times := []unix.Timespec{{Sec: atime.Sec, Nsec: atime.Nsec}, {Sec: mtime.Sec, Nsec: mtime.Nsec}}
+	if err := unix.UtimesNanoAt(unix.AT_FDCWD, "/proc/self/fd/"+strconv.Itoa(f.fd()), times, 0); err != nil {
+		return fmt.Errorf("set the times of %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+func (f *realWritable) SetMode(mode uint32) error {
+	if err := unix.Fchmod(f.fd(), mode); err != nil {
+		return fmt.Errorf("chmod %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+func (f *realWritable) SetOwner(uid, gid uint32) error {
+	if err := unix.Fchown(f.fd(), int(uid), int(gid)); err != nil {
+		return fmt.Errorf("chown %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+func (f *realWritable) DropCache() error {
+	if err := unix.Fadvise(f.fd(), 0, 0, unix.FADV_DONTNEED); err != nil {
+		return fmt.Errorf("drop the cache of %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+func (f *realWritable) Close() error {
+	if err := f.file.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
 }
 
 func (f *realFile) Close() error {
