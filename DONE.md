@@ -4,7 +4,7 @@ Finished work, newest first. Each item names its commits; unless it says otherwi
 
 ## Propagation: `atoll daemon --until-idle` and `atoll guard` (specs.md §15.1, §15.3, §15.6, §15.10, §15.12, §17.2, §25)
 
-Commits "Propagate renames and deletions, with atoll daemon and atoll guard", "Hold a folder back while one renamed inside it waits", "Test what the mutation runs left standing, and fix a dry run" and "State a folder rotation while one waits as a limit", on `propagate-renames-deletions` (pull request #3).
+Commits "Propagate renames and deletions, with atoll daemon and atoll guard", "Hold a folder back while one renamed inside it waits", "Test what the mutation runs left standing, and fix a dry run", "State a folder rotation while one waits as a limit" and "Make the propagation schemas say what their descriptions say", on `propagate-renames-deletions` (pull request #3).
 
 - The maintainer's decisions:
   - the command is `daemon --until-idle`, which does all the work that is due once and exits, so a timer can run it until the watcher exists. It takes no `--yes`: starting it is the consent, and the mass-deletion guard is the safety (invariant 17 now says so);
@@ -29,8 +29,8 @@ Commits "Propagate renames and deletions, with atoll daemon and atoll guard", "H
   - the dry run's differences from a real pass are a class of limits in §15.12;
   - a trash job queued for a deletion stands when its file is decided again, and the job of a refused rename stands beside a deletion's: two clauses in the Deletion row of §15.12;
   - a disk's folder renames are decided in the order of their jobs. Nothing says in what order two disks acted, so across disks a copy decided below a folder's old name is below it like any other, and the next look finds it `moved`.
-- Verified: `go test ./...`, the race detector, lint on both builds, 443 scenarios (269 new) and every vector.
-- Not run: `test/loopdev`'s rename tests in qemu (they compile and lint), the older mutation lists, the real outputs of `daemon` and `guard` against their schemas, and the port written from the documents alone. Not measured again: memory, which before the last seven rounds peaked at about 205 and 208 MiB in the worst passes on 200,000 files, past the 200 MB of §26.
+- Verified: `go test ./...`, the race detector, lint on both builds, 443 scenarios (269 new) and every vector. 2,352 real outputs against their schemas, 809 of them from `daemon` and 28 from `guard`, which refuse 303 broken ones. 18 of those passed at first, each ruled out by a description, §10 or §15.6: a disk's reason as its state says, the format of `next_due` and `up_to`, `up_to` as `done` says, and no paths on a guard not tripped. The schemas now enforce them, and nothing a command prints changes.
+- Not run: `test/loopdev`'s rename tests in qemu (they compile and lint), the older mutation lists, and the port written from the documents alone. Not measured again: memory, which before the last seven rounds peaked at about 205 and 208 MiB in the worst passes on 200,000 files, past the 200 MB of §26.
 
 ## The journal and the trash: `atoll prune` and `atoll trash` (specs.md §6.1, §9, §10, §15.10, §17, §25)
 

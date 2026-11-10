@@ -13,6 +13,8 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["disk", "tripped", "count", "paths"],
+        "if": { "properties": { "tripped": { "const": false } } },
+        "then": { "properties": { "paths": { "maxItems": 0 } } },
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
           "tripped": { "type": "boolean" },
