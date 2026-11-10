@@ -1054,12 +1054,26 @@ func TestAnEditBeforeTheMove(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	check := func(t *testing.T, b *bench, items []PruneItem) {
+	mtime := func(t *testing.T, b *bench) time.Time {
+		t.Helper()
+		info, err := os.Stat(source(b))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.ModTime()
+	}
+	setMtime := func(t *testing.T, b *bench, at time.Time) {
+		t.Helper()
+		if err := os.Chtimes(source(b), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(t *testing.T, b *bench, items []PruneItem, text string) {
 		t.Helper()
 		if len(items) != 1 || items[0].Outcome != OutcomeChanged {
 			t.Fatalf("%+v", items)
 		}
-		if got := b.sourceText(); got != "edited" {
+		if got := b.sourceText(); got != text {
 			t.Errorf("%q", got)
 		}
 		if got := b.text("SELECT state FROM ops"); got != "undone" {
@@ -1083,7 +1097,7 @@ func TestAnEditBeforeTheMove(t *testing.T) {
 			return nil
 		}
 		items, _ := b.prune()
-		check(t, b, items)
+		check(t, b, items, "edited")
 	})
 	t.Run("a change of nothing but the change time", func(t *testing.T) {
 		b := newBench(t)
@@ -1106,24 +1120,51 @@ func TestAnEditBeforeTheMove(t *testing.T) {
 			t.Error("the copy went")
 		}
 	})
-	t.Run("between the link and the unlink", func(t *testing.T) {
-		b := newBench(t)
-		syncs := 0
-		b.fail[b.dirs["t3"]] = func(call, _ string) error {
-			switch call {
-			case "rename":
-				return syscall.EINVAL
-			case "sync":
-				syncs++
-				if syncs == syncsOfAFirstMove-1 {
-					edit(t, b)
-				}
+	// The link moved the change time, so between the link and the unlink only the size, the modification
+	// time and the inode tell what was linked from what took its place, and each must tell alone.
+	for _, tc := range []struct {
+		name   string
+		change func(t *testing.T, b *bench)
+		text   string
+	}{
+		{"between the link and the unlink", edit, "edited"},
+		{"between the link and the unlink, keeping the modification time", func(t *testing.T, b *bench) {
+			at := mtime(t, b)
+			edit(t, b)
+			setMtime(t, b, at)
+		}, "edited"},
+		{"between the link and the unlink, of the same size", func(t *testing.T, b *bench) {
+			at := mtime(t, b)
+			if err := os.WriteFile(source(b), []byte("y"), 0o644); err != nil {
+				t.Fatal(err)
 			}
-			return nil
-		}
-		items, _ := b.prune()
-		check(t, b, items)
-	})
+			setMtime(t, b, at.Add(time.Second))
+		}, "y"},
+		{"replaced between the link and the unlink, of the same size and modification time", func(t *testing.T, b *bench) {
+			at := mtime(t, b)
+			b.replace(source(b), "y")
+			setMtime(t, b, at)
+		}, "y"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t)
+			syncs := 0
+			b.fail[b.dirs["t3"]] = func(call, _ string) error {
+				switch call {
+				case "rename":
+					return syscall.EINVAL
+				case "sync":
+					syncs++
+					if syncs == syncsOfAFirstMove-1 {
+						tc.change(t, b)
+					}
+				}
+				return nil
+			}
+			items, _ := b.prune()
+			check(t, b, items, tc.text)
+		})
+	}
 }
 
 // The fsyncs of each kind of operation, in order: the target before the source, so that the file has a
