@@ -55,4 +55,4 @@ Every item here is a **decision**:
 - `atoll names check`: the CLI over `names.Check`, reading the catalog, with the JSON of `api/schemas/names-check.schema.json`.
 - ntfy alerts, among them the two guards of a disk tripped: for now only the `guards` of a pass, exit code 3 and `atoll guard list` say so.
 - The operation journal (`ops`) covers the trash, the renames of propagation, files and folders, and the copies (`create`) so far (§14.2, §17.1, §17.2). Each new kind of operation needs its own reprise, with kill -9 at each step and fault injection.
-- The break-glass test and the failed-mount test in CI (`test/ci/run.sh`).
+- The break-glass test in CI (`test/ci/run.sh`), which waits for `mergerfs-config`. The failed-mount test runs in `test/loopdev` (`TestAFailedMountIsAMissingDisk`).

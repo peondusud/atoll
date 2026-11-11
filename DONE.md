@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The failed-mount test, on every driver (CLAUDE.md, invariant 4)
+
+Commit "Test a failed mount end to end on every driver", on `failed-mount`.
+
+- `TestAFailedMountIsAMissingDisk`, in `test/loopdev`, so in the qemu job of `test/ci/run.sh`: on ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g, a disk holding two copies is unmounted, which leaves the folder of its mount path, where a service that did not notice, as a media server, makes `media/` and writes a file. A scan and two passes, an hour and two days later, past the debounce of a deletion and with the mass-deletion guard set aside, find the disk `missing`, `not-mounted`: nothing decided, nothing run, the copies' rows as they were, no `copy-gone`, trash, job or guard, and the service's folder as it left it. Mounted again, the disk holds what it held, and a pass has nothing to do.
+- How it was judged: against a mount check that takes a path holding its parent's mount for the disk, it fails on every driver. Without the service's `media/`, the root folder alone, absent, kept that disk `missing`, so the first version caught the broken check only by its reason. With it, the scan, which writes the catalog and relies on the mount check alone, adopted the service's file as a copy and found one of the disk's two copies gone; only the confirmation of a pass, which reads the head past the cache before any write, kept the deletions from being decided.
+- Verified: in qemu on Linux 6.12.116, on the six drivers, and in the local CI; kernel.ubuntu.com did not answer for 7.3.1.
+
 ## The mass-modification guard (specs.md §15.6)
 
 Commit "Hold a modification in mass until someone answers", on `modify-guard`.
