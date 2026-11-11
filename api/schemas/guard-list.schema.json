@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/peondusud/atoll/api/schemas/guard-list.schema.json",
   "title": "atoll guard list --json",
-  "description": "The mass-deletion guard of each disk, by position (specs.md §15.6), from the catalog only.",
+  "description": "The guards of each disk, by position, its mass-deletion guard then its mass-modification guard (specs.md §15.6), from the catalog only.",
   "type": "object",
   "additionalProperties": false,
   "required": ["disks"],
@@ -12,15 +12,16 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["disk", "tripped", "count", "paths"],
+        "required": ["disk", "kind", "tripped", "count", "paths"],
         "if": { "properties": { "tripped": { "const": false } } },
         "then": { "properties": { "paths": { "maxItems": 0 } } },
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["deletions", "modifications"] },
           "tripped": { "type": "boolean" },
           "count": { "type": "integer", "minimum": 0 },
           "paths": {
-            "description": "What it holds, in byte order.",
+            "description": "What it holds, in byte order; for modifications, the files it counted.",
             "type": "array",
             "items": {
               "type": "object",

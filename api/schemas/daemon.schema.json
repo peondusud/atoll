@@ -115,14 +115,15 @@
       }
     },
     "guards": {
-      "description": "The disks whose mass-deletion guard is tripped (specs.md §15.6), by position.",
+      "description": "The guards tripped, by disk position, deletions then modifications (specs.md §15.6).",
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["disk", "count"],
+        "required": ["disk", "kind", "count"],
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["deletions", "modifications"] },
           "count": { "type": "integer", "minimum": 0 }
         }
       }

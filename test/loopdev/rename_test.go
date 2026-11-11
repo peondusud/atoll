@@ -51,7 +51,7 @@ func newPassBench(t *testing.T, v *volume, at string) *passBench {
 	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", file, filepath.Join(dir, "pool")) +
 		fmt.Sprintf("[[disk]]\nid = \"k\"\nuuid = %q\nmount = %q\nfs = %q\n", kept.uuid, keep, kept.fs) +
 		fmt.Sprintf("[[disk]]\nid = \"v\"\nuuid = %q\nmount = %q\nfs = %q\n", v.uuid, at, v.fs) +
-		"[deletes]\ndebounce = \"1s\"\n[deletes.mass_guard]\npercent = \"100%\"\n"
+		"[deletes]\ndebounce = \"1s\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n"
 	c, err := config.Parse([]byte(text))
 	if err != nil {
 		t.Fatal(err)

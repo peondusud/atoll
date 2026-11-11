@@ -109,6 +109,7 @@
         "guards": [
           {
             "disk": "t1",
+            "kind": "deletions",
             "count": 3
           }
         ],
@@ -151,6 +152,7 @@
         "guards": [
           {
             "disk": "t1",
+            "kind": "deletions",
             "count": 3
           }
         ],
@@ -216,6 +218,7 @@
         "disks": [
           {
             "disk": "t1",
+            "kind": "deletions",
             "tripped": true,
             "count": 3,
             "paths": [
@@ -231,7 +234,22 @@
             ]
           },
           {
+            "disk": "t1",
+            "kind": "modifications",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
             "disk": "t2",
+            "kind": "deletions",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
+            "disk": "t2",
+            "kind": "modifications",
             "tripped": false,
             "count": 0,
             "paths": []
@@ -257,6 +275,7 @@
       ],
       "stdout_json": {
         "disk": "t1",
+        "kind": "deletions",
         "done": true,
         "up_to": "2026-01-01T00:01:00.000000000Z"
       }
@@ -399,6 +418,7 @@
       ],
       "stdout_json": {
         "disk": "t1",
+        "kind": "deletions",
         "done": false,
         "up_to": null
       }

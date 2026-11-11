@@ -164,6 +164,7 @@
         "guards": [
           {
             "disk": "t2",
+            "kind": "deletions",
             "count": 3
           }
         ],
@@ -273,6 +274,7 @@
         "guards": [
           {
             "disk": "t2",
+            "kind": "deletions",
             "count": 2
           }
         ],
@@ -291,12 +293,21 @@
         "disks": [
           {
             "disk": "t1",
+            "kind": "deletions",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
+            "disk": "t1",
+            "kind": "modifications",
             "tripped": false,
             "count": 0,
             "paths": []
           },
           {
             "disk": "t2",
+            "kind": "deletions",
             "tripped": true,
             "count": 2,
             "paths": [
@@ -316,6 +327,13 @@
                 "path": "e"
               }
             ]
+          },
+          {
+            "disk": "t2",
+            "kind": "modifications",
+            "tripped": false,
+            "count": 0,
+            "paths": []
           }
         ]
       }

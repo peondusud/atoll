@@ -55,6 +55,7 @@ type daemonOperation struct {
 // daemonGuard is one guard of api/schemas/daemon.schema.json.
 type daemonGuard struct {
 	Disk  string `json:"disk"`
+	Kind  string `json:"kind"`
 	Count int64  `json:"count"`
 }
 
@@ -181,7 +182,7 @@ func daemonOperationOf(op *jobs.Operation) daemonOperation {
 func daemonRestOf(o *jobs.Outcome) daemonRest {
 	rest := daemonRest{Guards: []daemonGuard{}, Waiting: o.Waiting}
 	for i := range o.Guards {
-		rest.Guards = append(rest.Guards, daemonGuard{Disk: o.Guards[i].Disk, Count: o.Guards[i].Count})
+		rest.Guards = append(rest.Guards, daemonGuard{Disk: o.Guards[i].Disk, Kind: o.Guards[i].Kind, Count: o.Guards[i].Count})
 	}
 	if o.NextDue.Valid {
 		due := timeText(o.NextDue.Int64)
@@ -331,7 +332,12 @@ func (t *textDaemon) end(o *jobs.Outcome) error {
 		text.WriteString("a dry run: nothing was written\n")
 	}
 	for i := range o.Guards {
-		fmt.Fprintf(&text, "%s: the mass-deletion guard holds %d copies: atoll guard list\n", o.Guards[i].Disk, o.Guards[i].Count)
+		g := &o.Guards[i]
+		if g.Kind == jobs.GuardModifications {
+			fmt.Fprintf(&text, "%s: the mass-modification guard holds what changed after %d files modified: atoll guard list\n", g.Disk, g.Count)
+			continue
+		}
+		fmt.Fprintf(&text, "%s: the mass-deletion guard holds %d copies: atoll guard list\n", g.Disk, g.Count)
 	}
 	if o.NextDue.Valid {
 		fmt.Fprintf(&text, "%d copies wait until %s\n", o.Waiting, timeText(o.NextDue.Int64))
@@ -349,6 +355,7 @@ func shownB64(path, b64 string) string {
 // guardItem is one disk of api/schemas/guard-list.schema.json.
 type guardItem struct {
 	Disk    string     `json:"disk"`
+	Kind    string     `json:"kind"`
 	Tripped bool       `json:"tripped"`
 	Count   int64      `json:"count"`
 	Paths   []pathItem `json:"paths"`
@@ -357,6 +364,7 @@ type guardItem struct {
 // guardAnswer is the output of api/schemas/guard-answer.schema.json.
 type guardAnswer struct {
 	Disk string  `json:"disk"`
+	Kind string  `json:"kind"`
 	Done bool    `json:"done"`
 	UpTo *string `json:"up_to"`
 }
@@ -405,7 +413,7 @@ func guardList(configPath string, args []string, stdout, stderr io.Writer) int {
 			if it.Tripped {
 				state = "tripped"
 			}
-			fmt.Fprintf(&text, "%s: %s, %d\n", it.Disk, state, it.Count)
+			fmt.Fprintf(&text, "%s, %s: %s, %d\n", it.Disk, it.Kind, state, it.Count)
 			printPaths(&text, "  held", it.Paths)
 		}
 		err = writeText(stdout, text.String())
@@ -437,9 +445,29 @@ func readGuards(c *config.Config) (items []guardItem, err error) {
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, *item)
+		modified, err := readModifyGuard(ctx, db, c.Disks[i].ID, settings, machineNow)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item, *modified)
 	}
 	return items, nil
+}
+
+// readModifyGuard says what the mass-modification guard of a disk holds, from events: tripped while a modify-guard
+// event stands, with the files it counted, as which files wait only a look can tell (specs.md §15.6).
+func readModifyGuard(ctx context.Context, db *sql.DB, disk string, s *guardSettings, now int64) (*guardItem, error) {
+	read, err := catalog.ReadModifyGuard(ctx, db, disk, now, s.modWindow)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	paths := []string{}
+	if read.Stands {
+		if paths, err = catalog.ModifiedPaths(ctx, db, disk, now, s.modWindow, read.AnswerID); err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+	}
+	return &guardItem{Disk: disk, Kind: jobs.GuardModifications, Tripped: read.Stands, Count: read.Count, Paths: pathItems(paths)}, nil
 }
 
 // nowOf reads the clock as a command that looks at no disk does: in a conformance build, that is the
@@ -453,9 +481,10 @@ func nowOf() (int64, error) {
 }
 
 type guardSettings struct {
-	files   int64
-	percent value.Percent
-	window  int64
+	files     int64
+	percent   value.Percent
+	window    int64
+	modWindow int64
 }
 
 func guardSettingsOf(c *config.Config) (*guardSettings, error) {
@@ -471,7 +500,12 @@ func guardSettingsOf(c *config.Config) (*guardSettings, error) {
 	if err != nil {
 		return nil, fmt.Errorf("deletes.mass_guard.window: %w", err)
 	}
-	return &guardSettings{files: files, percent: percent, window: window.Nanoseconds()}, nil
+	text, _ = effective["modifies.mass_guard.window"].(string)
+	modWindow, err := value.ParseDuration(text)
+	if err != nil {
+		return nil, fmt.Errorf("modifies.mass_guard.window: %w", err)
+	}
+	return &guardSettings{files: files, percent: percent, window: window.Nanoseconds(), modWindow: modWindow.Nanoseconds()}, nil
 }
 
 func readGuard(ctx context.Context, db *sql.DB, d *config.Disk, s *guardSettings, now int64) (*guardItem, error) {
@@ -501,12 +535,12 @@ func readGuard(ctx context.Context, db *sql.DB, d *config.Disk, s *guardSettings
 		}
 		slices.Sort(paths)
 	}
-	return &guardItem{Disk: d.ID, Tripped: tripped, Count: count, Paths: pathItems(paths)}, nil
+	return &guardItem{Disk: d.ID, Kind: jobs.GuardDeletions, Tripped: tripped, Count: count, Paths: pathItems(paths)}, nil
 }
 
 func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) int {
 	asJSON := false
-	disk := ""
+	disk, kind := "", ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -519,12 +553,24 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 			disk = args[i]
 		case strings.HasPrefix(a, "--disk=") && disk == "" && a != "--disk=":
 			disk = strings.TrimPrefix(a, "--disk=")
+		case a == "--kind" && i+1 < len(args) && kind == "":
+			i++
+			kind = args[i]
+		case strings.HasPrefix(a, "--kind=") && kind == "":
+			kind = strings.TrimPrefix(a, "--kind=")
 		default:
 			return usage(stderr, fmt.Sprintf("guard %s: unknown argument %q", what, a))
 		}
 	}
 	if disk == "" {
 		return usage(stderr, fmt.Sprintf("guard %s: want --disk", what))
+	}
+	switch kind {
+	case "":
+		kind = jobs.GuardDeletions
+	case jobs.GuardDeletions, jobs.GuardModifications:
+	default:
+		return usage(stderr, fmt.Sprintf("guard %s: --kind is deletions or modifications, not %q", what, kind))
 	}
 	c, err := load(configPath)
 	if err != nil {
@@ -533,11 +579,11 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 	if !hasDisk(c, disk) {
 		return failure(stderr, fmt.Errorf("guard: no disk %q in the configuration", disk))
 	}
-	upTo, err := actOnGuard(c, what, disk)
+	upTo, err := actOnGuard(c, what, kind, disk)
 	if err != nil {
 		return failure(stderr, err)
 	}
-	answer := guardAnswer{Disk: disk, Done: upTo.Valid}
+	answer := guardAnswer{Disk: disk, Kind: kind, Done: upTo.Valid}
 	if upTo.Valid {
 		at := timeText(upTo.Int64)
 		answer.UpTo = &at
@@ -555,7 +601,7 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 	return exitOK
 }
 
-func actOnGuard(c *config.Config, what, id string) (upTo sql.NullInt64, err error) {
+func actOnGuard(c *config.Config, what, kind, id string) (upTo sql.NullInt64, err error) {
 	ctx := context.Background()
 	now, err := nowOf()
 	if err != nil {
@@ -574,6 +620,16 @@ func actOnGuard(c *config.Config, what, id string) (upTo sql.NullInt64, err erro
 	defer func() { err = errors.Join(err, db.Close()) }()
 	if release, err = fsx.LockFile(catalogPath(c)); err != nil {
 		return upTo, fmt.Errorf("%w", err)
+	}
+	if kind == jobs.GuardModifications {
+		event := catalog.EventModifyGuardConfirm
+		if what == "reject" {
+			event = catalog.EventModifyGuardReject
+		}
+		if upTo, err = catalog.AnswerModifyGuard(ctx, db, id, event, now); err != nil {
+			return upTo, fmt.Errorf("catalog: %w", err)
+		}
+		return upTo, nil
 	}
 	var disk *config.Disk
 	for i := range c.Disks {

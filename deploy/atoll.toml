@@ -80,6 +80,9 @@ direct     = "propagate"                # propagate | restore
 debounce   = "30s"                      # longer than a USB disk's spin-up
 mass_guard = { files = 100, percent = "5%", window = "10m" }
 
+[modifies]
+mass_guard = { files = 100, percent = "5%", window = "10m" }   # files modified, not touched
+
 [balance]
 schedule = "02:00-06:00"                # never | immediate | time window
 trigger  = { ratio_below = "90%", or_more_than = "200GiB" }   # share of bytes correctly placed

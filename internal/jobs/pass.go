@@ -63,11 +63,18 @@ type DiskLine struct {
 	Walked  bool
 }
 
-// GuardLine is a disk whose guard is tripped.
+// GuardLine is a guard tripped: the mass-deletion guard of a disk, or its mass-modification guard (specs.md §15.6).
 type GuardLine struct {
 	Disk  string
+	Kind  string
 	Count int64
 }
+
+// The kinds of a guard.
+const (
+	GuardDeletions     = "deletions"
+	GuardModifications = "modifications"
+)
 
 // Sink is told of what a pass does as it does it: holding a rename of a whole pool until the end would
 // not fit in the memory of specs.md §26. Every decision comes before the first operation.
@@ -93,17 +100,22 @@ type Outcome struct {
 }
 
 type pass struct {
-	db          *sql.DB
-	config      *config.Config
-	machine     disks.Machine
-	session     *trash.Session
-	apply       bool
-	now         int64
-	direct      string
-	debounce    time.Duration
-	window      time.Duration
-	files       int64
-	percent     value.Percent
+	db       *sql.DB
+	config   *config.Config
+	machine  disks.Machine
+	session  *trash.Session
+	apply    bool
+	now      int64
+	direct   string
+	debounce time.Duration
+	window   time.Duration
+	files    int64
+	percent  value.Percent
+	// the settings of the mass-modification guard, and its state by disk (specs.md §15.6)
+	modWindow   time.Duration
+	modFiles    int64
+	modPercent  value.Percent
+	modGuards   map[string]*modGuard
 	rows        map[string]int64
 	walked      map[string]bool
 	seen        map[string][]watch.CopySeen
@@ -163,7 +175,7 @@ func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, a
 	p := &pass{
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink,
 		rows: map[string]int64{}, walked: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
-		guards: map[string]*guardState{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
+		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
 		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
 	if err := p.readSettings(); err != nil {
@@ -175,7 +187,7 @@ func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, a
 	}
 	defer session.Close()
 	p.session = session
-	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.decide, p.decideFolders, p.modify, p.work, p.cleanJobs, p.copies, p.finish} {
+	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.work, p.cleanJobs, p.copies, p.finish} {
 		if err := step(ctx); err != nil {
 			return nil, err
 		}
@@ -226,6 +238,15 @@ func (p *pass) readSettings() error {
 	}
 	p.percent = percent
 	p.files, _ = effective["deletes.mass_guard.files"].(int64)
+	text, _ = effective["modifies.mass_guard.window"].(string)
+	if p.modWindow, err = value.ParseDuration(text); err != nil {
+		return fmt.Errorf("modifies.mass_guard.window: %w", err)
+	}
+	text, _ = effective["modifies.mass_guard.percent"].(string)
+	if p.modPercent, err = value.ParsePercent(text); err != nil {
+		return fmt.Errorf("modifies.mass_guard.percent: %w", err)
+	}
+	p.modFiles, _ = effective["modifies.mass_guard.files"].(int64)
 	return nil
 }
 
@@ -375,7 +396,7 @@ func (p *pass) readGuards(ctx context.Context) error {
 			}
 			continue
 		}
-		p.out.Guards = append(p.out.Guards, GuardLine{Disk: d.ID, Count: read.Gone + read.Events + n})
+		p.out.Guards = append(p.out.Guards, GuardLine{Disk: d.ID, Kind: GuardDeletions, Count: read.Gone + read.Events + n})
 		if read.Gone > 0 || n > 0 {
 			p.out.Held = true
 		}

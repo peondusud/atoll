@@ -109,6 +109,7 @@
         "guards": [
           {
             "disk": "t1",
+            "kind": "deletions",
             "count": 3
           }
         ],
@@ -140,6 +141,7 @@
       ],
       "stdout_json": {
         "disk": "t1",
+        "kind": "deletions",
         "done": true,
         "up_to": "2026-01-01T00:01:00.000000000Z"
       }
