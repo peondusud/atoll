@@ -25,7 +25,7 @@ Every item here is a **decision**:
 
 - `api/openapi.yaml` and `api/schemas/` for the `--json` outputs.
 
-## Phase 1a, not started (specs.md §28)
+## Phase 1a, the alpha, not started (specs.md §28)
 
 - Configuration in the shell (§24.3, §10):
   - in `atoll rules check`, the rules that no file reaches or that an earlier one hides (§11.3);

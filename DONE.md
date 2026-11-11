@@ -2,6 +2,12 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Milestones on the roadmap (specs.md §28)
+
+Commit "Name the milestones of the roadmap", on `roadmap-milestones`.
+
+- The maintainer chose them: the alpha at the end of phase 1a, the beta at 1b, and v0.1, the first stable version, at 2a. Each counts every phase before it. No code, contract or vector change.
+
 ## The `ntfs` driver of Linux 7.1 measured (specs.md §10, §15.8, §22)
 
 Commit "Measure the ntfs driver of Linux 7.x", on `claude/modest-chatterjee-ab55eb`.
