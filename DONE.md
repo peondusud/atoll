@@ -2,6 +2,17 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The precision of each disk's times, and the comparisons that need it (specs.md §9, §10, §15.4, §17.2)
+
+Commit "Compare times at the precision each filesystem holds them", on `time-precision`.
+
+- The maintainer's decision: the precision comes from the filesystem, read with its identifier, never measured by writing to the disk and never set in the configuration.
+- What it does: `disks.time_precision_ns`, in the schema since the start and never written, now holds how finely a disk holds a time: 1 for XFS and btrfs, 100 for NTFS, and for ext4 1, or 10^9 when the superblock says its inodes are 128 bytes (revision 0 at 1100, or the inode size at 1112). The mount check reads it with the identifier, and the disk row records it with the state; a check that reads no head keeps what an earlier one read, and a disk never seen has none, which compares exactly. The conformance build, which has no head, takes it from the disk's `fs`.
+- Two times are the same at a precision when each, divided by it and rounded down, toward the past, gives the same number, which is what a filesystem that holds only multiples of it keeps (`solver.SameTime`, `conformance/vectors/same_time.json`, whose cases before the epoch tell rounding down from truncating).
+- Where it counts, the two comparisons of a time across filesystems: the metadata plan gives no operation to a copy that holds the time at the coarser precision of its disk and of the disk that gives it; and the reprise of an operation `utimens` finishes when the disk holds the event's time at its own precision. Until now NTFS made that reprise undo the operation with a warning, and the next pass applied the time again. Every other comparison of a time is of a copy with its own row, which one filesystem wrote, and stays exact.
+- Memory, on 200,000 files every copy on one disk touched, then rewritten (§26): 176 MiB for the pass that applies every time, in 873 s, against 174 MiB and 862 s before; 171 MiB for its dry run, 175 MiB for the dry run where every copy was rewritten, and 171 MiB for the pass that rewrites them all, stopped at the first trash job, against 160 MiB before, of which nothing new but an integer per copy decided stays: the collector's timing.
+- Verified: the local CI (`test/ci/run.sh`) on this commit, which caught a field `gofmt` would align, and in qemu on Linux 6.12.116 and 7.3.1, on each of ext4, ext4 with 128-byte inodes, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g: the precision the head gives is what the driver keeps of a time set to the nanosecond, the ext4 bytes of the vectors are what `mkfs.ext4` writes, and a pass killed once the time is set is finished by the reprise, with no warning, on all six drivers. 486 scenarios (1 new: `daemon-metadata-same-tick`). Of 26 mutations of the new code, 26 are caught.
+
 ## A local CI: every check of a commit, with only git and Docker
 
 Commit "Run every check of a commit locally, with only git and Docker", on `local-ci`.

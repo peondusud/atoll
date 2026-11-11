@@ -66,8 +66,9 @@ func (d *Disk) recoverUtimens(ctx context.Context, db *sql.DB, op *Op, nowNS int
 	if err != nil {
 		return d.Undo(ctx, db, op, true, nowNS)
 	}
+	// What the disk holds of the time, at its precision: NTFS keeps only multiples of 100 ns (specs.md §9).
 	switch {
-	case mtime == wanted:
+	case solver.SameTime(mtime, wanted, d.precision):
 		ctime, err := solver.TimeNS(st.Ctime.Sec, st.Ctime.Nsec)
 		if err != nil {
 			return fmt.Errorf("change time: %w", err)

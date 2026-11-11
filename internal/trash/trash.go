@@ -47,6 +47,8 @@ type slot struct {
 	state  solver.DiskState
 	handle *ops.Disk
 	tried  bool
+	// precision is how finely the disk holds a time, as its row says (specs.md §9): 0 when no check read it.
+	precision int64
 }
 
 // Session is one run of a command that writes: it confirms each disk once, before it first reads or
@@ -90,7 +92,7 @@ func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, ap
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	for i := range rows {
-		s.slots[rows[i].ID] = &slot{state: solver.DiskState(rows[i].State)}
+		s.slots[rows[i].ID] = &slot{state: solver.DiskState(rows[i].State), precision: rows[i].TimePrecisionNS}
 	}
 	for i := range c.Disks {
 		if sl := s.slots[c.Disks[i].ID]; sl != nil {
@@ -120,6 +122,14 @@ func (s *Session) Readable(id string) bool {
 // Writable says whether a disk can still be written to in this session.
 func (s *Session) Writable(id string) bool {
 	return s.writable(id)
+}
+
+// TimePrecision says how finely a disk holds a time (specs.md §9), 0 when nothing read it.
+func (s *Session) TimePrecision(id string) int64 {
+	if sl := s.slots[id]; sl != nil {
+		return sl.precision
+	}
+	return 0
 }
 
 // Handle gives a handle on a disk, confirmed if this session writes, and nil when it cannot be reached.
@@ -243,7 +253,7 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 	if sl.config == nil || !readable(sl.state) {
 		return nil, nil //nolint:nilnil // likewise
 	}
-	handle, err := ops.Open(s.machine, sl.config)
+	handle, err := ops.Open(s.machine, sl.config, sl.precision)
 	if err != nil {
 		return nil, s.lose(ctx, id, err)
 	}

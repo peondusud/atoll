@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §9, §10",
+  "description": "How finely a filesystem holds a time, read from the head of its device as the configuration's fs says: for ext4, from its revision and inode size; a constant for the others. A head that holds no such filesystem is the error of superblock.json.",
+  "cases": [
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "53ef"}, {"at": 1100, "hex": "01000000"}, {"at": 1112, "hex": "0001"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "time_precision_ns": 1, "note": "as mkfs.ext4 makes it: revision 1, 256-byte inodes"},
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "53ef"}, {"at": 1100, "hex": "01000000"}, {"at": 1112, "hex": "8000"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "time_precision_ns": 1000000000, "note": "mkfs.ext4 -I 128: no room for nanoseconds"},
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "53ef"}, {"at": 1100, "hex": "01000000"}, {"at": 1112, "hex": "0002"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "time_precision_ns": 1, "note": "512-byte inodes"},
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "53ef"}, {"at": 1100, "hex": "00000000"}, {"at": 1112, "hex": "0001"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "time_precision_ns": 1000000000, "note": "revision 0 has 128-byte inodes, whatever the size field holds"},
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "53ef"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "time_precision_ns": 1000000000, "note": "zeros: revision 0"},
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "53ef"}, {"at": 1100, "hex": "00000001"}, {"at": 1112, "hex": "0001"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "time_precision_ns": 1, "note": "a revision other than 0, read little-endian: the size field counts"},
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "53ef"}, {"at": 1100, "hex": "01000000"}, {"at": 1112, "hex": "0100"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "time_precision_ns": 1000000000, "note": "256 in the wrong byte order reads as 1 byte, no more than 128"},
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "53ef"}, {"at": 1100, "hex": "01000000"}, {"at": 1112, "hex": "8100"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "time_precision_ns": 1, "note": "more than 128 bytes"},
+    {"fs": "ext4", "length": 4096, "bytes": [{"at": 1080, "hex": "0000"}, {"at": 1100, "hex": "01000000"}, {"at": 1112, "hex": "0001"}, {"at": 1128, "hex": "53861a41fda2460a80ed7e53c9b3510f"}], "error": true, "note": "no magic"},
+    {"fs": "xfs", "length": 4096, "bytes": [{"at": 0, "hex": "58465342"}, {"at": 32, "hex": "cc307e15e4f548adb479086dc30967b0"}, {"at": 100, "hex": "b4a5"}], "time_precision_ns": 1, "note": "XFS"},
+    {"fs": "btrfs", "length": 65608, "bytes": [{"at": 65568, "hex": "95dae4f743014bee96dac8a979a2b3cf"}, {"at": 65600, "hex": "5f42485266535f4d"}], "time_precision_ns": 1, "note": "btrfs"},
+    {"fs": "ntfs", "length": 4096, "bytes": [{"at": 3, "hex": "4e54465320202020"}, {"at": 72, "hex": "083f583fa193ea4c"}], "time_precision_ns": 100, "note": "NTFS counts in 100 ns"}
+  ]
+}

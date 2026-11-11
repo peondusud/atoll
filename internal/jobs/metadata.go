@@ -46,7 +46,10 @@ func (p *pass) metadataPlan(f *catalog.FileRow, in *solver.ModInput, looks map[s
 	for i := range in.Copies {
 		mc := &in.Copies[i]
 		row := copyOn(f, mc.Disk)
-		c := solver.MetaCopy{Disk: mc.Disk, Position: mc.Position, Changed: isChanged(mc), State: mc.State, RowMtime: row.MtimeNS.Int64}
+		c := solver.MetaCopy{
+			Disk: mc.Disk, Position: mc.Position, Changed: isChanged(mc), State: mc.State, RowMtime: row.MtimeNS.Int64,
+			PrecisionNS: p.session.TimePrecision(mc.Disk),
+		}
 		if look := looks[mc.Disk]; c.Changed && look != nil {
 			c.Mtime, c.Ctime = look.MtimeNS, look.CtimeNS
 		}

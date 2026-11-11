@@ -18,6 +18,7 @@ type metaVector struct {
 		Mtime     *int64     `json:"mtime"`
 		Ctime     *int64     `json:"ctime"`
 		Reachable bool       `json:"reachable"`
+		Precision int64      `json:"precision_ns"`
 	} `json:"copies"`
 	Plan *struct {
 		Mtime *int64   `json:"mtime"`
@@ -38,7 +39,7 @@ func TestMetadataVectors(t *testing.T) {
 			if c.Disk == nil || c.Position == nil || c.State == nil || c.RowMtime == nil || c.Changed != (c.Mtime != nil) || c.Changed != (c.Ctime != nil) {
 				t.Fatalf("vector %d: a copy needs a disk, a position, a state and its row's time, and a changed one its look's times", i)
 			}
-			mc := MetaCopy{Disk: *c.Disk, Position: *c.Position, Changed: c.Changed, State: *c.State, RowMtime: *c.RowMtime, Reachable: c.Reachable}
+			mc := MetaCopy{Disk: *c.Disk, Position: *c.Position, Changed: c.Changed, State: *c.State, RowMtime: *c.RowMtime, Reachable: c.Reachable, PrecisionNS: c.Precision}
 			if c.Changed {
 				mc.Mtime, mc.Ctime = *c.Mtime, *c.Ctime
 			}

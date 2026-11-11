@@ -8,16 +8,18 @@ import (
 
 // MetaCopy is one copy of a file whose change is to its metadata only, as what that applies sees it (specs.md
 // §15.4). Mtime and Ctime are what the look found of a changed copy; Reachable says that the pass can write to its
-// disk, and that its look reached it. A pending copy is none: its disk holds nothing of it yet.
+// disk, and that its look reached it; PrecisionNS is its disk's time_precision_ns, 0 when unknown (specs.md §9). A
+// pending copy is none: its disk holds nothing of it yet.
 type MetaCopy struct {
-	Disk      string
-	Position  int
-	Changed   bool
-	State     CopyState
-	RowMtime  int64
-	Mtime     int64
-	Ctime     int64
-	Reachable bool
+	Disk        string
+	Position    int
+	Changed     bool
+	State       CopyState
+	RowMtime    int64
+	Mtime       int64
+	Ctime       int64
+	Reachable   bool
+	PrecisionNS int64
 }
 
 // MetaPlan is what a metadata-only change applies: Mtime, when HasMtime, the time of the copy From, to the copies in
@@ -58,8 +60,9 @@ func MetadataPlan(copies []MetaCopy) (MetaPlan, error) {
 		if c.Changed {
 			now = c.Mtime
 		}
+		// A copy holds the time when it holds it as finely as its disk, or the disk it comes from, can.
 		switch {
-		case c == last || now == plan.Mtime || c.State == CopyStale:
+		case c == last || SameTime(now, plan.Mtime, Coarser(c.PrecisionNS, last.PrecisionNS)) || c.State == CopyStale:
 		case c.Reachable:
 			plan.Apply = append(plan.Apply, c.Disk)
 		default:

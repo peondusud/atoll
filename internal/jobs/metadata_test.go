@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -390,5 +391,69 @@ func TestARepriseOfATimeOnACopyOfAnotherSize(t *testing.T) {
 	b.pass()
 	if got := b.count("SELECT count(*) FROM events WHERE kind = 'op-undone'"); got != 1 {
 		t.Errorf("%d warnings", got)
+	}
+}
+
+// ntfsTick rounds a time down to what NTFS holds of it, 100 ns.
+func ntfsTick(ns int64) int64 {
+	return ns / 100 * 100
+}
+
+// A reprise finds what NTFS holds of the time its event holds, which is all of it that disk can hold: the
+// operation finishes, with no warning, and the next decision applies nothing more (specs.md §9, §17.2).
+func TestARepriseOfATimeThatNTFSHoldsLessFinely(t *testing.T) {
+	b := touched(t)
+	b.precision["t2"] = 100
+	b.crashAt("times-set")
+	// What NTFS would have kept: the bench's folders hold nanoseconds.
+	held := ntfsTick(touchedNS)
+	if err := os.Chtimes(filepath.Join(b.dirs["t2"], "media", "a"), time.Unix(0, held), time.Unix(0, held)); err != nil {
+		t.Fatal(err)
+	}
+	out := b.pass()
+	if got := b.text("SELECT group_concat(state, ',') FROM (SELECT state FROM ops ORDER BY id)"); got != "done" {
+		t.Errorf("the operations are %s", got)
+	}
+	if got := b.count("SELECT count(*) FROM events WHERE kind = 'op-undone'"); got != 0 {
+		t.Errorf("%d warnings", got)
+	}
+	if !slices.Equal(out.Decisions, []Decision{{Path: "a", Kind: "metadata"}}) || len(out.Operations) != 0 {
+		t.Errorf("%+v, %+v", out.Decisions, out.Operations)
+	}
+	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND mtime_ns = ?", held); got != 1 {
+		t.Error("the row does not say what the disk holds")
+	}
+	if out := b.pass(); len(out.Decisions)+len(out.Operations) != 0 {
+		t.Errorf("then %+v", out)
+	}
+}
+
+// A copy on NTFS that holds, within its 100 ns, the time a touch gave another copy gets no operation: it holds that
+// time as finely as it can (specs.md §9, §15.4). Its disk's precision is what its row recorded.
+func TestATimeNTFSHoldsAlreadyIsNotApplied(t *testing.T) {
+	b := pool(t)
+	b.precision["t2"] = 100
+	before := b.mtimeOf("t2", "a")
+	within := ntfsTick(before) + 99
+	if within == before {
+		within--
+	}
+	b.touch("t1", "a", within)
+	b.now = b.ctimeOf("t1", "a") + settleNS
+	out := b.pass()
+	if !slices.Equal(out.Decisions, []Decision{{Path: "a", Kind: "metadata"}}) || len(out.Operations) != 0 {
+		t.Errorf("%+v, %+v", out.Decisions, out.Operations)
+	}
+	if got := b.count("SELECT count(*) FROM disks WHERE id = 't2' AND time_precision_ns = 100"); got != 1 {
+		t.Error("the precision is not recorded")
+	}
+	if b.mtimeOf("t2", "a") != before || b.count("SELECT count(*) FROM ops") != 0 {
+		t.Error("the copy was written to")
+	}
+	if got := b.text("SELECT group_concat(mtime_ns, ',') FROM (SELECT mtime_ns FROM copies ORDER BY disk_id)"); got != fmt.Sprintf("%d,%d", within, before) {
+		t.Errorf("the rows say %s", got)
+	}
+	if out := b.pass(); len(out.Decisions)+len(out.Operations) != 0 {
+		t.Errorf("then %+v", out)
 	}
 }

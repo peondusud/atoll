@@ -46,11 +46,13 @@ type Disk struct {
 	mountID uint64
 	dev     uint64
 	ino     uint64
+	// precision is how finely the disk holds a time (specs.md §9), 0 when unknown, which compares exactly.
+	precision int64
 }
 
-// Open opens the top of a disk. The caller confirms it afterwards, then calls Verify, so that what
-// was confirmed is what the handle leads to (specs.md §10).
-func Open(m disks.Machine, d *config.Disk) (*Disk, error) {
+// Open opens the top of a disk, which holds a time to precisionNS. The caller confirms it afterwards, then calls
+// Verify, so that what was confirmed is what the handle leads to (specs.md §10).
+func Open(m disks.Machine, d *config.Disk, precisionNS int64) (*Disk, error) {
 	top, err := m.OpenTop(d.Mount)
 	if err != nil {
 		return nil, fmt.Errorf("disk %q: %w", d.ID, err)
@@ -59,7 +61,7 @@ func Open(m disks.Machine, d *config.Disk) (*Disk, error) {
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("disk %q: %w", d.ID, err), top.Close())
 	}
-	return &Disk{ID: d.ID, config: d, machine: m, top: top, mountID: info.MountID, dev: info.Dev, ino: info.Ino}, nil
+	return &Disk{ID: d.ID, config: d, machine: m, top: top, mountID: info.MountID, dev: info.Dev, ino: info.Ino, precision: precisionNS}, nil
 }
 
 // Close lets go of the disk.
