@@ -76,6 +76,14 @@
             }
           },
           {
+            "if": { "properties": { "kind": { "const": "utimens" } } },
+            "then": {
+              "description": "The modification time a metadata change applies to another copy (specs.md §15.4).",
+              "properties": { "outcome": { "enum": ["applied", "to-apply", "changed", "io-error"] } },
+              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["reason"] }, { "required": ["source"] }] }
+            }
+          },
+          {
             "if": { "properties": { "kind": { "const": "replicate" } } },
             "then": {
               "description": "A copy (specs.md §14.1): disk is its target.",
@@ -87,7 +95,7 @@
         ],
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["rename", "folder", "trash", "replicate"] },
+          "kind": { "enum": ["utimens", "rename", "folder", "trash", "replicate"] },
           "path": { "type": "string" },
           "path_b64": { "type": "string" },
           "to": { "type": "string" },

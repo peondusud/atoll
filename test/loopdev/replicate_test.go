@@ -4,6 +4,7 @@ package loopdev
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -219,6 +220,56 @@ func TestAPassRefreshesOnEachDriver(t *testing.T) {
 			}
 			if got := b.text("SELECT count(*) FROM jobs"); got != "0" {
 				t.Errorf("%s jobs left", got)
+			}
+		})
+	}
+}
+
+// TestAPassAppliesATimeOnEachDriver: a copy touched elsewhere gives its time to the copy on every driver, which holds
+// it as finely as it can: the row says what the disk holds, read through a cold cache, and the next pass has nothing
+// left to apply (specs.md §14, §15.4).
+func TestAPassAppliesATimeOnEachDriver(t *testing.T) {
+	needRoot(t)
+	for _, tc := range trashDrivers {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, v, tc.driver, at, options...)
+			b := newPassBench(t, v, at)
+			data := threeChunks()
+			when := time.Unix(1500000000, 0)
+			writeBytes(t, b.keep, "big", data, when)
+			b.scan(false)
+			if _, err := jobs.Replicate(b.t.Context(), b.db, b.config, b.machine, jobs.ReplicateOptions{}, func(*jobs.ReplicateItem) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			b.pass()
+			// A time below what NTFS holds, 100 ns.
+			touched := time.Unix(0, 1_600_000_000_123_456_789)
+			if err := os.Chtimes(filepath.Join(b.keep, "media", "big"), touched, touched); err != nil {
+				t.Fatal(err)
+			}
+			b.machine = &later{Machine: b.machine, by: 11 * time.Minute}
+			out := b.pass()
+			want := []jobs.Operation{{Disk: "v", Kind: jobs.KindUtimens, Path: "big", Outcome: jobs.OutcomeApplied}}
+			if !slices.Equal(out.Decisions, []jobs.Decision{{Path: "big", Kind: "metadata"}}) || !slices.Equal(out.Operations, want) || out.Partial {
+				t.Errorf("%+v, %+v, partial %v", out.Decisions, out.Operations, out.Partial)
+			}
+			dropCaches(t)
+			st, err := os.Stat(filepath.Join(at, "media", "big"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			held := st.ModTime().UnixNano()
+			if gap := touched.UnixNano() - held; gap < 0 || gap >= 100 {
+				t.Errorf("the copy holds %d, for %d", held, touched.UnixNano())
+			}
+			if got := b.text(fmt.Sprintf("SELECT count(*) FROM copies WHERE disk_id = 'v' AND mtime_ns = %d", held)); got != "1" {
+				t.Errorf("the row does not say what the disk holds, %d", held)
+			}
+			if out := b.pass(); len(out.Decisions)+len(out.Operations) != 0 {
+				t.Errorf("then %+v, %+v", out.Decisions, out.Operations)
 			}
 		})
 	}

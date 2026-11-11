@@ -103,6 +103,11 @@ func (p *pass) modInput(ctx context.Context, f *catalog.FileRow, positions map[s
 	if err != nil {
 		return nil, nil, fmt.Errorf("catalog: %w", err)
 	}
+	// What an operation left planned at a copy's name, only a reprise can tell (specs.md §17.2).
+	for i := range f.Copies {
+		place := f.Copies[i].Place(f)
+		running = running || slices.ContainsFunc(p.planned[f.Copies[i].Disk], func(name string) bool { return isAtOrBelow(place, name) })
+	}
 	size := f.Size
 	settle := p.config.Policy(f.Path, &size).Settle.Nanoseconds()
 	in := &solver.ModInput{State: solver.State(f.State), Size: f.Size, Hash: f.Hash, Running: running}
@@ -281,16 +286,36 @@ func (p *pass) loseRead(ctx context.Context, disk string, why error) error {
 
 // applyModification records what was decided, or with a dry run says what it would do.
 func (p *pass) applyModification(ctx context.Context, f *catalog.FileRow, in *solver.ModInput, d *solver.ModDecision, looks map[string]*watch.FoundFile, chunks map[string][]byte) error {
+	stale, src := d.Stale, d.Changed[0]
+	if d.Kind == solver.ModMetadata {
+		plan, err := p.metadataPlan(f, in, looks)
+		if err != nil {
+			return err
+		}
+		stale, src = plan.Stale, plan.From
+		// The time goes to each copy first: a decision recorded before would read, after a crash, as one that
+		// was already there (specs.md §15.4).
+		applied, err := p.applyTime(ctx, f, &plan, looks)
+		if err != nil || !applied {
+			p.decided(Decision{Path: f.Path, Kind: string(d.Kind)})
+			return err
+		}
+	}
 	if !p.apply {
-		if d.Kind == solver.ModModified {
-			p.planModified(f, d)
+		switch d.Kind {
+		case solver.ModModified:
+			p.jobsDropped[f.ID] = true
+			p.planOverwrites(f, stale, src)
+		case solver.ModMetadata:
+			p.planOverwrites(f, stale, src)
+		case solver.ModConflict, solver.ModNone, solver.ModWait, solver.ModRead:
 		}
 		p.decided(Decision{Path: f.Path, Kind: string(d.Kind)})
 		return nil
 	}
 	size := f.Size
 	m := &catalog.Modification{
-		FileID: f.ID, Path: f.Path, Kind: string(d.Kind), Stale: d.Stale, Src: d.Changed[0], Hash: d.Hash, Reference: d.Reference,
+		FileID: f.ID, Path: f.Path, Kind: string(d.Kind), Stale: stale, Src: src, Hash: d.Hash, Reference: d.Reference,
 		Priority: int64(p.config.Policy(f.Path, &size).Priority),
 	}
 	if d.Hash != nil {
@@ -317,12 +342,11 @@ func (p *pass) applyModification(ctx context.Context, f *catalog.FileRow, in *so
 	return nil
 }
 
-// planModified says what a modification would send to the trash, as a dry run records nothing: every queued job of
-// the file goes, and each stale copy that holds a file gets one (specs.md §15.4).
-func (p *pass) planModified(f *catalog.FileRow, d *solver.ModDecision) {
-	p.jobsDropped[f.ID] = true
-	held := p.trashOutcome(d.Changed[0]) == OutcomeHeld
-	for _, disk := range d.Stale {
+// planOverwrites says what a modification would send to the trash, as a dry run records nothing: each stale copy that
+// holds a file gets a job (specs.md §15.4).
+func (p *pass) planOverwrites(f *catalog.FileRow, stale []string, src string) {
+	held := p.trashOutcome(src) == OutcomeHeld
+	for _, disk := range stale {
 		if c := copyOn(f, disk); c.FileKey.Valid {
 			plan := p.planOf(disk)
 			plan.overwrites = append(plan.overwrites, overwrite{place: c.Place(f), held: held})

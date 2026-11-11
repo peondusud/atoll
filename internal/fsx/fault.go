@@ -181,6 +181,20 @@ func (f *faultFile) Info() (Stat, error) {
 	return f.File.Info()
 }
 
+func (f *faultFile) SetTimes(atime, mtime Time) error {
+	if err := f.fail("settimes", f.name); err != nil {
+		return err
+	}
+	return f.File.SetTimes(atime, mtime)
+}
+
+func (f *faultFile) Sync() error {
+	if err := f.fail("filesync", f.name); err != nil {
+		return err
+	}
+	return f.File.Sync()
+}
+
 type faultWritable struct {
 	WritableFile
 	name string

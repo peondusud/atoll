@@ -28,6 +28,7 @@ var errLook = errors.New("a look at the disk failed")
 
 // work runs what is pending on each disk, by position.
 func (p *pass) work(ctx context.Context) error {
+	p.listMetaOps()
 	for i := range p.config.Disks {
 		d := &p.config.Disks[i]
 		if !p.apply {

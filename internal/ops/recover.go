@@ -85,6 +85,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverRename(ctx, db, op, nowNS, out)
 	case catalog.OpCreate:
 		return d.recoverCreate(ctx, db, op, nowNS, out)
+	case catalog.OpUtimens:
+		return d.recoverUtimens(ctx, db, op, nowNS)
 	default:
 		return fmt.Errorf("reprise: operation %d: no reprise for %q", op.ID, op.Kind)
 	}

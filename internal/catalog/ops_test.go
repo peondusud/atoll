@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -153,6 +154,29 @@ func TestTrashEntriesAcrossPages(t *testing.T) {
 }
 
 // The same path can be taken for another disk's copy only by its key, and bytes tell them apart.
+// What finds a copy by its place reads that place, never every copy of its disk: each operation asks once, and a
+// pass that applied a time to 200,000 copies did 6 a second (specs.md §26). SQLite has no statistics here, so the
+// plan is what every catalog gets.
+func TestAQueryByPlaceReadsOnlyThatPlace(t *testing.T) {
+	b := openForOps(t)
+	for _, q := range []struct {
+		name, sql string
+		args      []any
+	}{
+		{"CopyOf", copyOfSQL, []any{"u1", []byte("a/b")}},
+		{"finishCopy", finishCopySQL, []any{"u1", []byte("a/b"), "7"}},
+		{"renameRow", renameRowSQL, []any{"u1", []byte("a/b"), "7"}},
+		{"FinishUtimens", finishUtimensSQL, []any{"u1", []byte("a/b"), "7", 1, 2}},
+	} {
+		plan := queryPlan(t, b, q.sql, q.args...)
+		for _, line := range plan {
+			if strings.HasPrefix(line, "SCAN") || strings.HasSuffix(line, "(disk_id=?)") {
+				t.Errorf("%s: %q in %q", q.name, line, plan)
+			}
+		}
+	}
+}
+
 func TestKeyTaken(t *testing.T) {
 	b := openForOps(t)
 	b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u1', 'x', 'ntfs', '/u', 'media', 'Atoll', 'data', 0, '[]', 'online')")

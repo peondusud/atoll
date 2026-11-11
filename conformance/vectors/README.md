@@ -249,6 +249,14 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `decision` | object | `kind` (`none`, `wait`, `read`, `modified`, `metadata` or `conflict`), and when they apply, by position: `read`, the copies to read before deciding; `changed`; `stale`, the copies a modification makes stale; `reference`, the copy read to compare with where the file had no hash; `hash`, what the file's hash becomes |
 | `error` | boolean | `true` on an unknown word, a pending copy, a disk or a position that appears twice, or `other` on a copy not `replaced` |
 
+### `metadata.json` — what a metadata-only change applies to the other copies (§15.4)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, and `reachable` when it is on a disk the pass can write to, where its look reached it. Booleans are `false` when absent |
+| `plan` | object | `mtime`, the time applied, and `from`, the changed copy that gives it, both absent when no time moved; `apply`, the copies that get it through an operation; `stale`, those that go stale instead; each by position, absent when empty |
+| `error` | boolean | `true` on an unknown state, a pending copy, or a disk or a position that appears twice |
+
 ### `guard.json` — whether the guard of a disk trips (§15.6, §29.5)
 
 | Field | Type | Meaning |

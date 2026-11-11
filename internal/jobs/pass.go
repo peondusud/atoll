@@ -128,6 +128,10 @@ type pass struct {
 	realMoves map[folderKey]bool
 	// by disk, the names a copy of another file was found moved to, while modifications are decided
 	targets map[string]map[string]bool
+	// by disk, the names of the operations left planned, which only a reprise can tell of
+	planned map[string][]string
+	// the operations utimens of the modifications, until every decision is out
+	metaOps []metaOp
 	// the files whose copy waits for settle, and the changed copies not yet due, and when the first of them is due
 	copiesWaiting int64
 	copiesDue     sql.NullInt64
@@ -160,7 +164,7 @@ func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, a
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink,
 		rows: map[string]int64{}, walked: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
 		guards: map[string]*guardState{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
-		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
+		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
 	if err := p.readSettings(); err != nil {
 		return nil, err
@@ -244,6 +248,7 @@ func (p *pass) look(ctx context.Context) error {
 		// A dry run confirms nothing, and asks only whether this session still holds the disk: a look at its own
 		// folders may have lost it.
 		look := &watch.Look{Write: p.apply, Own: p.ownFiles, Confirm: p.confirm, Planned: plannedOn(planned, d.ID)}
+		p.planned[d.ID] = look.Planned
 		report, err := watch.LookAtDisk(ctx, p.db, p.config, p.machine, d, verdict, p.now, look)
 		if err != nil {
 			return fmt.Errorf("%w", err)
@@ -281,7 +286,7 @@ func plannedOn(list []catalog.Op, disk string) []string {
 		switch op.Kind {
 		case catalog.OpRename:
 			paths = append(paths, op.Path, op.Path2)
-		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpCreate:
+		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpCreate, catalog.OpUtimens:
 			paths = append(paths, op.Path)
 		}
 	}

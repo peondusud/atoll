@@ -93,6 +93,12 @@ func applyModified(ctx context.Context, tx *sql.Tx, nowNS int64, m *Modification
 	if _, err := tx.ExecContext(ctx, "DELETE FROM copies WHERE file_id = ? AND state = 'pending'", m.FileID); err != nil {
 		return fmt.Errorf("pending copies: %w", err)
 	}
+	return markStale(ctx, tx, m)
+}
+
+// markStale makes copies stale, each that holds a file with a trash job, refreshed from Src once in the trash
+// (specs.md §15.4).
+func markStale(ctx context.Context, tx *sql.Tx, m *Modification) error {
 	for _, disk := range m.Stale {
 		if _, err := tx.ExecContext(ctx, "UPDATE copies SET state = 'stale', verified_ns = NULL WHERE file_id = ? AND disk_id = ?", m.FileID, disk); err != nil {
 			return fmt.Errorf("stale copy: %w", err)
@@ -108,11 +114,15 @@ func applyModified(ctx context.Context, tx *sql.Tx, nowNS int64, m *Modification
 	return nil
 }
 
+// applyMetadata records a metadata-only change, once its time has reached each copy it could (specs.md §15.4).
 func applyMetadata(ctx context.Context, tx *sql.Tx, nowNS int64, m *Modification) error {
 	for i := range m.Changed {
 		if err := takeLook(ctx, tx, nowNS, m.FileID, &m.Changed[i], false, true); err != nil {
 			return err
 		}
+	}
+	if err := markStale(ctx, tx, m); err != nil {
+		return err
 	}
 	if m.Reference == "" {
 		return nil
