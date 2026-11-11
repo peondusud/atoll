@@ -43,6 +43,7 @@ make conformance        # black-box runner: conformance/scenarios against a conf
 make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
 make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
+test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint and qemu on a commit, all at once; --report posts each to its pull request
 golangci-lint run ./...
 ./bin/atoll --config ./dev/atoll.toml daemon --foreground
 ```
@@ -70,7 +71,7 @@ internal/trash/  internal/notify/  internal/alerts/  internal/cache/
 api/                   openapi.yaml, schemas/ for --json outputs
 schema/                migrations/NNNN_name.sql, config.schema.json
 conformance/           vectors/, scenarios/, corpus/names/, runner/ (language-neutral)
-test/                  integration, faults, break glass, loopdev, and qemu to run loopdev anywhere
+test/                  integration, faults, break glass, loopdev, qemu to run loopdev anywhere, and ci to run every check of a commit
 deploy/                systemd units, sample configuration
 docs/research/         research reports behind open design decisions (not contracts)
 ```
