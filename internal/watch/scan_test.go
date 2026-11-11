@@ -39,6 +39,8 @@ type bench struct {
 	readOnly bool
 	// noSpace says which mounts fail statfs.
 	noSpace map[string]error
+	// unread says which mounts' device the read past the cache cannot read, while the mount table still answers.
+	unread map[string]bool
 }
 
 // pastTick lets the clock behind a change time move, which Linux 6.12 can leave the same within a
@@ -75,6 +77,9 @@ func (b *bench) OpenTop(mount string) (fsx.Dir, error) {
 }
 
 func (b *bench) ReadPastCache(fs names.Filesystem, entry *disks.MountEntry) disks.DeviceSeen {
+	if b.unread[entry.MountPoint] {
+		return disks.DeviceSeen{Device: disks.DeviceUnreadable, Note: "EIO"}
+	}
 	return b.Device(fs, entry)
 }
 
@@ -1366,5 +1371,40 @@ func TestAnOpenRowKeepsItsRow(t *testing.T) {
 		if got := r.known(); got != k {
 			t.Errorf("%+v gives back %+v", k, got)
 		}
+	}
+}
+
+// A scan confirms each disk it walks before it writes what the walk found, as a pass does: a disk whose mount the
+// table still shows, and whose device the read past the cache cannot read, is missing, and nothing of its walk is
+// recorded, neither a copy it seemed to hold nor one it seemed to lose (specs.md §10, §15.6, §15.10).
+func TestAScanConfirmsWhatItWalks(t *testing.T) {
+	b := newBench(t, "d1", "d2")
+	b.write("d1", "a", "x")
+	b.write("d2", "a", "x")
+	b.scan(Options{})
+	if err := os.Remove(filepath.Join(b.dirs["d2"], "media", "a")); err != nil {
+		t.Fatal(err)
+	}
+	b.write("d2", "new", "y")
+	b.unread = map[string]bool{b.dirs["d2"]: true}
+	out := b.scan(Options{})
+	r := out.Disks[1]
+	if r.ID != "d2" || r.Verdict.State != disks.Missing || r.Verdict.Reason != disks.IOError || len(r.Absent) != 0 {
+		t.Errorf("%+v", r)
+	}
+	if got := b.count("SELECT count(*) FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = 'd2' AND f.lpath = CAST('a' AS BLOB) AND c.gone_kind IS NULL"); got != 1 {
+		t.Error("the copy the walk did not find has a clock")
+	}
+	if got := b.count("SELECT count(*) FROM files WHERE lpath = CAST('new' AS BLOB)"); got != 0 {
+		t.Error("what the walk found was recorded")
+	}
+	if got := b.count("SELECT count(*) FROM disks WHERE id = 'd2' AND state = 'missing'"); got != 1 {
+		t.Error("the disk is not recorded missing")
+	}
+	// Once its device answers, the next scan sees what the disk holds.
+	b.unread = nil
+	out = b.scan(Options{})
+	if r := out.Disks[1]; r.Verdict.State != disks.Online || len(r.Absent) != 1 || r.New != 1 {
+		t.Errorf("then %+v", r)
 	}
 }

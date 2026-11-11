@@ -557,6 +557,18 @@ func TestConfirmationOfAFailingDevice(t *testing.T) {
 			if got := b.text("SELECT count(*) FROM ops"); got != "0" {
 				t.Errorf("%s operations on a dead disk", got)
 			}
+			// A scan finds it missing too, whether its walk fails or the cache answers the walk and the confirmation
+			// does not: nothing it walked is recorded (specs.md §15.10).
+			out, err := watch.Scan(t.Context(), b.db, b.config, b.machine, watch.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r := out.Disks[1]; r.Verdict.State != disks.Missing {
+				t.Errorf("scan: %+v", r.Verdict)
+			}
+			if got := b.text("SELECT count(*) FROM copies WHERE disk_id = 'v' AND gone_kind IS NOT NULL"); got != "0" {
+				t.Errorf("%s clocks started on a dead disk", got)
+			}
 			m.heal(t)
 		})
 	}
