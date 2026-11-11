@@ -282,7 +282,7 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 	if err := cmpr.resolve(ctx, db, d, w, look); err != nil {
 		return nil, err
 	}
-	out.Clocks = cmpr.clocks
+	out.Clocks, out.Modes = cmpr.clocks, cmpr.modes
 	planned := pathSet(look.Planned)
 	if err := keepPlanned(ctx, db, d.ID, pathSet(look.Planned, w.Unreadable), out); err != nil {
 		return nil, err
@@ -357,7 +357,7 @@ func freshFile(c *config.Config, f *FoundFile, r *Report, out *catalog.Walk, top
 		return
 	}
 	out.Copies = append(out.Copies, catalog.NewCopy{
-		Path: f.Path, Size: f.Size, MtimeNS: f.MtimeNS, CtimeNS: f.CtimeNS, BtimeNS: f.BtimeNS, FileKey: f.FileKey, Nlink: f.Nlink,
+		Path: f.Path, Size: f.Size, MtimeNS: f.MtimeNS, CtimeNS: f.CtimeNS, BtimeNS: f.BtimeNS, FileKey: f.FileKey, Nlink: f.Nlink, Mode: f.Mode,
 	})
 	r.New++
 	found(f)

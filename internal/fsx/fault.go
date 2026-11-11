@@ -188,6 +188,13 @@ func (f *faultFile) SetTimes(atime, mtime Time) error {
 	return f.File.SetTimes(atime, mtime)
 }
 
+func (f *faultFile) SetMode(mode uint32) error {
+	if err := f.fail("setmode", f.name); err != nil {
+		return err
+	}
+	return f.File.SetMode(mode)
+}
+
 func (f *faultFile) Sync() error {
 	if err := f.fail("filesync", f.name); err != nil {
 		return err

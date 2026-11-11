@@ -253,9 +253,9 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
-| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, `reachable` when it is on a disk the pass can write to, where its look reached it, and `precision_ns`, its disk's `time_precision_ns`, absent when unknown, which compares exactly (§9). Booleans are `false` when absent |
-| `plan` | object | `mtime`, the time applied, and `from`, the changed copy that gives it, both absent when no time moved; `apply`, the copies that get it through an operation; `stale`, those that go stale instead; each by position, absent when empty |
-| `error` | boolean | `true` on an unknown state, a pending copy, or a disk or a position that appears twice |
+| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, `reachable` when it is on a disk the pass can write to, where its look reached it, and `precision_ns`, its disk's `time_precision_ns`, absent when unknown, which compares exactly (§9); `row_mode`, the mode its row says, absent when it has none, and for a changed copy `look_mode`, the mode its look found; both integers, and a mode absent is unknown. Booleans are `false` when absent |
+| `plan` | object | `mtime`, the time applied, and `from`, the changed copy that gives it, both absent when no time moved; `apply`, the copies that get it through an operation `utimens`; `mode` and `mode_from`, the same for the mode, and `chmod`, the copies that get it through an operation `chmod`; `stale`, those that go stale instead, once whatever they lack; each by position, absent when empty |
+| `error` | boolean | `true` on an unknown state, a pending copy, a disk or a position that appears twice, or a mode outside 0 to 4095 (`07777`) |
 
 ### `guard.json` — whether the guard of a disk trips (§15.6, §29.5)
 

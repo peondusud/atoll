@@ -167,6 +167,7 @@ func TestAQueryByPlaceReadsOnlyThatPlace(t *testing.T) {
 		{"finishCopy", finishCopySQL, []any{"u1", []byte("a/b"), "7"}},
 		{"renameRow", renameRowSQL, []any{"u1", []byte("a/b"), "7"}},
 		{"FinishUtimens", finishUtimensSQL, []any{"u1", []byte("a/b"), "7", 1, 2}},
+		{"FinishChmod", finishChmodSQL, []any{"u1", []byte("a/b"), "7", 0o640, 2}},
 	} {
 		plan := queryPlan(t, b, q.sql, q.args...)
 		for _, line := range plan {

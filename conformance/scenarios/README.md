@@ -48,6 +48,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `delete` | `disk`, a path | removes a file or an empty folder |
 | `symlink` | `disk`, a path, `target` | creates a symbolic link |
 | `touch` | `disk`, a path, `mtime_ns` | sets a modification time |
+| `chmod` | `disk`, a path, `mode` | sets a file's mode, written in octal digits with a leading 0, as `"0640"`: the permission bits, setuid, setgid and sticky |
 | `advance` | `by` | moves the clock forward, by a duration of `specs.md` §29.5 |
 | `tick` | | waits until the real clock behind a change time has moved, which it may not do within a clock tick (`specs.md` §17.1). `advance` moves another clock |
 | `unmount` | `disk` | a failed mount: the disk's folder is left empty and leaves the control file, and its tree is set aside |
@@ -63,7 +64,7 @@ A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the to
 
 **`expect_tree`** covers the whole disk. An entry has a path and a `kind`: `file`, when left out, `dir` or `symlink`.
 
-- A file has its content: `text`, a string, or `size`, which means that many bytes of `i mod 251`, the pattern of the official BLAKE3 test vectors. `mtime_ns` is compared when given.
+- A file has its content: `text`, a string, or `size`, which means that many bytes of `i mod 251`, the pattern of the official BLAKE3 test vectors. `mtime_ns` and `mode`, written as for `chmod`, are compared when given. In a disk's `tree`, they are set.
 - A symlink has its `target`.
 - The folders on the way to a listed entry need no entry, and an empty folder must have one.
 - A component that is exactly `*` matches any one name, for an operation's id in `Atoll/trash/<date>/<op-id>/…`.
@@ -99,7 +100,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
 |---|---|
 | `decided` | once a pass has committed what it decided about a page of files, before anything runs on a disk (`specs.md` §15.12) |
 | `modified` | once a pass has committed a modification of one file, before anything runs on a disk (`specs.md` §15.4) |
-| `journaled` | once a `trash`, `restore`, `rename`, `create`, `utimens` or purge operation is committed `planned`, before anything is written to a disk |
+| `journaled` | once a `trash`, `restore`, `rename`, `create`, `chmod`, `utimens` or purge operation is committed `planned`, before anything is written to a disk |
 | `copied` | once a `create` has copied the whole source into its `.part` and recorded every chunk hash, before the source is looked at again and the times are restored |
 | `verified` | once a `create` has re-read its `.part` against the chunk hashes and recorded the whole-file hash, before the target is resolved |
 | `trash-folders` | once the folders of a move to the trash are made and synced, before the copy is looked at again and moved. A restore and a purge have none |
@@ -107,6 +108,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
 | `linked` | between `link` and the `fsync` that follows it, so only on a disk with `renameat2` at `false` |
 | `moved` | once the name has moved, a file's or a folder's, or the file of a purge is gone, before any later `fsync` of what holds it. With `renameat2` at `false`, `unlink` has run too, so the source's name is gone, which is not yet synced, and the target folder was synced once already, between `link` and `unlink` |
 | `times-set` | once a `utimens` has set the time on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
+| `mode-set` | once a `chmod` has set the mode on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `target-synced` | after `fsync` of the target folder. A purge has none |
 | `source-synced` | after every `fsync`, before the operation is committed `done`, and so before the folders left empty go. For a `create`, the source is the folder of its `.part` |
 

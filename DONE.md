@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The mode applied to the other copies (specs.md §9, §15.4, §15.10, §17.2)
+
+Commit "Apply the mode of a metadata change to the other copies", on `permissions`.
+
+- The maintainer's decisions: the mode only, all of its 07777 bits as the copy pipeline gives them, and the owner left for later; the rows the migration finds get their mode from the next look; a copy whose mode is unknown, on a disk the pass cannot write to, goes stale, as for a time.
+- What it does: migration `0003_copy_mode.sql` adds `copies.mode`, 0 to `07777`, NULL until known. The scan, the copy pipeline and a decision record it with the copy's times; a look records it for a copy `there`, unchanged since its row, whose row has none, as a `chmod` moves the change time. A `metadata` decision applies the mode of the changed copy whose mode moved last, by change time, to each other copy that holds another or an unknown one, through an operation `chmod` journaled with a `chmod` event that holds the mode, before the `utimens` of the same copy, copy by copy by position. A copy the pass cannot reach goes stale, refreshed from the copy that gives the time, or the mode when no time moved. The reprise finishes on the mode its event holds, undoes with no warning on the mode its row says, and with one otherwise.
+- Measured on both kernels: ext4, XFS, btrfs and ntfs3 keep the mode; ntfs-3g and lowntfs-3g, mounted without `permissions`, keep `0777` whatever is asked. The row records what the disk holds, and the difference is then one that was already there: the next pass applies nothing.
+- A dry run records no mode, so a copy whose row has none reads as unknown and gets an operation that the pass after it would not run: added to the dry run's limits (§15.12).
+- The conformance runner: a step `chmod`, and `mode` in a tree, both in octal digits. 6 new scenarios: a `chmod`, a `chmod` with a `touch`, a disk away, a dry run, and a crash at `journaled` and at `mode-set`.
+- Found by the mutations: a condition that only a changed copy has a look's mode made redundant, removed, and two gaps closed with tests: setgid, and the `INSERT` of a copy whose pending row went meanwhile.
+- Memory, on 200,000 empty files on both of two disks (§26): the pass that finds every row without a mode, as the migration leaves them, records them all at 152 MiB, in 6.1 s against 5.0 s for a pass with nothing to do; with every copy on one disk `chmod`, the pass that applies 200,000 modes peaks at 176 MiB, in 720 s, and its dry run at 175 MiB; with every copy touched, 174 MiB, in 720 s; rewritten, the dry run at 174 MiB and the pass stopped at the first trash job at 166 MiB.
+- Verified: the local CI on this commit, race, lint, 492 scenarios (6 new) and `test/loopdev` in qemu on Linux 6.12.116. On 7.3.1 only the tests of the mode and the time ran, in a targeted run before the last changes, which only added tests and removed a redundant condition: kernel.ubuntu.com did not answer for the full run, which is still to do. On ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g: a `chmod` applied by a pass and recorded as the disk holds it, read through a cold cache, with nothing left for the next pass, and a crash at `mode-set` resolved by the reprise with no warning. Unit tests cover a `chmod` that reaches the other copy, a `chown` alone, a mode the look records before the decision and a dry run that cannot, a changed copy with no mode, a mode then a time, setgid, an operation `chmod` left planned, and the order by position. Of 40 mutations, 39 are caught, and 1 went with the redundant condition it changed.
+- Left for later, in [TODO.md](TODO.md): the owner, with `copies.uid` and `copies.gid` and operations `chown`.
+
 ## The precision of each disk's times, and the comparisons that need it (specs.md §9, §10, §15.4, §17.2)
 
 Commit "Compare times at the precision each filesystem holds them", on `time-precision`.

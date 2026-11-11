@@ -54,6 +54,7 @@ type eventData struct {
 	Reason  string `json:"reason,omitempty"`
 	Source  string `json:"source,omitempty"`
 	MtimeNS *int64 `json:"mtime_ns,omitempty"`
+	Mode    *int64 `json:"mode,omitempty"`
 }
 
 // writeEvent writes an event, in the transaction of the operation it speaks of, so before it runs.
@@ -175,7 +176,7 @@ const (
 		UNION ALL
 		SELECT o.file_id FROM files g JOIN copies o ON o.file_id = g.id WHERE g.lpath = ?2 AND o.disk_id = ?1 AND o.old_lpath IS NULL)`
 	copyOfSQL = `
-		SELECT f.id, f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key
+		SELECT f.id, f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key, c.mode
 		FROM copies c JOIN files f ON f.id = c.file_id
 		WHERE c.disk_id = ?1 AND ` + copyAtPlace
 	finishCopySQL = `
@@ -185,6 +186,8 @@ const (
 		WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
 	finishUtimensSQL = `
 		UPDATE copies AS c SET mtime_ns = ?4, ctime_ns = ?5 WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
+	finishChmodSQL = `
+		UPDATE copies AS c SET mode = ?4, ctime_ns = ?5 WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
 )
 
 // finishCopy says that a copy went for good: its row, found by disk, place and inode, the job that sent
@@ -229,7 +232,7 @@ func CopyOf(ctx context.Context, db *sql.DB, disk, path string) (KnownCopy, erro
 	row := KnownCopy{Path: path, FilePath: path}
 	var file []byte
 	err := db.QueryRowContext(ctx, copyOfSQL, disk, []byte(path)).
-		Scan(&row.FileID, &file, &row.Size, &row.MtimeNS, &row.CtimeNS, &row.BtimeNS, &row.FileKey)
+		Scan(&row.FileID, &file, &row.Size, &row.MtimeNS, &row.CtimeNS, &row.BtimeNS, &row.FileKey, &row.Mode)
 	if err != nil && !isNoRows(err) {
 		return row, fmt.Errorf("copy: %w", err)
 	}

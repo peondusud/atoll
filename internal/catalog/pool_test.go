@@ -300,3 +300,31 @@ func TestSyncDisks(t *testing.T) {
 		t.Error("a refused sync changed something")
 	}
 }
+
+// A walk records the mode of a new copy, and gives one to a row that has none; a row given one since keeps it
+// (specs.md §9).
+func TestAWalkRecordsModes(t *testing.T) {
+	db, _ := newPool(t)
+	if err := SyncDisks(t.Context(), db, []Disk{oneDisk("t1", "u1", 0)}); err != nil {
+		t.Fatal(err)
+	}
+	walk := &Walk{Copies: []NewCopy{{Path: "a", Size: 1, FileKey: "1", Nlink: 1, Mode: 0o640}, {Path: "b", Size: 1, FileKey: "2", Nlink: 1, Mode: 0o644}, {Path: "c", Size: 1, FileKey: "3", Nlink: 1, Mode: 0o644}}}
+	if err := WriteWalk(t.Context(), db, "t1", 1, walk); err != nil {
+		t.Fatal(err)
+	}
+	if got := countOf(t, db, "SELECT count(*) FROM copies c JOIN files f ON f.id = c.file_id WHERE f.lpath = CAST('a' AS BLOB) AND c.mode = 416"); got != 1 {
+		t.Error("a new copy has no mode")
+	}
+	exec(t, db, "UPDATE copies SET mode = NULL WHERE file_id IN (SELECT id FROM files WHERE lpath IN (CAST('b' AS BLOB), CAST('c' AS BLOB)))")
+	exec(t, db, "UPDATE copies SET mode = 420 WHERE file_id = (SELECT id FROM files WHERE lpath = CAST('c' AS BLOB))")
+	var b, c int64
+	if err := db.QueryRowContext(t.Context(), "SELECT (SELECT id FROM files WHERE lpath = CAST('b' AS BLOB)), (SELECT id FROM files WHERE lpath = CAST('c' AS BLOB))").Scan(&b, &c); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteWalk(t.Context(), db, "t1", 2, &Walk{Modes: []CopyMode{{FileID: b, Mode: 0o600}, {FileID: c, Mode: 0o600}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := countOf(t, db, "SELECT count(*) FROM copies WHERE (file_id = ? AND mode = 384) OR (file_id = ? AND mode = 420)", b, c); got != 2 {
+		t.Error("a row without a mode did not get it, or a row with one lost it")
+	}
+}

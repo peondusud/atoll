@@ -141,10 +141,12 @@ func TestFinishCreate(t *testing.T) {
 		name     string
 		known    []byte
 		verified int
+		gone     bool
 	}{
-		{"a file with no hash", nil, 1},
-		{"a file with that hash", bytes.Repeat([]byte{9}, 32), 1},
-		{"a file with another hash", bytes.Repeat([]byte{8}, 32), 0},
+		{"a file with no hash", nil, 1, false},
+		{"a file with that hash", bytes.Repeat([]byte{9}, 32), 1, false},
+		{"a file with another hash", bytes.Repeat([]byte{8}, 32), 0, false},
+		{"a pending copy gone meanwhile", nil, 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, job := newReplicateDB(t)
@@ -159,14 +161,17 @@ func TestFinishCreate(t *testing.T) {
 			if err := RecordVerified(t.Context(), b.sql(), job, bytes.Repeat([]byte{9}, 32)); err != nil {
 				t.Fatal(err)
 			}
-			made := &NewCopy{Path: "a", Size: 1, MtimeNS: 1, CtimeNS: 77, FileKey: "88", Nlink: 1}
+			if tc.gone {
+				b.exec("DELETE FROM copies WHERE disk_id = 'u2'")
+			}
+			made := &NewCopy{Path: "a", Size: 1, MtimeNS: 1, CtimeNS: 77, FileKey: "88", Nlink: 1, Mode: 0o640}
 			if err := FinishCreate(t.Context(), b.sql(), op, job, made, 60); err != nil {
 				t.Fatal(err)
 			}
 			if got := b.count("SELECT count(*) FROM ops WHERE state = 'done'"); got != 1 {
 				t.Errorf("%d done", got)
 			}
-			if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 'u2' AND state = 'ok' AND created_by = 'atoll' AND file_key = '88' AND ctime_ns = 77 AND first_seen_ns = 60"); got != 1 {
+			if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 'u2' AND state = 'ok' AND created_by = 'atoll' AND file_key = '88' AND ctime_ns = 77 AND first_seen_ns = 60 AND mode = 416"); got != 1 {
 				t.Errorf("%d copies made", got)
 			}
 			if got := b.count("SELECT count(*) FROM copies WHERE verified_ns = 60"); got != 2*tc.verified {

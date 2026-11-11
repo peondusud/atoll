@@ -20,12 +20,14 @@ type KnownCopy struct {
 	FileKey  sql.NullString
 	GoneNS   sql.NullInt64
 	GoneKind sql.NullString
+	// Mode is NULL for a row recorded before modes were (specs.md §9).
+	Mode sql.NullInt64
 }
 
-const knownColumns = "f.id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key, c.gone_ns, c.gone_kind"
+const knownColumns = "f.id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key, c.gone_ns, c.gone_kind, c.mode"
 
 func scanKnown(rows *sql.Rows, k *KnownCopy, path *[]byte, more ...any) error {
-	dest := append([]any{path, &k.FileID, &k.Size, &k.MtimeNS, &k.CtimeNS, &k.BtimeNS, &k.FileKey, &k.GoneNS, &k.GoneKind}, more...)
+	dest := append([]any{path, &k.FileID, &k.Size, &k.MtimeNS, &k.CtimeNS, &k.BtimeNS, &k.FileKey, &k.GoneNS, &k.GoneKind, &k.Mode}, more...)
 	if err := rows.Scan(dest...); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
@@ -118,6 +120,7 @@ type NewCopy struct {
 	BtimeNS *int64
 	FileKey string
 	Nlink   int64
+	Mode    int64
 }
 
 // EntryRow is a folder, symlink or ignored file a walk found. A folder has its identity (specs.md
@@ -138,12 +141,19 @@ type CopyClock struct {
 	Kind   string
 }
 
+// CopyMode is the mode a look found of a copy whose row has none, and which is there as its row says (specs.md §9).
+type CopyMode struct {
+	FileID int64
+	Mode   int64
+}
+
 // Walk is what one walk found. Kept holds the rows of folders that stay though the walk did not find
 // them, as they were renamed and not yet decided (specs.md §15.12).
 type Walk struct {
 	Copies  []NewCopy
 	Entries []EntryRow
 	Clocks  []CopyClock
+	Modes   []CopyMode
 	Kept    map[string]bool
 }
 
@@ -156,6 +166,9 @@ func WriteWalk(ctx context.Context, db *sql.DB, disk string, nowNS int64, w *Wal
 			return err
 		}
 		if err := writeClocks(ctx, tx, disk, nowNS, w.Clocks); err != nil {
+			return err
+		}
+		if err := writeModes(ctx, tx, disk, w.Modes); err != nil {
 			return err
 		}
 		return writeEntries(ctx, tx, disk, w.Entries, w.Kept)
@@ -196,6 +209,24 @@ func writeClocks(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, cloc
 	return nil
 }
 
+// writeModes gives a mode to the rows that have none. A row given one since, by an operation or a copy, keeps it.
+func writeModes(ctx context.Context, tx *sql.Tx, disk string, modes []CopyMode) error {
+	if len(modes) == 0 {
+		return nil
+	}
+	fill, err := tx.PrepareContext(ctx, "UPDATE copies SET mode = ? WHERE file_id = ? AND disk_id = ? AND mode IS NULL")
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer func() { _ = fill.Close() }()
+	for _, m := range modes {
+		if _, err := fill.ExecContext(ctx, m.Mode, m.FileID, disk); err != nil {
+			return fmt.Errorf("mode of file %d: %w", m.FileID, err)
+		}
+	}
+	return nil
+}
+
 func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copies []NewCopy) error {
 	find, err := tx.PrepareContext(ctx, "SELECT id, size FROM files WHERE lpath = ?")
 	if err != nil {
@@ -218,8 +249,8 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 	}
 	defer func() { _ = addFile.Close() }()
 	addCopy, err := tx.PrepareContext(ctx, `
-		INSERT INTO copies(file_id, disk_id, file_key, nlink, size, mtime_ns, ctime_ns, btime_ns, created_by, first_seen_ns, state)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, 'ok')`)
+		INSERT INTO copies(file_id, disk_id, file_key, nlink, size, mtime_ns, ctime_ns, btime_ns, created_by, first_seen_ns, state, mode)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, 'ok', ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
@@ -264,7 +295,7 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 		if _, err := dropJob.ExecContext(ctx, id, disk); err != nil {
 			return fmt.Errorf("%q: job: %w", c.Path, err)
 		}
-		if _, err := addCopy.ExecContext(ctx, id, disk, c.FileKey, c.Nlink, c.Size, c.MtimeNS, c.CtimeNS, c.BtimeNS, nowNS); err != nil {
+		if _, err := addCopy.ExecContext(ctx, id, disk, c.FileKey, c.Nlink, c.Size, c.MtimeNS, c.CtimeNS, c.BtimeNS, nowNS, c.Mode); err != nil {
 			return fmt.Errorf("%q: copy: %w", c.Path, err)
 		}
 	}
@@ -339,6 +370,8 @@ type CopyRow struct {
 	OldPath     *string
 	GoneNS      sql.NullInt64
 	GoneKind    sql.NullString
+	// Mode is NULL for a row recorded before modes were (specs.md §9).
+	Mode sql.NullInt64
 }
 
 // Place says where a copy of a file sits.
@@ -406,7 +439,7 @@ func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 // fileColumns are what readFiles scans.
 const fileColumns = `f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns,
 	c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state, c.file_key,
-	c.nlink, c.old_lpath, c.gone_ns, c.gone_kind`
+	c.nlink, c.old_lpath, c.gone_ns, c.gone_kind, c.mode`
 
 func (r *FileReader) page(ctx context.Context, files string) ([]FileRow, error) {
 	rows, err := r.db.QueryContext(ctx, "SELECT "+fileColumns+" FROM ("+files+") f LEFT JOIN copies c ON c.file_id = f.id ORDER BY f.lpath, c.disk_id", r.after, filePageSize)
@@ -435,7 +468,7 @@ func (r *FileReader) readFiles(rows *sql.Rows) ([]FileRow, error) {
 		var old []byte
 		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original, &f.FirstSeenNS,
 			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &c.VerifiedNS, &copyState, &c.FileKey,
-			&c.Nlink, &old, &c.GoneNS, &c.GoneKind)
+			&c.Nlink, &old, &c.GoneNS, &c.GoneKind, &c.Mode)
 		if err != nil {
 			return nil, fmt.Errorf("files: %w", err)
 		}
