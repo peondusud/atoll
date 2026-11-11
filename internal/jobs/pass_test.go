@@ -34,8 +34,10 @@ type bench struct {
 	ro       map[string]bool
 	gone     map[string]bool
 	at       map[string]func()
-	points   []string
-	now      int64
+	// precision is how finely a disk holds a time, by id, as its head would say; 0 says nothing.
+	precision map[string]int64
+	points    []string
+	now       int64
 	// base is the configuration's text up to the tables a test adds after the disks.
 	base string
 }
@@ -62,7 +64,8 @@ func (b *bench) Mount(mount string) disks.MountSeen {
 func (b *bench) identity(entry *disks.MountEntry) disks.DeviceSeen {
 	for i := range b.config.Disks {
 		if b.config.Disks[i].Mount == entry.MountPoint {
-			return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: b.config.Disks[i].UUID}}
+			d := &b.config.Disks[i]
+			return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: d.UUID, TimePrecisionNS: b.precision[d.ID]}}
 		}
 	}
 	return disks.DeviceSeen{Device: disks.DeviceGoneAway}
@@ -129,7 +132,7 @@ func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 	var text strings.Builder
 	fmt.Fprintf(&text, "pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(top, "catalog.db"), filepath.Join(top, "pool"))
 	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, walkFail: map[string]func(string, string) error{}, unread: map[string]bool{}, ro: map[string]bool{},
-		gone: map[string]bool{}, at: map[string]func(){}, now: 1767225600000000000}
+		gone: map[string]bool{}, at: map[string]func(){}, precision: map[string]int64{}, now: 1767225600000000000}
 	for i, id := range ids {
 		dir := filepath.Join(top, id)
 		if err := os.MkdirAll(filepath.Join(dir, "media"), 0o755); err != nil {

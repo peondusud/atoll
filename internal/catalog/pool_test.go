@@ -230,14 +230,18 @@ func TestFileReaderPages(t *testing.T) {
 func TestSyncDisks(t *testing.T) {
 	db, _ := newPool(t)
 	seen := oneDisk("a", "ua", 0)
-	seen.Seen, seen.Capacity, seen.Free, seen.LastSeenNS = true, 10, 5, 7
+	seen.Seen, seen.Capacity, seen.Free, seen.LastSeenNS, seen.TimePrecisionNS = true, 10, 5, 7, 100
 	seen.Tags, seen.Domain = []string{"usb", "sata"}, "d1"
 	sync := func(list ...Disk) error { return SyncDisks(t.Context(), db, list) }
 	if err := sync(seen, oneDisk("b", "ub", 1), oneDisk("c", "uc", 2)); err != nil {
 		t.Fatal(err)
 	}
-	if got := countOf(t, db, `SELECT count(*) FROM disks WHERE id = 'a' AND tags = '["usb","sata"]' AND domain = 'd1' AND capacity_bytes = 10 AND free_bytes = 5 AND last_seen_ns = 7`); got != 1 {
+	if got := countOf(t, db, `SELECT count(*) FROM disks WHERE id = 'a' AND tags = '["usb","sata"]' AND domain = 'd1' AND capacity_bytes = 10 AND free_bytes = 5 AND last_seen_ns = 7 AND time_precision_ns = 100`); got != 1 {
 		t.Error("what a check saw was not written")
+	}
+	list, err := Disks(t.Context(), db)
+	if err != nil || len(list) != 3 || list[0].TimePrecisionNS != 100 || list[1].TimePrecisionNS != 0 {
+		t.Errorf("%+v, %v", list, err)
 	}
 	// A disk the check could not confirm keeps what was last seen.
 	missing := oneDisk("a", "ua", 0)
@@ -245,8 +249,17 @@ func TestSyncDisks(t *testing.T) {
 	if err := sync(missing, oneDisk("b", "ub", 1), oneDisk("c", "uc", 2)); err != nil {
 		t.Fatal(err)
 	}
-	if got := countOf(t, db, `SELECT count(*) FROM disks WHERE id = 'a' AND state = 'missing' AND capacity_bytes = 10 AND free_bytes = 5 AND last_seen_ns = 7 AND tags = '[]' AND domain IS NULL`); got != 1 {
+	if got := countOf(t, db, `SELECT count(*) FROM disks WHERE id = 'a' AND state = 'missing' AND capacity_bytes = 10 AND free_bytes = 5 AND last_seen_ns = 7 AND time_precision_ns = 100 AND tags = '[]' AND domain IS NULL`); got != 1 {
 		t.Error("a missing disk lost what was last seen, or kept old settings")
+	}
+	// Seen again by a check that read no head, it keeps the precision an earlier one read (specs.md §9).
+	unread := oneDisk("a", "ua", 0)
+	unread.Seen, unread.Capacity, unread.Free, unread.LastSeenNS = true, 10, 5, 8
+	if err := sync(unread, oneDisk("b", "ub", 1), oneDisk("c", "uc", 2)); err != nil {
+		t.Fatal(err)
+	}
+	if got := countOf(t, db, `SELECT count(*) FROM disks WHERE id = 'a' AND time_precision_ns = 100 AND last_seen_ns = 8`); got != 1 {
+		t.Error("a check that read no head lost the precision")
 	}
 	// The order is the configuration's, and it may change.
 	if err := sync(oneDisk("c", "uc", 0), oneDisk("b", "ub", 1), missing); err != nil {

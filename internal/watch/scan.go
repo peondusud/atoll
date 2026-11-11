@@ -157,6 +157,7 @@ func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now i
 				row.State = string(disks.Missing)
 			} else {
 				row.Seen, row.Capacity, row.Free, row.LastSeenNS = true, capacity, free, now
+				row.TimePrecisionNS = verdicts[i].TimePrecisionNS
 			}
 		}
 		rows = append(rows, row)

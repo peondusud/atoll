@@ -78,3 +78,35 @@ func TestCreationTimeNSVectors(t *testing.T) {
 		}
 	}
 }
+
+type sameTimeVector struct {
+	A         *int64 `json:"a"`
+	B         *int64 `json:"b"`
+	Precision *int64 `json:"precision_ns"`
+	Same      *bool  `json:"same"`
+	Note      string `json:"note"`
+}
+
+func TestSameTimeVectors(t *testing.T) {
+	for i, v := range vectors.Load[sameTimeVector](t, "same_time.json") {
+		if v.A == nil || v.B == nil || v.Precision == nil || v.Same == nil {
+			t.Errorf("vector %d (%s): want a, b, precision_ns and same", i, v.Note)
+			continue
+		}
+		if got := SameTime(*v.A, *v.B, *v.Precision); got != *v.Same {
+			t.Errorf("vector %d (%s): got %v", i, v.Note, got)
+		}
+		if got := SameTime(*v.B, *v.A, *v.Precision); got != *v.Same {
+			t.Errorf("vector %d (%s), the other way round: got %v", i, v.Note, got)
+		}
+	}
+}
+
+// The coarser precision wins, and an unknown one is exact.
+func TestCoarser(t *testing.T) {
+	for _, c := range [][3]int64{{1, 100, 100}, {100, 1, 100}, {0, 100, 100}, {0, 0, 1}, {1_000_000_000, 100, 1_000_000_000}} {
+		if got := Coarser(c[0], c[1]); got != c[2] {
+			t.Errorf("Coarser(%d, %d) = %d, want %d", c[0], c[1], got, c[2])
+		}
+	}
+}

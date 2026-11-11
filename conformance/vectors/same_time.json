@@ -1,0 +1,20 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §9",
+  "description": "Whether two times are the same at a precision: each, divided by the precision and rounded down, toward the past, gives the same number, which is what a filesystem that holds only multiples of the precision keeps of a time. A precision of 0, unknown, or 1 compares exactly.",
+  "cases": [
+    {"a": 1600000000123456789, "b": 1600000000123456789, "precision_ns": 1, "same": true, "note": "one time"},
+    {"a": 1600000000123456789, "b": 1600000000123456788, "precision_ns": 1, "same": false, "note": "1 ns apart, at 1 ns"},
+    {"a": 1600000000123456789, "b": 1600000000123456700, "precision_ns": 0, "same": false, "note": "an unknown precision compares exactly"},
+    {"a": 1600000000123456789, "b": 1600000000123456700, "precision_ns": 100, "same": true, "note": "what NTFS keeps of a time: its multiple of 100 ns below"},
+    {"a": 1600000000123456700, "b": 1600000000123456799, "precision_ns": 100, "same": true, "note": "both ends of one tick of 100 ns"},
+    {"a": 1600000000123456799, "b": 1600000000123456800, "precision_ns": 100, "same": false, "note": "1 ns apart, across a tick"},
+    {"a": 1600000000999999999, "b": 1600000000000000000, "precision_ns": 1000000000, "same": true, "note": "ext4 with 128-byte inodes keeps the second"},
+    {"a": 1600000000999999999, "b": 1600000001000000000, "precision_ns": 1000000000, "same": false, "note": "1 ns apart, across a second"},
+    {"a": -150, "b": -200, "precision_ns": 100, "same": true, "note": "before the epoch, rounded down toward the past: both in the tick from -200"},
+    {"a": -150, "b": -100, "precision_ns": 100, "same": false, "note": "rounded toward zero, these two would read as one tick"},
+    {"a": -1, "b": 0, "precision_ns": 100, "same": false, "note": "the epoch starts a tick"},
+    {"a": -9223372036854775808, "b": -9223372036854775801, "precision_ns": 100, "same": true, "note": "the lowest time, with no overflow"},
+    {"a": 9223372036854775807, "b": 9223372036854775800, "precision_ns": 100, "same": true, "note": "the highest time"}
+  ]
+}

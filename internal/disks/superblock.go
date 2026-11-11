@@ -25,10 +25,29 @@ const (
 	VariantASCIICI  Variant = "ascii-ci"
 )
 
-// Identity is what the head of a device says about its filesystem.
+// Identity is what the head of a device says about its filesystem. TimePrecisionNS is how finely it holds a
+// time, in nanoseconds (specs.md §9), 0 when nothing says.
 type Identity struct {
-	ID      string
-	Variant Variant
+	ID              string
+	Variant         Variant
+	TimePrecisionNS int64
+}
+
+// The precisions of a time, in nanoseconds (specs.md §9).
+const (
+	nanosecond   = 1
+	ntfsTick     = 100
+	wholeSecond  = 1_000_000_000
+	oldInodeSize = 128
+)
+
+// TimePrecision gives how finely a filesystem holds a time when nothing but its kind is known: an ext4 is taken to
+// have the inodes mkfs.ext4 makes, which hold nanoseconds (specs.md §9).
+func TimePrecision(fs names.Filesystem) int64 {
+	if fs == names.NTFS {
+		return ntfsTick
+	}
+	return nanosecond
 }
 
 // ErrNoFilesystem says that a head does not hold the filesystem it was read as.
@@ -37,33 +56,49 @@ var ErrNoFilesystem = errors.New("no such filesystem")
 // ReadIdentity reads a head as the layout of fs, and looks at nothing else, so that what an
 // earlier filesystem left at another offset changes nothing.
 func ReadIdentity(fs names.Filesystem, head []byte) (Identity, error) {
+	var id Identity
+	var err error
 	switch fs {
 	case names.Ext4:
-		return readExt4(head)
+		id, err = readExt4(head)
 	case names.XFS:
-		return readXFS(head)
+		id, err = readXFS(head)
 	case names.Btrfs:
-		return readBtrfs(head)
+		id, err = readBtrfs(head)
 	case names.NTFS:
-		return readNTFS(head)
+		id, err = readNTFS(head)
 	default:
 		return Identity{}, fmt.Errorf("%w: unknown %q", ErrNoFilesystem, fs)
 	}
+	if err != nil {
+		return Identity{}, err
+	}
+	if id.TimePrecisionNS == 0 {
+		id.TimePrecisionNS = TimePrecision(fs)
+	}
+	return id, nil
 }
 
 func readExt4(head []byte) (Identity, error) {
 	const (
-		magicAt    = 1080
-		featuresAt = 1120
-		uuidAt     = 1128
-		casefold   = 0x20000
+		magicAt     = 1080
+		revisionAt  = 1100
+		inodeSizeAt = 1112
+		featuresAt  = 1120
+		uuidAt      = 1128
+		casefold    = 0x20000
 	)
 	if len(head) < uuidAt+16 || !bytes.Equal(head[magicAt:magicAt+2], []byte{0x53, 0xEF}) {
 		return Identity{}, fmt.Errorf("%w: ext4", ErrNoFilesystem)
 	}
-	id := Identity{ID: formatUUID(head[uuidAt : uuidAt+16])}
+	id := Identity{ID: formatUUID(head[uuidAt : uuidAt+16]), TimePrecisionNS: nanosecond}
 	if binary.LittleEndian.Uint32(head[featuresAt:])&casefold != 0 {
 		id.Variant = VariantCasefold
+	}
+	// Revision 0 has 128-byte inodes, whatever the size field holds; an inode that small has no room for the
+	// nanoseconds of its times.
+	if binary.LittleEndian.Uint32(head[revisionAt:]) == 0 || binary.LittleEndian.Uint16(head[inodeSizeAt:]) <= oldInodeSize {
+		id.TimePrecisionNS = wholeSecond
 	}
 	return id, nil
 }

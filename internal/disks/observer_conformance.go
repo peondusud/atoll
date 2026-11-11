@@ -96,9 +96,10 @@ func (f folders) Mount(mount string) MountSeen {
 	return MountSeen{Path: PathOK, Entry: &entry}
 }
 
-func (f folders) Device(_ names.Filesystem, entry *MountEntry) DeviceSeen {
+// Device has no head to read either: a folder holds a time as finely as a disk of its kind would.
+func (f folders) Device(fs names.Filesystem, entry *MountEntry) DeviceSeen {
 	d := f.find(entry.MountPoint)
-	return DeviceSeen{Device: DeviceOK, Identity: &Identity{ID: d.UUID}}
+	return DeviceSeen{Device: DeviceOK, Identity: &Identity{ID: d.UUID, TimePrecisionNS: TimePrecision(fs)}}
 }
 
 // ReadPastCache has no device to read: a folder answers as the control file says.

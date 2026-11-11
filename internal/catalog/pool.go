@@ -202,6 +202,8 @@ type Disk struct {
 	Capacity   int64
 	Free       int64
 	LastSeenNS int64
+	// TimePrecisionNS is how finely the disk holds a time (specs.md §9), 0 when no check read it.
+	TimePrecisionNS int64
 }
 
 // SyncDisks rewrites the disks from the configuration, which wins (specs.md §9). A disk it no longer
@@ -267,9 +269,11 @@ func syncOne(ctx context.Context, tx *sql.Tx, d *Disk) error {
 		free = sql.NullInt64{Int64: d.Free, Valid: true}
 		lastSeen = sql.NullInt64{Int64: d.LastSeenNS, Valid: true}
 	}
+	// A check that did not read the head keeps what an earlier one read.
+	precision := sql.NullInt64{Int64: d.TimePrecisionNS, Valid: d.TimePrecisionNS > 0}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, domain, tags, capacity_bytes, free_bytes, state, last_seen_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, domain, tags, capacity_bytes, free_bytes, state, last_seen_ns, time_precision_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			fs_uuid = excluded.fs_uuid, fs_type = excluded.fs_type, mount_path = excluded.mount_path,
 			root = excluded.root, workdir = excluded.workdir, role = excluded.role,
@@ -277,8 +281,9 @@ func syncOne(ctx context.Context, tx *sql.Tx, d *Disk) error {
 			capacity_bytes = COALESCE(excluded.capacity_bytes, capacity_bytes),
 			free_bytes = COALESCE(excluded.free_bytes, free_bytes),
 			state = excluded.state,
-			last_seen_ns = COALESCE(excluded.last_seen_ns, last_seen_ns)`,
-		d.ID, d.UUID, d.FS, d.Mount, d.Root, d.Workdir, d.Role, d.Position, domain, string(tagsJSON), capacity, free, d.State, lastSeen)
+			last_seen_ns = COALESCE(excluded.last_seen_ns, last_seen_ns),
+			time_precision_ns = COALESCE(excluded.time_precision_ns, time_precision_ns)`,
+		d.ID, d.UUID, d.FS, d.Mount, d.Root, d.Workdir, d.Role, d.Position, domain, string(tagsJSON), capacity, free, d.State, lastSeen, precision)
 	if err != nil {
 		return fmt.Errorf("write: %w", err)
 	}

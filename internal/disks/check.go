@@ -49,10 +49,12 @@ const (
 )
 
 // Verdict is the result of a mount check. Reason and Message are empty on a disk that is online.
+// TimePrecisionNS is how finely the disk holds a time (specs.md §9), as the head read: 0 for a missing disk.
 type Verdict struct {
-	State   State
-	Reason  Reason
-	Message string
+	State           State
+	Reason          Reason
+	Message         string
+	TimePrecisionNS int64
 }
 
 // PathAnswer is what the mount path gave.
@@ -198,7 +200,9 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	case FolderIOError:
 		return missing(IOError, fmt.Sprintf("%q does not answer: %s", d.Root, root.Note))
 	}
-	return judgeWrites(e, device.Identity.Variant, root.OtherCase, d.Root)
+	verdict := judgeWrites(e, device.Identity.Variant, root.OtherCase, d.Root)
+	verdict.TimePrecisionNS = device.Identity.TimePrecisionNS
+	return verdict
 }
 
 // Confirm runs a mount check, then reads the head past the page cache, so that a disk whose answers

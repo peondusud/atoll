@@ -84,24 +84,31 @@ type superblockCase struct {
 		At  int    `json:"at"`
 		Hex string `json:"hex"`
 	} `json:"bytes"`
-	ID      string `json:"id"`
-	Variant string `json:"variant"`
-	Error   bool   `json:"error"`
-	Note    string `json:"note"`
+	ID            string `json:"id"`
+	Variant       string `json:"variant"`
+	TimePrecision int64  `json:"time_precision_ns"`
+	Error         bool   `json:"error"`
+	Note          string `json:"note"`
+}
+
+// head builds what a case says a device starts with. A little longer, then cut: bytes past the end of a head must
+// not count.
+func (c *superblockCase) head(t *testing.T) []byte {
+	t.Helper()
+	head := make([]byte, max(c.Length, HeadSize))
+	for _, b := range c.Bytes {
+		raw, err := hex.DecodeString(b.Hex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		copy(head[b.At:], raw)
+	}
+	return head[:c.Length]
 }
 
 func TestReadIdentity(t *testing.T) {
 	for _, c := range vectors.Load[superblockCase](t, "superblock.json") {
-		// A little longer, then cut: bytes past the end of a head must not count.
-		head := make([]byte, max(c.Length, HeadSize))
-		for _, b := range c.Bytes {
-			raw, err := hex.DecodeString(b.Hex)
-			if err != nil {
-				t.Fatal(err)
-			}
-			copy(head[b.At:], raw)
-		}
-		got, err := ReadIdentity(names.Filesystem(c.FS), head[:c.Length])
+		got, err := ReadIdentity(names.Filesystem(c.FS), c.head(t))
 		if c.Error {
 			if err == nil {
 				t.Errorf("%s: read as %+v, want it refused (%s)", c.FS, got, c.Note)
@@ -114,8 +121,35 @@ func TestReadIdentity(t *testing.T) {
 			t.Errorf("%s: %v (%s)", c.FS, err, c.Note)
 			continue
 		}
-		if want := (Identity{c.ID, Variant(c.Variant)}); got != want {
-			t.Errorf("%s: got %+v, want %+v (%s)", c.FS, got, want, c.Note)
+		if got.ID != c.ID || got.Variant != Variant(c.Variant) {
+			t.Errorf("%s: got %+v, want %s %q (%s)", c.FS, got, c.ID, c.Variant, c.Note)
+		}
+	}
+}
+
+func TestTimePrecisionVectors(t *testing.T) {
+	for _, c := range vectors.Load[superblockCase](t, "time_precision.json") {
+		got, err := ReadIdentity(names.Filesystem(c.FS), c.head(t))
+		switch {
+		case c.Error:
+			if !errors.Is(err, ErrNoFilesystem) {
+				t.Errorf("%s: %+v, %v, want it refused (%s)", c.FS, got, err, c.Note)
+			}
+		case err != nil:
+			t.Errorf("%s: %v (%s)", c.FS, err, c.Note)
+		case c.TimePrecision == 0:
+			t.Errorf("%s: a case needs time_precision_ns or error (%s)", c.FS, c.Note)
+		case got.TimePrecisionNS != c.TimePrecision:
+			t.Errorf("%s: %d ns, want %d (%s)", c.FS, got.TimePrecisionNS, c.TimePrecision, c.Note)
+		}
+	}
+}
+
+// What only the kind of a filesystem says: NTFS counts in 100 ns, and the others hold nanoseconds.
+func TestTimePrecisionOfAKind(t *testing.T) {
+	for fs, want := range map[names.Filesystem]int64{names.Ext4: 1, names.XFS: 1, names.Btrfs: 1, names.NTFS: 100} {
+		if got := TimePrecision(fs); got != want {
+			t.Errorf("%s: %d, want %d", fs, got, want)
 		}
 	}
 }
@@ -211,7 +245,7 @@ func answersFor(c *checkCase) (*config.Disk, *answers) {
 	a := &answers{seen: MountSeen{Path: PathAnswer(or(c.Path, "ok")), Entry: entry}}
 	a.device = DeviceSeen{Device: DeviceAnswer(or(c.Device, "ok"))}
 	if !c.NoMagic {
-		a.device.Identity = &Identity{or(c.ID, uuid), Variant(c.Variant)}
+		a.device.Identity = &Identity{ID: or(c.ID, uuid), Variant: Variant(c.Variant), TimePrecisionNS: 100}
 	}
 	a.root = RootSeen{Folder: FolderAnswer(or(c.RootFolder, "ok")), OtherCase: c.OtherCase}
 	return d, a
@@ -228,6 +262,10 @@ func TestCheck(t *testing.T) {
 		}
 		if (got.State == Online) != (got.Message == "") {
 			t.Errorf("case %d: %s with the message %q (%s)", i, got.State, got.Message, c.Note)
+		}
+		// What the head said of the time goes with a disk that passed, and nothing with one that did not (specs.md §9).
+		if want := map[bool]int64{true: 0, false: 100}[got.State == Missing]; got.TimePrecisionNS != want {
+			t.Errorf("case %d: %s with a precision of %d (%s)", i, got.State, got.TimePrecisionNS, c.Note)
 		}
 	}
 }

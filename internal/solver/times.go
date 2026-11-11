@@ -47,6 +47,29 @@ func CreationTimeNS(seconds, nanoseconds int64) (ns int64, ok bool, err error) {
 	return seconds*1000000000 + nanoseconds, true, nil
 }
 
+// SameTime says whether two times are the same at a precision: each, divided by it and rounded down, toward the
+// past, gives the same number, which is what a filesystem that holds only multiples of it keeps of a time
+// (specs.md §9). A precision of 0, unknown, or 1 compares exactly.
+func SameTime(a, b, precisionNS int64) bool {
+	if precisionNS <= 1 {
+		return a == b
+	}
+	return floorDiv(a, precisionNS) == floorDiv(b, precisionNS)
+}
+
+// Coarser gives the coarser of two precisions, an unknown one being exact.
+func Coarser(a, b int64) int64 {
+	return max(a, b, 1)
+}
+
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && a < 0 {
+		q--
+	}
+	return q
+}
+
 func inTimeRange(seconds, nanoseconds int64) bool {
 	switch {
 	case seconds < minTimeSeconds, seconds > maxTimeSeconds:
