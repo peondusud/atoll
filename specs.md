@@ -1502,7 +1502,7 @@ atoll daemon [--foreground] [--until-idle] [--dry-run]
 | 4 — Windows | — | Rust | Windows engine (service) and WinFsp pool drive, health evacuation, XFS and btrfs | — |
 | 5 | — | Rust | web interface, openmediavault plugin, duplicates by metadata, header cache, parity study | — |
 
-A milestone is reached when its phase and every phase before it are done: the alpha is the safe core, the beta the complete Linux MVP, and v0.1, the first stable version, adds Atoll's own view, with the contracts frozen at format version 1. The phases after 2a have no milestone yet.
+A milestone is reached when its phase and every phase before it are done: the alpha is the safe core, the beta the complete Linux MVP, and v0.1, the first stable version, adds Atoll's own view, with the contracts frozen at format version 1. The phases after 2a have no milestone yet. Where the work stands, and what remains before each milestone, is in `ROADMAP.md`.
 
 ## 29. Implementation and Rust rewrite
 
