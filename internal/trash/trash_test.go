@@ -2524,6 +2524,8 @@ func TestConfirmedOnce(t *testing.T) {
 	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
 		t.Fatal(err)
 	}
+	// A scan confirms what it walks (specs.md §15.10): what counts here is what the sessions read.
+	b.confirm = map[string]int{}
 	dry, err := Open(t.Context(), b.db, b.config, b, false)
 	if err != nil {
 		t.Fatal(err)
@@ -2972,6 +2974,8 @@ func TestReadOnlyDisks(t *testing.T) {
 		b.prune()
 		delete(b.fail, b.dirs["t3"])
 		b.ro[b.dirs["t3"]] = true
+		// What counts is what this session reads past the cache, not the scans before it.
+		b.confirm = map[string]int{}
 		s, err := Open(t.Context(), b.db, b.config, b, true)
 		if err != nil {
 			t.Fatal(err)
@@ -2988,8 +2992,8 @@ func TestReadOnlyDisks(t *testing.T) {
 		if got := b.text("SELECT state FROM ops"); got != "planned" {
 			t.Errorf("the operation is %q", got)
 		}
-		if n := b.confirm[b.dirs["t3"]]; n != 1 {
-			t.Errorf("%d confirmations: a disk it cannot write to has no reason to wake", n-1)
+		if n := b.confirm[b.dirs["t3"]]; n != 0 {
+			t.Errorf("%d confirmations: a disk it cannot write to has no reason to wake", n)
 		}
 	})
 	for _, restore := range []bool{true, false} {
@@ -3028,6 +3032,8 @@ func TestADiskThatCannotBeReadIsLeftAlone(t *testing.T) {
 	for _, state := range []solver.DiskState{solver.DiskFailed, solver.DiskDraining, solver.DiskRetired, solver.DiskMissing} {
 		t.Run(string(state), func(t *testing.T) {
 			b := newBench(t)
+			// What counts is what this session reads past the cache, not the scan that set the bench up.
+			b.confirm = map[string]int{}
 			s, err := Open(t.Context(), b.db, b.config, b, true)
 			if err != nil {
 				t.Fatal(err)

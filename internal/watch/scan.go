@@ -92,7 +92,8 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 		if opts.Disk != "" && d.ID != opts.Disk {
 			continue
 		}
-		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Write: true})
+		// Confirmed as a pass's look is, and every time, as a scan records what it found (specs.md §10, §15.10).
+		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Write: true, Confirm: confirmPastCache(m), ConfirmEach: true})
 		if err != nil {
 			return nil, err
 		}
@@ -173,8 +174,18 @@ type Look struct {
 	Planned []string
 	// Own gives what the disk's own trash and tmp hold of those inodes.
 	Own func(d *config.Disk, inodes map[string]bool) (map[string][]solver.FileLook, error)
-	// Confirm is asked before anything is concluded from an absence. It says false for a disk that fails.
-	Confirm func(ctx context.Context, d *config.Disk) (bool, error)
+	// Confirm is asked before anything is concluded from an absence, or with ConfirmEach before anything a walk found is
+	// written, as a scan does. It says false for a disk that fails.
+	Confirm     func(ctx context.Context, d *config.Disk) (bool, error)
+	ConfirmEach bool
+}
+
+// confirmPastCache confirms a disk as a session does before it writes: a mount check, then a read of its head past
+// the page cache, whose identifier must be the disk's (specs.md §10).
+func confirmPastCache(m disks.Machine) func(context.Context, *config.Disk) (bool, error) {
+	return func(_ context.Context, d *config.Disk) (bool, error) {
+		return disks.Confirm(m, d).State != disks.Missing, nil
+	}
 }
 
 // LookAtDisk walks one disk and writes what it found, whole or not at all.
@@ -200,12 +211,17 @@ func LookAtDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	if look.Confirm != nil && needsConfirming(r) {
+	if look.Confirm != nil && (look.ConfirmEach || needsConfirming(r)) {
 		ok, err := look.Confirm(ctx, d)
 		if err != nil {
 			return nil, fmt.Errorf("%w", err)
 		}
 		if !ok {
+			if look.Write {
+				if err := catalog.SetDiskState(ctx, db, d.ID, string(disks.Missing)); err != nil {
+					return nil, fmt.Errorf("catalog: %w", err)
+				}
+			}
 			return &Report{ID: d.ID, Verdict: disks.Verdict{State: disks.Missing, Reason: disks.IOError, Message: "the disk failed its confirmation"},
 				Changed: []string{}, Moved: []MovedCopy{}, Absent: []string{}, PathTaken: []string{}, Unreadable: []string{}, OtherMounts: []string{}}, nil
 		}

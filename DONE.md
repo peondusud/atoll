@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A scan confirms each disk it walks (specs.md §10, §15.10)
+
+Commit "Confirm each disk a scan walks before recording it", on `scan-confirm`.
+
+- Asked by the maintainer after the failed-mount test: against a mount check that took the folder below a failed mount for the disk, `atoll scan` recorded that folder as the disk, adopting a service's file as a copy and starting the clock of a copy it did not find, where only a pass's confirmation kept the deletions from being decided. §15.6 already said an absence counts only once the disk's identity is confirmed in the same scan.
+- What it does: once a walk is over, and before anything it found is written, a scan confirms the disk, as a session does before it writes: a mount check, then the head read past the page cache, whose identifier must be the disk's. Every disk it walks, whatever the walk found, where a pass confirms only one it would conclude something from: a scan records all it finds, a copy it seems to gain as one it seems to lose. One that fails is `missing`, `io-error`, recorded so, and nothing of its walk is written. It costs one read of 68 KiB a disk walked: on 200,000 files on two disks, `scan --full` takes 234.5 s at 177 MiB, as before (225 s to 331 s, 178 MiB to 181 MiB, in earlier runs), and a scan of copies all known 4.6 s at 152 MiB.
+- Verified: a unit test of a disk whose mount the table still shows and whose device the read past the cache cannot read, failing before the change; `TestConfirmationOfAFailingDevice` runs a scan too, on ext4, XFS, ntfs3 and ntfs-3g over dm-error; three tests that count the reads past the cache of a session count from the session on, as the scan that sets their bench up reads too. The local CI on this commit, `test/loopdev` in qemu on Linux 6.12.116; kernel.ubuntu.com did not answer for 7.3.1.
+
 ## The failed-mount test, on every driver (CLAUDE.md, invariant 4)
 
 Commit "Test a failed mount end to end on every driver", on `failed-mount`.
