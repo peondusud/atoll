@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The `ntfs` driver of Linux 7.1 measured (specs.md §10, §15.8, §22)
+
+Commit "Measure the ntfs driver of Linux 7.x", on `claude/modest-chatterjee-ab55eb`.
+
+- Why: Debian sid's 7.3.3 kernel, the future Debian 14's, builds no ntfs3, only the new read-write `ntfs` driver, which Atoll makes `readonly` as never measured.
+- Measured in qemu on Ubuntu's mainline 7.3.1, beside ntfs3 and ntfs-3g, with throwaway tests and a scratch copy of Atoll that let it write there. Report: [docs/research/ntfs-driver.md](docs/research/ntfs-driver.md).
+- Names, times, birth time, identity and modes of its own match ntfs3's, and Atoll's `test/loopdev` suite passes on it, but where ntfs3 is exempt already and for `windows_names`. It differs on hibernated and dirty volumes (read-write under its default `errors=continue`), on `windows_names` (`link` ignores it, `unlink` obeys it), on `link` (which moves the modification time), on files with no mode of their own (`umask=00`), and on names with `" * < > ?` (`ERANGE`).
+- No code, spec or vector change: the decisions it needs are at the end of the report, and in TODO.md.
+
 ## A scan confirms each disk it walks (specs.md §10, §15.10)
 
 Commit "Confirm each disk a scan walks before recording it", on `scan-confirm`.
