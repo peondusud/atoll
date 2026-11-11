@@ -42,6 +42,11 @@ Every item here is a **decision**:
   - at `disk add`: the block-device topology (R-06), another filesystem with the same identifier (§10), and the warning about `chattr +i`;
   - the remount after a USB reset (§10).
 - `disk add` and `disk remove`, and the other `atoll disk` commands. `disk remove` must refuse a disk with `planned` operations: on a disk no longer in the configuration they wait for good, and every command that writes exits with 4.
+- The daemon that runs for good (`atoll daemon`), which the maintainer chose to build on the watcher's measurements (`docs/research/watcher.md`), in this order:
+  - the watcher of §15.1: fanotify with a filesystem mark on ext4, XFS, btrfs and ntfs3, an inode mark per folder on ntfs-3g and lowntfs-3g, inotify only where fanotify cannot be had; the bounded queue, an overflow being a rescan of that disk; the events grouped per path over `deletes.debounce`, the mergerfs process's own told apart by pid, Atoll's own by the `ops` journal;
+  - the loop: a pass when the watcher or a clock says something is due, and only on the disks it concerns, so that watching wakes no disk;
+  - the catalog's `flock` taken for each pass and let go between them, and a command that finds it taken waiting for it with a word on standard error instead of exiting with 1 (a change to §25 the maintainer chose);
+  - `atoll daemon` without `--foreground` the same as with it: Atoll never detaches itself, and a systemd unit in `deploy/` runs it.
 - The scan in the daemon: at startup, after an overflow, every `maintenance.rescan_every`, and hashing new files inside `maintenance.window` (§15.1, §18). `atoll scan` hashes only with `--full`.
 - The modes `immediate`, which needs the watcher to know a file closed and stable, and `scheduled`, which runs inside `[replication].window`: until then both fall back to `deferred`, which `daemon --until-idle` runs, settle counted from when a file was first seen (§12.2, §12.3, §14.1). The `manual_alert_after` alert for a `manual` file left unprotected.
 - What the copy pipeline leaves for later (§14): one copy at a time, in one pass, is all the daemon runs, so `max_parallel_per_disk` waits for its loop; the creation time set after the rename on Windows (§7).

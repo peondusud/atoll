@@ -549,12 +549,15 @@ Rules:
 ### 15.1 Detection
 
 - Sources: watcher events, rescans and the `ops` journal. Events are hints; rescans are the truth.
-- Linux watcher: fanotify when available, otherwise recursive inotify.
-  - A filesystem-wide fanotify mark (`FAN_MARK_FILESYSTEM`) needs `CAP_SYS_ADMIN`. Create, delete and rename events need `FAN_REPORT_FID`, which fails with `EOPNOTSUPP` on filesystems without file-handle support; ntfs-3g is to be tested (§30).
-  - fanotify reports the process behind each event. Operations made by the mergerfs process are view operations: they already reached the copies mergerfs meant to change, so Atoll reconciles them without propagating. inotify gives no process, so grouping (below) handles that case.
+- Linux watcher: fanotify, on every driver Atoll writes to, otherwise recursive inotify (measured on Linux 6.12 and 7.3, `docs/research/watcher.md`):
+  - on ext4, XFS, btrfs and ntfs3, one filesystem-wide mark per disk (`FAN_MARK_FILESYSTEM`, which needs `CAP_SYS_ADMIN`), in a group that reports each entry's folder and name and the file itself (`FAN_REPORT_DFID_NAME`, `FAN_REPORT_FID`, `FAN_REPORT_TARGET_FID`): a rename comes as one `FAN_RENAME` event with both names;
+  - on ntfs-3g and lowntfs-3g, whose filesystem has no fsid, a filesystem mark fails with `ENODEV`, so the group puts an inode mark on each folder below `<root>`, for the events of its entries (`FAN_EVENT_ON_CHILD`), with `FAN_UNLIMITED_MARKS`, as the default limit scales with memory (about 50,000 marks for 6 GiB). A folder made or moved in is marked as it appears, then listed, as it may have been filled before its mark;
+  - inotify only where fanotify cannot be had at all, with the same watch per folder, and no process.
+  - fanotify reports the process behind each event, on all six drivers. Operations made by the mergerfs process are view operations: they already reached the copies mergerfs meant to change, so Atoll reconciles them without propagating. inotify gives no process, so grouping (below) handles that case.
+  - The group asks only for the events Atoll needs, so that its queue lasts: `FAN_RENAME` rather than `FAN_MOVED_FROM`, `FAN_MOVED_TO` and `FAN_MOVE_SELF` where the group has it, and `FAN_CLOSE_WRITE` rather than `FAN_MODIFY`. The queue keeps its default bound, 16,384 events, and is read without waiting. An unlimited one would hold a few hundred bytes of kernel memory per event waiting, without bound in a mass change (measured).
 - Windows watcher (phase 4): ReadDirectoryChangesW.
 - An overflow or watcher error triggers a rescan of the affected disk: `IN_Q_OVERFLOW`, `FAN_Q_OVERFLOW`, or a zero-byte result or `ERROR_NOTIFY_ENUM_DIR` from ReadDirectoryChangesW.
-- Rescans: at startup, after an overflow, and every `maintenance.rescan_every` (7 days by default) inside `maintenance.window`. Watching does not wake disks; rescans do.
+- Rescans: at startup, after an overflow, and every `maintenance.rescan_every` (7 days by default) inside `maintenance.window`. Watching does not wake disks (a mark caused no read of the device, measured); rescans do.
 - Events are grouped per logical path over `deletes.debounce` (30 s by default, longer than a USB disk's spin-up) before Atoll decides what happened.
 - File identity (`same`): on one disk, the same inode or NTFS file ID and the same creation time (§7); where either has none, the same inode, size and modification time. A row with no inode recorded matches no inode, so it is the `same` as nothing. The change time is no part of it, as a rename moves it on every driver, and the inode alone is not enough: a new file right after a removal takes the same inode 40 times of 40 on ext4 and on ntfs3, with another creation time each time (measured on Linux 6.12 and 7.3). If this were wrong, the copies at one name would differ, which a read reports (§15.10), and nothing would have left the library on the strength of it (§15.12).
 - Hard links: each name under the root that a look has recorded is a separate logical file, so a name that already has its row is never the target of a rename. This covers Sonarr/Radarr links between `Téléchargements/` and a library: removing one name is a deletion of that name. A name with no row is the target of a rename when it is the only one the file has, however many links it has outside the root: a torrent client's own link must not turn a rename into a deletion.
@@ -1659,7 +1662,6 @@ identifier  = ( "a"…"z" | "0"…"9" ) { "a"…"z" | "0"…"9" | "_" | "-" }  ;
 ## 30. Risks and open questions
 
 - How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)?
-- fanotify on ntfs-3g and ntfs3: file-handle support for create, delete and rename events; fallback to inotify.
 - mergerfs behavior with a failing branch before Atoll removes it (I/O errors or fallback to the next branch): to verify with a USB drop simulation.
 - Phase 1 limits: deletions through mergerfs bypass the trash unless the link guard is on; mergerfs presents the first branch's copy, not the oldest one.
 - Jellyfin and Emby: whether their scans delete items whose files are missing while a disk is absent.

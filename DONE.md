@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The Linux watcher measured (specs.md §15.1, §30)
+
+Commit "Measure fanotify and inotify on each driver", on `watcher-research`.
+
+- Why: the daemon that runs for good needs a watcher, as a pass finds changes by walking every disk, which wakes them; and §30 left open whether fanotify works on ntfs-3g and ntfs3.
+- Measured in qemu on Linux 6.12.116 and 7.3.1, on the six drivers, with a throwaway test: report in [docs/research/watcher.md](docs/research/watcher.md). ext4, XFS, btrfs and ntfs3 take a filesystem-wide fanotify mark with every handle flag, and report a rename as one event with both names; ntfs-3g and lowntfs-3g refuse it (`ENODEV`, fsid 0) and take an inode mark per folder; every operation through mergerfs carries mergerfs's pid, on all six; inotify works on all six, with no process; a mark reads nothing from the device; the default queue overflows at 16,384 events; an event waiting costs 328 to 413 bytes of kernel memory, a mark per folder 171 to 194, an inotify watch 155 to 178.
+- The maintainer chose an inode mark per folder on ntfs-3g and lowntfs-3g rather than inotify, so that the process is known on every driver, and the bounded queue with a rescan on overflow rather than an unlimited one. §15.1 says so; the question of §30 is closed.
+- Also chosen for the daemon, recorded in TODO.md for its own change: the catalog's lock taken per pass, a command waiting for it rather than exiting with 1; `atoll daemon` without `--foreground` the same as with it, under systemd.
+
 ## `atoll mergerfs-config` and the break-glass test (specs.md §21.1, §25, §27)
 
 Commit "Print the mergerfs configuration and test break glass", on `mergerfs-config`.
