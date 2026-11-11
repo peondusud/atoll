@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll mergerfs-config` and the break-glass test (specs.md §21.1, §25, §27)
+
+Commit "Print the mergerfs configuration and test break glass", on `mergerfs-config`.
+
+- The maintainer chose: the runtime branches come with the daemon that runs for good, which brings the 30 s mount check they need; an fstab line and `--json` now, the openmediavault settings later; each branch's `minfreespace` from the capacity in the catalog, so that the command reads no disk; a `minfreespace` not larger than the largest file a warning only.
+- `atoll mergerfs-config` prints one fstab line, type `mergerfs` (the `mount.mergerfs` helper mergerfs ships): the root folders of the data disks in configuration order, each `<path>=RW,<minfreespace>`, then the options of §21.1 in its order, `category.create=mfs` as every `new_files` works as `most-free` until phase 2b. `--json` gives the branches, the options, the largest file and the line (`api/schemas/mergerfs-config.schema.json`). A disk no scan has found takes the smallest size of `min_free`; with percentages only, its branch has none of its own and the command exits with 4. Sizes in the largest unit of 1024 that holds them exactly. fstab's escapes for a space, a tab, a line feed and a backslash; a branch path with `:` or `,` refused with exit 1, as is a pool with no data disk.
+- Measured on mergerfs 2.40.2 (Debian 13) before writing it: the line, mounted through `mount -T`, gives exactly those settings; sizes are powers of 1024; `\040` and `\134` work in branches and mount point; `,` breaks the branches and `:` ends one; `=` works as long as the mode follows; a branch whose folder does not exist stays listed and serves nothing; writing the whole list to `user.mergerfs.branches` puts a branch back at its place.
+- `TestBreakGlass` in `test/loopdev`, on every driver: a library on two disks, replicated; mergerfs mounted from the line through `mount -T`, as a boot would; a rename, a deletion, an atomic save and a new file through it; Atoll catches up to no stale copy and no conflict; then its catalog and configuration go, and plain mergerfs mounted again from the line shows the same files, contents and folders, which are the library as the user left it, each disk holds every file in its `media/` and nothing else there, and no disk holds a hidden name. The qemu guest installs mergerfs and sets `ATOLL_QEMU=1`, so that the test fails there rather than skips without it. 25 s for the six drivers on Linux 6.12.
+- Found on the way, not a bug: the copy back from an atomic save waits for the `settle` of the file's rule, ten minutes by default, as the replaced copy is decided only then, and its first attempt ends `changed` (LESSONS.md). The test sets `settle = "0s"`.
+- Judged by mutations: the 29 of the command, its view and the catalog are caught, one of them by a test of the plain output, which the scenarios cannot read; and two of the break-glass test in qemu, branches at the disk's top and a hidden `Atoll/.tmp`, are caught too. The local CI passes, `test/loopdev` on Linux 6.12.116 and 7.3.1.
+- `config.MinFree` replaces the scan's own reading of `placement.min_free`; `value.MinFree.SmallestSize`, with four vectors of an unknown capacity in `min_free.json`; `catalog.Disk.HasCapacity` and `catalog.LargestFile`. Nine scenarios `mergerfs-config-*`.
+
 ## Milestones on the roadmap (specs.md §28)
 
 Commit "Name the milestones of the roadmap", on `roadmap-milestones`.

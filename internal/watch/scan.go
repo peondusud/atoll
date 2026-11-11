@@ -467,7 +467,7 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
-	minFree, err := minFreeOf(c)
+	minFree, err := c.MinFree()
 	if err != nil {
 		return err
 	}
@@ -545,20 +545,6 @@ func (q *copyQueue) flush() error {
 	err := q.queue(q.batch)
 	q.batch = q.batch[:0]
 	return err
-}
-
-func minFreeOf(c *config.Config) (value.MinFree, error) {
-	raw, _ := c.Effective()["placement.min_free"].([]any)
-	list := make([]string, 0, len(raw))
-	for _, v := range raw {
-		text, _ := v.(string)
-		list = append(list, text)
-	}
-	minFree, err := value.ParseMinFree(list)
-	if err != nil {
-		return value.MinFree{}, fmt.Errorf("placement.min_free: %w", err)
-	}
-	return minFree, nil
 }
 
 func missingGraceOf(c *config.Config) (time.Duration, error) {

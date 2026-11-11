@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §13.1, §29.5",
-  "description": "What min_free reserves on a disk, and what the solver may fill. The smallest of the values applies; a percentage is of the disk's capacity, computed exactly and rounded down. What may be filled is the capacity minus the reserve, or 0 if the reserve is larger.",
+  "description": "What min_free reserves on a disk, and what the solver may fill. The smallest of the values applies; a percentage is of the disk's capacity, computed exactly and rounded down. What may be filled is the capacity minus the reserve, or 0 if the reserve is larger. A capacity of null is one not known: only the smallest size holds then, and nothing with percentages only; such a case has no usable (§21.1).",
   "cases": [
     { "min_free": ["5%", "100GiB"], "capacity": 4000000000000, "reserved": 107374182400, "usable": 3892625817600, "note": "§13.2: 5% is 200 GB, so 100 GiB is smaller" },
     { "min_free": ["5%", "100GiB"], "capacity": 1000000000000, "reserved": 50000000000, "usable": 950000000000, "note": "5% is 50 GB, the smaller here" },
@@ -25,6 +25,10 @@
     { "min_free": ["5 %"], "capacity": 1000, "error": true, "note": "no space in the grammar" },
     { "min_free": ["101%"], "capacity": 1000, "error": true, "note": "above 100%" },
     { "min_free": ["5%", "abc"], "capacity": 1000, "error": true, "note": "one bad value is enough" },
-    { "min_free": ["5%"], "capacity": -1, "error": true, "note": "a negative capacity" }
+    { "min_free": ["5%"], "capacity": -1, "error": true, "note": "a negative capacity" },
+    { "min_free": ["5%", "100GiB", "1GB"], "capacity": null, "reserved": 1000000000, "note": "capacity unknown, as for a disk no scan has found: the smallest size, which holds whatever the capacity (§21.1)" },
+    { "min_free": ["100GiB"], "capacity": null, "reserved": 107374182400, "note": "capacity unknown, a size alone" },
+    { "min_free": ["5%", "1%"], "capacity": null, "reserved": null, "note": "capacity unknown and percentages only: nothing holds" },
+    { "min_free": ["5"], "capacity": null, "error": true, "note": "capacity unknown: a bad value is still refused" }
   ]
 }

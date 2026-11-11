@@ -13,6 +13,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/rules"
+	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/schema"
 )
 
@@ -78,6 +79,21 @@ type Config struct {
 // with no value is not there. The caller must not change it.
 func (c *Config) Effective() map[string]any {
 	return c.effective
+}
+
+// MinFree returns placement.min_free: what to leave free on each disk (specs.md §13.1).
+func (c *Config) MinFree() (value.MinFree, error) {
+	raw, _ := c.effective["placement.min_free"].([]any)
+	list := make([]string, 0, len(raw))
+	for _, v := range raw {
+		text, _ := v.(string)
+		list = append(list, text)
+	}
+	minFree, err := value.ParseMinFree(list)
+	if err != nil {
+		return value.MinFree{}, fmt.Errorf("placement.min_free: %w", err)
+	}
+	return minFree, nil
 }
 
 // Policy returns the effective policy of a file (specs.md §11.3). A nil size means it

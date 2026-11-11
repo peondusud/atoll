@@ -1,9 +1,10 @@
 # test/loopdev in qemu
 
-`test/loopdev` needs root, loop devices, device-mapper and every filesystem driver Atoll meets: ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g. A Docker container has none of that, as it shares its host's kernel: Docker Desktop's has no ntfs3. So `run.sh` boots kernels of its own in qemu, inside a throwaway `debian:13` container, and runs the tests there as root. It needs Docker and nothing else, on Linux and on Windows alike.
+`test/loopdev` needs root, loop devices, device-mapper, every filesystem driver Atoll meets (ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g), and mergerfs for the break-glass test. A Docker container has none of that, as it shares its host's kernel: Docker Desktop's has no ntfs3. So `run.sh` boots kernels of its own in qemu, inside a throwaway `debian:13` container, and runs the tests there as root. It needs Docker and nothing else, on Linux and on Windows alike.
 
 - Two kernels by default: Debian 13's (Linux 6.12) and a mainline one from kernel.ubuntu.com (v7.3.1), the two the measurements of specs.md were made on.
 - Each guest boots from an initramfs made of the container's own files, with no network. Its only disks are loop images in its own memory: nothing touches a real disk.
+- The guest sets `ATOLL_QEMU=1`: a test that skips on a machine without mergerfs fails in the guest, where `run.sh` installs it.
 - Without KVM, as on Docker Desktop, qemu emulates the processor: a whole run takes about 20 minutes, the tests about 5 of them on each kernel. With `/dev/kvm` they should take far less.
 - The exit code is the worst of the guests': 0 when every test passed, 1 when one failed, 2 when a guest did not say, a download failed or nothing was built.
 

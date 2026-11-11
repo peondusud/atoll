@@ -1,0 +1,68 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a721.1, \u00a725",
+  "description": "In the line, a space, a tab and a backslash of a path are written \\040, \\011 and \\134, as fstab(5) reads them, in the branches and in the mount point; the paths of --json are not escaped. '=' needs nothing: mergerfs takes the last one of a branch, and the mode always follows. The command looks at no disk: those paths need not exist.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/my pool\"\n[placement]\nmin_free = [\"1GiB\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/my disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"x1\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/back\\\\slash/x1\"\nfs = \"xfs\"\n[[disk]]\nid = \"u1\"\nuuid = \"01D9F3A2B4C5E6F7\"\nmount = \"${SANDBOX}/a=b\\tc/u1\"\nfs = \"ntfs\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--json"
+      ],
+      "stdout_json": {
+        "mount": "${SANDBOX}/my pool",
+        "branches": [
+          {
+            "disk": "t1",
+            "path": "${SANDBOX}/my disks/t1/media",
+            "minfreespace_bytes": 1073741824
+          },
+          {
+            "disk": "x1",
+            "path": "${SANDBOX}/back\\slash/x1/media",
+            "minfreespace_bytes": 1073741824
+          },
+          {
+            "disk": "u1",
+            "path": "${SANDBOX}/a=b\tc/u1/media",
+            "minfreespace_bytes": 1073741824
+          }
+        ],
+        "options": [
+          "category.search=ff",
+          "category.action=epall",
+          "category.create=mfs",
+          "moveonenospc=false",
+          "rename-exdev=passthrough",
+          "link-exdev=passthrough",
+          "cache.attr=1",
+          "cache.entry=1",
+          "cache.negative_entry=0"
+        ],
+        "largest_file_bytes": null,
+        "fstab": "${SANDBOX}/my\\040disks/t1/media=RW,1G:${SANDBOX}/back\\134slash/x1/media=RW,1G:${SANDBOX}/a=b\\011c/u1/media=RW,1G ${SANDBOX}/my\\040pool mergerfs category.search=ff,category.action=epall,category.create=mfs,moveonenospc=false,rename-exdev=passthrough,link-exdev=passthrough,cache.attr=1,cache.entry=1,cache.negative_entry=0 0 0"
+      }
+    }
+  ]
+}

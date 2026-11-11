@@ -21,9 +21,10 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 echo "installing the guest's tools and Debian's kernel"
 apt-get update -qq >/dev/null || exit 2
-# What the tests call, and what makes the initramfs. The kernel's package brings its modules.
+# What the tests call, and what makes the initramfs. The kernel's package brings its modules. mergerfs brings
+# mount.mergerfs, which the break-glass test mounts through, as a boot would.
 apt-get install -y -qq --no-install-recommends linux-image-amd64 ntfs-3g e2fsprogs xfsprogs btrfs-progs \
-	util-linux dmsetup procps kmod cpio curl ca-certificates zstd >/dev/null || exit 2
+	util-linux dmsetup procps kmod cpio curl ca-certificates zstd mergerfs >/dev/null || exit 2
 versions=(/usr/lib/modules/*)
 debian_version=${versions[0]##*/}
 echo "debian kernel: $debian_version"

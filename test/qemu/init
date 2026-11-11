@@ -14,6 +14,8 @@ for m in loop ext4 xfs btrfs ntfs3 fuse dm_mod dm_flakey sd_mod; do
 	modprobe "$m" 2>/dev/null || echo "no module $m in this kernel"
 done
 echo "kernel: $(uname -r)"
+# What run.sh installs is here: a test that would skip for want of it fails instead.
+export ATOLL_QEMU=1
 mapfile -t args </opt/atoll/args
 cd /opt/atoll/repo/test/loopdev && /opt/atoll/loopdev.test "${args[@]}"
 echo "ATOLL-QEMU-EXIT=$?"
