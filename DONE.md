@@ -2,6 +2,16 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A local CI: every check of a commit, with only git and Docker
+
+Commit "Run every check of a commit locally, with only git and Docker", on `local-ci`.
+
+- Why local: the repository has no CI, and a hosted runner has no loop device, no device-mapper and no ntfs3, which `test/loopdev` needs. A self-hosted runner on a public repository would run the code of any fork's pull request on this machine.
+- `test/ci/run.sh [--report] [--jobs "..."] [REV]` copies the commit, as git holds it, into a Docker volume through `git archive`, never the working tree, and runs five jobs at once, each in a container of its own and a copy of its own: `race` (`make test-race`), `integration` (`make test-integration`, which has no test of its tag yet), `conformance` (`make conformance`), `lint` (`make lint`, then the loopdev build), and `qemu` (`make qemu-build`, then `test/qemu/run.sh` on both kernels, with `/dev/kvm` when the host has it). Each job writes its log to `bin/ci/<commit>/`; the exit code is 0 when every job passed. The module cache is a volume that outlives the run; everything else goes when it ends, Ctrl+C included.
+- `--report` posts each job to GitHub as a commit status, `local/<job>`, pending at the start and passed or failed at its end, which a pull request on that commit lists among its checks.
+- Runs from Linux, macOS (bash 3.2) and Git Bash on Windows, where `MSYS_NO_PATHCONV` keeps `/src` a path of the container.
+- Verified on the commit of pull request #8: the five jobs passed, in 23 minutes, qemu the longest without KVM; race 3 min 38 s, conformance (485 scenarios) 1 min 48 s, lint 59 s.
+
 ## Metadata changes: the modification time applied to the other copies (specs.md §15.4, §17.2)
 
 Commit "Apply the time of a metadata change to the other copies", on `metadata`.
