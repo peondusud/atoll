@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §15.4, §15.12",
-  "description": "Only the modification time of a copy changes: the pass reads it, finds the file's content, and only that copy's row follows it. Nothing is written to a disk, and the next pass has nothing to say.",
+  "description": "Only the modification time of a copy changes: the pass reads it, finds the file's content, and applies that time to the other copy, with no copy made. The next pass has nothing to say.",
   "clock": "2030-01-01T00:00:00Z",
   "disks": [
     {
@@ -83,7 +83,14 @@
             "decision": "metadata"
           }
         ],
-        "operations": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "utimens",
+            "path": "a",
+            "outcome": "applied"
+          }
+        ],
         "guards": [],
         "waiting": 0,
         "next_due": null
@@ -107,7 +114,7 @@
         {
           "path": "media/a",
           "text": "x",
-          "mtime_ns": 1600000000000000000
+          "mtime_ns": 1700000000000000000
         }
       ]
     },
@@ -126,7 +133,7 @@
           "t2",
           "user",
           "ok",
-          1600000000000000000,
+          1700000000000000000,
           1
         ]
       ]
@@ -143,10 +150,24 @@
     },
     {
       "do": "expect_catalog",
-      "query": "SELECT count(*) FROM events",
+      "query": "SELECT level, kind, json_extract(data, '$.disk'), json_extract(data, '$.path'), json_extract(data, '$.mtime_ns') FROM events",
       "rows": [
         [
-          0
+          "info",
+          "utimens",
+          "t2",
+          "a",
+          1700000000000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, state FROM ops",
+      "rows": [
+        [
+          "utimens",
+          "done"
         ]
       ]
     },

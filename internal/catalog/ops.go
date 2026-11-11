@@ -53,6 +53,7 @@ type eventData struct {
 	PathB64 string `json:"path_b64,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Source  string `json:"source,omitempty"`
+	MtimeNS *int64 `json:"mtime_ns,omitempty"`
 }
 
 // writeEvent writes an event, in the transaction of the operation it speaks of, so before it runs.
@@ -164,15 +165,34 @@ func FinishTrash(ctx context.Context, db *sql.DB, op *Op, restart *Restart, link
 	return nil
 }
 
+// What finds a copy by its place on a disk: ?1 the disk, ?2 the place, ?3 the inode. A copy sits at its old path
+// while a rename is pending, at its file's path otherwise. Each half of the union reads one index: one OR over
+// copies and files read every copy of the disk, once for each operation, and a pass that applied a time to 200,000
+// copies did 6 a second (specs.md §26).
+const (
+	copyAtPlace = `c.file_id IN (
+		SELECT file_id FROM copies WHERE disk_id = ?1 AND old_lpath = ?2
+		UNION ALL
+		SELECT o.file_id FROM files g JOIN copies o ON o.file_id = g.id WHERE g.lpath = ?2 AND o.disk_id = ?1 AND o.old_lpath IS NULL)`
+	copyOfSQL = `
+		SELECT f.id, f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key
+		FROM copies c JOIN files f ON f.id = c.file_id
+		WHERE c.disk_id = ?1 AND ` + copyAtPlace
+	finishCopySQL = `
+		SELECT c.file_id FROM copies c WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
+	renameRowSQL = `
+		SELECT c.file_id, f.lpath FROM copies c JOIN files f ON f.id = c.file_id
+		WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
+	finishUtimensSQL = `
+		UPDATE copies AS c SET mtime_ns = ?4, ctime_ns = ?5 WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
+)
+
 // finishCopy says that a copy went for good: its row, found by disk, place and inode, the job that sent
 // it, and its file if that was its last copy. A reprise comes here too, so that a run with a crash ends
 // as a run without one (specs.md §15.12).
 func finishCopy(ctx context.Context, tx *sql.Tx, op *Op) error {
 	var fileID int64
-	err := tx.QueryRowContext(ctx, `
-		SELECT c.file_id FROM copies c JOIN files f ON f.id = c.file_id
-		WHERE c.disk_id = ?1 AND c.file_key = ?2 AND (c.old_lpath = ?3 OR (c.old_lpath IS NULL AND f.lpath = ?3))`,
-		op.Disk, op.FileKey, []byte(op.Path)).Scan(&fileID)
+	err := tx.QueryRowContext(ctx, finishCopySQL, op.Disk, []byte(op.Path), op.FileKey).Scan(&fileID)
 	switch {
 	case isNoRows(err):
 		return nil
@@ -208,10 +228,7 @@ func dropFileIfEmpty(ctx context.Context, tx *sql.Tx, fileID int64) error {
 func CopyOf(ctx context.Context, db *sql.DB, disk, path string) (KnownCopy, error) {
 	row := KnownCopy{Path: path, FilePath: path}
 	var file []byte
-	err := db.QueryRowContext(ctx, `
-		SELECT f.id, f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key
-		FROM copies c JOIN files f ON f.id = c.file_id
-		WHERE c.disk_id = ?1 AND (c.old_lpath = ?2 OR (c.old_lpath IS NULL AND f.lpath = ?2))`, disk, []byte(path)).
+	err := db.QueryRowContext(ctx, copyOfSQL, disk, []byte(path)).
 		Scan(&row.FileID, &file, &row.Size, &row.MtimeNS, &row.CtimeNS, &row.BtimeNS, &row.FileKey)
 	if err != nil && !isNoRows(err) {
 		return row, fmt.Errorf("copy: %w", err)

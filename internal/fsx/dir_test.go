@@ -29,6 +29,60 @@ func TestFileTime(t *testing.T) {
 	}
 }
 
+// A time in nanoseconds is seconds and nanoseconds as futimens takes them: the nanoseconds never negative, before the
+// epoch too.
+func TestTimeOf(t *testing.T) {
+	for ns, want := range map[int64]Time{
+		0:              {0, 0},
+		1_500_000_001:  {1, 500_000_001},
+		-1:             {-1, 999_999_999},
+		-1_000_000_000: {-1, 0},
+		-1_500_000_000: {-2, 500_000_000},
+	} {
+		if got := TimeOf(ns); got != want {
+			t.Errorf("%d: %+v, want %+v", ns, got, want)
+		}
+	}
+}
+
+// A file open for reading takes the times it is given, and keeps the access time that is omitted.
+func TestAFileOpenForReadingTakesItsTimes(t *testing.T) {
+	top := t.TempDir()
+	if err := os.WriteFile(filepath.Join(top, "a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	atime := time.Unix(1_000_000_000, 0)
+	if err := os.Chtimes(filepath.Join(top, "a"), atime, atime); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	f, err := dir.OpenFile("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if err := f.SetTimes(OmitTime, TimeOf(1_600_000_000_123_456_789)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	var st syscall.Stat_t
+	if err := syscall.Stat(filepath.Join(top, "a"), &st); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Mtim.Nano(); got != 1_600_000_000_123_456_789 {
+		t.Errorf("modification time %d", got)
+	}
+	if got := st.Atim.Nano(); got != atime.UnixNano() {
+		t.Errorf("access time %d, want it as it was", got)
+	}
+}
+
 func TestDirNeverFollowsASymlink(t *testing.T) {
 	top := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(top, "real/sub"), 0o755); err != nil {

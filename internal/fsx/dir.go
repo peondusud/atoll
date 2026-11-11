@@ -57,6 +57,15 @@ type Time struct {
 // OmitTime, given to SetTimes, leaves that time as it is.
 var OmitTime = Time{Nsec: unix.UTIME_OMIT}
 
+// TimeOf gives a time in nanoseconds since the epoch as seconds and nanoseconds, the nanoseconds never negative.
+func TimeOf(ns int64) Time {
+	sec, nsec := ns/1_000_000_000, ns%1_000_000_000
+	if nsec < 0 {
+		sec, nsec = sec-1, nsec+1_000_000_000
+	}
+	return Time{Sec: sec, Nsec: nsec}
+}
+
 // Dir is a handle on a folder of a disk. Everything below it is reached through handles, never
 // through a path from the top, so that a folder renamed during a walk, or a mount that changed,
 // cannot lead elsewhere (invariant 3), and a deep tree has no path limit. No method follows a
@@ -102,12 +111,16 @@ type Dir interface {
 	Close() error
 }
 
-// File is a regular file open for reading.
+// File is a regular file open for reading. Its times can be set, which writes nothing to its content.
 type File interface {
 	io.Reader
 	// ReaderAt serves a resume, which reads the source from the first chunk it still needs.
 	io.ReaderAt
 	Info() (Stat, error)
+	// SetTimes sets the access and modification times, as futimens does: a metadata change applied to a copy
+	// (specs.md §15.4). Sync is fsync of the file.
+	SetTimes(atime, mtime Time) error
+	Sync() error
 	Close() error
 }
 
@@ -401,6 +414,22 @@ func (f *realFile) ReadAt(p []byte, off int64) (int, error) {
 
 func (f *realFile) Info() (Stat, error) {
 	return statx(int(f.file.Fd()), "", unix.AT_EMPTY_PATH)
+}
+
+// SetTimes goes through /proc, as a writable file's does: the file is open for reading only.
+func (f *realFile) SetTimes(atime, mtime Time) error {
+	times := []unix.Timespec{{Sec: atime.Sec, Nsec: atime.Nsec}, {Sec: mtime.Sec, Nsec: mtime.Nsec}}
+	if err := unix.UtimesNanoAt(unix.AT_FDCWD, "/proc/self/fd/"+strconv.Itoa(int(f.file.Fd())), times, 0); err != nil {
+		return fmt.Errorf("set the times of %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+func (f *realFile) Sync() error {
+	if err := unix.Fsync(int(f.file.Fd())); err != nil {
+		return fmt.Errorf("fsync %q: %w", f.file.Name(), err)
+	}
+	return nil
 }
 
 type realWritable struct {

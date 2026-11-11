@@ -917,9 +917,7 @@ func renameRow(ctx context.Context, tx *sql.Tx, disk, place, target, fileKey str
 	var fileID int64
 	var path []byte
 	// At its place as the row says, whichever way: a rename back while this was planned clears old_lpath.
-	err := tx.QueryRowContext(ctx, `
-		SELECT c.file_id, f.lpath FROM copies c JOIN files f ON f.id = c.file_id
-		WHERE c.disk_id = ?1 AND c.file_key = ?3 AND (c.old_lpath = ?2 OR (c.old_lpath IS NULL AND f.lpath = ?2))`, disk, []byte(place), fileKey).Scan(&fileID, &path)
+	err := tx.QueryRowContext(ctx, renameRowSQL, disk, []byte(place), fileKey).Scan(&fileID, &path)
 	switch {
 	case isNoRows(err):
 		return nil

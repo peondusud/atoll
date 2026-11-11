@@ -99,13 +99,14 @@ After each `atoll` step, on each disk (`specs.md` §6):
 |---|---|
 | `decided` | once a pass has committed what it decided about a page of files, before anything runs on a disk (`specs.md` §15.12) |
 | `modified` | once a pass has committed a modification of one file, before anything runs on a disk (`specs.md` §15.4) |
-| `journaled` | once a `trash`, `restore`, `rename`, `create` or purge operation is committed `planned`, before anything is written to a disk |
+| `journaled` | once a `trash`, `restore`, `rename`, `create`, `utimens` or purge operation is committed `planned`, before anything is written to a disk |
 | `copied` | once a `create` has copied the whole source into its `.part` and recorded every chunk hash, before the source is looked at again and the times are restored |
 | `verified` | once a `create` has re-read its `.part` against the chunk hashes and recorded the whole-file hash, before the target is resolved |
 | `trash-folders` | once the folders of a move to the trash are made and synced, before the copy is looked at again and moved. A restore and a purge have none |
 | `folder-made` | once a restore has made a folder below the root, before it is synced or recorded |
 | `linked` | between `link` and the `fsync` that follows it, so only on a disk with `renameat2` at `false` |
 | `moved` | once the name has moved, a file's or a folder's, or the file of a purge is gone, before any later `fsync` of what holds it. With `renameat2` at `false`, `unlink` has run too, so the source's name is gone, which is not yet synced, and the target folder was synced once already, between `link` and `unlink` |
+| `times-set` | once a `utimens` has set the time on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `target-synced` | after `fsync` of the target folder. A purge has none |
 | `source-synced` | after every `fsync`, before the operation is committed `done`, and so before the folders left empty go. For a `create`, the source is the folder of its `.part` |
 
