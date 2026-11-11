@@ -1487,15 +1487,17 @@ atoll daemon [--foreground] [--until-idle] [--dry-run]
 
 ## 28. Roadmap
 
-| Phase | Language | Included | Excluded |
-|---|---|---|---|
-| 1a — Safe core | Go | disk identity and mounts, `disk add`/`remove`, scan, file and chunk hashes, rules, `deferred` and `manual` modes with `--now`/`--force`, propagation of renames, deletions and modifications with grouping and guards, trash, `prune`, detection-only scrub, `mergerfs-config` and runtime branches, status, ntfy alerts, contracts and conformance suite (§29) | repair, notifications, other modes |
-| 1b — Complete Linux MVP | Go | `immediate` and `scheduled` modes, repair and quarantine, duplicates, domains and tags, SMART, Gotify and SMTP, media-server notifications, `conflicts resolve`, `balance`, `capacity`, optional link guard | own view |
-| 2a — Own view | Go | Atoll's FUSE view on Linux: original presented, every entry from the catalog, trash on delete; contracts frozen at format version 1 | SSD cache |
-| 2b — Disk sleep | Go | SSD cache, NUT, `ordered` and `colocate` strategies, Prometheus | Windows |
-| 3 — Rust rewrite | Rust | feature parity with phase 2 on Linux, same contracts, conformance suite passed, switch without data migration (§29.2) | new features |
-| 4 — Windows | Rust | Windows engine (service) and WinFsp pool drive, health evacuation, XFS and btrfs | — |
-| 5 | Rust | web interface, openmediavault plugin, duplicates by metadata, header cache, parity study | — |
+| Phase | Milestone | Language | Included | Excluded |
+|---|---|---|---|---|
+| 1a — Safe core | alpha | Go | disk identity and mounts, `disk add`/`remove`, scan, file and chunk hashes, rules, `deferred` and `manual` modes with `--now`/`--force`, propagation of renames, deletions and modifications with grouping and guards, trash, `prune`, detection-only scrub, `mergerfs-config` and runtime branches, status, ntfy alerts, contracts and conformance suite (§29) | repair, notifications, other modes |
+| 1b — Complete Linux MVP | beta | Go | `immediate` and `scheduled` modes, repair and quarantine, duplicates, domains and tags, SMART, Gotify and SMTP, media-server notifications, `conflicts resolve`, `balance`, `capacity`, optional link guard | own view |
+| 2a — Own view | v0.1 | Go | Atoll's FUSE view on Linux: original presented, every entry from the catalog, trash on delete; contracts frozen at format version 1 | SSD cache |
+| 2b — Disk sleep | — | Go | SSD cache, NUT, `ordered` and `colocate` strategies, Prometheus | Windows |
+| 3 — Rust rewrite | — | Rust | feature parity with phase 2 on Linux, same contracts, conformance suite passed, switch without data migration (§29.2) | new features |
+| 4 — Windows | — | Rust | Windows engine (service) and WinFsp pool drive, health evacuation, XFS and btrfs | — |
+| 5 | — | Rust | web interface, openmediavault plugin, duplicates by metadata, header cache, parity study | — |
+
+A milestone is reached when its phase and every phase before it are done: the alpha is the safe core, the beta the complete Linux MVP, and v0.1, the first stable version, adds Atoll's own view, with the contracts frozen at format version 1. The phases after 2a have no milestone yet.
 
 ## 29. Implementation and Rust rewrite
 
