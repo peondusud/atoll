@@ -7,7 +7,7 @@ Open work, in a suggested order. Finished work is in [DONE.md](DONE.md), lessons
 To decide before the solver, the scanner and `atoll names check` need them:
 
 - **decision**, before phase 2a: should Atoll's own view refuse, with an error, a rename that a copy's filesystem refuses, instead of following §15.3?
-- Pin in `test/loopdev` what mergerfs and ntfs3 do with a refused name or an `ads` stream (`docs/research/name-compatibility.md`), re-reading through a cold cache, so that a release that changes it fails a test. The measurements so far were throwaway scripts in qemu; `make test-qemu` now runs `test/loopdev` on both kernels, but its guest has no mergerfs yet.
+- Pin in `test/loopdev` what mergerfs and ntfs3 do with a refused name or an `ads` stream (`docs/research/name-compatibility.md`), re-reading through a cold cache, so that a release that changes it fails a test. The measurements so far were throwaway scripts in qemu; `make test-qemu` runs `test/loopdev` on both kernels, and its guest now has mergerfs, which `TestBreakGlass` mounts.
 - Measure on the maintainer's Windows machine, with their go-ahead, what a report says is not established: which reserved names Windows 11 still refuses, and what Windows does with `Film.mkv` beside `film.mkv` on an NTFS volume (a VHD).
 - NTFS 8.3 short names: never decide that a file exists with `stat` alone, and treat an `EEXIST` without a visible exact entry as name-incompatible.
 - `disk add`: refuse ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase`, ntfs3 `ads` and lowntfs-3g `ignore_case`, which the mount check of §10 already reports. Watch `FS_CASEFOLD_FL` on folders under `<root>/`.
@@ -37,6 +37,7 @@ Every item here is a **decision**:
 - Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. A daemon that runs for good, with its watcher, will hold more.
 - What the mount check of §10 leaves to do for disks:
   - the check every 30 s in the daemon, which must wake no disk (§18), and the alert when a disk becomes `missing` or `readonly`;
+  - with it, the runtime branches of mergerfs (§21.1): a `missing` disk's branch removed through `.mergerfs`, and put back at its place once the disk is reconciled, by writing the whole list (measured on mergerfs 2.40.2), which the maintainer chose to bring with the daemon;
   - `Atoll/disk.toml` and `atoll disk show`, which could show `time_precision_ns`;
   - at `disk add`: the block-device topology (R-06), another filesystem with the same identifier (§10), and the warning about `chattr +i`;
   - the remount after a USB reset (§10).
@@ -51,8 +52,8 @@ Every item here is a **decision**:
 - A volume that ntfs3 left with names that disagree (§17.2) shows only as a warning in the log and exit 4 on every run on that disk: say what to do, which is a repair of the volume, in an alert once alerts exist, and in `atoll status`.
 - The rest of the trash (§17): `[trash].max_size` and its purging order, the `.chunks` folders with `repair`, `restore --to` with the copy pipeline, the link guard, the alert for a name the driver refuses, the reasons other than `surplus`, `deleted` and `renamed`, and removing Atoll's own folders below the root once they are empty (§6.1). A folder's attributes other than its mode and owner wait for the pipeline.
 - Detection-only scrub. `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`, and `repair` (phase 1b) must look for the conflict again before it clears that.
-- `mergerfs-config` and runtime branches.
+- The settings of the openmediavault mergerfs plugin from `atoll mergerfs-config` (§21.1), which the maintainer left for later: the fstab line and `--json` are done.
 - `atoll names check`: the CLI over `names.Check`, reading the catalog, with the JSON of `api/schemas/names-check.schema.json`.
 - ntfy alerts, among them the two guards of a disk tripped: for now only the `guards` of a pass, exit code 3 and `atoll guard list` say so.
 - The operation journal (`ops`) covers the trash, the renames of propagation, files and folders, and the copies (`create`) so far (§14.2, §17.1, §17.2). Each new kind of operation needs its own reprise, with kill -9 at each step and fault injection.
-- The break-glass test in CI (`test/ci/run.sh`), which waits for `mergerfs-config`. The failed-mount test runs in `test/loopdev` (`TestAFailedMountIsAMissingDisk`).
+- The break-glass test runs in `test/loopdev` (`TestBreakGlass`), so in the CI's qemu job, on two disks and every driver. What it leaves: a pool of more disks, a disk away when Atoll goes, and, once Atoll's own view comes (phase 2a), comparing that view with plain mergerfs.

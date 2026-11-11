@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/mergerfs-config.schema.json",
+  "title": "atoll mergerfs-config --json",
+  "description": "The mergerfs configuration of the merged view, for phase 1 and break glass (specs.md §21.1, §25).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mount", "branches", "options", "largest_file_bytes", "fstab"],
+  "properties": {
+    "mount": {
+      "description": "view.mount, where mergerfs is mounted.",
+      "type": "string",
+      "minLength": 1
+    },
+    "branches": {
+      "description": "The data disks, in configuration order.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/branch" }
+    },
+    "options": {
+      "description": "Each option as key=value, in the order of specs.md §21.1.",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z._-]+=[^,]+$" }
+    },
+    "largest_file_bytes": {
+      "description": "The size of the largest file the catalog knows, or null when it knows none.",
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "fstab": {
+      "description": "The line the command prints without --json, with no line feed: branches, mount point, type, options, 0 and 0, with what fstab(5) needs escaped.",
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "branch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disk", "path", "minfreespace_bytes"],
+      "properties": {
+        "disk": { "type": "string", "minLength": 1 },
+        "path": {
+          "description": "<mount>/<root> of the disk, not escaped.",
+          "type": "string",
+          "minLength": 1
+        },
+        "minfreespace_bytes": {
+          "description": "What placement.min_free keeps free on the disk, or null when the branch has none of its own: its capacity was never recorded and min_free holds no size.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

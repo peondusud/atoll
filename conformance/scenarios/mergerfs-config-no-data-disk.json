@@ -1,0 +1,43 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a721.1, \u00a725",
+  "description": "With only a cache disk, mergerfs would have no branch: the command exits with 1 and prints nothing.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[placement]\nmin_free = [\"1GiB\"]\n[[disk]]\nid = \"c1\"\nuuid = \"5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/c1\"\nfs = \"ext4\"\nrole = \"cache\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--json"
+      ],
+      "exit": 1
+    }
+  ]
+}

@@ -58,6 +58,19 @@ func (m MinFree) Reserved(capacity int64) (int64, error) {
 	return reserved, nil
 }
 
+// SmallestSize returns the smallest of the sizes, which holds whatever the
+// capacity; false when there are only percentages.
+func (m MinFree) SmallestSize() (int64, bool) {
+	if len(m.sizes) == 0 {
+		return 0, false
+	}
+	smallest := m.sizes[0]
+	for _, s := range m.sizes[1:] {
+		smallest = min(smallest, s)
+	}
+	return smallest, true
+}
+
 // Usable returns what the solver may fill on a disk of this capacity: the
 // capacity minus the reserve, or 0 if the reserve is larger.
 func (m MinFree) Usable(capacity int64) (int64, error) {

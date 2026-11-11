@@ -204,6 +204,8 @@ type Disk struct {
 	LastSeenNS int64
 	// TimePrecisionNS is how finely the disk holds a time (specs.md §9), 0 when no check read it.
 	TimePrecisionNS int64
+	// HasCapacity says that a scan recorded Capacity: it is 0 when none did.
+	HasCapacity bool
 }
 
 // SyncDisks rewrites the disks from the configuration, which wins (specs.md §9). A disk it no longer
