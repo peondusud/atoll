@@ -64,6 +64,8 @@ type compared struct {
 	// behind holds the paths of files whose copy on this disk still sits elsewhere.
 	behind map[string]bool
 	clocks []catalog.CopyClock
+	// modes holds the mode of each copy there as its row says whose row has none (specs.md §9).
+	modes []catalog.CopyMode
 }
 
 // openRow is a row whose copy is not where it says, until resolve says what became of it. A rename of a whole disk
@@ -188,6 +190,10 @@ func (c *compared) row(k *catalog.KnownCopy, at *FoundFile) {
 			at.home = true
 			c.r.Known++
 			c.clock(k, v)
+			// Unchanged since its row, its mode cannot have moved: a chmod moves the change time.
+			if !k.Mode.Valid {
+				c.modes = append(c.modes, catalog.CopyMode{FileID: k.FileID, Mode: at.Mode})
+			}
 			return
 		}
 		if v == solver.VerdictEdited {

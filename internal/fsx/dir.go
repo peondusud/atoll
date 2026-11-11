@@ -117,9 +117,10 @@ type File interface {
 	// ReaderAt serves a resume, which reads the source from the first chunk it still needs.
 	io.ReaderAt
 	Info() (Stat, error)
-	// SetTimes sets the access and modification times, as futimens does: a metadata change applied to a copy
-	// (specs.md §15.4). Sync is fsync of the file.
+	// SetTimes sets the access and modification times, as futimens does, and SetMode the permission bits, as fchmod
+	// does: a metadata change applied to a copy (specs.md §15.4). Sync is fsync of the file.
 	SetTimes(atime, mtime Time) error
+	SetMode(mode uint32) error
 	Sync() error
 	Close() error
 }
@@ -421,6 +422,14 @@ func (f *realFile) SetTimes(atime, mtime Time) error {
 	times := []unix.Timespec{{Sec: atime.Sec, Nsec: atime.Nsec}, {Sec: mtime.Sec, Nsec: mtime.Nsec}}
 	if err := unix.UtimesNanoAt(unix.AT_FDCWD, "/proc/self/fd/"+strconv.Itoa(int(f.file.Fd())), times, 0); err != nil {
 		return fmt.Errorf("set the times of %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+// SetMode needs no /proc: fchmod asks only that the file be its caller's, whatever it is open for.
+func (f *realFile) SetMode(mode uint32) error {
+	if err := unix.Fchmod(int(f.file.Fd()), mode); err != nil {
+		return fmt.Errorf("chmod %q: %w", f.file.Name(), err)
 	}
 	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,6 +68,8 @@ type entry struct {
 	Size    *int    `json:"size"`
 	Target  string  `json:"target"`
 	MtimeNS *int64  `json:"mtime_ns"`
+	// Mode is a file's mode in octal digits, as "0640": the permission bits, setuid, setgid and sticky.
+	Mode *string `json:"mode"`
 }
 
 type step struct {
@@ -84,6 +87,7 @@ type step struct {
 	Size       *int              `json:"size"`
 	Target     string            `json:"target"`
 	MtimeNS    *int64            `json:"mtime_ns"`
+	Mode       *string           `json:"mode"`
 	By         string            `json:"by"`
 	Tree       []entry           `json:"tree"`
 	Query      string            `json:"query"`
@@ -105,6 +109,8 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "path", "path_b64", "target"}, true
 	case "touch":
 		return []string{"disk", "path", "path_b64", "mtime_ns"}, true
+	case "chmod":
+		return []string{"disk", "path", "path_b64", "mode"}, true
 	case "advance":
 		return []string{"by"}, true
 	case "tick":
@@ -159,6 +165,10 @@ func parseScenario(data []byte) (*scenario, error) {
 			err = checkEntry(&entry{Text: st.Text, Size: st.Size})
 		case st.Do == "touch" && st.MtimeNS == nil:
 			err = errors.New("no mtime_ns")
+		case st.Do == "chmod" && st.Mode == nil:
+			err = errors.New("no mode")
+		case st.Do == "chmod":
+			_, err = parseMode(*st.Mode)
 		case st.Do == "symlink" && st.Target == "":
 			err = errors.New("no target")
 		}
@@ -218,13 +228,17 @@ func checkEntry(e *entry) error {
 			return errors.New("no content: want text or size")
 		case e.Size != nil && *e.Size < 0:
 			return fmt.Errorf("size %d", *e.Size)
+		case e.Mode != nil:
+			if _, err := parseMode(*e.Mode); err != nil {
+				return err
+			}
 		}
 	case "dir":
-		if e.Text != nil || e.Size != nil || e.Target != "" || e.MtimeNS != nil {
+		if e.Text != nil || e.Size != nil || e.Target != "" || e.MtimeNS != nil || e.Mode != nil {
 			return errors.New("a folder has only a path")
 		}
 	case "symlink":
-		if e.Text != nil || e.Size != nil || e.MtimeNS != nil {
+		if e.Text != nil || e.Size != nil || e.MtimeNS != nil || e.Mode != nil {
 			return errors.New("a symlink has only a path and a target")
 		}
 		if e.Target == "" {
@@ -504,10 +518,49 @@ func (b *sandbox) fileStep(s *step) error {
 	case "symlink":
 		b.note(s.Disk, rel)
 		return writeEntry(root, rel, &entry{Kind: "symlink", Target: s.Target})
+	case "chmod":
+		mode, err := parseMode(*s.Mode)
+		if err != nil {
+			return err
+		}
+		return os.Chmod(full, mode)
 	default: // touch
 		when := time.Unix(0, *s.MtimeNS)
 		return os.Chtimes(full, when, when)
 	}
+}
+
+// parseMode reads a mode written in octal digits with a leading 0, as "0640" or "04755": the permission bits,
+// setuid, setgid and sticky, and nothing else.
+func parseMode(text string) (os.FileMode, error) {
+	value, err := strconv.ParseUint(text, 8, 32)
+	if err != nil || len(text) < 4 || len(text) > 5 || text[0] != '0' || value > 0o7777 {
+		return 0, fmt.Errorf("mode %q: want octal digits from 0000 to 07777", text)
+	}
+	mode := os.FileMode(value & 0o777)
+	for _, s := range specialBits {
+		if uint32(value)&s.bit != 0 {
+			mode |= s.flag
+		}
+	}
+	return mode, nil
+}
+
+// specialBits are the bits above the permission bits, as stat(2) and Go each write them.
+var specialBits = [...]struct {
+	bit  uint32
+	flag os.FileMode
+}{{0o4000, os.ModeSetuid}, {0o2000, os.ModeSetgid}, {0o1000, os.ModeSticky}}
+
+// modeBits gives the permission bits, setuid, setgid and sticky of a mode, as stat(2) has them.
+func modeBits(mode os.FileMode) uint32 {
+	bits := uint32(mode.Perm())
+	for _, s := range specialBits {
+		if mode&s.flag != 0 {
+			bits |= s.bit
+		}
+	}
+	return bits
 }
 
 func (b *sandbox) runAtoll(s *step) (err error) {
@@ -837,6 +890,15 @@ func writeEntry(root, rel string, e *entry) error {
 	if err := os.WriteFile(full, contentOf(e), 0o644); err != nil {
 		return err
 	}
+	if e.Mode != nil {
+		mode, err := parseMode(*e.Mode)
+		if err != nil {
+			return err
+		}
+		if err := os.Chmod(full, mode); err != nil {
+			return err
+		}
+	}
 	if e.MtimeNS == nil {
 		return nil
 	}
@@ -850,7 +912,8 @@ type found struct {
 	content []byte
 	target  string
 	mtimeNS int64
-	empty   bool // for a folder
+	mode    uint32 // for a file: the permission bits, setuid, setgid and sticky
+	empty   bool   // for a folder
 }
 
 // listTree reads a whole disk, by path relative to its top.
@@ -889,7 +952,7 @@ func listTree(root string) (map[string]*found, error) {
 			if err != nil {
 				return err
 			}
-			out[rel] = &found{kind: "file", content: content, mtimeNS: info.ModTime().UnixNano()}
+			out[rel] = &found{kind: "file", content: content, mtimeNS: info.ModTime().UnixNano(), mode: modeBits(info.Mode())}
 		default:
 			return fmt.Errorf("%q: neither a file, a folder nor a symlink", rel)
 		}
@@ -984,6 +1047,11 @@ func sameEntry(e *entry, f *found) error {
 		}
 		if e.MtimeNS != nil && f.mtimeNS != *e.MtimeNS {
 			return fmt.Errorf("mtime %d, want %d", f.mtimeNS, *e.MtimeNS)
+		}
+		if e.Mode != nil {
+			if want, err := parseMode(*e.Mode); err != nil || f.mode != modeBits(want) {
+				return fmt.Errorf("mode %04o, want %s", f.mode, *e.Mode)
+			}
 		}
 	}
 	return nil

@@ -286,7 +286,7 @@ func plannedOn(list []catalog.Op, disk string) []string {
 		switch op.Kind {
 		case catalog.OpRename:
 			paths = append(paths, op.Path, op.Path2)
-		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpCreate, catalog.OpUtimens:
+		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpCreate, catalog.OpUtimens, catalog.OpChmod:
 			paths = append(paths, op.Path)
 		}
 	}

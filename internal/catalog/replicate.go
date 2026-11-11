@@ -409,9 +409,10 @@ func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, ma
 		}
 		result, err := tx.ExecContext(ctx, `
 			UPDATE copies SET state = 'ok', created_by = 'atoll', file_key = ?3, nlink = ?4, size = ?5, mtime_ns = ?6, ctime_ns = ?7,
-				btime_ns = ?8, first_seen_ns = ?9, verified_ns = ?10, gone_ns = NULL, gone_kind = NULL, old_lpath = NULL, old_lpath_key = NULL
+				btime_ns = ?8, first_seen_ns = ?9, verified_ns = ?10, gone_ns = NULL, gone_kind = NULL, old_lpath = NULL, old_lpath_key = NULL,
+				mode = ?11
 			WHERE file_id = ?1 AND disk_id = ?2`,
-			fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, verified)
+			fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, verified, made.Mode)
 		if err != nil {
 			return fmt.Errorf("copy: %w", err)
 		}
@@ -419,9 +420,9 @@ func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, ma
 			return fmt.Errorf("copy: %w", err)
 		} else if n == 0 {
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO copies(file_id, disk_id, file_key, nlink, size, mtime_ns, ctime_ns, btime_ns, created_by, first_seen_ns, verified_ns, state)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'atoll', ?, ?, 'ok')`,
-				fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, verified); err != nil {
+				INSERT INTO copies(file_id, disk_id, file_key, nlink, size, mtime_ns, ctime_ns, btime_ns, created_by, first_seen_ns, verified_ns, state, mode)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'atoll', ?, ?, 'ok', ?)`,
+				fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, verified, made.Mode); err != nil {
 				return fmt.Errorf("copy: %w", err)
 			}
 		}

@@ -78,30 +78,6 @@ func TestATouchReachesTheOtherCopy(t *testing.T) {
 	}
 }
 
-// A chmod alone moves no modification time: nothing to apply, and only the changed copy's row follows it.
-func TestAChmodAloneAppliesNothing(t *testing.T) {
-	b := pool(t)
-	before := b.ctimeOf("t1", "a")
-	full := filepath.Join(b.dirs["t1"], "media", "a")
-	for mode := os.FileMode(0o600); b.ctimeOf("t1", "a") == before; mode ^= 0o040 {
-		if err := os.Chmod(full, mode); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	b.now = b.ctimeOf("t1", "a") + settleNS
-	out := b.pass()
-	if !slices.Equal(out.Decisions, []Decision{{Path: "a", Kind: "metadata"}}) || len(out.Operations) != 0 {
-		t.Fatalf("%+v", out)
-	}
-	if got := b.count("SELECT count(*) FROM ops"); got != 0 {
-		t.Errorf("%d operations", got)
-	}
-	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't1' AND ctime_ns = ?", b.ctimeOf("t1", "a")); got != 1 {
-		t.Error("the changed copy's row does not follow it")
-	}
-}
-
 // A copy that changed since its look gets no time: the operation is undone, nothing is decided, and the next pass
 // sees both changes.
 func TestACopyChangedBeforeItsTime(t *testing.T) {
