@@ -47,6 +47,8 @@ type Modification struct {
 	Hash      []byte
 	Chunks    []byte
 	Reference string
+	// Answered says that a confirm of the mass-modification guard answered it (specs.md §15.6).
+	Answered bool
 }
 
 // ApplyModification records a modification in one transaction, before anything runs on a disk (specs.md §15.4).
@@ -70,10 +72,13 @@ func ApplyModification(ctx context.Context, db *sql.DB, nowNS int64, m *Modifica
 }
 
 func applyModified(ctx context.Context, tx *sql.Tx, nowNS int64, m *Modification) error {
-	data := eventRow{Disk: m.Src}
-	data.setPath(m.Path)
-	if err := insertEvent(ctx, tx, nowNS, "info", EventModified, &data); err != nil {
-		return err
+	// The event says what the mass-modification guard counts: a file whose other copies went stale (specs.md §15.6).
+	if len(m.Stale) > 0 {
+		data := eventRow{Disk: m.Src, Answered: m.Answered}
+		data.setPath(m.Path)
+		if err := insertEvent(ctx, tx, nowNS, "info", EventModified, &data); err != nil {
+			return err
+		}
 	}
 	for i := range m.Changed {
 		if err := takeLook(ctx, tx, nowNS, m.FileID, &m.Changed[i], true, m.Hash != nil); err != nil {

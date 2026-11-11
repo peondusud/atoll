@@ -154,6 +154,26 @@
         }
       }
     },
+    "modifies": {
+      "description": "What stops a modification in mass (specs.md §15.6).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mass_guard": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "files": { "description": "Files modified from a copy on a disk.", "type": "integer", "minimum": 0, "default": 100 },
+            "percent": {
+              "description": "Of a disk's copies.",
+              "$ref": "#/$defs/percent",
+              "default": "5%"
+            },
+            "window": { "$ref": "#/$defs/positive_duration", "default": "10m" }
+          }
+        }
+      }
+    },
     "balance": {
       "type": "object",
       "additionalProperties": false,

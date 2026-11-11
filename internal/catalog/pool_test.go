@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -326,5 +327,42 @@ func TestAWalkRecordsModes(t *testing.T) {
 	}
 	if got := countOf(t, db, "SELECT count(*) FROM copies WHERE (file_id = ? AND mode = 384) OR (file_id = ? AND mode = 420)", b, c); got != 2 {
 		t.Error("a row without a mode did not get it, or a row with one lost it")
+	}
+}
+
+// What the mass-modification guard of a disk counts and lists: its modified events within the window, after the last
+// answer, not answered, a path that is not UTF-8 included (specs.md §15.6).
+func TestTheModifyGuardReadsItsEvents(t *testing.T) {
+	db, _ := newPool(t)
+	event := func(ts int64, kind, data string) {
+		exec(t, db, "INSERT INTO events(ts_ns, level, kind, data) VALUES (?, 'info', ?, ?)", ts, kind, data)
+	}
+	event(10, EventModified, `{"disk":"t1","path":"old"}`)
+	event(100, EventModified, `{"disk":"t1","path":"z"}`)
+	event(101, EventModified, `{"disk":"t1","path_b64":"YP8="}`)
+	event(102, EventModified, `{"disk":"t1","path":"answered","answered":true}`)
+	event(103, EventModified, `{"disk":"t2","path":"elsewhere"}`)
+	read, err := ReadModifyGuard(t.Context(), db, "t1", 110, 50)
+	if err != nil || read.Count != 2 || read.Stands || read.Answer != "" {
+		t.Fatalf("%+v, %v", read, err)
+	}
+	paths, err := ModifiedPaths(t.Context(), db, "t1", 110, 50, read.AnswerID)
+	if err != nil || !slices.Equal(paths, []string{"`\xff", "z"}) {
+		t.Errorf("%q, %v", paths, err)
+	}
+	if upTo, err := AnswerModifyGuard(t.Context(), db, "t1", EventModifyGuardConfirm, 111); err != nil || upTo.Valid {
+		t.Errorf("an answer with no guard: %+v, %v", upTo, err)
+	}
+	event(120, EventModifyGuard, `{"disk":"t1"}`)
+	if read, err = ReadModifyGuard(t.Context(), db, "t1", 130, 50); err != nil || !read.Stands || read.GuardNS != 120 {
+		t.Fatalf("%+v, %v", read, err)
+	}
+	upTo, err := AnswerModifyGuard(t.Context(), db, "t1", EventModifyGuardReject, 140)
+	if err != nil || !upTo.Valid || upTo.Int64 != 120 {
+		t.Fatalf("%+v, %v", upTo, err)
+	}
+	read, err = ReadModifyGuard(t.Context(), db, "t1", 150, 50)
+	if err != nil || read.Stands || read.Count != 0 || read.Answer != EventModifyGuardReject || !read.Answers(120) || read.Answers(121) {
+		t.Errorf("%+v, %v", read, err)
 	}
 }

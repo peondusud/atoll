@@ -132,6 +132,7 @@
         "guards": [
           {
             "disk": "t2",
+            "kind": "deletions",
             "count": 2
           }
         ],
@@ -197,6 +198,7 @@
         "guards": [
           {
             "disk": "t2",
+            "kind": "deletions",
             "count": 2
           }
         ],

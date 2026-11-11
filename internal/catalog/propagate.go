@@ -89,6 +89,8 @@ type eventRow struct {
 	GoneNS      *int64 `json:"gone_ns,omitempty"`
 	NothingLeft bool   `json:"nothing_left,omitempty"`
 	UpTo        *int64 `json:"up_to,omitempty"`
+	// Answered says that a confirm of the mass-modification guard answered a modified: it counts for nothing.
+	Answered bool `json:"answered,omitempty"`
 }
 
 func (e *eventRow) setPath(p string) {

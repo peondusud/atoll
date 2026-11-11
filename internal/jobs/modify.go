@@ -164,6 +164,11 @@ func (p *pass) modifyFile(ctx context.Context, id int64, positions map[string]in
 	if kind, err := solver.ModifyGate(in); err != nil || kind != solver.ModRead {
 		return err
 	}
+	// Held by the mass-modification guard of its disk: nothing is read until someone answers (specs.md §15.6).
+	if first := firstChanged(in); first != nil && p.heldBefore(first.Disk, ctimes[first.Disk]) {
+		p.out.Held = true
+		return nil
+	}
 	looks := map[string]*watch.FoundFile{}
 	for i := range in.Copies {
 		mc := &in.Copies[i]
@@ -198,7 +203,14 @@ func (p *pass) modifyFile(ctx context.Context, id int64, positions map[string]in
 	if d.Kind == solver.ModNone || d.Kind == solver.ModWait {
 		return nil
 	}
-	return p.applyModification(ctx, f, in, &d, looks, chunks)
+	answered := false
+	if d.Kind == solver.ModModified {
+		var goes bool
+		if goes, answered, err = p.guardModification(ctx, &d, ctimes[d.Changed[0]]); err != nil || !goes {
+			return err
+		}
+	}
+	return p.applyModification(ctx, f, in, &d, looks, chunks, answered)
 }
 
 // lookAgain looks at a changed copy before anything is read or decided of it: it must still be the file its walk
@@ -285,7 +297,7 @@ func (p *pass) loseRead(ctx context.Context, disk string, why error) error {
 }
 
 // applyModification records what was decided, or with a dry run says what it would do.
-func (p *pass) applyModification(ctx context.Context, f *catalog.FileRow, in *solver.ModInput, d *solver.ModDecision, looks map[string]*watch.FoundFile, chunks map[string][]byte) error {
+func (p *pass) applyModification(ctx context.Context, f *catalog.FileRow, in *solver.ModInput, d *solver.ModDecision, looks map[string]*watch.FoundFile, chunks map[string][]byte, answered bool) error {
 	stale, src := d.Stale, d.Changed[0]
 	if d.Kind == solver.ModMetadata {
 		plan, err := p.metadataPlan(f, in, looks)
@@ -316,7 +328,7 @@ func (p *pass) applyModification(ctx context.Context, f *catalog.FileRow, in *so
 	size := f.Size
 	m := &catalog.Modification{
 		FileID: f.ID, Path: f.Path, Kind: string(d.Kind), Stale: stale, Src: src, Hash: d.Hash, Reference: d.Reference,
-		Priority: int64(p.config.Policy(f.Path, &size).Priority),
+		Priority: int64(p.config.Policy(f.Path, &size).Priority), Answered: answered,
 	}
 	if d.Hash != nil {
 		m.Chunks = chunks[d.Changed[0]]

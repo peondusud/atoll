@@ -139,12 +139,28 @@
         "disks": [
           {
             "disk": "t1",
+            "kind": "deletions",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
+            "disk": "t1",
+            "kind": "modifications",
             "tripped": false,
             "count": 0,
             "paths": []
           },
           {
             "disk": "t2",
+            "kind": "deletions",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
+            "disk": "t2",
+            "kind": "modifications",
             "tripped": false,
             "count": 0,
             "paths": []
