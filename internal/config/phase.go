@@ -23,7 +23,7 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 		var phase, effect string
 		switch index.ReplaceAllString(key, "") {
 		case "defaults.mode", "rule.mode":
-			if v == "immediate" || v == "scheduled" {
+			if v == "immediate" {
 				phase, effect = "1b", "works as deferred"
 			}
 		case "placement.new_files":

@@ -329,7 +329,6 @@ func TestLaterPhaseWarnings(t *testing.T) {
 		"rule[6].cache_min_age",
 		"rule[6].spread_mode",
 		"rule[7].colocate",
-		"rule[7].mode",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("warnings at\n%q, want\n%q", got, want)
@@ -346,7 +345,7 @@ func TestFallbackWarnings(t *testing.T) {
 [view]
 mount = "/srv/pool"
 [defaults]
-mode = "scheduled"
+mode = "immediate"
 [placement]
 new_files = "ordered"
 [integrity]

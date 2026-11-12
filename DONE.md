@@ -2,6 +2,17 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The scheduled mode (specs.md §12.3, §14.1)
+
+Commit "Run scheduled copies inside replication.window", on `develop`.
+
+- The beta's third piece. A file in `scheduled` mode is queued as before, once its `settle` has passed, and its copy runs only inside `[replication].window`, in the time zone of `timezone`. Outside it, the job waits in the queue, counts in `waiting`, and `next_due` says when the window opens, which wakes the daemon then. `atoll replicate --now` runs it whatever the time, and a dry run lists only what it would copy now.
+- `scheduled` no longer warns that it works as `deferred`; `immediate` still does. Two scenarios of `rules check` keep their later-phase rows with `immediate`.
+- Verified: `TestScheduledCopiesWaitForTheirWindow`; the scenario `daemon-scheduled.json`; two mutants, each caught by both.
+- **Decided without the maintainer, to confirm:**
+  - A pass judges every copy at its own time: a copy that starts inside the window runs to its end, even past it.
+  - A file in `scheduled` mode waits for the window whatever its size; a rule can give a file another mode.
+
 ## The report of duplicates (specs.md §16)
 
 Commit "Report the files that hold the same content", on `develop`.

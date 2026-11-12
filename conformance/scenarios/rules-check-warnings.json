@@ -2,7 +2,7 @@
   "format_version": 1,
   "spec": "specs.md \u00a724.4, \u00a725",
   "description": "Warnings leave the configuration valid, so the exit code stays 0. They come sorted by key, and say which ones a later phase will end: read.classes[0] names a tag no disk carries, while read.classes is a feature of phase 2a and defaults.mode asks for a mode of phase 1b. Only what the file sets gets one: every other key stays at its default, silently.",
-  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nmode = \"scheduled\"\n[read]\nclasses = [\"sata\", \"usb\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ntags = [\"usb\"]\n",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nmode = \"immediate\"\n[read]\nclasses = [\"sata\", \"usb\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ntags = [\"usb\"]\n",
   "steps": [
     {
       "do": "atoll",
