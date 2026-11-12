@@ -51,15 +51,20 @@ type WakeInput struct {
 	ScrubBudgetNS      int64
 	ScrubSpentNS       int64
 	ScrubSpentOpenedNS int64
+	// BackupPending says that the stretch of Window that holds now, or the next one, has no catalog backup yet
+	// (specs.md §9).
+	BackupPending bool
 }
 
 // WakeOutput says what to do now, and when to look again. Hash says to read new files' hashes, once any check
-// and pass due are done, and Scrub to scrub, when there is no hash to read. ScrubOpenedNS is when the stretch of
-// the scrub's window that holds now began, 0 outside it or with no scrub pending.
+// and pass due are done; Backup to back the catalog up, when there is no hash to read; and Scrub to scrub, when
+// there is neither. ScrubOpenedNS is when the stretch of the scrub's window that holds now began, 0 outside it or
+// with no scrub pending.
 type WakeOutput struct {
 	Check         bool
 	Because       []string
 	Hash          bool
+	Backup        bool
 	Scrub         bool
 	ScrubOpenedNS int64
 	WakeNS        int64
@@ -116,6 +121,14 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 		out.Hash = in.Window.Contains(nowLocal)
 		earliest(in.Window.Next(nowLocal).UnixNano())
 	}
+	if in.BackupPending {
+		nowLocal := time.Unix(0, now).In(in.Location)
+		if in.Window.Contains(nowLocal) {
+			out.Backup = !out.Hash
+		} else {
+			earliest(in.Window.Next(nowLocal).UnixNano())
+		}
+	}
 	if in.ScrubPending {
 		if in.ScrubBudgetNS <= 0 {
 			return WakeOutput{}, fmt.Errorf("wake: the scrub's budget must be positive, not %d", in.ScrubBudgetNS)
@@ -127,14 +140,14 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 			earliest(in.ScrubWindow.Next(nowLocal).UnixNano())
 		case in.ScrubSpentOpenedNS != opened.UnixNano() || in.ScrubSpentNS < in.ScrubBudgetNS:
 			out.ScrubOpenedNS = opened.UnixNano()
-			out.Scrub = !out.Hash
+			out.Scrub = !out.Hash && !out.Backup
 		default:
 			// The budget of this stretch is spent: the next stretch begins a day after this one did.
 			out.ScrubOpenedNS = opened.UnixNano()
 			earliest(in.ScrubWindow.Next(opened.AddDate(0, 0, 1)).UnixNano())
 		}
 	}
-	if len(out.Because) > 0 || out.Hash || out.Scrub {
+	if len(out.Because) > 0 || out.Hash || out.Backup || out.Scrub {
 		wake = now
 	}
 	out.WakeNS = max(wake, now)

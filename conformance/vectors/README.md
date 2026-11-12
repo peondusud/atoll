@@ -334,10 +334,12 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `scrub_window` | string | `integrity.window` |
 | `scrub_budget_ns` | integer | `integrity.scrub_budget`, which must be positive when `scrub_pending` |
 | `scrub_spent_ns`, `scrub_spent_opened_ns` | integer | what the scrub spent, and when the stretch of its window it spent it in began |
+| `backup_pending` | boolean | the stretch of the window that holds now, or the next one, has no catalog backup yet |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
 | `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
-| `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, and no hash to read |
+| `backup` | boolean | `true` when the catalog is to be backed up now: `backup_pending`, inside the window, and no hash to read |
+| `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, no hash to read and no backup due |
 | `scrub_opened_ns` | integer | with `scrub_pending`, inside `scrub_window`, when this stretch of it began; left out otherwise |
 | `wake_ns` | integer | when to look again: `now_ns` when something is due |
 | `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, a `rescan_every_ns` that is not positive, or a scrub budget that is not, with `scrub_pending` |

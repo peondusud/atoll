@@ -279,6 +279,47 @@ func TestPassSink(t *testing.T) {
 	}
 }
 
+// Inside maintenance.window, after its first pass, the daemon backs the catalog up, once for that stretch of the
+// window (specs.md §9, §15.13).
+func TestRunBacksUp(t *testing.T) {
+	window := time.Now().Add(-time.Hour).Format("15:04") + "-" + time.Now().Add(time.Hour).Format("15:04")
+	c := bench(t, "[maintenance]\nwindow = \""+window+"\"\n")
+	file, _ := c.Effective()["catalog"].(string)
+	backups := filepath.Join(filepath.Dir(file), catalog.BackupFolder)
+	machine, err := disks.NewMachine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	reload := make(chan struct{})
+	passes := make(chan struct{}, 8)
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{Config: c, Machine: machine, Apply: true, Log: slog.New(slog.DiscardHandler), CheckEvery: time.Hour,
+			Reload: reload, Load: func() (*config.Config, error) { return c, nil },
+			OnPass: func([]string, *jobs.Outcome) { passes <- struct{}{} }})
+	}()
+	count := func() int {
+		entries, _ := os.ReadDir(backups)
+		return len(entries)
+	}
+	<-passes
+	for deadline := time.Now().Add(10 * time.Second); count() == 0 && time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+	}
+	// Another pass in the same stretch makes no other backup.
+	time.Sleep(1100 * time.Millisecond)
+	reload <- struct{}{}
+	<-passes
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Errorf("%d backups", n)
+	}
+}
+
 // failing is a channel that cannot be reached.
 type failing struct{}
 

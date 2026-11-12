@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The daemon's daily catalog backup (specs.md §9, §15.13)
+
+Commit "Back the catalog up every night", on `develop`.
+
+- Once for each stretch of `maintenance.window`, after the new files' hashes and before the scrub, the daemon backs the catalog up under its lock, through `jobs.BackupCatalog`, which `atoll catalog backup` now shares. `Wake` says when, with four more vectors in `daemon_wake.json`.
+- `TestRunBacksUp`: a window around now, one backup after the first pass, and none more for a pass in the same stretch.
+- **Decided without the maintainer, to confirm:** a backup that fails is not tried again before the next stretch, with a line of the log; no alert says it yet.
+
 ## A nested btrfs subvolume is another mount (specs.md §15.10)
 
 Commit "Leave a nested btrfs subvolume out of the walk", on `develop`, as the maintainer chose on 2026-11-12.

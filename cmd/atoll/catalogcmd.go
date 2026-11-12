@@ -11,8 +11,7 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
-	"github.com/peondusud/atoll/internal/fsx"
-	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/jobs"
 )
 
 // catalogBackupOutput is the output of api/schemas/catalog-backup.schema.json.
@@ -95,63 +94,27 @@ func runCatalog(configPath string, args []string, stdout, stderr io.Writer) int 
 }
 
 // catalogBackup backs the catalog up beside it, and with maintenance.catalog_on_disks copies the backup to each disk
-// that can be written; a disk it could not copy to is exit 4.
+// not failed; a disk it could not copy to is exit 4.
 func catalogBackup(ctx context.Context, c *config.Config, m disks.Machine, stderr io.Writer) (out *catalogBackupOutput, code int, err error) {
-	file := catalogPath(c)
-	db, err := catalog.OpenPool(ctx, file, c.PoolID)
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	written, removed, err := catalog.Backup(ctx, db, file, c.PoolID, m.Now())
+	done, err := jobs.BackupCatalog(ctx, db, c, m)
 	if err != nil {
 		return nil, 0, fmt.Errorf("%w", err)
 	}
-	out = &catalogBackupOutput{Backup: written, Removed: append([]string{}, removed...), Disks: []catalogBackupDisk{}}
+	out = &catalogBackupOutput{Backup: done.Path, Removed: append([]string{}, done.Removed...), Disks: []catalogBackupDisk{}}
 	code = exitOK
-	if on, _ := c.Effective()["maintenance.catalog_on_disks"].(bool); !on {
-		return out, code, nil
-	}
-	for i := range c.Disks {
-		d := &c.Disks[i]
-		if d.State == config.DiskFailed {
-			continue
-		}
-		line := catalogBackupDisk{ID: d.ID}
-		if err := copyBackupTo(m, d, written); err != nil {
-			report(stderr, fmt.Sprintf("warning: disk %s: the backup was not copied: %v", d.ID, err))
+	for _, d := range done.Disks {
+		if d.Err != nil {
+			report(stderr, fmt.Sprintf("warning: disk %s: the backup was not copied: %v", d.ID, d.Err))
 			code = exitPartial
-		} else {
-			line.Written = true
 		}
-		out.Disks = append(out.Disks, line)
+		out.Disks = append(out.Disks, catalogBackupDisk{ID: d.ID, Written: d.Err == nil})
 	}
 	return out, code, nil
-}
-
-// copyBackupTo copies a backup to a disk's Atoll/catalog/, through a handle confirmed first (invariant 3). A disk
-// missing or read-only takes none.
-func copyBackupTo(m disks.Machine, d *config.Disk, backup string) error {
-	if v := disks.Check(m, d); v.State != disks.Online {
-		return fmt.Errorf("it is %s (%s)", v.State, v.Reason)
-	}
-	handle, err := ops.Open(m, d, 0)
-	if err != nil {
-		return err //nolint:wrapcheck // ops names the disk
-	}
-	defer handle.Close()
-	if v := disks.Confirm(m, d); v.State == disks.Missing {
-		return fmt.Errorf("%s (%s)", v.Message, v.Reason)
-	}
-	if err := handle.Verify(); err != nil {
-		return err //nolint:wrapcheck // likewise
-	}
-	src, err := fsx.OpenSystemFile(backup)
-	if err != nil {
-		return err //nolint:wrapcheck // fsx names the file
-	}
-	defer func() { _ = src.Close() }()
-	return handle.PutCatalog(src) //nolint:wrapcheck // ops names the disk
 }
 
 // catalogVerify runs SQLite's integrity and foreign key checks on the catalog: exit 4 with a problem.
