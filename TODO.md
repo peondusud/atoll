@@ -65,9 +65,9 @@ Every item here is a **decision**:
 - `catalog rebuild` must start `ops.id` past the ids in each disk's trash and in each `tmp/`, as must `atoll init` over a catalog that went missing, so that a new operation's folder or `<op id>.part` does not meet an old one (§14.2, §17): both restart `sqlite_sequence`. Until then such a meeting costs one `io-error`, and the next run takes another id.
 - Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. The daemon that runs for good, with its watcher and its grouping, is still to measure over hours of changes.
 - What the mount check of §10 leaves to do for disks:
-  - `Atoll/disk.toml` and `atoll disk show`, which could show `time_precision_ns`;
-  - at `disk add`: the block-device topology (R-06), another filesystem with the same identifier (§10), and the warning about `chattr +i`.
-- `disk add` and `disk remove`, and the other `atoll disk` commands. `disk remove` must refuse a disk with `planned` operations: on a disk no longer in the configuration they wait for good, and every command that writes exits with 4.
+  - `atoll disk show`, which could show `time_precision_ns`, and reading `Atoll/disk.toml` at each mount check;
+  - the topology check of R-06 at each start, not only at `disk add`, with the catalog's `disks.device`.
+- `disk remove`, `fail`, `replace` and `show`. `disk remove` must refuse a disk with `planned` operations: on a disk no longer in the configuration they wait for good, and every command that writes exits with 4.
 - What the daemon that runs for good (§15.13) leaves:
   - the watcher's limits: a folder that leaves the root under inotify and comes back in another read is watched again from scratch; a path past `PATH_MAX` cannot get a mark of its own on ntfs-3g; the process of an event already gone reads as `user`;
   - the remount after a USB reset of an ntfs-3g disk, through `mount.ntfs-3g`, as the dedicated user, is not tested.

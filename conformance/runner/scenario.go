@@ -57,6 +57,10 @@ type disk struct {
 	// Said of a disk, so that a folder can behave as a driver does.
 	Renameat2 *bool    `json:"renameat2"`
 	Refuses   []string `json:"refuses"`
+	// Said of a disk for atoll disk add: the whole disk it stands for, and whether the folder under its mount point
+	// is immutable.
+	Device    string `json:"device"`
+	Immutable bool   `json:"immutable"`
 }
 
 // entry is what a tree holds at a path.
@@ -362,6 +366,8 @@ func (b *sandbox) writeControl() error {
 		Capacity  int64    `json:"capacity"`
 		Renameat2 *bool    `json:"renameat2,omitempty"`
 		Refuses   []string `json:"refuses,omitempty"`
+		Device    string   `json:"device,omitempty"`
+		Immutable bool     `json:"immutable,omitempty"`
 	}
 	control := struct {
 		Now     string        `json:"now"`
@@ -371,7 +377,7 @@ func (b *sandbox) writeControl() error {
 	for i := range b.s.Disks {
 		d := &b.s.Disks[i]
 		if !b.away[d.ID] {
-			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses})
+			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses, d.Device, d.Immutable})
 		}
 	}
 	data, err := json.MarshalIndent(control, "", "  ")

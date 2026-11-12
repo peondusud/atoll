@@ -1,0 +1,169 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a710, \u00a718, \u00a725",
+  "description": "A disk mounted and identified is appended to the configuration and to the catalog, its domain and tags with it, and gets its marker in Atoll/; what it holds is left as it is, for the daemon or a scan to walk. Added again, it is refused.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ],
+      "immutable": true
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ],
+      "immutable": true
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--domain",
+        "d2",
+        "--tags=usb,slow",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": {
+          "id": "t2",
+          "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+          "fs": "ext4",
+          "mount": "${SANDBOX}/disks/t2",
+          "domain": "d2",
+          "tags": [
+            "usb",
+            "slow"
+          ],
+          "state": "online",
+          "reason": null
+        },
+        "physical_disks": [
+          "t2"
+        ],
+        "dry_run": false,
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t1",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t2",
+            "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t2",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state, domain, tags, position FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "online",
+          null,
+          "[]",
+          0
+        ],
+        [
+          "t2",
+          "online",
+          "d2",
+          "[\"usb\",\"slow\"]",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM files",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"p\"\ndisk_id = \"t2\"\nfs_uuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\n"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--id",
+        "t9"
+      ],
+      "exit": 1
+    }
+  ]
+}

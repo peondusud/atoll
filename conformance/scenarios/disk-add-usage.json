@@ -1,0 +1,167 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a710, \u00a718, \u00a725",
+  "description": "disk add takes one absolute mount point, and --id, --domain and --tags with a value, --dry-run and --json, each once; an id, a domain and each tag are identifiers. A usage error comes before the configuration is read, here a configuration with no catalog.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "disks/t2"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "/a",
+        "/b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--id"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--id",
+        "Big"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--id=a",
+        "--id=b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--tags",
+        "usb,usb"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--tags",
+        ""
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--domain",
+        "d e"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--dry-run",
+        "--dry-run"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "--json",
+        "add",
+        "${SANDBOX}/disks/t2"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ]
+    }
+  ]
+}

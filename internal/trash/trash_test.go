@@ -3062,16 +3062,26 @@ func TestADiskThatCannotBeReadIsLeftAlone(t *testing.T) {
 			t.Errorf("%v, %v", handle, err)
 		}
 	})
-	t.Run("draining is read and written", func(t *testing.T) {
+	t.Run("draining is read and written, and stays draining once confirmed", func(t *testing.T) {
 		b := newBench(t)
+		for i := range b.config.Disks {
+			if b.config.Disks[i].ID == "t3" {
+				b.config.Disks[i].State = config.DiskDraining
+			}
+		}
 		s, err := Open(t.Context(), b.db, b.config, b, true)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer s.Close()
-		s.slots["t3"].state = solver.DiskDraining
+		if s.slots["t3"].state != solver.DiskDraining {
+			t.Fatalf("opened as %s", s.slots["t3"].state)
+		}
 		if handle, err := s.open(t.Context(), "t3"); err != nil || handle == nil || !s.Readable("t3") || !s.Writable("t3") {
 			t.Errorf("%v, %v, readable %v, writable %v", handle, err, s.Readable("t3"), s.Writable("t3"))
+		}
+		if s.slots["t3"].state != solver.DiskDraining {
+			t.Errorf("confirmed as %s", s.slots["t3"].state)
 		}
 	})
 }

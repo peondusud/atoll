@@ -2,6 +2,26 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The disk commands, part 1: a disk's state, the configuration's edits, `disk add` (specs.md §9, §10, §18, §21.1, §25)
+
+Commits "Keep a disk draining or failed in the configuration", "Edit a disk in the configuration, keeping every other byte" and "Add a disk to the pool", on `develop`.
+
+- **A disk's `state`.** A `[[disk]]` may say `state = "draining"` or `"failed"`. The catalog records a failed disk as failed whatever its mount check says, and a draining one as draining while the check finds it `online`. A draining disk is read, as its copies are the sources that evacuate it, and written, as it stays in step until it leaves; the plan already counted none of its copies and placed nothing on it. A failed disk is never walked, read for hashes, watched or remounted, and brings no pass. In mergerfs a draining disk's branch is `NC`, and a failed one's `RO` and last, so that `ff` reads its copy only when no other disk has one.
+- **The configuration's edits.** `config.AppendDisk`, `RemoveDisk` and `SetDiskState` keep every other byte, comments included, follow the file's line ends, and refuse an edit that would change anything else, or disks written as inline tables. 21 vectors in `config_edit.json`, written from the spec before the code ran.
+- **`atoll disk add`.** It reads the mount and the head, runs the mount check, and refuses what §10 and §18 refuse: an id or a mount the pool has, a disk missing, an identifier the pool or the catalog knows, the variants that change the rules of names, a physical disk another disk lives on (R-06), a marker of another pool, disk or filesystem. Then it appends the disk to the configuration, written whole through `<file>.new` and a rename, records the disks in the catalog, writes `Atoll/disk.toml` through a confirmed handle, and sends `SIGHUP` to the daemon. `--dry-run` writes nothing. Five scenarios; the conformance build tells a scenario's disks apart by a new `device` field, and says whether a mount point is immutable by `immutable`.
+- **Found while writing it.** A session that confirmed a draining disk wrote the mount check's `online` over `draining`, which would have made it a target again; it now keeps `draining`. A test that said a draining disk is never opened predated evacuation, which reads it: changed.
+- **Decided without the maintainer, to confirm:**
+  - The administrative state lives in the configuration, as the key `state` of a `[[disk]]`, `draining` or `failed`; the catalog can be rebuilt, and a disk declared failed must stay so.
+  - mergerfs: `NC` for a draining disk, `RO` and last for a failed one, rather than leaving their branches out, so that no file only they hold leaves the view.
+  - A draining disk mounted read-only is `readonly`: its copies count again and its evacuation waits until it is mounted read-write.
+  - A failed disk has no line in a scan or a pass, rather than a line saying `missing`, and no alert of its own.
+  - `disk add` needs no `--yes`: it adds and removes nothing. It takes a read-only disk, with a warning, and refuses only the variants that change name rules among the read-only reasons.
+  - Its id comes from the last component of the mount point, or `--id`; `--tags` takes a comma-separated list.
+  - The daemon is told by `SIGHUP` to each process of this executable that runs `daemon` without `--until-idle`, found through `/proc`.
+  - Topology: a loop device counts as its own disk, and a disk of the pool that is not mounted cannot be compared, which is a warning, not a refusal.
+  - `chattr +i` is read through `open_tree(OPEN_TREE_CLONE)` of the parent folder, a detached, non-recursive clone, rather than a bind mount in a private namespace: the same view of the folder under the mount point, gone when its descriptor closes. It needs `CAP_SYS_ADMIN`, which the service has; without it, a warning.
+  - A marker that disagrees refuses the disk; `disk add --id <its id>` takes back a disk the marker names.
+
 ## `atoll names check` (specs.md §15.9, §25)
 
 Commit "Report the names to fix", on `develop`.

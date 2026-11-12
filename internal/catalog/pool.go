@@ -222,6 +222,22 @@ func SyncDisks(ctx context.Context, db *sql.DB, list []Disk) error {
 	})
 }
 
+// TrySyncDisks says whether SyncDisks would take the list, and writes nothing: atoll disk add asks before it
+// changes the configuration (specs.md §9).
+func TrySyncDisks(ctx context.Context, db *sql.DB, list []Disk) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // nothing it did may stay
+	for i := range list {
+		if err := syncOne(ctx, tx, &list[i]); err != nil {
+			return fmt.Errorf("disk %q: %w", list[i].ID, err)
+		}
+	}
+	return retireOthers(ctx, tx, list)
+}
+
 func syncOne(ctx context.Context, tx *sql.Tx, d *Disk) error {
 	rows, err := tx.QueryContext(ctx, "SELECT id, fs_uuid FROM disks WHERE id = ? OR fs_uuid = ?", d.ID, d.UUID)
 	if err != nil {

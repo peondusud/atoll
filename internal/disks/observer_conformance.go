@@ -40,6 +40,10 @@ type controlDisk struct {
 	// driver does: see conformance/scenarios/README.md.
 	Renameat2 *bool    `json:"renameat2"`
 	Refuses   []string `json:"refuses"`
+	// Device names the whole disk the folder stands for, its id when left out; Immutable says that the folder
+	// under its mount point has the immutable flag (specs.md §10).
+	Device    string `json:"device"`
+	Immutable bool   `json:"immutable"`
 }
 
 // NewMachine gives what a conformance build sees: the folders listed in the control file as
@@ -100,6 +104,25 @@ func (f folders) Mount(mount string) MountSeen {
 func (f folders) Device(fs names.Filesystem, entry *MountEntry) DeviceSeen {
 	d := f.find(entry.MountPoint)
 	return DeviceSeen{Device: DeviceOK, Identity: &Identity{ID: d.UUID, TimePrecisionNS: TimePrecision(fs)}}
+}
+
+// PhysicalDisks gives the disk the control file names: two folders on one device share it.
+func (f folders) PhysicalDisks(_ names.Filesystem, entry *MountEntry, _ string) ([]string, error) {
+	d := f.find(entry.MountPoint)
+	switch {
+	case d == nil:
+		return nil, fmt.Errorf("%s: no disk of the control file", entry.MountPoint)
+	case d.Device != "":
+		return []string{d.Device}, nil
+	default:
+		return []string{d.ID}, nil
+	}
+}
+
+// MountPointImmutable answers as the control file says.
+func (f folders) MountPointImmutable(mount string) (bool, error) {
+	d := f.find(mount)
+	return d != nil && d.Immutable, nil
 }
 
 // ReadPastCache has no device to read: a folder answers as the control file says.

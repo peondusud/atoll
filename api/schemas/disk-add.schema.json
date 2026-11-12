@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/disk-add.schema.json",
+  "title": "atoll disk add --json",
+  "description": "The disk added, or with --dry-run the disk that would be, after its checks (specs.md §10, §18, §25). A disk refused gives exit 1 and nothing on standard output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disk", "physical_disks", "dry_run", "warnings"],
+  "properties": {
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "uuid", "fs", "mount", "domain", "tags", "state", "reason"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+        "uuid": { "type": "string", "minLength": 1 },
+        "fs": { "enum": ["ext4", "ntfs", "xfs", "btrfs"] },
+        "mount": { "type": "string", "minLength": 1 },
+        "domain": { "type": ["string", "null"] },
+        "tags": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "state": {
+          "description": "What its mount check gives: a disk missing is refused.",
+          "enum": ["online", "readonly"]
+        },
+        "reason": {
+          "description": "Why it is readonly (specs.md §10), null when online.",
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "physical_disks": {
+      "description": "The whole disks the filesystem lives on, by their kernel names, in byte order; null when they could not be told.",
+      "type": ["array", "null"],
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "dry_run": { "type": "boolean" },
+    "warnings": {
+      "description": "In the order they arose; each is also said on standard error. readonly: the disk takes no copy until mounted read-write. topology-unchecked: whether it shares a physical disk with another is not known. not-immutable, immutable-unchecked: the folder under its mount point is not immutable, or that is not known. catalog-not-updated, marker-not-written, daemon-not-told: added to the configuration, and that step left undone, with exit 4.",
+      "type": "array",
+      "items": {
+        "enum": ["readonly", "topology-unchecked", "not-immutable", "immutable-unchecked", "catalog-not-updated", "marker-not-written", "daemon-not-told"]
+      }
+    }
+  }
+}

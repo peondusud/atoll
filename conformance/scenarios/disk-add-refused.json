@@ -1,0 +1,258 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a710, \u00a718, \u00a725",
+  "description": "Each is refused with exit 1, and nothing is written: a disk whose identifier another disk of the pool has; a disk on the physical disk of another (R-06); a path where nothing is mounted; a disk with no media/ folder, which Atoll never creates; an id the pool has; a disk whose marker names another pool, or another disk of this one.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t4",
+      "uuid": "1c3e5a7b-9d2f-4b6a-8c1e-3f5a7b9d2c4e",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ],
+      "device": "t1"
+    },
+    {
+      "id": "t5",
+      "uuid": "2d4f6b8c-1e3a-4c7b-9d2e-4a6b8c1d3e5f",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "Other",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t6",
+      "uuid": "3e5a7c9d-2f4b-4d8c-ae3f-5b7c9d2e4f6a",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"elsewhere\"\ndisk_id = \"t6\"\nfs_uuid = \"3e5a7c9d-2f4b-4d8c-ae3f-5b7c9d2e4f6a\"\n"
+        }
+      ]
+    },
+    {
+      "id": "t7",
+      "uuid": "4f6b8d1e-3a5c-4e9d-bf4a-6c8d1e3f5a7b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"p\"\ndisk_id = \"old\"\nfs_uuid = \"4f6b8d1e-3a5c-4e9d-bf4a-6c8d1e3f5a7b\"\n"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t3"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t4"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/nowhere"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t5"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t6"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t7"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t7",
+        "--id",
+        "t1"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "--json",
+        "${SANDBOX}/disks/t7",
+        "--id",
+        "old"
+      ],
+      "stdout_json": {
+        "disk": {
+          "id": "old",
+          "uuid": "4f6b8d1e-3a5c-4e9d-bf4a-6c8d1e3f5a7b",
+          "fs": "ext4",
+          "mount": "${SANDBOX}/disks/t7",
+          "domain": null,
+          "tags": [],
+          "state": "online",
+          "reason": null
+        },
+        "physical_disks": [
+          "t7"
+        ],
+        "dry_run": false,
+        "warnings": [
+          "not-immutable"
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t1",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "old",
+            "uuid": "4f6b8d1e-3a5c-4e9d-bf4a-6c8d1e3f5a7b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t7",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t5",
+      "tree": [
+        {
+          "path": "Other",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t7",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"p\"\ndisk_id = \"old\"\nfs_uuid = \"4f6b8d1e-3a5c-4e9d-bf4a-6c8d1e3f5a7b\"\n"
+        }
+      ]
+    }
+  ]
+}

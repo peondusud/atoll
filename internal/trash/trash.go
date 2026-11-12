@@ -267,7 +267,7 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 			handle.Close()
 			return nil, s.lose(ctx, id, err)
 		}
-		if state := solver.DiskState(verdict.State); state != sl.state {
+		if state := heldState(sl.config, solver.DiskState(verdict.State)); state != sl.state {
 			sl.state = state
 			if err := catalog.SetDiskState(ctx, s.db, id, string(verdict.State)); err != nil {
 				handle.Close()
@@ -307,6 +307,16 @@ func (s *Session) cleanTmp(ctx context.Context, id string, handle *ops.Disk) err
 		slog.Warn("parts stay in tmp/", "disk", id, "error", err)
 	}
 	return nil
+}
+
+// heldState is the state of a disk whose mount check gave state: a disk the configuration marks draining stays
+// draining while it can be read and written (specs.md §9, §18). One mounted read-only is readonly, and its
+// evacuation waits.
+func heldState(d *config.Disk, state solver.DiskState) solver.DiskState {
+	if d.State == config.DiskDraining && (state == solver.DiskOnline || state == solver.DiskStandby) {
+		return solver.DiskDraining
+	}
+	return state
 }
 
 // readable and writable take a draining disk in: its copies are the sources that evacuate it, and it stays in step

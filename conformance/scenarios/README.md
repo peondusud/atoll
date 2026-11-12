@@ -30,7 +30,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `format_version` | integer | `1`. The runner refuses any other value |
 | `spec`, `description` | string | for readers; both are required in this folder |
 | `clock` | string | the time of the conformance build, in RFC 3339 with an offset. Left out, it is `2026-01-01T00:00:00Z` |
-| `disks` | array of objects | `id`, `uuid`, `fs`, `capacity` in bytes, and `tree`, what the disk holds at the start. A disk is the folder `${SANDBOX}/disks/<id>`. Optional: `renameat2`, `false` for a disk that lacks `RENAME_NOREPLACE`, and `refuses`, the names it refuses as the target of a move or a link |
+| `disks` | array of objects | `id`, `uuid`, `fs`, `capacity` in bytes, and `tree`, what the disk holds at the start. A disk is the folder `${SANDBOX}/disks/<id>`. Optional: `renameat2`, `false` for a disk that lacks `RENAME_NOREPLACE`, and `refuses`, the names it refuses as the target of a move or a link; for `atoll disk add`, `device`, the name of the whole disk it stands for, its `id` when left out, so that two disks can share one, and `immutable`, `true` when the folder under its mount point has the immutable flag |
 | `config` | string | the text of the configuration, written to `${SANDBOX}/atoll.toml`, which each `atoll` step gets through `--config`, before its `args`. Left out, no step gets it |
 | `steps` | array of objects | what happens, in order: below |
 

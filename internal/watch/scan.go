@@ -169,7 +169,8 @@ func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now i
 				row.TimePrecisionNS = verdicts[i].TimePrecisionNS
 			}
 		}
-		if d.State == config.DiskDraining && row.State != string(disks.Missing) {
+		// Draining while it can be read and written: one mounted read-only is readonly, and its evacuation waits.
+		if d.State == config.DiskDraining && row.State == string(disks.Online) {
 			row.State = config.DiskDraining
 		}
 		rows = append(rows, row)
