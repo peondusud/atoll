@@ -111,7 +111,7 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	code := exitOK
 	if !parsed.dryRun {
 		if err := fsx.ReplaceFile(configPath, text, a.text); err != nil {
-			return failure(stderr, fmt.Errorf("disk add: the configuration is unchanged: %w", err))
+			return failure(stderr, fmt.Errorf(T("disk add: the configuration is unchanged: %w"), err))
 		}
 		code = a.finish(ctx)
 	}
@@ -140,10 +140,10 @@ func parseDiskAdd(args []string) (diskAddArgs, error) {
 		}
 		if !flags || !strings.HasPrefix(a, "--") {
 			if out.mount != "" {
-				return out, fmt.Errorf("one mount point, not %q too", a)
+				return out, fmt.Errorf(T("one mount point, not %q too"), a)
 			}
 			if !filepath.IsAbs(a) {
-				return out, fmt.Errorf("the mount point %q is not an absolute path", a)
+				return out, fmt.Errorf(T("the mount point %q is not an absolute path"), a)
 			}
 			out.mount = filepath.Clean(a)
 			continue
@@ -162,41 +162,41 @@ func parseDiskAdd(args []string) (diskAddArgs, error) {
 		}
 		name, value, inline := strings.Cut(a, "=")
 		if name != "--id" && name != "--domain" && name != "--tags" {
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		}
 		if !inline {
 			if i+1 == len(args) {
-				return out, fmt.Errorf("%s needs a value", name)
+				return out, fmt.Errorf(T("%s needs a value"), name)
 			}
 			i++
 			value = args[i]
 		}
 		if given[name] {
-			return out, fmt.Errorf("%s comes twice", name)
+			return out, fmt.Errorf(T("%s comes twice"), name)
 		}
 		given[name] = true
 		switch name {
 		case "--id":
 			if !layout.IsIdentifier(value) {
-				return out, fmt.Errorf("--id: %q is no identifier", value)
+				return out, fmt.Errorf(T("--id: %q is no identifier"), value)
 			}
 			out.id = value
 		case "--domain":
 			if !layout.IsIdentifier(value) {
-				return out, fmt.Errorf("--domain: %q is no identifier", value)
+				return out, fmt.Errorf(T("--domain: %q is no identifier"), value)
 			}
 			out.domain = value
 		default:
 			for _, tag := range strings.Split(value, ",") {
 				if !layout.IsIdentifier(tag) || slices.Contains(out.tags, tag) {
-					return out, fmt.Errorf("--tags: %q is no identifier, or comes twice", tag)
+					return out, fmt.Errorf(T("--tags: %q is no identifier, or comes twice"), tag)
 				}
 				out.tags = append(out.tags, tag)
 			}
 		}
 	}
 	if out.mount == "" {
-		return out, errors.New("which mount point?")
+		return out, errors.New(T("which mount point?"))
 	}
 	return out, nil
 }
@@ -207,20 +207,20 @@ func checkDiskAdd(ctx context.Context, c *config.Config, m disks.Machine, text [
 	id := p.id
 	if id == "" {
 		if id = filepath.Base(mount); !layout.IsIdentifier(id) {
-			return nil, fmt.Errorf("the name of the mount point, %q, is no identifier: give one with --id", id)
+			return nil, fmt.Errorf(T("the name of the mount point, %q, is no identifier: give one with --id"), id)
 		}
 	}
 	for i := range c.Disks {
 		switch {
 		case c.Disks[i].ID == id:
-			return nil, fmt.Errorf("the pool has a disk %q already: give another id with --id", id)
+			return nil, fmt.Errorf(T("the pool has a disk %q already: give another id with --id"), id)
 		case c.Disks[i].Mount == mount:
-			return nil, fmt.Errorf("%s is the mount point of disk %q already", mount, c.Disks[i].ID)
+			return nil, fmt.Errorf(T("%s is the mount point of disk %q already"), mount, c.Disks[i].ID)
 		}
 	}
 	seen := m.Mount(mount)
 	if seen.Path != disks.PathOK || seen.Entry == nil || seen.Entry.MountPoint != mount {
-		return nil, fmt.Errorf("nothing is mounted at %s", mount)
+		return nil, fmt.Errorf(T("nothing is mounted at %s"), mount)
 	}
 	fs, err := filesystemOf(seen.Entry)
 	if err != nil {
@@ -228,12 +228,12 @@ func checkDiskAdd(ctx context.Context, c *config.Config, m disks.Machine, text [
 	}
 	dev := m.Device(fs, seen.Entry)
 	if dev.Device != disks.DeviceOK || dev.Identity == nil {
-		return nil, fmt.Errorf("the device mounted at %s cannot be read as %s: %s", mount, fs, dev.Note)
+		return nil, fmt.Errorf(T("the device mounted at %s cannot be read as %s: %s"), mount, fs, dev.Note)
 	}
 	uuid := dev.Identity.ID
 	for i := range c.Disks {
 		if c.Disks[i].UUID == uuid {
-			return nil, fmt.Errorf("disk %q has the same identifier, %s: two disks with one are refused until one is regenerated (tune2fs -U, xfs_admin -U, btrfstune -u, ntfslabel --new-serial)", c.Disks[i].ID, uuid)
+			return nil, fmt.Errorf(T("disk %q has the same identifier, %s: two disks with one are refused until one is regenerated (tune2fs -U, xfs_admin -U, btrfstune -u, ntfslabel --new-serial)"), c.Disks[i].ID, uuid)
 		}
 	}
 	effective := c.Effective()
@@ -255,9 +255,9 @@ func checkDiskAdd(ctx context.Context, c *config.Config, m disks.Machine, text [
 	case verdict.State == disks.Missing:
 		return nil, fmt.Errorf("%s: %s (%s)", mount, verdict.Message, verdict.Reason)
 	case verdict.State == disks.Readonly && slices.Contains(nameRuleReasons, verdict.Reason):
-		return nil, fmt.Errorf("%s: its names do not follow the rules Atoll relies on: %s (%s)", mount, verdict.Message, verdict.Reason)
+		return nil, fmt.Errorf(T("%s: its names do not follow the rules Atoll relies on: %s (%s)"), mount, verdict.Message, verdict.Reason)
 	case verdict.State == disks.Readonly:
-		a.warn(warnReadonly, fmt.Sprintf("%s is read-only, %s (%s): Atoll makes no copy on it until it is mounted read-write", mount, verdict.Message, verdict.Reason))
+		a.warn(warnReadonly, fmt.Sprintf(T("%s is read-only, %s (%s): Atoll makes no copy on it until it is mounted read-write"), mount, verdict.Message, verdict.Reason))
 	}
 	if err := a.checkTopology(c, seen.Entry); err != nil {
 		return nil, err
@@ -273,7 +273,7 @@ func checkDiskAdd(ctx context.Context, c *config.Config, m disks.Machine, text [
 		return nil, err
 	}
 	if a.config, err = config.Parse(newText); err != nil {
-		return nil, fmt.Errorf("the configuration would not load: %w", err)
+		return nil, fmt.Errorf(T("the configuration would not load: %w"), err)
 	}
 	a.text = newText
 	return a, nil
@@ -292,7 +292,7 @@ func filesystemOf(entry *disks.MountEntry) (names.Filesystem, error) {
 	case "ntfs3", "ntfs", "fuseblk":
 		return names.NTFS, nil
 	default:
-		return "", fmt.Errorf("a filesystem of type %s: Atoll takes ext4, XFS, btrfs and NTFS", entry.FSType)
+		return "", fmt.Errorf(T("a filesystem of type %s: Atoll takes ext4, XFS, btrfs and NTFS"), entry.FSType)
 	}
 }
 
@@ -307,7 +307,7 @@ func (a *diskAdding) checkTopology(c *config.Config, entry *disks.MountEntry) er
 	}
 	mine, err := t.PhysicalDisks(a.disk.FS, entry, a.disk.UUID)
 	if err != nil {
-		a.warn(warnTopologyUnchecked, fmt.Sprintf("which physical disk %s lives on: %v", a.disk.Mount, err))
+		a.warn(warnTopologyUnchecked, fmt.Sprintf(T("which physical disk %s lives on: %v"), a.disk.Mount, err))
 	} else {
 		a.out.PhysicalDisks = mine
 		unchecked := false
@@ -325,7 +325,7 @@ func (a *diskAdding) checkTopology(c *config.Config, entry *disks.MountEntry) er
 			}
 			for _, name := range mine {
 				if slices.Contains(theirs, name) {
-					return fmt.Errorf("%s lives on %s, as disk %q does: two filesystems of a pool on one physical disk are refused (R-06)", a.disk.Mount, name, other.ID)
+					return fmt.Errorf(T("%s lives on %s, as disk %q does: two filesystems of a pool on one physical disk are refused (R-06)"), a.disk.Mount, name, other.ID)
 				}
 			}
 		}
@@ -336,9 +336,9 @@ func (a *diskAdding) checkTopology(c *config.Config, entry *disks.MountEntry) er
 	immutable, err := t.MountPointImmutable(a.disk.Mount)
 	switch {
 	case err != nil:
-		a.warn(warnImmutableUnchecked, fmt.Sprintf("whether the folder under %s is immutable: %v", a.disk.Mount, err))
+		a.warn(warnImmutableUnchecked, fmt.Sprintf(T("whether the folder under %s is immutable: %v"), a.disk.Mount, err))
 	case !immutable:
-		a.warn(warnNotImmutable, fmt.Sprintf("the folder under %s is not immutable: unmount the disk and run chattr +i %s, so that nothing writes there while it is away", a.disk.Mount, a.disk.Mount))
+		a.warn(warnNotImmutable, fmt.Sprintf(T("the folder under %s is not immutable: unmount the disk and run chattr +i %s, so that nothing writes there while it is away"), a.disk.Mount, a.disk.Mount))
 	}
 	return nil
 }
@@ -354,15 +354,15 @@ func (a *diskAdding) checkMarker(c *config.Config) error {
 	default:
 		mark, err := layout.ParseMarker(data)
 		if err != nil {
-			return fmt.Errorf("its marker %s: %w", layout.MarkerName, err)
+			return fmt.Errorf(T("its marker %s: %w"), layout.MarkerName, err)
 		}
 		switch {
 		case mark.PoolID != c.PoolID:
-			return fmt.Errorf("its marker says it is a disk of the pool %q", mark.PoolID)
+			return fmt.Errorf(T("its marker says it is a disk of the pool %q"), mark.PoolID)
 		case mark.DiskID != a.disk.ID:
-			return fmt.Errorf("its marker says it was disk %q of this pool: add it back with --id %s", mark.DiskID, mark.DiskID)
+			return fmt.Errorf(T("its marker says it was disk %q of this pool: add it back with --id %s"), mark.DiskID, mark.DiskID)
 		case mark.FSUUID != a.disk.UUID:
-			return fmt.Errorf("its marker names the filesystem %s, and this one is %s: a marker copied from another disk", mark.FSUUID, a.disk.UUID)
+			return fmt.Errorf(T("its marker names the filesystem %s, and this one is %s: a marker copied from another disk"), mark.FSUUID, a.disk.UUID)
 		}
 	}
 	if on, _ := c.Effective()["layout.marker"].(bool); on && a.out.Disk.State == string(disks.Online) {
@@ -404,7 +404,7 @@ func (a *diskAdding) finish(ctx context.Context) int {
 	code := recordAndTell(ctx, a.config, a.machine, a.warn, a.stderr, "atoll scan --disk "+a.disk.ID+" records what the disk holds")
 	if a.marker != "" {
 		if err := a.writeMarker(); err != nil {
-			a.warn(warnMarkerNotWritten, fmt.Sprintf("its marker was not written: %v", err))
+			a.warn(warnMarkerNotWritten, fmt.Sprintf(T("its marker was not written: %v"), err))
 			code = exitPartial
 		}
 	}
@@ -417,13 +417,13 @@ func (a *diskAdding) finish(ctx context.Context) int {
 func recordAndTell(ctx context.Context, c *config.Config, m disks.Machine, warn func(kind, message string), stderr io.Writer, alone string) int {
 	code := exitOK
 	if err := syncCatalog(ctx, c, m); err != nil {
-		warn(warnCatalogNotUpdated, fmt.Sprintf("the catalog was not updated, %v: the next scan or pass records the disks", err))
+		warn(warnCatalogNotUpdated, fmt.Sprintf(T("the catalog was not updated, %v: the next scan or pass records the disks"), err))
 		code = exitPartial
 	}
 	told, err := tellDaemon()
 	switch {
 	case err != nil:
-		warn(warnDaemonNotTold, fmt.Sprintf("the daemon was not told, %v: systemctl reload atoll", err))
+		warn(warnDaemonNotTold, fmt.Sprintf(T("the daemon was not told, %v: systemctl reload atoll"), err))
 		code = exitPartial
 	case told == 0:
 		report(stderr, "no daemon runs: "+alone)
@@ -460,15 +460,15 @@ func (a *diskAdding) writeMarker() error {
 func diskAddText(out *diskAddOutput, configPath string) string {
 	var b bytes.Buffer
 	d := &out.Disk
-	fmt.Fprintf(&b, "disk %s: %s %s, mounted at %s, %s", d.ID, d.FS, d.UUID, d.Mount, d.State)
+	fmt.Fprintf(&b, T("disk %s: %s %s, mounted at %s, %s"), d.ID, d.FS, d.UUID, d.Mount, d.State)
 	if d.Reason != nil {
 		fmt.Fprintf(&b, " (%s)", *d.Reason)
 	}
 	b.WriteString("\n")
 	if out.DryRun {
-		fmt.Fprintf(&b, "would be added to %s\n", configPath)
+		fmt.Fprintf(&b, T("would be added to %s\n"), configPath)
 	} else {
-		fmt.Fprintf(&b, "added to %s\n", configPath)
+		fmt.Fprintf(&b, T("added to %s\n"), configPath)
 	}
 	return b.String()
 }

@@ -141,23 +141,23 @@ func parseScrub(args []string) (scrubArgs, error) {
 		}
 		name, v, inline := strings.Cut(a, "=")
 		if name != "--disk" && name != "--budget" && name != "--path" {
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		}
 		if !inline {
 			if i+1 == len(args) {
-				return out, fmt.Errorf("%s needs a value", name)
+				return out, fmt.Errorf(T("%s needs a value"), name)
 			}
 			i++
 			v = args[i]
 		}
 		if given[name] {
-			return out, fmt.Errorf("%s comes twice", name)
+			return out, fmt.Errorf(T("%s comes twice"), name)
 		}
 		given[name] = true
 		switch name {
 		case "--disk":
 			if !layout.IsIdentifier(v) {
-				return out, fmt.Errorf("--disk: %q is no disk id", v)
+				return out, fmt.Errorf(T("--disk: %q is no disk id"), v)
 			}
 			out.disk = v
 			continue
@@ -171,12 +171,12 @@ func parseScrub(args []string) (scrubArgs, error) {
 		}
 		budget, err := value.ParseDuration(v)
 		if err != nil || budget <= 0 {
-			return out, fmt.Errorf("--budget: %q is no positive duration", v)
+			return out, fmt.Errorf(T("--budget: %q is no positive duration"), v)
 		}
 		out.budget = budget
 	}
 	if out.dryRun && out.yes {
-		return out, errors.New("--dry-run and --yes do not go together")
+		return out, errors.New(T("--dry-run and --yes do not go together"))
 	}
 	return out, nil
 }
@@ -185,12 +185,12 @@ func scrubText(out *scrubOutput, yes bool) string {
 	var b bytes.Buffer
 	for _, d := range out.Disks {
 		if !d.Scrubbed {
-			fmt.Fprintf(&b, "disk %s: not scrubbed\n", d.ID)
+			fmt.Fprintf(&b, T("disk %s: not scrubbed\n"), d.ID)
 			continue
 		}
-		fmt.Fprintf(&b, "disk %s: %d copies read, %d bytes", d.ID, d.CopiesRead, d.BytesRead)
+		fmt.Fprintf(&b, T("disk %s: %d copies read, %d bytes"), d.ID, d.CopiesRead, d.BytesRead)
 		if d.Left {
-			b.WriteString(", the budget ran out: the next scrub goes on from there")
+			b.WriteString(T(", the budget ran out: the next scrub goes on from there"))
 		}
 		b.WriteString("\n")
 		for _, list := range []struct {
@@ -203,9 +203,9 @@ func scrubText(out *scrubOutput, yes bool) string {
 		}
 		for _, p := range d.Quarantined {
 			if yes {
-				fmt.Fprintf(&b, "  moved to the trash: %s\n", pathText(p))
+				fmt.Fprintf(&b, T("  moved to the trash: %s\n"), pathText(p))
 			} else {
-				fmt.Fprintf(&b, "  to move to the trash with --yes: %s\n", pathText(p))
+				fmt.Fprintf(&b, T("  to move to the trash with --yes: %s\n"), pathText(p))
 			}
 		}
 	}

@@ -58,7 +58,6 @@ Every item here is a **decision**:
 
 - Configuration in the shell (§24.3, §10):
   - in `atoll rules check`, the rules that no file reaches or that an earlier one hides (§11.3);
-  - `--help`, the French translation of the CLI, and human output that writes durations as the configuration does: `atoll rules explain` prints `settle_ns = 600000000000`;
   - the fallbacks of §12.2 for the modes, when jobs act on them: `rules.Policy` holds what the configuration asks for, and `atoll scan` already gives the plan only what has an effect;
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
 - After `catalog rebuild`, the disks' trash entries are not in the new catalog: list them again from `trash/<date>/<op id>/`, with a reason to choose, and their expiry from the date.

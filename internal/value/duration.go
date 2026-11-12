@@ -3,6 +3,7 @@ package value
 import (
 	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 )
 
@@ -40,4 +41,22 @@ func ParseDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("duration %q: too long", s)
 	}
 	return time.Duration(n.Int64()), nil
+}
+
+// FormatDuration writes a duration as the configuration writes it (specs.md §29.5): in the largest of d, h, m and s
+// that divides it, "0s" for none, and never in weeks, as people write "7d" and "14d". ParseDuration reads it back. A duration of no whole seconds is written in
+// nanoseconds, with "ns", which the configuration does not take: no duration it gives is one.
+func FormatDuration(d time.Duration) string {
+	if d == 0 {
+		return "0s"
+	}
+	for _, u := range []struct {
+		unit time.Duration
+		name string
+	}{{24 * time.Hour, "d"}, {time.Hour, "h"}, {time.Minute, "m"}, {time.Second, "s"}} {
+		if d%u.unit == 0 {
+			return strconv.FormatInt(int64(d/u.unit), 10) + u.name
+		}
+	}
+	return strconv.FormatInt(int64(d), 10) + "ns"
 }

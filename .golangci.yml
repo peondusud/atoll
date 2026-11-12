@@ -125,6 +125,9 @@ linters:
         path-except: ^internal/(config|glob|names|rules|solver|value)/
       - linters: [gochecknoglobals]
         path: _test\.go$
+      # The CLI's French translation, and the test that reads it (specs.md §25).
+      - linters: [misspell]
+        path: ^cmd/atoll/i18n(_fr|_test)\.go$
 
 formatters:
   enable:

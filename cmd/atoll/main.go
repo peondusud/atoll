@@ -29,6 +29,7 @@ const defaultConfig = "/etc/atoll/atoll.toml"
 
 func main() {
 	limitMemory()
+	french = wantsFrench(os.Getenv)
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
@@ -51,13 +52,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		case isConfig:
 			configPath, args = value, args[1:]
 		case args[0] == "--config" && len(args) == 1:
-			return usage(stderr, "--config needs a path")
+			return usage(stderr, T("--config needs a path"))
 		case args[0] == "--config":
 			configPath, args = args[1], args[2:]
 		}
 	}
 	if len(args) == 0 {
-		return usage(stderr, "no command")
+		return usage(stderr, T("no command: atoll --help lists them"))
+	}
+	switch {
+	case args[0] == "--help" || args[0] == "-h" || (args[0] == "help" && len(args) == 1):
+		return writeHelp("", stdout, stderr)
+	case args[0] == "help" && len(args) == 2:
+		return writeHelp(args[1], stdout, stderr)
+	case args[0] == "help":
+		return usage(stderr, T("help takes one command at most"))
+	case helpAsked(args[1:]):
+		return writeHelp(args[0], stdout, stderr)
 	}
 	switch args[0] {
 	case "rules":
@@ -91,14 +102,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "catalog":
 		return runCatalog(configPath, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
+		return usage(stderr, fmt.Sprintf(T("unknown command %q"), args[0]))
 	}
 }
 
 // setFlag records a flag that takes no value. Given twice, it is a usage error (specs.md §25).
 func setFlag(flag *bool, name string) error {
 	if *flag {
-		return fmt.Errorf("%s comes twice", name)
+		return fmt.Errorf(T("%s comes twice"), name)
 	}
 	*flag = true
 	return nil
@@ -108,7 +119,7 @@ func setFlag(flag *bool, name string) error {
 // so once on standard error (specs.md §25).
 func lockCatalog(ctx context.Context, c *config.Config, stderr io.Writer) (func(), error) {
 	return fsx.WaitLockFile(ctx, catalogPath(c), func() {
-		report(stderr, "waiting for the catalog: another command, or a pass of the daemon, holds it")
+		report(stderr, T("waiting for the catalog: another command, or a pass of the daemon, holds it"))
 	})
 }
 

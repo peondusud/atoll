@@ -12,7 +12,7 @@ import (
 
 func runDisk(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "disk: want add, list, show, remove, fail or replace")
+		return usage(stderr, T("disk: want add, list, show, remove, fail or replace"))
 	}
 	switch args[0] {
 	case "add":
@@ -28,7 +28,7 @@ func runDisk(configPath string, args []string, stdout, stderr io.Writer) int {
 	case "list":
 		return diskList(configPath, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, fmt.Sprintf("disk: unknown command %q", args[0]))
+		return usage(stderr, fmt.Sprintf(T("disk: unknown command %q"), args[0]))
 	}
 }
 
@@ -53,7 +53,7 @@ func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
-			return usage(stderr, fmt.Sprintf("disk list: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("disk list: unknown argument %q"), a))
 		}
 		if err := setFlag(&asJSON, a); err != nil {
 			return usage(stderr, "disk list: "+err.Error())

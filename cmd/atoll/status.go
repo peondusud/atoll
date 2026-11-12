@@ -43,15 +43,15 @@ func parseStatus(args []string) (statusArgs, error) {
 		switch {
 		case isPath:
 		case a != "--path":
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		case i+1 == len(args):
-			return out, errors.New("--path needs a path")
+			return out, errors.New(T("--path needs a path"))
 		default:
 			i++
 			value = args[i]
 		}
 		if given {
-			return out, errors.New("--path comes twice")
+			return out, errors.New(T("--path comes twice"))
 		}
 		given = true
 		// Only its form counts here: a name a filesystem refuses may still be on a disk.
@@ -159,7 +159,7 @@ func writeStatus(c *config.Config, parsed statusArgs, stdout io.Writer) (err err
 		return err
 	}
 	if err := buffered.Flush(); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
 }
@@ -275,7 +275,7 @@ func (j *jsonList) item(v any) error {
 	j.listed = true
 	j.buffer.Reset()
 	if err := j.enc.Encode(v); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return writeText(j.w, start+strings.TrimSuffix(j.buffer.String(), "\n"))
 }
@@ -334,14 +334,14 @@ func (t textStatus) end(s *statusSummary) error {
 	var text strings.Builder
 	for i := range s.Disks {
 		d := &s.Disks[i]
-		fmt.Fprintf(&text, "%s: %s (%s, %s), %d copies, %d bytes", d.ID, d.State, d.Mount, d.FS, d.Copies, d.Bytes)
+		fmt.Fprintf(&text, T("%s: %s (%s, %s), %d copies, %d bytes"), d.ID, d.State, d.Mount, d.FS, d.Copies, d.Bytes)
 		if d.LastSeen != nil {
-			fmt.Fprintf(&text, ", %d of %d bytes free, seen %s", *d.Free, *d.Capacity, *d.LastSeen)
+			fmt.Fprintf(&text, T(", %d of %d bytes free, seen %s"), *d.Free, *d.Capacity, *d.LastSeen)
 		}
 		text.WriteString("\n")
 	}
-	fmt.Fprintf(&text, "files: %d, at their level: %d%s\n", s.FilesTotal, s.FilesAtLevel, share(int64(s.FilesAtLevel), int64(s.FilesTotal)))
-	fmt.Fprintf(&text, "bytes: %d, at their level: %d%s\n", s.BytesTotal, s.BytesAtLevel, share(s.BytesAtLevel, s.BytesTotal))
+	fmt.Fprintf(&text, T("files: %d, at their level: %d%s\n"), s.FilesTotal, s.FilesAtLevel, share(int64(s.FilesAtLevel), int64(s.FilesTotal)))
+	fmt.Fprintf(&text, T("bytes: %d, at their level: %d%s\n"), s.BytesTotal, s.BytesAtLevel, share(s.BytesAtLevel, s.BytesTotal))
 	for _, state := range []string{"unavailable", "corrupt", "conflict", "name-incompatible", "name-collision", "degraded", "pending", "unprotected", "ok"} {
 		if n := s.ByState[state]; n > 0 {
 			fmt.Fprintf(&text, "  %s: %d\n", state, n)
@@ -362,18 +362,18 @@ func printStatusFile(text *strings.Builder, f *statusFile) {
 	if name == "" {
 		name = "(base64) " + f.PathB64
 	}
-	fmt.Fprintf(text, "%s: %s, %d bytes, modified %s, wants %d copies\n", name, f.State, f.Size, f.Mtime, f.Replicas+1)
+	fmt.Fprintf(text, T("%s: %s, %d bytes, modified %s, wants %d copies\n"), name, f.State, f.Size, f.Mtime, f.Replicas+1)
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		fmt.Fprintf(text, "  %s: %s", c.Disk, c.State)
 		if c.Mtime != nil {
-			fmt.Fprintf(text, ", modified %s", *c.Mtime)
+			fmt.Fprintf(text, T(", modified %s"), *c.Mtime)
 		}
 		if c.Created != nil {
-			fmt.Fprintf(text, ", created %s", *c.Created)
+			fmt.Fprintf(text, T(", created %s"), *c.Created)
 		}
 		if f.Original != nil && *f.Original == c.Disk {
-			text.WriteString(", original")
+			text.WriteString(T(", original"))
 		}
 		text.WriteString("\n")
 	}

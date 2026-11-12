@@ -34,7 +34,7 @@ func runMergerfsConfig(configPath string, args []string, stdout, stderr io.Write
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
-			return usage(stderr, fmt.Sprintf("mergerfs-config: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("mergerfs-config: unknown argument %q"), a))
 		}
 		if err := setFlag(&asJSON, a); err != nil {
 			return usage(stderr, "mergerfs-config: "+err.Error())
@@ -60,10 +60,10 @@ func runMergerfsConfig(configPath string, args []string, stdout, stderr io.Write
 	for _, b := range out.Branches {
 		switch {
 		case b.MinFree == nil:
-			report(stderr, fmt.Sprintf("disk %q: no minfreespace of its own, so mergerfs uses its global one: no scan has recorded the disk's capacity, and placement.min_free holds no size", b.Disk))
+			report(stderr, fmt.Sprintf(T("disk %q: no minfreespace of its own, so mergerfs uses its global one: no scan has recorded the disk's capacity, and placement.min_free holds no size"), b.Disk))
 			code = exitPartial
 		case out.Largest != nil && *b.MinFree <= *out.Largest:
-			report(stderr, fmt.Sprintf("warning: disk %q: its minfreespace of %d bytes is not larger than the largest file, of %d bytes", b.Disk, *b.MinFree, *out.Largest))
+			report(stderr, fmt.Sprintf(T("warning: disk %q: its minfreespace of %d bytes is not larger than the largest file, of %d bytes"), b.Disk, *b.MinFree, *out.Largest))
 		}
 	}
 	return code

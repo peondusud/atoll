@@ -56,7 +56,7 @@ func parseReplicate(args []string) (replicateArgs, error) {
 			err = setFlag(&out.force, a)
 		default:
 			if strings.HasPrefix(a, "-") {
-				return out, fmt.Errorf("unknown argument %q", a)
+				return out, fmt.Errorf(T("unknown argument %q"), a)
 			}
 			paths = append(paths, a)
 		}
@@ -65,14 +65,14 @@ func parseReplicate(args []string) (replicateArgs, error) {
 		}
 	}
 	if len(paths) != 1 {
-		return out, fmt.Errorf("want one path, got %d", len(paths))
+		return out, fmt.Errorf(T("want one path, got %d"), len(paths))
 	}
 	out.path = paths[0]
 	if _, err := names.CheckPath(out.path, names.Ext4); err != nil {
 		return out, fmt.Errorf("%w", err)
 	}
 	if out.now && out.force {
-		return out, errors.New("--now and --force go alone")
+		return out, errors.New(T("--now and --force go alone"))
 	}
 	return out, nil
 }
@@ -92,19 +92,19 @@ func runReplicate(configPath string, args []string, stdout, stderr io.Writer) in
 	opts := jobs.ReplicateOptions{Path: parsed.path, Now: parsed.now, Force: parsed.force, DryRun: parsed.dryRun}
 	summary, err := replicate(c, opts, func(item *jobs.ReplicateItem) error {
 		if !parsed.asJSON {
-			return writeText(buffered, fmt.Sprintf("%s (%s, from %s): %s\n", shownPath(item.Path), item.Disk, item.Source, item.Outcome))
+			return writeText(buffered, fmt.Sprintf(T("%s (%s, from %s): %s\n"), shownPath(item.Path), item.Disk, item.Source, item.Outcome))
 		}
 		path, b64 := encodePath(item.Path)
 		return list.item(replicateCopy{Path: path, PathB64: b64, Disk: item.Disk, Source: item.Source, Size: item.Size, Outcome: item.Outcome})
 	}, stderr)
 	if err == nil && summary.Disabled {
-		err = writeText(stderr, "replicate: replication.enabled is false: nothing was queued or copied\n")
+		err = writeText(stderr, T("replicate: replication.enabled is false: nothing was queued or copied\n"))
 	}
 	if err == nil {
 		if parsed.asJSON {
 			err = list.end(replicateEnd{Applied: summary.Applied, Bytes: summary.Bytes})
 		} else {
-			err = writeText(buffered, fmt.Sprintf("%d bytes\n", summary.Bytes))
+			err = writeText(buffered, fmt.Sprintf(T("%d bytes\n"), summary.Bytes))
 		}
 	}
 	if err == nil {

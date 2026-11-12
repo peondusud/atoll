@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `--help`, and the CLI in French (specs.md §25)
+
+Commit "Give the CLI its help and its French", on `develop`.
+
+- `atoll --help`, `-h` and `help` list the commands; `atoll help <command>`, and `--help` or `-h` among a command's arguments before a `--`, give its synopsis and what it does, exit 0.
+- What the CLI writes for people is in French when the first of `LC_ALL`, `LC_MESSAGES` and `LANG` that is set starts with `fr`: 175 messages and the help, through `T()`, whose key is the English text. A test reads every `T("…")` of the sources and requires its French, with the same verbs in the same order and the same line breaks, and no French nothing asks for. The JSON outputs, the words they share with the human output, names, paths, keys, the daemon's log and the details of an error from below the CLI stay in English.
+- `atoll rules explain` writes a time as the configuration does, `settle = 10m`, never in nanoseconds (`value.FormatDuration`, read back by `ParseDuration`).
+- `guard confirm` and `reject` say their answer in a sentence of their own, rather than with the English verb inside it.
+- **Decided without the maintainer, to confirm:**
+  - The outcomes, reasons, states and decisions the JSON shares stay in English in the human output too, as a search reads them; so do the synopses' placeholders, such as `<path>`.
+  - A duration is written in days rather than weeks: `7d`, not `1w`.
+  - French typography puts a space before a colon, a plain one, as a terminal shows it.
+
 ## The local API (specs.md §25.1, §26, §29.5)
 
 Commit "Answer questions over a local API", on `develop`, as the maintainer chose on 2026-11-12.

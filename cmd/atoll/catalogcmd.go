@@ -49,25 +49,25 @@ type catalogVerifyOutput struct {
 // runCatalog runs atoll catalog backup, verify and rebuild (specs.md §9, §25).
 func runCatalog(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "catalog: want backup, verify or rebuild")
+		return usage(stderr, T("catalog: want backup, verify or rebuild"))
 	}
 	sub := args[0]
 	allowed := map[string][]string{"backup": {"--json"}, "verify": {"--json"}, "rebuild": {"--json", "--dry-run", "--yes"}}
 	if allowed[sub] == nil {
-		return usage(stderr, fmt.Sprintf("catalog: unknown command %q", sub))
+		return usage(stderr, fmt.Sprintf(T("catalog: unknown command %q"), sub))
 	}
 	flags := map[string]bool{}
 	for _, a := range args[1:] {
 		if !slices.Contains(allowed[sub], a) {
-			return usage(stderr, fmt.Sprintf("catalog %s: unknown argument %q", sub, a))
+			return usage(stderr, fmt.Sprintf(T("catalog %s: unknown argument %q"), sub, a))
 		}
 		if flags[a] {
-			return usage(stderr, fmt.Sprintf("catalog %s: %s comes twice", sub, a))
+			return usage(stderr, fmt.Sprintf(T("catalog %s: %s comes twice"), sub, a))
 		}
 		flags[a] = true
 	}
 	if flags["--dry-run"] && flags["--yes"] {
-		return usage(stderr, "catalog rebuild: --dry-run and --yes do not go together")
+		return usage(stderr, T("catalog rebuild: --dry-run and --yes do not go together"))
 	}
 	asJSON := flags["--json"]
 	c, err := load(configPath)
@@ -98,15 +98,15 @@ func runCatalog(configPath string, args []string, stdout, stderr io.Writer) int 
 		err = writeJSON(stdout, out)
 	} else {
 		var b bytes.Buffer
-		fmt.Fprintf(&b, "backup %s\n", out.Backup)
+		fmt.Fprintf(&b, T("backup %s\n"), out.Backup)
 		for _, name := range out.Removed {
-			fmt.Fprintf(&b, "removed %s\n", name)
+			fmt.Fprintf(&b, T("removed %s\n"), name)
 		}
 		for _, d := range out.Disks {
 			if d.Written {
-				fmt.Fprintf(&b, "disk %s: copied\n", d.ID)
+				fmt.Fprintf(&b, T("disk %s: copied\n"), d.ID)
 			} else {
-				fmt.Fprintf(&b, "disk %s: not copied\n", d.ID)
+				fmt.Fprintf(&b, T("disk %s: not copied\n"), d.ID)
 			}
 		}
 		err = writeText(stdout, b.String())
@@ -133,7 +133,7 @@ func catalogBackup(ctx context.Context, c *config.Config, m disks.Machine, stder
 	code = exitOK
 	for _, d := range done.Disks {
 		if d.Err != nil {
-			report(stderr, fmt.Sprintf("warning: disk %s: the backup was not copied: %v", d.ID, d.Err))
+			report(stderr, fmt.Sprintf(T("warning: disk %s: the backup was not copied: %v"), d.ID, d.Err))
 			code = exitPartial
 		}
 		out.Disks = append(out.Disks, catalogBackupDisk{ID: d.ID, Written: d.Err == nil})
@@ -157,10 +157,10 @@ func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, s
 	} else {
 		var b bytes.Buffer
 		for _, p := range out.Problems {
-			fmt.Fprintf(&b, "problem: %s\n", p)
+			fmt.Fprintf(&b, T("problem: %s\n"), p)
 		}
 		if len(out.Problems) == 0 {
-			fmt.Fprintf(&b, "the catalog %s is in order\n", path.Base(catalogPath(c)))
+			fmt.Fprintf(&b, T("the catalog %s is in order\n"), path.Base(catalogPath(c)))
 		}
 		err = printScan(&b, scanOutput{Disks: out.Disks, Conflicts: []pathItem{}})
 		if err == nil {
@@ -239,7 +239,7 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 		}
 		defer release()
 		if err := catalog.Checkpoint(ctx, file); err != nil {
-			report(stderr, fmt.Sprintf("warning: %v: its log is set aside with it", err))
+			report(stderr, fmt.Sprintf(T("warning: %v: its log is set aside with it"), err))
 		}
 	}
 	fresh := file + ".rebuild"
@@ -263,7 +263,7 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 	}
 	old, err := catalog.SetAside(file, fresh, m.Now())
 	if err != nil {
-		return failure(stderr, fmt.Errorf("catalog rebuild: the new catalog is %s, not yet in place: %w", fresh, err))
+		return failure(stderr, fmt.Errorf(T("catalog rebuild: the new catalog is %s, not yet in place: %w"), fresh, err))
 	}
 	if old != "" {
 		out.SetAside = &old
@@ -292,7 +292,7 @@ func rebuildInto(ctx context.Context, c *config.Config, m disks.Machine, fresh s
 		}
 		highest, err := highestOpID(m, d)
 		if err != nil {
-			report(stderr, fmt.Sprintf("warning: disk %s: the operations its trash and tmp/ name are not known (%v): a new one may meet an old one there, which costs it one io-error", d.ID, err))
+			report(stderr, fmt.Sprintf(T("warning: disk %s: the operations its trash and tmp/ name are not known (%v): a new one may meet an old one there, which costs it one io-error"), d.ID, err))
 			continue
 		}
 		out.OpsAfter = max(out.OpsAfter, highest)
@@ -310,7 +310,7 @@ func rebuildInto(ctx context.Context, c *config.Config, m disks.Machine, fresh s
 // highestOpID reads the highest operation id a disk's work folder names, through a handle on its top.
 func highestOpID(m disks.Machine, d *config.Disk) (int64, error) {
 	if v := disks.Check(m, d); v.State == disks.Missing {
-		return 0, fmt.Errorf("it is missing (%s)", v.Reason)
+		return 0, fmt.Errorf(T("it is missing (%s)"), v.Reason)
 	}
 	handle, err := ops.Open(m, d, 0)
 	if err != nil {
@@ -332,11 +332,11 @@ func writeRebuild(out *catalogRebuildOutput, asJSON bool, code int, stdout, stde
 		var b bytes.Buffer
 		switch {
 		case !out.Done:
-			fmt.Fprintf(&b, "would set %s aside, and make a new catalog from what the disks hold, reading every copy whole: --yes to do it\n", out.Catalog)
+			fmt.Fprintf(&b, T("would set %s aside, and make a new catalog from what the disks hold, reading every copy whole: --yes to do it\n"), out.Catalog)
 		case out.SetAside != nil:
-			fmt.Fprintf(&b, "a new catalog at %s; the old one is at %s\n", out.Catalog, *out.SetAside)
+			fmt.Fprintf(&b, T("a new catalog at %s; the old one is at %s\n"), out.Catalog, *out.SetAside)
 		default:
-			fmt.Fprintf(&b, "a new catalog at %s\n", out.Catalog)
+			fmt.Fprintf(&b, T("a new catalog at %s\n"), out.Catalog)
 		}
 		if out.Done {
 			err = printScan(&b, scanOutput{Disks: out.Disks, Conflicts: out.Conflicts})

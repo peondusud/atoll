@@ -41,10 +41,10 @@ type namesArgs struct {
 // (specs.md §15.9).
 func runNames(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "names: want check")
+		return usage(stderr, T("names: want check"))
 	}
 	if args[0] != "check" {
-		return usage(stderr, fmt.Sprintf("names: unknown command %q", args[0]))
+		return usage(stderr, fmt.Sprintf(T("names: unknown command %q"), args[0]))
 	}
 	parsed, err := parseNamesCheck(args[1:])
 	if err != nil {
@@ -85,15 +85,15 @@ func parseNamesCheck(args []string) (namesArgs, error) {
 		switch {
 		case isPath:
 		case a != "--path":
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		case i+1 == len(args):
-			return out, errors.New("--path needs a path")
+			return out, errors.New(T("--path needs a path"))
 		default:
 			i++
 			value = args[i]
 		}
 		if given {
-			return out, errors.New("--path comes twice")
+			return out, errors.New(T("--path comes twice"))
 		}
 		given = true
 		if _, err := names.CheckPath(value, names.Ext4); err != nil {
@@ -151,7 +151,7 @@ func writeNamesText(w io.Writer, out *namesOutput) error {
 		line := name + ": " + f.Kind
 		switch {
 		case f.FS != "":
-			line += fmt.Sprintf(" on %s (%s)", f.FS, strings.Join(f.Reasons, ", "))
+			line += fmt.Sprintf(T(" on %s (%s)"), f.FS, strings.Join(f.Reasons, ", "))
 		case len(f.With) > 0:
 			line += " with " + strings.Join(f.With, ", ")
 		case f.Disk != "":
@@ -159,9 +159,9 @@ func writeNamesText(w io.Writer, out *namesOutput) error {
 		}
 		_, _ = fmt.Fprintln(buffered, line) // a write error stays in buffered, and Flush gives it
 	}
-	_, _ = fmt.Fprintf(buffered, "%d names checked, %d findings\n", out.Checked, len(out.Findings))
+	_, _ = fmt.Fprintf(buffered, T("%d names checked, %d findings\n"), out.Checked, len(out.Findings))
 	if err := buffered.Flush(); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
 }

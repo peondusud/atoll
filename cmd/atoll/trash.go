@@ -42,7 +42,7 @@ func (f *writeFlags) take(a string) (bool, error) {
 
 func (f *writeFlags) check() error {
 	if f.dryRun && f.yes {
-		return errors.New("--dry-run and --yes do not go together")
+		return errors.New(T("--dry-run and --yes do not go together"))
 	}
 	return nil
 }
@@ -96,7 +96,7 @@ func session(c *config.Config, stdout, stderr io.Writer, apply bool, run func(*t
 		return fmt.Errorf("%w", err)
 	}
 	if err := buffered.Flush(); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
 }
@@ -139,7 +139,7 @@ func runPrune(configPath string, args []string, stdout, stderr io.Writer) int {
 			return usage(stderr, "prune: "+err.Error())
 		}
 		if !known {
-			return usage(stderr, fmt.Sprintf("prune: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("prune: unknown argument %q"), a))
 		}
 	}
 	if err := flags.check(); err != nil {
@@ -183,26 +183,26 @@ func endWrite(out io.Writer, list *jsonList, asJSON bool, summary *trash.Summary
 		return list.end(rest)
 	}
 	for _, id := range summary.Full {
-		line := fmt.Sprintf("the trash of %s still holds more than trash.max_size: what is left there waits for its time\n", id)
+		line := fmt.Sprintf(T("the trash of %s still holds more than trash.max_size: what is left there waits for its time\n"), id)
 		if err := writeText(out, line); err != nil {
 			return err
 		}
 	}
 	switch {
 	case !summary.Applied && summary.ToDo > 0 && withBytes:
-		return writeText(out, fmt.Sprintf("%d to do, %d bytes, and %d staying: nothing was written\n", summary.ToDo, summary.Bytes, summary.Stayed))
+		return writeText(out, fmt.Sprintf(T("%d to do, %d bytes, and %d staying: nothing was written\n"), summary.ToDo, summary.Bytes, summary.Stayed))
 	case !summary.Applied && summary.ToDo > 0:
-		return writeText(out, fmt.Sprintf("%d to do, and %d staying: nothing was written\n", summary.ToDo, summary.Stayed))
+		return writeText(out, fmt.Sprintf(T("%d to do, and %d staying: nothing was written\n"), summary.ToDo, summary.Stayed))
 	case withBytes:
-		return writeText(out, fmt.Sprintf("%d bytes, and %d staying\n", summary.Bytes, summary.Stayed))
+		return writeText(out, fmt.Sprintf(T("%d bytes, and %d staying\n"), summary.Bytes, summary.Stayed))
 	default:
-		return writeText(out, fmt.Sprintf("%d staying\n", summary.Stayed))
+		return writeText(out, fmt.Sprintf(T("%d staying\n"), summary.Stayed))
 	}
 }
 
 func runTrash(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "trash: want list, restore or purge")
+		return usage(stderr, T("trash: want list, restore or purge"))
 	}
 	switch args[0] {
 	case "list":
@@ -212,7 +212,7 @@ func runTrash(configPath string, args []string, stdout, stderr io.Writer) int {
 	case "purge":
 		return trashPurge(configPath, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, fmt.Sprintf("trash: unknown command %q", args[0]))
+		return usage(stderr, fmt.Sprintf(T("trash: unknown command %q"), args[0]))
 	}
 }
 
@@ -233,7 +233,7 @@ func trashList(configPath string, args []string, stdout, stderr io.Writer) int {
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
-			return usage(stderr, fmt.Sprintf("trash list: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("trash list: unknown argument %q"), a))
 		}
 		if err := setFlag(&asJSON, a); err != nil {
 			return usage(stderr, "trash list: "+err.Error())
@@ -271,7 +271,7 @@ func writeTrash(c *config.Config, asJSON bool, stdout io.Writer) (err error) {
 		if asJSON {
 			return list.item(entry)
 		}
-		return writeText(out, fmt.Sprintf("%s (%s): %s, trashed %s, until %s\n", shownPath(e.Path), e.Disk, e.Reason, entry.Deleted, entry.Expires))
+		return writeText(out, fmt.Sprintf(T("%s (%s): %s, trashed %s, until %s\n"), shownPath(e.Path), e.Disk, e.Reason, entry.Deleted, entry.Expires))
 	})
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -282,7 +282,7 @@ func writeTrash(c *config.Config, asJSON bool, stdout io.Writer) (err error) {
 		}
 	}
 	if err := out.Flush(); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
 }
@@ -316,13 +316,13 @@ func parseRestore(args []string) (restoreArgs, error) {
 			return out, err
 		case known:
 		case strings.HasPrefix(a, "-"):
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		default:
 			paths = append(paths, a)
 		}
 	}
 	if len(paths) != 1 {
-		return out, fmt.Errorf("want one path, got %d", len(paths))
+		return out, fmt.Errorf(T("want one path, got %d"), len(paths))
 	}
 	out.under = paths[0]
 	if _, err := names.CheckPath(out.under, names.Ext4); err != nil {
@@ -393,15 +393,15 @@ func parsePurge(args []string) (purgeArgs, error) {
 		switch {
 		case isOlder:
 		case a != "--older-than":
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		case i+1 == len(args):
-			return out, errors.New("--older-than needs a duration")
+			return out, errors.New(T("--older-than needs a duration"))
 		default:
 			i++
 			text = args[i]
 		}
 		if out.olderThan != nil {
-			return out, errors.New("--older-than comes twice")
+			return out, errors.New(T("--older-than comes twice"))
 		}
 		duration, err := value.ParseDuration(text)
 		if err != nil {
