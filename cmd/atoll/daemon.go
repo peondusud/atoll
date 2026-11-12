@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/signal"
 	"slices"
 	"strings"
@@ -98,7 +99,7 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 		return failure(stderr, err)
 	}
 	if !untilIdle {
-		return runForGood(c, !dryRun, stderr)
+		return runForGood(configPath, c, !dryRun, stderr)
 	}
 	buffered := bufio.NewWriter(stdout)
 	var sink daemonSink = &textDaemon{w: buffered}
@@ -127,17 +128,30 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// runForGood runs the daemon until SIGTERM or SIGINT (specs.md §15.13). Atoll never detaches itself:
-// --foreground changes nothing.
-func runForGood(c *config.Config, apply bool, stderr io.Writer) int {
+// runForGood runs the daemon until SIGTERM or SIGINT, reading the configuration again on SIGHUP (specs.md
+// §15.13). Atoll never detaches itself: --foreground changes nothing.
+func runForGood(configPath string, c *config.Config, apply bool, stderr io.Writer) int {
 	machine, err := disks.NewMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	hangups := make(chan os.Signal, 1)
+	signal.Notify(hangups, syscall.SIGHUP)
+	defer signal.Stop(hangups)
+	reload := make(chan struct{}, 1)
+	go func() {
+		for range hangups {
+			select {
+			case reload <- struct{}{}:
+			default:
+			}
+		}
+	}()
 	log := slog.New(slog.NewTextHandler(stderr, nil))
-	if err := daemon.Run(ctx, daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log}); err != nil {
+	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: func() (*config.Config, error) { return load(configPath) }}
+	if err := daemon.Run(ctx, opts); err != nil {
 		return failure(stderr, err)
 	}
 	return exitOK

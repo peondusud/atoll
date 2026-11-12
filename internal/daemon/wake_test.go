@@ -14,6 +14,7 @@ func TestWakeVectors(t *testing.T) {
 		NowNS         int64    `json:"now_ns"`
 		CheckDueNS    int64    `json:"check_due_ns"`
 		First         bool     `json:"first"`
+		Reloaded      bool     `json:"reloaded"`
 		Gone          bool     `json:"gone"`
 		Back          bool     `json:"back"`
 		PassDueNS     *int64   `json:"pass_due_ns"`
@@ -38,7 +39,7 @@ func TestWakeVectors(t *testing.T) {
 		var out WakeOutput
 		if err == nil {
 			out, err = Wake(&WakeInput{
-				NowNS: v.NowNS, CheckDueNS: v.CheckDueNS, First: v.First, Gone: v.Gone, Back: v.Back, PassDueNS: v.PassDueNS,
+				NowNS: v.NowNS, CheckDueNS: v.CheckDueNS, First: v.First, Reloaded: v.Reloaded, Gone: v.Gone, Back: v.Back, PassDueNS: v.PassDueNS,
 				GroupDueNS: v.GroupDueNS, RipeOrigins: v.RipeOrigins, LastPassEndNS: v.LastPassEndNS, RescanEveryNS: v.RescanEveryNS,
 				Window: w, Location: loc,
 			})

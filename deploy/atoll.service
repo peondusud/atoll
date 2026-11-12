@@ -11,6 +11,8 @@ Wants=network-online.target
 [Service]
 Type=notify
 ExecStart=/usr/local/bin/atoll daemon
+# systemctl reload atoll: the configuration read again (specs.md §15.13).
+ExecReload=/bin/kill -HUP $MAINPID
 User=atoll
 Group=atoll
 # Reading a device's head to confirm a disk (specs.md §10).

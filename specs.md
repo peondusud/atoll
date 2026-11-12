@@ -884,6 +884,7 @@ Finishing, immediately or in a reprise, is one transaction: the operation `done`
 - **A pass** is that of §15.12, on every disk: each pass confirms every writable disk anyway (§10), and sparing the disks' sleep is phase 2b. For each pass, the daemon takes the catalog's lock, waiting while a command holds it (§25), opens the catalog, runs the pass, puts the runtime branches right (below), closes the catalog, and lets go of the lock, in that order, as closing a descriptor of the catalog's file would drop SQLite's own locks. Between passes it holds neither.
 - **When it acts.** At a time `now`, it checks every disk's mount when the check is due, every 30 s. It runs a pass when one of these holds, each a reason:
   - `start`: no pass has run since it started;
+  - `reload`: the configuration was read again since the last pass (below);
   - `gone`: a disk went `missing` since the last pass;
   - `back`: a disk that was `missing` is found again;
   - `events`: a group of the watcher ripened (§15.1) that someone other than Atoll made, as Atoll's own operations are known from its journal;
@@ -896,6 +897,7 @@ Finishing, immediately or in a reprise, is one transaction: the operation `done`
 - **A disk found again.** A pass reconciles it first. Only once a pass has walked it does its watch start again and its branch come back to mergerfs (§18).
 - **Runtime branches** (§21.1). After each pass, when `<view.mount>/.mergerfs` exists, the daemon reads `user.mergerfs.branches`. When the branches should differ, it writes the whole list there: the branches of `atoll mergerfs-config`, without the disks that are `missing` or not yet walked since they came back, in configuration order. A list written whole puts a branch back at its place (measured). It writes nothing when nothing would change, or with no mergerfs at `view.mount`.
 - **Stopping.** `SIGTERM` or `SIGINT` ends the wait, or the pass under way at its next step, as a long loop can be cancelled. What an operation left is the reprise's at the next start (§17.2). It then exits with 0. It tells the service manager `STOPPING=1` first.
+- **Reloading.** It reads the configuration again on `SIGHUP`, and only then (`systemctl reload atoll`); `disk add` and `disk remove` send it themselves. A configuration that does not load is left aside with a line of its log, and the one it had stays. One that loads takes effect at once: the disks it no longer lists are no longer watched, a mount check follows, then a pass for `reload`.
 - **`--dry-run`**, shadow mode (§29.2), runs the same loop with passes in `--dry-run`: no runtime branch is changed, and no remount is tried.
 - **What it says.** Each pass, each state a disk changes to, each remount and each change of branches is a line of its log on standard error, which the service manager keeps.
 

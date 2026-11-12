@@ -154,3 +154,63 @@ func TestRunNeedsItsCatalog(t *testing.T) {
 		t.Errorf("a catalog was made: %v", statErr)
 	}
 }
+
+// On SIGHUP the configuration is read again: one that does not load is left aside, with no pass; one that loads
+// takes effect, with a pass for reload that sees its disks (specs.md §15.13).
+func TestRunReloads(t *testing.T) {
+	c := bench(t, "")
+	file, _ := c.Effective()["catalog"].(string)
+	dir := filepath.Dir(file)
+	text := "pool_id = \"p\"\ncatalog = " + strconv.Quote(file) + "\n[view]\nmount = " + strconv.Quote(filepath.Join(dir, "pool")) + "\n" +
+		"[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = " + strconv.Quote(filepath.Join(dir, "t1")) + "\nfs = \"ext4\"\n" +
+		"[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = " + strconv.Quote(filepath.Join(dir, "t2")) + "\nfs = \"ext4\"\n"
+	bigger, err := config.Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loads := []func() (*config.Config, error){
+		func() (*config.Config, error) { return nil, errors.New("a configuration that does not load") },
+		func() (*config.Config, error) { return bigger, nil },
+	}
+	machine, err := disks.NewMachine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reload := make(chan struct{})
+	passes := make(chan passLine, 16)
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{Config: c, Machine: machine, Apply: true, Log: slog.New(slog.DiscardHandler), CheckEvery: time.Hour,
+			Reload: reload, Load: func() (*config.Config, error) { next := loads[0]; loads = loads[1:]; return next() },
+			OnPass: func(because []string, o *jobs.Outcome) { passes <- passLine{because, len(o.Disks)} }})
+	}()
+	if p := <-passes; !slices.Equal(p.because, []string{BecauseStart}) || p.disks != 1 {
+		t.Fatalf("the first pass: %+v", p)
+	}
+	reload <- struct{}{}
+	select {
+	case p := <-passes:
+		t.Errorf("a pass for a configuration that did not load: %+v", p)
+	case <-time.After(300 * time.Millisecond):
+	}
+	reload <- struct{}{}
+	select {
+	case p := <-passes:
+		if !slices.Equal(p.because, []string{BecauseReload}) || p.disks != 2 {
+			t.Errorf("the pass after the reload: %+v", p)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no pass after the reload")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("stopped: %v", err)
+	}
+}
+
+type passLine struct {
+	because []string
+	disks   int
+}

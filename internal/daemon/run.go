@@ -41,6 +41,9 @@ type Options struct {
 	Inotify    bool
 	// OnPass is told of each pass, for tests.
 	OnPass func(because []string, outcome *jobs.Outcome)
+	// Reload says to read the configuration again, through Load: SIGHUP (specs.md §15.13).
+	Reload <-chan struct{}
+	Load   func() (*config.Config, error)
 }
 
 // ErrStartup says that the daemon could not start: its configuration or its catalog cannot be used.
@@ -118,10 +121,10 @@ type loop struct {
 	grouping *watch.Grouping
 	disks    map[string]*diskState
 
-	first, gone, back bool
-	checkDue          int64
-	passDue           *int64
-	lastEnd           *int64
+	first, reloaded, gone, back bool
+	checkDue                    int64
+	passDue                     *int64
+	lastEnd                     *int64
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -189,7 +192,7 @@ func (l *loop) run(ctx context.Context) error {
 				}
 			}
 		}
-		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
+		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
 			RipeOrigins: origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location}
 		if waiting {
 			in.GroupDueNS = &groupNext
@@ -214,9 +217,40 @@ func (l *loop) run(ctx context.Context) error {
 		case e := <-l.watcher.Events():
 			timer.Stop()
 			l.add(e)
+		case <-l.opt.Reload:
+			timer.Stop()
+			l.reload()
 		case <-timer.C:
 		}
 	}
+}
+
+// reload reads the configuration again (specs.md §15.13). One that does not load is left aside, and the one read
+// before stays; one that does takes effect at once, with a check, then a pass.
+func (l *loop) reload() {
+	if l.opt.Load == nil {
+		return
+	}
+	c, err := l.opt.Load()
+	if err != nil {
+		l.log.Warn("the configuration did not load: the one read before stays", "error", err)
+		return
+	}
+	set, err := readSettings(c, l.opt)
+	if err != nil {
+		l.log.Warn("the configuration did not load: the one read before stays", "error", err)
+		return
+	}
+	l.opt.Config, l.set = c, set
+	for id := range l.disks {
+		if set.disksByID[id] == nil {
+			l.unwatch(id)
+			delete(l.disks, id)
+		}
+	}
+	l.reloaded = true
+	l.checkDue = l.opt.Machine.Now()
+	l.log.Info("the configuration was read again", "disks", len(c.Disks))
 }
 
 // add puts an event, and every other already waiting, in its group.
@@ -319,7 +353,7 @@ func (l *loop) unwatch(id string) {
 // pass runs one pass of §15.12 under the catalog's lock, then puts the runtime branches right.
 func (l *loop) pass(ctx context.Context, because []string) {
 	start := l.opt.Machine.Now()
-	l.first, l.gone, l.back = false, false, false
+	l.first, l.reloaded, l.gone, l.back = false, false, false, false
 	l.log.Info("a pass begins", "because", because)
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		outcome, err := jobs.RunTo(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, nil)

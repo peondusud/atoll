@@ -15,6 +15,7 @@ import (
 // Why a pass runs (specs.md §15.13), in the order a pass gives them.
 const (
 	BecauseStart  = "start"
+	BecauseReload = "reload"
 	BecauseGone   = "gone"
 	BecauseBack   = "back"
 	BecauseEvents = "events"
@@ -28,8 +29,9 @@ var origins = []string{watch.OriginView, watch.OriginAtoll, watch.OriginUser, wa
 type WakeInput struct {
 	NowNS      int64
 	CheckDueNS int64
-	// First says that no pass has run since it started; Gone and Back that a disk went missing, or came back.
-	First, Gone, Back bool
+	// First says that no pass has run since it started, Reloaded that the configuration was read again since the
+	// last pass, and Gone and Back that a disk went missing, or came back.
+	First, Reloaded, Gone, Back bool
 	// PassDueNS is the last pass's next_due, GroupDueNS when a waiting group ripens: nil when none.
 	PassDueNS, GroupDueNS *int64
 	// RipeOrigins holds who made the groups ripe now.
@@ -73,7 +75,7 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 	for _, r := range []struct {
 		holds bool
 		why   string
-	}{{in.First, BecauseStart}, {in.Gone, BecauseGone}, {in.Back, BecauseBack}, {events, BecauseEvents}} {
+	}{{in.First, BecauseStart}, {in.Reloaded, BecauseReload}, {in.Gone, BecauseGone}, {in.Back, BecauseBack}, {events, BecauseEvents}} {
 		if r.holds {
 			out.Because = append(out.Because, r.why)
 		}
