@@ -31,28 +31,32 @@ func (g *ModifyGuardRead) Answers(ctimeNS int64) bool {
 	return g.UpTo.Valid && ctimeNS <= g.UpTo.Int64
 }
 
+// The reads of the mass-modification guard, made at every pass for each disk (specs.md §15.6), as those of the
+// mass-deletion guard: never over the whole log (TestGuardReadsUseAnIndex).
+const (
+	modifyAnswerQuery = `SELECT id, kind, json_extract(data, '$.up_to') FROM events
+		WHERE kind IN (?1, ?2) AND json_extract(data, '$.disk') = ?3
+		ORDER BY id DESC LIMIT 1`
+	modifyGuardSinceQuery = "SELECT ts_ns FROM events WHERE kind = ? AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1"
+	modifiedCountQuery    = `SELECT count(*) FROM events
+		WHERE kind = ?1 AND ts_ns > ?2 AND id > ?3 AND json_extract(data, '$.disk') = ?4 AND json_extract(data, '$.answered') IS NULL`
+)
+
 // ReadModifyGuard reads what the mass-modification guard of a disk looks at.
 func ReadModifyGuard(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS int64) (*ModifyGuardRead, error) {
 	g := &ModifyGuardRead{}
-	err := db.QueryRowContext(ctx, `
-		SELECT id, kind, json_extract(data, '$.up_to') FROM events
-		WHERE kind IN (?1, ?2) AND json_extract(data, '$.disk') = ?3
-		ORDER BY id DESC LIMIT 1`, EventModifyGuardConfirm, EventModifyGuardReject, disk).Scan(&g.AnswerID, &g.Answer, &g.UpTo)
+	err := db.QueryRowContext(ctx, modifyAnswerQuery, EventModifyGuardConfirm, EventModifyGuardReject, disk).Scan(&g.AnswerID, &g.Answer, &g.UpTo)
 	if err != nil && !isNoRows(err) {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, "SELECT ts_ns FROM events WHERE kind = ? AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1",
-		EventModifyGuard, g.AnswerID, disk).Scan(&g.GuardNS)
+	err = db.QueryRowContext(ctx, modifyGuardSinceQuery, EventModifyGuard, g.AnswerID, disk).Scan(&g.GuardNS)
 	switch {
 	case err == nil:
 		g.Stands = true
 	case !isNoRows(err):
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, `
-		SELECT count(*) FROM events
-		WHERE kind = ?1 AND ts_ns > ?2 AND id > ?3 AND json_extract(data, '$.disk') = ?4 AND json_extract(data, '$.answered') IS NULL`,
-		EventModified, nowNS-windowNS, g.AnswerID, disk).Scan(&g.Count)
+	err = db.QueryRowContext(ctx, modifiedCountQuery, EventModified, nowNS-windowNS, g.AnswerID, disk).Scan(&g.Count)
 	if err != nil {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
@@ -111,8 +115,7 @@ func AnswerModifyGuard(ctx context.Context, db *sql.DB, disk, kind string, nowNS
 			return fmt.Errorf("read: %w", err)
 		}
 		var at int64
-		err = tx.QueryRowContext(ctx, "SELECT ts_ns FROM events WHERE kind = ? AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1",
-			EventModifyGuard, last, disk).Scan(&at)
+		err = tx.QueryRowContext(ctx, modifyGuardSinceQuery, EventModifyGuard, last, disk).Scan(&at)
 		switch {
 		case isNoRows(err):
 			return nil

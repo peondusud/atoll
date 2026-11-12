@@ -1157,25 +1157,32 @@ type GuardRead struct {
 	EventsLeft  int64         // those with something left to send
 }
 
+// The reads of the mass-deletion guard, made at every pass for each disk (specs.md §15.6). Each goes over the events
+// of its kinds, and a count over its window, never over the whole log, which only grows (§9): TestGuardReadsUseAnIndex.
+const (
+	guardAnswerQuery = `SELECT json_extract(data, '$.up_to') FROM events
+		WHERE kind IN ('guard-confirm', 'guard-reject') AND json_extract(data, '$.disk') = ?
+		ORDER BY id DESC LIMIT 1`
+	guardEndQuery = `SELECT id FROM events
+		WHERE kind IN ('guard-confirm', 'guard-reject', 'guard-clear') AND json_extract(data, '$.disk') = ?
+		ORDER BY id DESC LIMIT 1`
+	guardSinceQuery = "SELECT ts_ns FROM events WHERE kind = 'guard' AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1"
+	copiesGoneQuery = `SELECT count(*), COALESCE(sum(COALESCE(json_extract(data, '$.nothing_left'), 0) = 0), 0) FROM events
+		WHERE kind = 'copy-gone' AND ts_ns > ?1 AND json_extract(data, '$.disk') = ?2 AND json_extract(data, '$.gone_ns') > ?3`
+)
+
 // ReadGuard reads what the guard of a disk looks at.
 func ReadGuard(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS int64) (*GuardRead, error) {
 	g := &GuardRead{}
-	err := db.QueryRowContext(ctx, `
-		SELECT json_extract(data, '$.up_to') FROM events
-		WHERE kind IN ('guard-confirm', 'guard-reject') AND json_extract(data, '$.disk') = ?
-		ORDER BY id DESC LIMIT 1`, disk).Scan(&g.UpTo)
+	err := db.QueryRowContext(ctx, guardAnswerQuery, disk).Scan(&g.UpTo)
 	if err != nil && !isNoRows(err) {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, `
-		SELECT id FROM events
-		WHERE kind IN ('guard-confirm', 'guard-reject', 'guard-clear') AND json_extract(data, '$.disk') = ?
-		ORDER BY id DESC LIMIT 1`, disk).Scan(&g.LastEventID)
+	err = db.QueryRowContext(ctx, guardEndQuery, disk).Scan(&g.LastEventID)
 	if err != nil && !isNoRows(err) {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, `
-		SELECT ts_ns FROM events WHERE kind = 'guard' AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1`, g.LastEventID, disk).Scan(&g.GuardNS)
+	err = db.QueryRowContext(ctx, guardSinceQuery, g.LastEventID, disk).Scan(&g.GuardNS)
 	switch {
 	case err == nil:
 		g.HasGuard = true
@@ -1195,10 +1202,7 @@ func ReadGuard(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS int
 	if err != nil {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, `
-		SELECT count(*), COALESCE(sum(COALESCE(json_extract(data, '$.nothing_left'), 0) = 0), 0) FROM events
-		WHERE kind = 'copy-gone' AND ts_ns > ?1 AND json_extract(data, '$.disk') = ?2 AND json_extract(data, '$.gone_ns') > ?3`,
-		nowNS-windowNS, disk, upTo).Scan(&g.Events, &g.EventsLeft)
+	err = db.QueryRowContext(ctx, copiesGoneQuery, nowNS-windowNS, disk, upTo).Scan(&g.Events, &g.EventsLeft)
 	if err != nil {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
@@ -1344,13 +1348,12 @@ func ConfirmGuard(ctx context.Context, db *sql.DB, disk string, nowNS int64, ref
 
 func lastGuard(ctx context.Context, tx *sql.Tx, disk string) (sql.NullInt64, error) {
 	var last int64
-	err := tx.QueryRowContext(ctx, `
-		SELECT id FROM events WHERE kind IN ('guard-confirm', 'guard-reject', 'guard-clear') AND json_extract(data, '$.disk') = ? ORDER BY id DESC LIMIT 1`, disk).Scan(&last)
+	err := tx.QueryRowContext(ctx, guardEndQuery, disk).Scan(&last)
 	if err != nil && !isNoRows(err) {
 		return sql.NullInt64{}, fmt.Errorf("read: %w", err)
 	}
 	var at int64
-	err = tx.QueryRowContext(ctx, "SELECT ts_ns FROM events WHERE kind = 'guard' AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1", last, disk).Scan(&at)
+	err = tx.QueryRowContext(ctx, guardSinceQuery, last, disk).Scan(&at)
 	switch {
 	case isNoRows(err):
 		return sql.NullInt64{}, nil

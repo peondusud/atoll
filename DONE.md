@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The events log read through an index (specs.md §9, §15.6)
+
+Commit "Read the guards' events through an index", on `develop`.
+
+- Looked for once the soak had shown passes slowing down: what else a pass reads grows for good. The guards read the events log at every pass, for each disk, and three of their reads went over the whole log, three more over all of it since the last answer to a guard, which most pools never give. `events` is never pruned: over a million events, a pass with nothing to do took 0.8 s, against 64 ms.
+- `schema/migrations/0007_events_by_kind.sql`: an index on `events(kind, ts_ns)`. Each read goes over the events of its kinds, and a count over its window of them: 64 ms over a million events of the kinds a pool writes. It takes a second or two to build over a million events, once.
+- The reads are named constants, and a test explains each (`EXPLAIN QUERY PLAN`): none may scan the log. The indexes vector lists the new one.
+- **Contract to review:** the migration.
+
 ## A pass while the mass-modification guard holds (specs.md §15.6, §26)
 
 Commit "Read the files a pass looks at again through prepared statements", on `develop`.
