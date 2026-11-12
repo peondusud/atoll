@@ -504,7 +504,7 @@ type countedCopy struct {
 // sets their marks, and takes the size of each pending one off its disk.
 func (f *planFile) keep(counted []countedCopy) {
 	byRank := slices.Clone(counted)
-	slices.SortFunc(byRank, compareKeep)
+	slices.SortFunc(byRank, func(a, b countedCopy) int { return compareKeep(a, b, f.Placement) })
 	take := func(d *planDisk) {
 		f.counted = append(f.counted, d)
 		f.covered = appendNew(f.covered, d.domain)
@@ -540,11 +540,15 @@ func (f *planFile) keep(counted []countedCopy) {
 	}
 }
 
-func compareKeep(a, b countedCopy) int {
+// compareKeep orders the copies that count, the first kept first (specs.md §13.4). Where only listed disks are
+// candidates, a copy on one outranks a copy of the same maker on a disk the lists no longer allow.
+func compareKeep(a, b countedCopy, place *Placement) int {
+	strict := onlyListed(place)
 	return cmp.Or(
 		boolRank(a.copy.State == CopyPending, b.copy.State == CopyPending),
 		boolRank(a.disk.State == DiskMissing, b.disk.State == DiskMissing),
 		boolRank(a.copy.CreatedBy != CreatedByUser, b.copy.CreatedBy != CreatedByUser),
+		boolRank(strict && !listed(a.disk, place), strict && !listed(b.disk, place)),
 		cmp.Compare(a.copy.FirstSeenNS, b.copy.FirstSeenNS),
 		cmp.Compare(a.disk.Position, b.disk.Position),
 	)

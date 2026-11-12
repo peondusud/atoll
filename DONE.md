@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The copy the lists want, kept (specs.md §13.4)
+
+Commit "Keep the copy the rule's lists want", on `beta`: the first piece of `atoll balance`.
+
+- When more copies count than a file's level, the plan keeps some and marks the others `surplus`. Where only listed disks are candidates, `tags_mode = "strict"` or `overflow = "deny"`, a copy on a listed disk now outranks one of the same maker on a disk the lists no longer allow. So once a copy is made where a changed rule wants it, the one left behind is the surplus, rather than the younger copy that is in the right place. A user copy still stays before any Atoll copy.
+- Verified: 4 `plan.json` vectors, two of them failing before the change; the solver's property tests.
+
 ## The capacity of the pool (specs.md §13.1, §13.3)
 
 Commit "Say what the pool can hold at 1, 2 and 3 copies", on `beta`.
