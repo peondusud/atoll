@@ -1347,6 +1347,11 @@ ntfy_token_file = ""                    # a Bearer token, for a ntfy server that
 gotify          = ""
 smtp            = ""
 
+[api]                                   # the local API of the daemon (§25.1)
+socket     = "/run/atoll/atoll.sock"
+listen     = ""                         # "127.0.0.1:7341", or an address of the Tailscale network
+token_file = ""                         # the Bearer token TCP asks for
+
 # Rules: the first matching rule wins; conditions are combined with AND.
 [[rule]]
 label    = "temporary and system files"
@@ -1545,12 +1550,29 @@ atoll daemon [--foreground] [--until-idle] [--dry-run]
 - `atoll rules check` exits with 0 when the configuration loads, warnings or not, and with 1 when it does not load or cannot be read, with the same output. So a script can run it before a restart.
 - `atoll rules explain` exits with 0 once it has answered, whatever the answer; with 1 when the configuration does not load or cannot be read, with nothing on standard output; and with 2 on a size or a path that is not well-formed. `<size>` is a size of §29.5, so it needs its unit.
 
+### 25.1 The local API
+
+The daemon that runs for good (§15.13) answers questions about the pool over HTTP/1.1 and JSON: on a Unix socket, and over TCP when `api.listen` says so. In the alpha it only answers: a command that moves or deletes goes through the CLI, which takes the catalog's lock (§25). `api/openapi.yaml` describes it.
+
+- **The socket**, `api.socket` (`/run/atoll/atoll.sock` by default, `""` for none), is made when the daemon starts, with mode 0660: whoever may open it may ask, as its permissions say (§26). Its folder is the service manager's (`RuntimeDirectory=atoll` in `deploy/atoll.service`), and the daemon never makes it. A socket an earlier run left at that path is replaced; anything else there stays, and so does a missing folder, the socket being then off, with a line of the log.
+- **TCP**, `api.listen` (`""` by default, for none): an address and a port, the address a loopback one or one of the Tailscale network, `100.64.0.0/10` or `fd7a:115c:a1e0::/48` (§29.5); anything else is refused when the configuration loads. Every request carries `Authorization: Bearer <token>`, the token being what `api.token_file` holds, its last line break left out, compared in constant time. Without it, or with another, the answer is 401 with nothing more. `api.listen` with no `api.token_file` is refused when the configuration loads. The token is read at each request, so that a new one takes effect at once; a token file that cannot be read, or is empty, refuses every request.
+- **What it answers**, to `GET` alone, any other method being 405:
+  - `/v1/health`: `{"version": …}`, Atoll's version;
+  - `/v1/status`: what `atoll status --json` gives;
+  - `/v1/disks`: what `atoll disk list --json` gives;
+  - `/v1/disks/{id}`: what `atoll disk show <id> --json` gives, and 404 for a disk the configuration does not list;
+  - `/v1/trash`: what `atoll trash list --json` gives;
+  - `/v1/guards`: what `atoll guard list --json` gives.
+
+  Each answer is the output of that command, with its schema, made whole before it is sent, with 200. One that cannot be made, as when the catalog cannot be used, gives 503 with `{"error": …}`; another path gives 404.
+- **Limits**: 10 s for a request's headers, 60 s for its answer, 16 KiB of headers, and no body. After a reload (§15.13) the answers follow the new configuration; a changed `api.socket` or `api.listen` takes effect at the next start. A daemon in `--dry-run` answers too: answering writes nothing.
+
 ## 26. Non-functional requirements
 
 - Resources (ZimaBoard 2 or M920q): under 200 MB of memory for 200,000 files; under 5 % CPU outside scrubs. The binary sets a soft memory limit of 170 MiB unless `GOMEMLIMIT` says otherwise. A first scan of 200,000 files with two copies each peaks at about 180 MiB, in 12 s on an idle machine, and a later one at about 155 MiB, in 5 s (measured on empty files in a container, so it says nothing about the time real disks take). `atoll status` peaks at about 21 MiB on the same pool, with `--path` over all of it too, as it writes files as it reads them. `atoll prune --yes` takes about 8 ms per copy and `atoll trash purge --yes` about 4 ms, nearly all of it in commits and `fsync` (measured on 20,000 files in a container), and they peak at about 40 MiB there. On the same 200,000 files with two copies each, a pass with nothing to do peaks at about 156 MiB, in 5 s; a folder holding them all renamed on one disk, at about 187 MiB for the scan that first sees it, the most of all, 178 MiB for a pass that first sees it, 178 MiB and 28 s for the pass that decides it with one folder operation, and 181 MiB for a dry run. That same rename through the view, on both disks, and every copy of a disk gone at once, are the most a pass holds: about 181 MiB and 179 MiB. The passes after every copy of a disk went, while the guard holds them and once they go, take about 8, 7 and 15 s: what reads below a folder must read by the folder's paths, not by its disk, as it is asked once for each folder that disk lost. 200 MB is 190.7 MiB. What keeps the worst under it, measured by the peak the kernel records rather than by samples: no list of every file grown entry by entry while the rest is held, as for a moment it is both its old size and its new one; no job list for a plan whose jobs nothing runs; one string where the catalog gives the same path twice; a compact row for each copy not where its row says; and a scan letting go of what its looks found of each copy before its plan. A pass writes what it does as it does it, so its output adds nothing to this. `atoll replicate` on a folder that holds all 200,000 files, none of them on the second disk, peaks at about 175 MiB for a dry run and 178 MiB for queuing every copy, in 8 s; with every copy pending, a scan peaks at about 179 MiB and a pass at 180 MiB; 500 empty files are copied with `--now` in 9 s, nearly all of it in commits and `fsync` (measured in a container).
 - Throughput: copies and scrubs at 90 % or more of the disk's raw throughput; hashing is never the bottleneck.
 - Robustness: a hard kill (kill -9) or a power cut at any moment loses no file and leaves a consistent catalog after restart.
-- Security: local API over a socket with restricted permissions; HTTP limited to localhost or the Tailscale network, with a token.
+- Security: local API over a socket with restricted permissions; HTTP limited to localhost or the Tailscale network, with a token (§25.1).
 - Distribution: a single binary. Go version: Linux amd64 and arm64. Rust version: the same, then Windows amd64 (phase 4).
 
 ## 27. Test plan
@@ -1666,6 +1688,8 @@ window   = hh ":" mm "-" hh ":" mm                                  ; "02:00-06:
 number   = digits [ "." digits ]
 temperature = 1 to 3 digits "C"                                     ; "50C"
 identifier  = ( "a"…"z" | "0"…"9" ) { "a"…"z" | "0"…"9" | "_" | "-" }  ; at most 64 characters: "t1", "d4-320"
+listen   = ( ipv4 | "[" ipv6 "]" ) ":" port                        ; "127.0.0.1:7341", "[::1]:7341"
+port     = nonzero digit, at most 5 digits                          ; 1 to 65535
 ```
 
 - Each percentage is a share of what its key states: `min_free`, `fill_to` and `trash.max_size` of each disk's capacity; `cache.max_fill` of the cache's capacity; `ratio_below` of the bytes correctly placed; `mass_guard.percent` of a disk's copies.
@@ -1673,6 +1697,7 @@ identifier  = ( "a"…"z" | "0"…"9" ) { "a"…"z" | "0"…"9" | "_" | "-" }  ;
 - `pool_id`, a disk's `id`, `domain` and `tags`, a rule's `tags` and `domains`, and `read.classes` are identifiers. They pass through the CLI, JSON and `disk.toml`, and are compared byte for byte, so each has one spelling. NFC and NFD forms of `été` would otherwise be two domains, and `spread_mode = "strict"` would count them as two.
 - An absolute path (`catalog`, a `mount`, a `token_file`, an `api_key_file`, both sides of `path_map`) starts with `/`, is not `/` itself, and has no empty, `.` or `..` component and no NUL. The Windows form comes with phase 4.
 - `min_free` is a list of one or more sizes and percentages; the smallest applies to each disk (§13.1).
+- `api.listen` is an address and a port (§25.1): an IPv4 address in four decimal parts from 0 to 255, each with no leading zero, or an IPv6 address in brackets, with no zone and not an IPv4 address written as IPv6; the address must be a loopback one (`127.0.0.0/8`, `::1`) or one of the Tailscale network (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`). A name is refused, as it would be resolved, and so is the unspecified address, which would listen everywhere.
 - Time windows use wall-clock time in `timezone` and may wrap past midnight. A window crossing a daylight-saving change is shortened or lengthened accordingly; on a spring-forward night the missing hour is simply skipped. The first time inside a window at or after an instant is that instant when it is inside; otherwise the window's start that day, or the next day if that start has gone by, and a start that a spring-forward night skips is the first instant after it.
 - Glob, implemented in-house in both versions (third-party matchers disagree: doublestar's `*` stops at `/`, globset's crosses it), matched against the whole logical path without a leading `/`:
   - `*` matches any run of characters except `/`; `?` one character except `/`;

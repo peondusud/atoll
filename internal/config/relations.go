@@ -38,12 +38,21 @@ func stringList(t map[string]any, key string) []string {
 
 // checkRelations applies step 3 of specs.md §24.3, on values the schema has checked,
 // and fills the typed fields of c.
+// checkAPI refuses HTTP over TCP with no token to ask for (specs.md §25.1).
+func checkAPI(tree map[string]any, found *problems) {
+	api := table(tree, "api")
+	if text(api, "listen") != "" && text(api, "token_file") == "" {
+		found.add("api.token_file", "api.listen needs a token file: HTTP over TCP asks every request for its token")
+	}
+}
+
 func checkRelations(tree, user map[string]any, c *Config, found *problems) {
 	checkDisks(tree, c, found)
 	checkSpread("placement.spread", table(tree, "placement"), table(tree, "placement"), found)
 	if ups := table(tree, "ups"); ups["enabled"] == true && text(ups, "nut") == "" {
 		found.add("ups.nut", "ups.enabled needs a NUT address")
 	}
+	checkAPI(tree, found)
 	checkRules(tree, user, c, found)
 }
 

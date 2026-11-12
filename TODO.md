@@ -52,7 +52,7 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 Every item here is a **decision**:
 
-- `api/openapi.yaml` and `api/schemas/` for the `--json` outputs.
+- The local API's commands that write (moving, deleting, answering a guard), which the alpha leaves to the CLI (§25.1).
 
 ## Phase 1a, the alpha, not started (specs.md §28)
 

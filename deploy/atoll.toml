@@ -138,6 +138,11 @@ ntfy_token_file = ""                    # a Bearer token, for a ntfy server that
 gotify          = ""
 smtp            = ""
 
+[api]                                   # the local API of the daemon (§25.1)
+socket     = "/run/atoll/atoll.sock"
+listen     = ""                         # "127.0.0.1:7341", or an address of the Tailscale network
+token_file = ""                         # the Bearer token TCP asks for
+
 # Rules: the first matching rule wins; conditions are combined with AND.
 [[rule]]
 label    = "temporary and system files"

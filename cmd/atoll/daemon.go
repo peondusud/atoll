@@ -150,7 +150,18 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 		}
 	}()
 	log := slog.New(slog.NewTextHandler(stderr, nil))
-	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: func() (*config.Config, error) { return load(configPath) }}
+	// The local API answers with the configuration the daemon runs with, the one a reload takes too (specs.md §25.1).
+	api := newAPIServer(c, machine, log)
+	stopAPI := api.start(ctx, c)
+	defer stopAPI()
+	load := func() (*config.Config, error) {
+		next, err := load(configPath)
+		if err == nil {
+			api.current.Store(next)
+		}
+		return next, err
+	}
+	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: load}
 	if err := daemon.Run(ctx, opts); err != nil {
 		return failure(stderr, err)
 	}

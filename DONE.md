@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The local API (specs.md §25.1, §26, §29.5)
+
+Commit "Answer questions over a local API", on `develop`, as the maintainer chose on 2026-11-12.
+
+- The daemon that runs for good answers `GET /v1/health`, `/v1/status`, `/v1/disks`, `/v1/disks/{id}`, `/v1/trash` and `/v1/guards`, each with what that command's `--json` gives, made by the command's own writer with the configuration the daemon runs with, a reload included. `api/openapi.yaml` describes it.
+- On the Unix socket `api.socket` (`/run/atoll/atoll.sock`), made with mode 0660, never wider for a moment, in the folder the unit's `RuntimeDirectory` makes; a socket an earlier run left is replaced, anything else stays. Over TCP on `api.listen`, a loopback address or one of the Tailscale network, every request carries the Bearer token `api.token_file` holds, read again at each request and compared in constant time.
+- Configuration: `[api]` with `socket`, `listen` and `token_file`; `api.listen` follows a grammar of its own (§29.5), with 37 vectors in `listen.json`, parsed in-house so that the Rust version can match it; `listen` without `token_file` is refused. 12 cases in `config.json`.
+- Verified: each answer equals its command's output byte for byte; 405 for any method but GET, 404 for another path or disk, 503 for a catalog that cannot be used; the token missing, wrong, changed, empty or gone; the socket's mode, a stale socket replaced, a file at its path left alone, the socket gone at the stop; a round trip over TCP.
+- **Decided without the maintainer, to confirm:**
+  - The alpha's API only answers: moving and deleting stay with the CLI, which takes the catalog's lock.
+  - A socket or a TCP address that cannot be opened leaves that side off, with a line of the log, rather than stopping the daemon.
+  - The token is read at each request, so that a new one takes effect without a reload; HEAD is refused like any method but GET.
+  - Every answer that cannot be made is 503, with its error.
+
 ## The owner applied to the other copies (specs.md §9, §15.4, §15.10, §17.2)
 
 Commit "Apply the owner of a metadata change to the other copies", on `develop`, as the maintainer chose on 2026-11-12.

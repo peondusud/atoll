@@ -33,27 +33,27 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **Trash.** `atoll prune`, `trash list`, `restore` and `purge`, the purge by retention and `max_size`, also run by the daemon, and Atoll's own empty folders removed (§17).
 - **mergerfs.** `atoll mergerfs-config` (§21.1).
 - **The daemon that runs for good.** fanotify, or inotify, with the events grouped per path; the catalog's lock taken per pass, with commands waiting for it; rescans and new files' hashes inside the maintenance window; the mount check every 30 s; mergerfs's branches changed at runtime; the remount after a USB reset; reload on `SIGHUP`; a systemd unit (§15.13).
+- **The local API.** The daemon answers status, disks, trash and guards over a Unix socket, and over TCP with a token on loopback or Tailscale (§25.1).
 - **Alerts.** ntfy alerts after each pass, kept in the catalog so that a restart sends again only what is due, and `atoll notify test` (§23).
 - **The catalog.** `atoll catalog backup`, every night by the daemon too, `verify` against the disks, and `rebuild` from them (§9).
 - **The scrub.** `atoll scrub`, and the daemon inside `integrity.window`, check each chunk of the copies due, quarantine a corrupt copy when a healthy one exists, and resume at the chunk the budget reached (§16).
 - **The disk commands.** `atoll disk add`, `show`, `remove` with `--evacuate`, `fail` and `replace`, which edit the configuration keeping every other byte, check the topology and the mount point, and drain a disk through the daemon's passes (§10, §18).
 - **Tests.** The break-glass test, and the failed-mount test (§27).
-- **Contracts and conformance.** 44 vector files and 538 black-box scenarios shared with the Rust version (§29).
+- **Contracts and conformance.** 45 vector files and 538 black-box scenarios shared with the Rust version (§29).
 - **Local CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3 (`test/ci/run.sh`).
 
 ### Remaining
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **The local API**: a Unix socket, and HTTP with a token.
-2. **The rest of the trash**: `restore --to`. The reasons `rebalance` and `repaired` come with balancing and repair.
-3. **The command line**: `--help`, the French translation, and durations written as the configuration writes them.
-4. **Smaller limits**:
+1. **The rest of the trash**: `restore --to`. The reasons `rebalance` and `repaired` come with balancing and repair.
+2. **The command line**: `--help`, the French translation, and durations written as the configuration writes them.
+3. **Smaller limits**:
    - an overwriting move or a swap of two names;
    - a folder renamed into the old name of one that waits;
    - operation ids after `catalog rebuild`;
    - NTFS short names.
-5. **The memory of a daemon that runs for days**, measured.
+4. **The memory of a daemon that runs for days**, measured.
 
 ## Beta: phase 1b, the complete Linux MVP
 

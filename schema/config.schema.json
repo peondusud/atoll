@@ -315,6 +315,29 @@
         }
       }
     },
+    "api": {
+      "description": "The local API of the daemon that runs for good (specs.md §25.1).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "socket": {
+          "description": "Its Unix socket, made with mode 0660; empty for none.",
+          "$ref": "#/$defs/optional_path",
+          "default": "/run/atoll/atoll.sock"
+        },
+        "listen": {
+          "description": "An address and a port for HTTP over TCP, a loopback one or one of the Tailscale network (specs.md §29.5); empty for none.",
+          "type": "string",
+          "format": "atoll-optional-listen",
+          "default": ""
+        },
+        "token_file": {
+          "description": "A file that holds the Bearer token HTTP over TCP asks for; listen needs it.",
+          "$ref": "#/$defs/optional_path",
+          "default": ""
+        }
+      }
+    },
     "rule": {
       "description": "Ordered: the first matching rule wins (specs.md §11.3).",
       "type": "array",

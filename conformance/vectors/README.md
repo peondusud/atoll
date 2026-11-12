@@ -40,6 +40,15 @@ One JSON file per function. Every file has this envelope:
 | `nanoseconds` | integer | the duration in nanoseconds |
 | `error` | boolean | `true` when `input` is rejected |
 
+### `listen.json` — `api.listen` (§25.1, §29.5)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `input` | string | the value as written in the configuration |
+| `address` | string | the address, in its canonical form: dotted decimal, or RFC 5952 for IPv6 |
+| `port` | integer | the port |
+| `error` | boolean | `true` when `input` is rejected |
+
 ### `size.json` — sizes (§29.5)
 
 | Field | Type | Meaning |
