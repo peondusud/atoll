@@ -37,13 +37,17 @@
     "branch": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["disk", "path", "minfreespace_bytes"],
+      "required": ["disk", "path", "mode", "minfreespace_bytes"],
       "properties": {
         "disk": { "type": "string", "minLength": 1 },
         "path": {
           "description": "<mount>/<root> of the disk, not escaped.",
           "type": "string",
           "minLength": 1
+        },
+        "mode": {
+          "description": "RW; NC for a disk draining, RO for a disk failed, which comes after the others (specs.md §21.1).",
+          "enum": ["RW", "NC", "RO"]
         },
         "minfreespace_bytes": {
           "description": "What placement.min_free keeps free on the disk, or null when the branch has none of its own: its capacity was never recorded and min_free holds no size.",

@@ -61,6 +61,7 @@ internal/names/        exact paths, collision keys, per-filesystem compatibility
 internal/solver/       placement, capacity, original selection, job plan (pure)
 internal/value/        value grammars: durations, sizes, percentages, time windows (pure)
 internal/jobs/         queue, atomic copy pipeline, per-path locks
+internal/daemon/       the daemon that runs for good: its loop, mount checks, runtime branches, remount
 internal/ops/          operation journal, crash recovery
 internal/watch/        fanotify / inotify, rescans, event grouping, file identity
 internal/integrity/    hashing (pure), scrub, repair, quarantine, duplicates

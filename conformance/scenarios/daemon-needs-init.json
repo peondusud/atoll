@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a725",
-  "description": "With no catalog there is nothing to read, and none is created.",
+  "spec": "specs.md \u00a725, \u00a715.13",
+  "description": "With no catalog there is nothing to read, and none is created: a daemon that would run for good exits with 1 at once.",
   "disks": [
     {
       "id": "state",
@@ -38,6 +38,21 @@
         "confirm",
         "--disk",
         "state"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--dry-run"
       ],
       "exit": 1
     },

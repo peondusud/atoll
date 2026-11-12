@@ -71,7 +71,7 @@ func checkDisks(tree map[string]any, c *Config, found *problems) {
 		c.Disks = append(c.Disks, Disk{
 			ID: text(d, "id"), UUID: text(d, "uuid"), Mount: text(d, "mount"), FS: fs,
 			Role: text(d, "role"), Domain: text(d, "domain"), Tags: stringList(d, "tags"),
-			Root: root, Workdir: workdir,
+			Root: root, Workdir: workdir, State: text(d, "state"),
 		})
 	}
 	checkMounts(tree, disks, found)

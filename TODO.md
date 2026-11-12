@@ -2,6 +2,35 @@
 
 Open work, in a suggested order. Finished work is in [DONE.md](DONE.md), lessons in [LESSONS.md](LESSONS.md). Items marked **decision** change a contract (specs.md §29.3) or an invariant: ask the maintainer first (CLAUDE.md).
 
+## Decisions for the alpha (the maintainer, 2026-11-12)
+
+The work goes to the `develop` branch, with one pull request once the big work is done. An ambiguity these do not settle takes the safest option, and DONE.md lists it as decided without the maintainer, to confirm. New contracts follow the style of the existing ones, vectors or scenarios first, each listed for review.
+
+- **Order:** the daemon that runs for good, then ntfy alerts, `atoll names check`, the disk commands, the scrub. The alpha also takes in `atoll catalog backup | verify | rebuild`, `atoll disk fail` and `disk replace`, the owner applied to the other copies, and the local API.
+- **The daemon:**
+  - **Passes.** A pass walks every disk, as `daemon --until-idle` does: each pass confirms every writable disk anyway, and sparing the disks' sleep is phase 2b.
+  - **The lock.** The catalog's lock is taken for each pass, and a command that finds it taken waits for it, saying so, instead of exiting with 1.
+  - **`--foreground`.** `atoll daemon` without it is the same as with it.
+  - **The account.** A systemd unit runs it as a dedicated user `atoll`, with the capabilities `CAP_SYS_ADMIN`, `CAP_DAC_READ_SEARCH`, `CAP_DAC_OVERRIDE`, `CAP_CHOWN` and `CAP_FOWNER`, the group `disk`, `NoNewPrivileges`, `ProtectHome=read-only` and `PrivateTmp`. Measured: so the user writes mergerfs's runtime branches, and runs `mount` and `umount`.
+  - **After a USB reset.** With `health.remount_after_reset`, the remount goes through the fstab entry of the mount point: `umount -l`, then `mount <mount point>`. Without an entry, an alert only. A dirty NTFS volume is never forced.
+- **The disk commands:**
+  - **`disk add`.** It takes the disk's id from the mount point's last component, or `--id`; one that is not a valid identifier, or is taken, is refused.
+  - **`disk remove --evacuate`** is in the alpha. It marks the disk `draining` and returns, and the daemon's passes re-create elsewhere what only that disk holds. Once nothing depends on it, it is `retired`, and `disk remove` without `--evacuate` takes it out of the configuration.
+  - **`disk replace u2 --with <mount>`.** The new disk comes in as `disk add` brings one, with an id of its own, and the domain and tags of `u2`. It receives the copies, and `u2` ends `retired`: the catalog never reads what it knows of one disk against another (§9).
+  - **`disk fail u2 --yes`.** It re-creates at once the missing replicas, and leaves `u2` `failed` in the configuration: never a source or a target again, its copies counting for nothing, `failed` even if it comes back. `disk remove u2` takes it out.
+  - **Configuration changes.** The daemon reads the configuration again only on `SIGHUP`, which `systemctl reload atoll` sends. `disk add` and `disk remove` tell it so themselves. A change made by hand needs that reload.
+  - **`chattr +i`.** The flag of the covered mount point is read through a non-recursive bind mount of its parent, in a private, throwaway mount namespace.
+- **The scrub.** A corrupt copy goes to the trash when a healthy copy exists, re-verified first, and replication re-creates it. A file with one copy is marked and alerted only. A scrub resumes at the chunk where its budget stopped, through a catalog migration.
+- **Alerts.**
+  - **When.** The daemon sends them, not the commands: when a condition appears, then every 24 h while it lasts. The files of one pass go in one alert, and the state of the alerts is kept in the catalog.
+  - **ntfy.** A new key, `alerts.ntfy_token_file`, gives ntfy's token. `atoll notify test` sends a test alert.
+- **The local API.** A Unix socket, and HTTP with a token (§26), described in `api/openapi.yaml`.
+- **Settled at the same time:**
+  - **The `ntfs` driver** stays `readonly` in the alpha.
+  - **A nested btrfs subvolume** is another mount: the walk leaves it out and lists it in `other_mounts`.
+  - **The choices DONE.md listed as "to confirm"** are confirmed.
+  - **Catalog backups.** They are daily, in `<catalog folder>/backups/`, 7 kept. With `catalog_on_disks`, the latest also goes in each disk's `Atoll/catalog/`. A rebuild sets the old catalog aside.
+
 ## Names (specs.md §30)
 
 To decide before the solver, the scanner and `atoll names check` need them:
@@ -32,28 +61,29 @@ Every item here is a **decision**:
   - `--help`, the French translation of the CLI, and human output that writes durations as the configuration does: `atoll rules explain` prints `settle_ns = 600000000000`;
   - the fallbacks of §12.2 for the modes, when jobs act on them: `rules.Policy` holds what the configuration asks for, and `atoll scan` already gives the plan only what has an effect;
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
-- **decision**: a nested btrfs subvolume below the root has its own inode numbers, so `file_key` does not identify a file there, and what happens to a hard-linked file can write another file's row, which then reads as changed. Also, nothing can move from it to the trash, as `rename` gives `EXDEV`. Should a walk treat a folder on another device like a folder on another mount?
+- The catalog: the daemon's daily backup inside `maintenance.window`; in `catalog verify`, the read-only comparison of the catalog with the disks; and `catalog rebuild`, which sets the old catalog aside. `catalog backup` and the integrity checks are done.
 - `catalog rebuild` must start `ops.id` past the ids in each disk's trash and in each `tmp/`, as must `atoll init` over a catalog that went missing, so that a new operation's folder or `<op id>.part` does not meet an old one (§14.2, §17): both restart `sqlite_sequence`. Until then such a meeting costs one `io-error`, and the next run takes another id.
-- Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. A daemon that runs for good, with its watcher, will hold more.
+- Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. The daemon that runs for good, with its watcher and its grouping, is still to measure over hours of changes.
 - What the mount check of §10 leaves to do for disks:
-  - the check every 30 s in the daemon, which must wake no disk (§18), and the alert when a disk becomes `missing` or `readonly`;
-  - with it, the runtime branches of mergerfs (§21.1): a `missing` disk's branch removed through `.mergerfs`, and put back at its place once the disk is reconciled, by writing the whole list (measured on mergerfs 2.40.2), which the maintainer chose to bring with the daemon;
-  - `Atoll/disk.toml` and `atoll disk show`, which could show `time_precision_ns`;
-  - at `disk add`: the block-device topology (R-06), another filesystem with the same identifier (§10), and the warning about `chattr +i`;
-  - the remount after a USB reset (§10).
-- `disk add` and `disk remove`, and the other `atoll disk` commands. `disk remove` must refuse a disk with `planned` operations: on a disk no longer in the configuration they wait for good, and every command that writes exits with 4.
-- The scan in the daemon: at startup, after an overflow, every `maintenance.rescan_every`, and hashing new files inside `maintenance.window` (§15.1, §18). `atoll scan` hashes only with `--full`.
-- The modes `immediate`, which needs the watcher to know a file closed and stable, and `scheduled`, which runs inside `[replication].window`: until then both fall back to `deferred`, which `daemon --until-idle` runs, settle counted from when a file was first seen (§12.2, §12.3, §14.1). The `manual_alert_after` alert for a `manual` file left unprotected.
+  - `atoll disk show`, which could show `time_precision_ns`, and reading `Atoll/disk.toml` at each mount check;
+  - the topology check of R-06 at each start, not only at `disk add`, with the catalog's `disks.device`.
+- What the daemon that runs for good (§15.13) leaves:
+  - the watcher's limits: a folder that leaves the root under inotify and comes back in another read is watched again from scratch; a path past `PATH_MAX` cannot get a mark of its own on ntfs-3g; the process of an event already gone reads as `user`;
+  - the remount after a USB reset of an ntfs-3g disk, through `mount.ntfs-3g`, as the dedicated user, is not tested.
+- The modes `immediate`, which needs the watcher to know a file closed and stable, and `scheduled`, which runs inside `[replication].window`: until then both fall back to `deferred`, which `daemon --until-idle` runs, settle counted from when a file was first seen (§12.2, §12.3, §14.1).
 - What the copy pipeline leaves for later (§14): one copy at a time, in one pass, is all the daemon runs, so `max_parallel_per_disk` waits for its loop; the creation time set after the rename on Windows (§7).
 - A folder renamed on one disk into the old name of one that waits there (`mv Dx N; mv D Dx`, while a copy below Dx on another disk has a clock running, is held by the guard, or cannot be read): what only other disks hold below Dx stays there, in the folder now named Dx (specs.md §15.12, `daemon-folder-rotation-while-waiting`). The fix holds back what lands in that old name, folders and copies moved in from elsewhere, until the one that waits is decided. It needs that wait known before the files of a pass are decided, and must not block a cycle, where each folder lands in the other's old name.
 - The owner applied to the other copies (§15.4, Limits), which the maintainer chose to leave for later when the mode came: it would take `copies.uid` and `copies.gid`, recorded as `copies.mode` is, and operations `chown` journaled with their reprise. Until then a `chown` is a metadata change that applies nothing. The grouping of events per path comes with the watcher (§15.1).
 - What modifications leave as limits (§15.4, §15.12): an overwriting move (`mv P Q`, Q there) and a swap of two names on one disk, and a copy replaced by anything but a regular file, which are only reported. `deletes.direct = "restore"` (§15.5), which the copy pipeline now allows, still propagates nothing.
-- What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), are to confirm.
-- A volume that ntfs3 left with names that disagree (§17.2) shows only as a warning in the log and exit 4 on every run on that disk: say what to do, which is a repair of the volume, in an alert once alerts exist, and in `atoll status`.
-- The rest of the trash (§17): `[trash].max_size` and its purging order, the `.chunks` folders with `repair`, `restore --to` with the copy pipeline, the link guard, the alert for a name the driver refuses, the reasons other than `surplus`, `deleted` and `renamed`, and removing Atoll's own folders below the root once they are empty (§6.1). A folder's attributes other than its mode and owner wait for the pipeline.
-- Detection-only scrub. `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`, and `repair` (phase 1b) must look for the conflict again before it clears that.
+- What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), were confirmed on 2026-11-12.
+- A volume that ntfs3 left with names that disagree (§17.2) shows only as a warning in the log and exit 4 on every run on that disk: say what to do, which is a repair of the volume, in an alert, which §23 does not list yet, and in `atoll status`.
+- The rest of the trash (§17): `[trash].max_size` and its purging order, the `.chunks` folders with `repair`, `restore --to` with the copy pipeline, the link guard, the reasons other than `surplus`, `deleted` and `renamed`, and removing Atoll's own folders below the root once they are empty (§6.1). A folder's attributes other than its mode and owner wait for the pipeline.
+- The scrub: `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`, and `repair` (phase 1b) must look for the conflict again before it clears that.
 - The settings of the openmediavault mergerfs plugin from `atoll mergerfs-config` (§21.1), which the maintainer left for later: the fstab line and `--json` are done.
-- `atoll names check`: the CLI over `names.Check`, reading the catalog, with the JSON of `api/schemas/names-check.schema.json`.
-- ntfy alerts, among them the two guards of a disk tripped: for now only the `guards` of a pass, exit code 3 and `atoll guard list` say so.
+- What the alerts leave (§23): Gotify and SMTP, SMART and a volume marked dirty, with phase 1b; the trash full, with `trash.max_size`. The counts read the whole of `files` after each pass, with no index: to measure on 200,000 files, before an index on the states that alert.
 - The operation journal (`ops`) covers the trash, the renames of propagation, files and folders, and the copies (`create`) so far (§14.2, §17.1, §17.2). Each new kind of operation needs its own reprise, with kill -9 at each step and fault injection.
 - The break-glass test runs in `test/loopdev` (`TestBreakGlass`), so in the CI's qemu job, on two disks and every driver. What it leaves: a pool of more disks, a disk away when Atoll goes, and, once Atoll's own view comes (phase 2a), comparing that view with plain mergerfs.
+
+## Later phases (specs.md §28)
+
+- **Observability, for phase 3 (the Rust rewrite)**, as the maintainer asked on 2026-11-12: OpenTelemetry, Vector, or both. OpenTelemetry would give the daemon's traces, metrics and logs over OTLP. Vector (vector.dev) would collect the logs and metrics and send them on. Phase 2b already brings Prometheus's `/metrics`; what the rewrite exports, and through which, is to decide then.

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/disk-show.schema.json",
+  "title": "atoll disk show --json",
+  "description": "One disk: its configuration, its mount check, what the catalog knows of it, and its marker (specs.md §10, §18, §25).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "uuid", "fs", "mount", "root", "workdir", "role", "domain", "tags", "configured", "state", "reason", "capacity_bytes",
+    "free_bytes", "time_precision_ns", "copies", "depending", "depending_first", "only_there", "planned_operations", "marker"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+    "uuid": { "type": "string", "minLength": 1 },
+    "fs": { "enum": ["ext4", "ntfs", "xfs", "btrfs"] },
+    "mount": { "type": "string", "minLength": 1 },
+    "root": { "type": "string", "minLength": 1 },
+    "workdir": { "type": "string", "minLength": 1 },
+    "role": { "enum": ["data", "cache"] },
+    "domain": { "type": ["string", "null"] },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "configured": {
+      "description": "The state its configuration sets: in-service when none.",
+      "enum": ["in-service", "draining", "failed"]
+    },
+    "state": {
+      "description": "failed when configured so; draining when configured so and its mount check finds it online; otherwise what the check finds.",
+      "enum": ["online", "readonly", "missing", "draining", "failed"]
+    },
+    "reason": {
+      "description": "The reason its mount check gives, null when online (specs.md §10).",
+      "type": ["string", "null"]
+    },
+    "capacity_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "free_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "time_precision_ns": { "type": ["integer", "null"], "minimum": 1 },
+    "copies": {
+      "description": "Its copies in the catalog, counted by state; a state with none is left out.",
+      "type": "object",
+      "propertyNames": { "enum": ["ok", "pending", "stale", "corrupt", "unavailable", "surplus"] },
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+    "depending": { "type": "integer", "minimum": 0 },
+    "depending_first": { "type": "array", "maxItems": 10, "items": { "type": "string" } },
+    "only_there": { "type": "integer", "minimum": 0 },
+    "planned_operations": { "type": "integer", "minimum": 0 },
+    "marker": {
+      "description": "Its Atoll/disk.toml, read from a disk its check finds there and that is not failed; null when there is none, or it is not one this version reads.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["pool_id", "disk_id", "fs_uuid"],
+      "properties": {
+        "pool_id": { "type": "string" },
+        "disk_id": { "type": "string" },
+        "fs_uuid": { "type": "string" }
+      }
+    }
+  }
+}

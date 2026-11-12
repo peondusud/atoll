@@ -78,6 +78,19 @@ func (machine) Root(mount, root string) RootSeen {
 	return lookAtRoot(mount, root)
 }
 
+// PhysicalDisks reads them from /sys: a btrfs mount holds an anonymous device number, so its devices come from
+// its UUID.
+func (machine) PhysicalDisks(fs names.Filesystem, entry *MountEntry, uuid string) ([]string, error) {
+	if fs == names.Btrfs {
+		return fsx.BtrfsDisks(uuid) //nolint:wrapcheck // fsx says what it read
+	}
+	return fsx.PhysicalDisks(entry.Major, entry.Minor) //nolint:wrapcheck // likewise
+}
+
+func (machine) MountPointImmutable(mount string) (bool, error) {
+	return fsx.MountPointImmutable(mount) //nolint:wrapcheck // likewise
+}
+
 func (machine) Now() int64 {
 	return time.Now().UnixNano()
 }

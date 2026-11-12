@@ -13,3 +13,13 @@ func ReadFile(path string) ([]byte, error) {
 	}
 	return data, nil
 }
+
+// Readlink reads where a symbolic link that is not on a pool disk leads, such as /proc's link to a process's
+// executable, or to a file a descriptor holds.
+func Readlink(path string) (string, error) {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return "", fmt.Errorf("readlink: %w", err)
+	}
+	return target, nil
+}

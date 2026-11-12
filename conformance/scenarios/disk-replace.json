@@ -1,0 +1,199 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.4, \u00a718, \u00a721.1, \u00a725",
+  "description": "disk replace brings the new disk in as disk add does, with the domain and tags of the old one, which becomes draining. The next pass makes the copies the old disk held, on the disks that count, and the old one is then taken out with disk remove.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ],
+      "immutable": true
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nsettle = \"0s\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ndomain = \"d1\"\ntags = [\"usb\"]\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "replace",
+        "t1",
+        "--with",
+        "${SANDBOX}/disks/t3",
+        "--domain",
+        "d9"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "replace",
+        "t1",
+        "--json",
+        "--with=${SANDBOX}/disks/t3"
+      ],
+      "stdout_json": {
+        "disk": {
+          "id": "t3",
+          "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+          "fs": "ext4",
+          "mount": "${SANDBOX}/disks/t3",
+          "domain": "d1",
+          "tags": [
+            "usb"
+          ],
+          "state": "online",
+          "reason": null
+        },
+        "physical_disks": [
+          "t3"
+        ],
+        "dry_run": false,
+        "warnings": [],
+        "replaces": {
+          "id": "t1",
+          "state": "draining"
+        }
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state, domain, tags FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "draining",
+          "d1",
+          "[\"usb\"]"
+        ],
+        [
+          "t2",
+          "online",
+          null,
+          "[]"
+        ],
+        [
+          "t3",
+          "online",
+          "d1",
+          "[\"usb\"]"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY 1, 2",
+      "rows": [
+        [
+          "a.mkv",
+          "t1",
+          "ok"
+        ],
+        [
+          "a.mkv",
+          "t2",
+          "ok"
+        ],
+        [
+          "a.mkv",
+          "t3",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--yes"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t2",
+            "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t2",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t3",
+            "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t3",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          }
+        ]
+      }
+    }
+  ]
+}

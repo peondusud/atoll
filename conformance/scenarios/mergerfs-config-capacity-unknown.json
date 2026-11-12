@@ -49,11 +49,13 @@
           {
             "disk": "t1",
             "path": "${SANDBOX}/disks/t1/media",
+            "mode": "RW",
             "minfreespace_bytes": null
           },
           {
             "disk": "x1",
             "path": "${SANDBOX}/disks/x1/media",
+            "mode": "RW",
             "minfreespace_bytes": null
           }
         ],
@@ -103,11 +105,13 @@
           {
             "disk": "t1",
             "path": "${SANDBOX}/disks/t1/media",
+            "mode": "RW",
             "minfreespace_bytes": 50000
           },
           {
             "disk": "x1",
             "path": "${SANDBOX}/disks/x1/media",
+            "mode": "RW",
             "minfreespace_bytes": null
           }
         ],
@@ -150,11 +154,13 @@
           {
             "disk": "t1",
             "path": "${SANDBOX}/disks/t1/media",
+            "mode": "RW",
             "minfreespace_bytes": 50000
           },
           {
             "disk": "x1",
             "path": "${SANDBOX}/disks/x1/media",
+            "mode": "RW",
             "minfreespace_bytes": 102400
           }
         ],

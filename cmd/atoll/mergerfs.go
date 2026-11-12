@@ -15,6 +15,7 @@ import (
 type mergerfsBranch struct {
 	Disk    string `json:"disk"`
 	Path    string `json:"path"`
+	Mode    string `json:"mode"`
 	MinFree *int64 `json:"minfreespace_bytes"`
 }
 
@@ -101,7 +102,7 @@ func mergerfsConfig(ctx context.Context, file string, c *config.Config) (out *me
 	}
 	out = &mergerfsOutput{Mount: m.Mount, Branches: make([]mergerfsBranch, 0, len(m.Branches)), Options: m.Options, Fstab: m.Fstab()}
 	for _, b := range m.Branches {
-		out.Branches = append(out.Branches, mergerfsBranch{Disk: b.Disk, Path: b.Path, MinFree: b.MinFree})
+		out.Branches = append(out.Branches, mergerfsBranch{Disk: b.Disk, Path: b.Path, Mode: b.Mode, MinFree: b.MinFree})
 	}
 	if known {
 		out.Largest = &largest

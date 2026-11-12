@@ -14,7 +14,6 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
-	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
@@ -64,7 +63,7 @@ func exitOf(f *writeFlags, s *trash.Summary) int {
 
 // session opens what a command that writes needs, runs it and closes everything, the output
 // included: nothing is left unsaid on an exit code that says the rest.
-func session(c *config.Config, stdout io.Writer, apply bool, run func(*trash.Session, *bufio.Writer) error) (err error) {
+func session(c *config.Config, stdout, stderr io.Writer, apply bool, run func(*trash.Session, *bufio.Writer) error) (err error) {
 	ctx := context.Background()
 	machine, err := disks.NewMachine()
 	if err != nil {
@@ -81,7 +80,7 @@ func session(c *config.Config, stdout io.Writer, apply bool, run func(*trash.Ses
 		return fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	if release, err = fsx.LockFile(catalogPath(c)); err != nil {
+	if release, err = lockCatalog(ctx, c, stderr); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	s, err := trash.Open(ctx, db, c, machine, apply)
@@ -150,7 +149,7 @@ func runPrune(configPath string, args []string, stdout, stderr io.Writer) int {
 		return failure(stderr, err)
 	}
 	code := exitOK
-	err = session(c, stdout, flags.yes, func(s *trash.Session, out *bufio.Writer) error {
+	err = session(c, stdout, stderr, flags.yes, func(s *trash.Session, out *bufio.Writer) error {
 		list := newJSONList(out, "copies")
 		summary, err := s.Prune(context.Background(), func(item *trash.PruneItem) error {
 			if !flags.asJSON {
@@ -332,7 +331,7 @@ func trashRestore(configPath string, args []string, stdout, stderr io.Writer) in
 		return failure(stderr, err)
 	}
 	code := exitOK
-	err = session(c, stdout, parsed.yes, func(s *trash.Session, out *bufio.Writer) error {
+	err = session(c, stdout, stderr, parsed.yes, func(s *trash.Session, out *bufio.Writer) error {
 		list := newJSONList(out, "entries")
 		summary, err := s.Restore(context.Background(), parsed.under, func(item *trash.EntryItem) error {
 			if !parsed.asJSON {
@@ -412,7 +411,7 @@ func trashPurge(configPath string, args []string, stdout, stderr io.Writer) int 
 		return failure(stderr, err)
 	}
 	code := exitOK
-	err = session(c, stdout, parsed.yes, func(s *trash.Session, out *bufio.Writer) error {
+	err = session(c, stdout, stderr, parsed.yes, func(s *trash.Session, out *bufio.Writer) error {
 		list := newJSONList(out, "entries")
 		summary, err := s.Purge(context.Background(), parsed.olderThan, func(item *trash.EntryItem) error {
 			if !parsed.asJSON {

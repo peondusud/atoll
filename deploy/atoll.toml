@@ -133,9 +133,10 @@ url          = ""
 api_key_file = ""
 
 [alerts]
-ntfy   = "https://ntfy.sh/my-secret-topic"
-gotify = ""
-smtp   = ""
+ntfy            = "https://ntfy.sh/my-secret-topic"
+ntfy_token_file = ""                    # a Bearer token, for a ntfy server that asks one
+gotify          = ""
+smtp            = ""
 
 # Rules: the first matching rule wins; conditions are combined with AND.
 [[rule]]

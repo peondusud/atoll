@@ -89,7 +89,8 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 	out := &Outcome{Disks: []Report{}}
 	for i := range c.Disks {
 		d := &c.Disks[i]
-		if opts.Disk != "" && d.ID != opts.Disk {
+		// A failed disk is never read again, so it is not walked and has no report (specs.md §18).
+		if opts.Disk != "" && d.ID != opts.Disk || d.State == config.DiskFailed {
 			continue
 		}
 		// Confirmed as a pass's look is, and every time, as a scan records what it found (specs.md §10, §15.10).
@@ -142,7 +143,9 @@ func sortPaths(r *Report) {
 }
 
 // diskRows says what to record of each disk. One that passed its check and cannot say how full it is
-// counts as failed, in the verdict too, and keeps what the last check measured (specs.md §15.10).
+// counts as failed, in the verdict too, and keeps what the last check measured (specs.md §15.10). A disk the
+// configuration marks failed is failed, whatever its check says, and nothing is measured on it; one it marks
+// draining is draining, unless its check finds it missing (specs.md §9, §18).
 func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now int64) []catalog.Disk {
 	rows := make([]catalog.Disk, 0, len(c.Disks))
 	for i := range c.Disks {
@@ -150,6 +153,11 @@ func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now i
 		row := catalog.Disk{
 			ID: d.ID, UUID: d.UUID, FS: string(d.FS), Mount: d.Mount, Root: d.Root, Workdir: d.Workdir, Role: d.Role,
 			Position: i, Domain: d.Domain, Tags: d.Tags, State: string(verdicts[i].State),
+		}
+		if d.State == config.DiskFailed {
+			row.State = config.DiskFailed
+			rows = append(rows, row)
+			continue
 		}
 		if verdicts[i].State != disks.Missing {
 			capacity, free, err := m.Space(d.Mount)
@@ -160,6 +168,10 @@ func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now i
 				row.Seen, row.Capacity, row.Free, row.LastSeenNS = true, capacity, free, now
 				row.TimePrecisionNS = verdicts[i].TimePrecisionNS
 			}
+		}
+		// Draining while it can be read and written: one mounted read-only is readonly, and its evacuation waits.
+		if d.State == config.DiskDraining && row.State == string(disks.Online) {
+			row.State = config.DiskDraining
 		}
 		rows = append(rows, row)
 	}
@@ -811,6 +823,55 @@ func hashCopies(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 		}
 	}
 	return nil
+}
+
+// HashNew reads the copies of the files that have no hash yet, on the disks that pass their mount check, until
+// the time until; it says whether it stopped there with some left (specs.md §15.13). It walks nothing: a copy
+// that is no longer what its row says is left as it is, for the next pass to look at, and so is one on a disk
+// that fails.
+func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64) (left bool, err error) {
+	now := m.Now()
+	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	if err != nil {
+		return false, fmt.Errorf("%w", err)
+	}
+	readers := make(map[string]*diskReader, len(c.Disks))
+	defer func() {
+		for _, r := range readers {
+			r.close()
+		}
+	}()
+	order := make(map[string]int, len(c.Disks))
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		order[d.ID] = i
+		if verdicts[i].State == disks.Missing || d.State == config.DiskFailed {
+			continue
+		}
+		reader := &diskReader{report: &Report{ID: d.ID, Verdict: verdicts[i], Walked: true}, skip: map[string]bool{}, notReached: map[string]bool{}}
+		if reader.root, err = m.OpenRoot(d.Mount, d.Root); err != nil {
+			reader.fail(err)
+		}
+		readers[d.ID] = reader
+	}
+	files := catalog.NewFileReader(db)
+	for {
+		page, err := files.NextUnhashed(ctx)
+		if err != nil {
+			return false, fmt.Errorf("catalog: %w", err)
+		}
+		if len(page) == 0 {
+			return false, nil
+		}
+		for i := range page {
+			if m.Now() >= until {
+				return true, nil
+			}
+			if err := hashFile(ctx, db, &page[i], readers, order, now); err != nil {
+				return false, err
+			}
+		}
+	}
 }
 
 func movedFrom(r *Report) []string {

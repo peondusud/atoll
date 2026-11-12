@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,26 +65,59 @@ func TestTheCatalogLock(t *testing.T) {
 	if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
 		t.Fatal(err)
 	}
+	for _, args := range [][]string{{"scan"}, {"prune"}, {"prune", "--yes"}, {"prune", "--dry-run"}, {"trash", "restore", "a"}, {"trash", "purge"}, {"daemon", "--until-idle"}, {"replicate", "a"}} {
+		release, err := fsx.LockFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr lockedBuffer
+		done := make(chan int)
+		go func() { done <- run(append([]string{"--config", config}, args...), &stdout, &stderr) }()
+		select {
+		case code := <-done:
+			release()
+			t.Fatalf("%v: did not wait, exit %d: %s", args, code, stderr.String())
+		case <-time.After(500 * time.Millisecond):
+		}
+		if stdout.String() != "" || !strings.Contains(stderr.String(), "waiting for the catalog") {
+			t.Errorf("%v while it waits: %q, %q", args, stdout.String(), stderr.String())
+		}
+		release()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%v: still waiting once the lock is free", args)
+		}
+	}
 	release, err := fsx.LockFile(file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
-	for _, args := range [][]string{{"scan"}, {"prune"}, {"prune", "--yes"}, {"prune", "--dry-run"}, {"trash", "restore", "a"}, {"trash", "purge"}} {
-		var stdout, stderr bytes.Buffer
-		if code := run(append([]string{"--config", config}, args...), &stdout, &stderr); code != exitError {
-			t.Errorf("%v: exit %d", args, code)
-		}
-		if stdout.Len() != 0 || !strings.Contains(stderr.String(), fsx.ErrBusy.Error()) {
-			t.Errorf("%v: %q, %q", args, stdout.String(), stderr.String())
-		}
-	}
 	for _, args := range [][]string{{"status"}, {"trash", "list"}, {"disk", "list"}} {
 		var stdout, stderr bytes.Buffer
 		if code := run(append([]string{"--config", config}, args...), &stdout, &stderr); code != exitOK {
 			t.Errorf("%v: exit %d, %s", args, code, stderr.String())
 		}
 	}
+}
+
+// lockedBuffer is a buffer a command writes to while the test reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // TestUsageInProcess runs in this process, as a panic would also exit with 2.

@@ -1,6 +1,7 @@
 package fsx
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -122,6 +124,9 @@ type File interface {
 	SetTimes(atime, mtime Time) error
 	SetMode(mode uint32) error
 	Sync() error
+	// DropCache asks the kernel to forget the file's clean pages, so that the next read comes from the disk: the
+	// scrub's second read of a chunk that did not match (specs.md §16).
+	DropCache() error
 	Close() error
 }
 
@@ -381,6 +386,17 @@ func (d *realDir) SetMtime(t Time) error {
 }
 
 // realOf finds the folder below any wrapping, as a system call takes only a real one.
+// Descriptor gives the descriptor of a folder of a disk, for what the kernel asks of a folder itself, as a
+// watch on it (specs.md §15.1). It stays the folder's: the caller never closes it, and stops using it once
+// the folder is closed.
+func Descriptor(d Dir) (int, error) {
+	r, err := realOf(d)
+	if err != nil {
+		return -1, err
+	}
+	return r.fd(), nil
+}
+
 func realOf(d Dir) (*realDir, error) {
 	for {
 		switch v := d.(type) {
@@ -437,6 +453,13 @@ func (f *realFile) SetMode(mode uint32) error {
 func (f *realFile) Sync() error {
 	if err := unix.Fsync(int(f.file.Fd())); err != nil {
 		return fmt.Errorf("fsync %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+func (f *realFile) DropCache() error {
+	if err := unix.Fadvise(int(f.file.Fd()), 0, 0, unix.FADV_DONTNEED); err != nil {
+		return fmt.Errorf("fadvise %q: %w", f.file.Name(), err)
 	}
 	return nil
 }
@@ -658,6 +681,36 @@ func LockFile(path string) (release func(), err error) {
 		return nil, fmt.Errorf("lock %q: %w", path, err)
 	}
 	return func() { _ = file.Close() }, nil
+}
+
+// lockRetry is how often WaitLockFile tries again: often enough that a command starts as soon as a pass ends,
+// rarely enough to cost nothing while it waits.
+const lockRetry = 200 * time.Millisecond
+
+// WaitLockFile takes the lock of LockFile, waiting while another process holds it (specs.md §25): waiting is
+// called once, then the lock is tried again until it is free or ctx is done. Trying again, rather than
+// blocking in the kernel, lets a cancel end the wait.
+func WaitLockFile(ctx context.Context, path string, waiting func()) (release func(), err error) {
+	release, err = LockFile(path)
+	if !errors.Is(err, ErrBusy) {
+		return release, err
+	}
+	if waiting != nil {
+		waiting()
+	}
+	tick := time.NewTicker(lockRetry)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("lock %q: %w", path, ctx.Err())
+		case <-tick.C:
+		}
+		release, err = LockFile(path)
+		if !errors.Is(err, ErrBusy) {
+			return release, err
+		}
+	}
 }
 
 // Space is what statfs says about a disk: all of it, and what a program may fill.

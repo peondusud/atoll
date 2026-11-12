@@ -47,6 +47,12 @@ func (e *Error) Error() string {
 	return "configuration: " + strings.Join(lines, "; ")
 }
 
+// The states a disk's configuration may set (specs.md §18). Left out, the disk is in service.
+const (
+	DiskDraining = "draining"
+	DiskFailed   = "failed"
+)
+
 // Disk is one [[disk]], with root and workdir resolved (specs.md §24.2).
 type Disk struct {
 	ID      string
@@ -58,6 +64,8 @@ type Disk struct {
 	Tags    []string
 	Root    string
 	Workdir string
+	// State is DiskDraining, DiskFailed, or "" for a disk in service.
+	State string
 }
 
 // Config is a configuration that loaded. Typed fields appear as the code that reads

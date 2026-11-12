@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/scrub.schema.json",
+  "title": "atoll scrub --json",
+  "description": "What a scrub read and found, disk by disk in configuration order (specs.md §16, §25). A disk failed has no line.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["applied", "disks"],
+  "properties": {
+    "applied": {
+      "description": "Whether what it found was recorded: false with --dry-run.",
+      "type": "boolean"
+    },
+    "disks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/disk" }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "path_b64": { "type": "string", "contentEncoding": "base64", "minLength": 1 }
+      },
+      "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }]
+    },
+    "paths": {
+      "description": "In the order they were read.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/path" }
+    },
+    "disk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "scrubbed", "copies_read", "bytes_read", "corrupt", "quarantined", "kept", "changed", "left"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+        "scrubbed": {
+          "description": "false when it could not be read, or the budget ran out before it.",
+          "type": "boolean"
+        },
+        "copies_read": {
+          "description": "The copies read whole that hold what their hashes say.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes_read": { "type": "integer", "minimum": 0 },
+        "corrupt": {
+          "description": "The copies whose content no longer matches, read again past the cache, their size and times unchanged.",
+          "$ref": "#/$defs/paths"
+        },
+        "quarantined": {
+          "description": "Of those, the ones another copy, read again first, is healthy for: moved to the trash with --yes, and to be moved without it.",
+          "$ref": "#/$defs/paths"
+        },
+        "kept": {
+          "description": "Of those, the ones left where they are: no healthy copy elsewhere, or a move that did not happen.",
+          "$ref": "#/$defs/paths"
+        },
+        "changed": {
+          "description": "The copies changed since their row, or while read: a modification, for the next pass.",
+          "$ref": "#/$defs/paths"
+        },
+        "left": {
+          "description": "Copies due were left when the budget ran out; the next scrub resumes at the chunk it reached.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

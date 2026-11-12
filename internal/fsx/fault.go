@@ -202,6 +202,13 @@ func (f *faultFile) Sync() error {
 	return f.File.Sync()
 }
 
+func (f *faultFile) DropCache() error {
+	if err := f.fail("dropcache", f.name); err != nil {
+		return err
+	}
+	return f.File.DropCache()
+}
+
 type faultWritable struct {
 	WritableFile
 	name string

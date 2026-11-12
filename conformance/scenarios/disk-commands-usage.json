@@ -1,0 +1,186 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.4, \u00a718, \u00a721.1, \u00a725",
+  "description": "disk remove, fail and show take one disk id, and their flags once each; --dry-run never goes with --yes; replace takes one id and --with. A usage error comes before the configuration is read, here a configuration with no catalog.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nsettle = \"0s\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "t2"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "T1"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--yes",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--dry-run",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--force"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "fail",
+        "t1",
+        "--evacuate"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "fail"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "show",
+        "t1",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "show"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "replace",
+        "t1"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "replace",
+        "--with",
+        "${SANDBOX}/disks/t1"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "replace",
+        "t1",
+        "--with",
+        "relative"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "replace",
+        "t1",
+        "--with",
+        "/a",
+        "--with",
+        "/b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "bogus"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t9"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "show",
+        "t9"
+      ],
+      "exit": 1
+    }
+  ]
+}

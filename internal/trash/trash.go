@@ -267,7 +267,7 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 			handle.Close()
 			return nil, s.lose(ctx, id, err)
 		}
-		if state := solver.DiskState(verdict.State); state != sl.state {
+		if state := heldState(sl.config, solver.DiskState(verdict.State)); state != sl.state {
 			sl.state = state
 			if err := catalog.SetDiskState(ctx, s.db, id, string(verdict.State)); err != nil {
 				handle.Close()
@@ -309,13 +309,25 @@ func (s *Session) cleanTmp(ctx context.Context, id string, handle *ops.Disk) err
 	return nil
 }
 
+// heldState is the state of a disk whose mount check gave state: a disk the configuration marks draining stays
+// draining while it can be read and written (specs.md §9, §18). One mounted read-only is readonly, and its
+// evacuation waits.
+func heldState(d *config.Disk, state solver.DiskState) solver.DiskState {
+	if d.State == config.DiskDraining && (state == solver.DiskOnline || state == solver.DiskStandby) {
+		return solver.DiskDraining
+	}
+	return state
+}
+
+// readable and writable take a draining disk in: its copies are the sources that evacuate it, and it stays in step
+// with the others until it leaves (specs.md §18). The plan never makes a copy on it.
 func readable(state solver.DiskState) bool {
-	return state == solver.DiskOnline || state == solver.DiskStandby || state == solver.DiskReadOnly
+	return state == solver.DiskOnline || state == solver.DiskStandby || state == solver.DiskReadOnly || state == solver.DiskDraining
 }
 
 func (s *Session) writable(id string) bool {
 	sl := s.slots[id]
-	return sl != nil && (sl.state == solver.DiskOnline || sl.state == solver.DiskStandby)
+	return sl != nil && (sl.state == solver.DiskOnline || sl.state == solver.DiskStandby || sl.state == solver.DiskDraining)
 }
 
 // lose records that a disk cannot be relied on any more, and what ran on it is over.
@@ -539,9 +551,9 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 	if handle == nil {
 		return outcomeUnavailable, nil
 	}
-	// A stale copy holds a version that came before the file's hash.
+	// A stale copy holds a version that came before the file's hash, and a corrupt one holds none.
 	hash := f.Hash
-	if reason == catalog.ReasonOverwritten {
+	if reason == catalog.ReasonOverwritten || reason == catalog.ReasonQuarantined {
 		hash = nil
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{

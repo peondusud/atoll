@@ -11,7 +11,6 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
-	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/names"
 )
@@ -97,7 +96,7 @@ func runReplicate(configPath string, args []string, stdout, stderr io.Writer) in
 		}
 		path, b64 := encodePath(item.Path)
 		return list.item(replicateCopy{Path: path, PathB64: b64, Disk: item.Disk, Source: item.Source, Size: item.Size, Outcome: item.Outcome})
-	})
+	}, stderr)
 	if err == nil && summary.Disabled {
 		err = writeText(stderr, "replicate: replication.enabled is false: nothing was queued or copied\n")
 	}
@@ -120,7 +119,7 @@ func runReplicate(configPath string, args []string, stdout, stderr io.Writer) in
 	return exitOK
 }
 
-func replicate(c *config.Config, opts jobs.ReplicateOptions, each func(*jobs.ReplicateItem) error) (summary *jobs.ReplicateSummary, err error) {
+func replicate(c *config.Config, opts jobs.ReplicateOptions, each func(*jobs.ReplicateItem) error, stderr io.Writer) (summary *jobs.ReplicateSummary, err error) {
 	ctx := context.Background()
 	machine, err := disks.NewMachine()
 	if err != nil {
@@ -137,7 +136,7 @@ func replicate(c *config.Config, opts jobs.ReplicateOptions, each func(*jobs.Rep
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	if release, err = fsx.LockFile(catalogPath(c)); err != nil {
+	if release, err = lockCatalog(ctx, c, stderr); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	summary, err = jobs.Replicate(ctx, db, c, machine, opts, each)

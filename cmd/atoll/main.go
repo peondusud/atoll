@@ -2,11 +2,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"runtime/debug"
 	"strings"
+
+	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/fsx"
 )
 
 // The exit codes of specs.md §29.3.
@@ -78,6 +82,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGuard(configPath, args[1:], stdout, stderr)
 	case "mergerfs-config":
 		return runMergerfsConfig(configPath, args[1:], stdout, stderr)
+	case "notify":
+		return runNotify(configPath, args[1:], stdout, stderr)
+	case "names":
+		return runNames(configPath, args[1:], stdout, stderr)
+	case "scrub":
+		return runScrub(configPath, args[1:], stdout, stderr)
+	case "catalog":
+		return runCatalog(configPath, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}
@@ -90,6 +102,14 @@ func setFlag(flag *bool, name string) error {
 	}
 	*flag = true
 	return nil
+}
+
+// lockCatalog takes the catalog's lock, waiting while another command or the daemon's pass holds it, and says
+// so once on standard error (specs.md §25).
+func lockCatalog(ctx context.Context, c *config.Config, stderr io.Writer) (func(), error) {
+	return fsx.WaitLockFile(ctx, catalogPath(c), func() {
+		report(stderr, "waiting for the catalog: another command, or a pass of the daemon, holds it")
+	})
 }
 
 func usage(stderr io.Writer, message string) int {

@@ -302,6 +302,11 @@
       "additionalProperties": false,
       "properties": {
         "ntfy": { "$ref": "#/$defs/http_url", "default": "" },
+        "ntfy_token_file": {
+          "description": "A file that holds the Bearer token of a ntfy server that asks one (specs.md §23).",
+          "$ref": "#/$defs/optional_path",
+          "default": ""
+        },
         "gotify": { "$ref": "#/$defs/http_url", "default": "" },
         "smtp": {
           "type": "string",
@@ -417,6 +422,10 @@
         "workdir": {
           "description": "Left out: layout.workdir.",
           "$ref": "#/$defs/folder_name"
+        },
+        "state": {
+          "description": "Set by atoll disk remove --evacuate (draining) and atoll disk fail (failed). Left out: the disk is in service (specs.md §18).",
+          "enum": ["draining", "failed"]
         }
       }
     },

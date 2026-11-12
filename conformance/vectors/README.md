@@ -24,7 +24,7 @@ One JSON file per function. Every file has this envelope:
 - Every case may carry a `note`: a short explanation for reviewers, never read by the tests.
 - Unknown fields are errors, so a typo cannot silently disable a check. Keys are lowercase ASCII and match a field exactly, and no key appears twice in one object: Go's decoder would otherwise match `Name` or `NAME` to `name`, and keep the last of two equal keys, where Rust's fails.
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
-- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
+- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`, `first`, `reloaded`, `gone`, `back`, `check`, `hash_pending`, `read_hashes`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
 - Integers are exact JSON integers within the signed 64-bit range, without a fraction, an exponent or `-0`; they are never written as strings or floats.
 - Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding), written exactly as the standard encoder writes it: no line break, no other spelling. A case has exactly one of the two.
 - A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
@@ -66,6 +66,8 @@ A percentage is checked through its use: the share of a total, such as `min_free
 | `input` | string | the window as written in the configuration |
 | `at` | string | an instant, in RFC 3339 with an offset; the offset gives the wall-clock time in the configured `timezone` |
 | `inside` | boolean | whether `at` falls inside the window |
+| `next` | string | the first instant inside the window at or after `at`, in `at`'s offset; left out where a case does not ask |
+| `opened` | string | for an `at` inside the window, when the stretch of it that holds `at` began: its start that day, or the day before for a window wrapping past midnight, in `at`'s offset; left out where a case does not ask. Outside, there is none |
 | `error` | boolean | `true` when `input` is rejected |
 
 ### `glob.json` — glob patterns (§29.5)
@@ -308,10 +310,49 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `min_free` | array of strings | the setting: sizes and percentages |
-| `capacity` | integer | the disk's capacity in bytes |
-| `reserved` | integer | what stays free: the smallest of the values |
-| `usable` | integer | what the solver may fill: `capacity` minus `reserved`, or 0 |
+| `capacity` | integer, or `null` | the disk's capacity in bytes; `null` when it is not known, as for a disk no scan has found (§21.1) |
+| `reserved` | integer, or `null` | what stays free: the smallest of the values; with a capacity of `null`, the smallest size, or `null` with percentages only |
+| `usable` | integer | what the solver may fill: `capacity` minus `reserved`, or 0; left out with a capacity of `null` |
 | `error` | boolean | `true` when a value is refused, the list is empty, or `capacity` is negative |
+
+### `daemon_wake.json` — when the daemon checks, passes and sleeps (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `now_ns` | integer | the time asked about |
+| `check_due_ns` | integer | when the mount check is next due |
+| `first`, `gone`, `back` | boolean | no pass since the daemon started; a disk went `missing`; a disk came back |
+| `pass_due_ns` | integer | the last pass's `next_due`; left out when none |
+| `group_due_ns` | integer | when a waiting group of the watcher ripens; left out when none |
+| `ripe_origins` | array of strings | who made the groups ripe now; left out when none is |
+| `last_pass_end_ns` | integer | when the last pass ended; left out before the first |
+| `rescan_every_ns` | integer | `maintenance.rescan_every` |
+| `window`, `timezone` | string | `maintenance.window`, and the IANA zone its wall clock is in |
+| `reloaded` | boolean | the configuration was read again since the last pass |
+| `hash_pending` | boolean | files may be waiting for their hash |
+| `scrub_pending` | boolean | copies may be due for the scrub |
+| `scrub_window` | string | `integrity.window` |
+| `scrub_budget_ns` | integer | `integrity.scrub_budget`, which must be positive when `scrub_pending` |
+| `scrub_spent_ns`, `scrub_spent_opened_ns` | integer | what the scrub spent, and when the stretch of its window it spent it in began |
+| `check` | boolean | `true` when the mount check is due |
+| `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
+| `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, and no hash to read |
+| `scrub_opened_ns` | integer | with `scrub_pending`, inside `scrub_window`, when this stretch of it began; left out otherwise |
+| `wake_ns` | integer | when to look again: `now_ns` when something is due |
+| `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, a `rescan_every_ns` that is not positive, or a scrub budget that is not, with `scrub_pending` |
+
+### `event_grouping.json` — the watcher's events grouped per path (§15.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `debounce_ns` | integer | `deletes.debounce`, in nanoseconds |
+| `events` | array of objects | the events, in the order they came: `disk`, `path` or `path_b64` (logical, `""` for the root), `kind` (`created`, `written`, `attrib`, `deleted`, `moved-from`, `moved-to` or `overflow`), `folder` (`true` or left out), `origin` (`view`, `atoll`, `user` or `unknown`) and `at_ns` |
+| `now_ns` | integer | the time the ripe groups are asked for |
+| `ripe` | array of objects | the groups ripe at `now_ns`, in their order: `disk`, `path` or `path_b64`, `folder` (`true` when one of its events names a folder, or left out), `kinds` and `origins` (each a set in byte order), `first_ns` and `last_ns` |
+| `waiting` | integer | how many groups are not ripe yet |
+| `next_due_ns` | integer | the earliest time one of them will be ripe; left out when none waits |
+| `error` | boolean | `true` when an event has a kind or an origin outside the lists, an overflow is not at the root, or the debounce is negative |
 
 ### `capacity_strict.json` — capacity with strict domains (§13.1)
 
@@ -350,6 +391,31 @@ A case holds the text of a file, and says what loading it gives. Keys are writte
 | `warnings` | array of strings | the keys of the warnings about names no disk carries (§24.4), in byte order |
 
 A case has `error`, or `errors`, or at least one of `effective`, `not_set` and `warnings`, and loads in the last case. `path`, `filename` and `ext` are shown as written, not compiled. A rule's keys hold what the file sets, plus `action` and `ignore_case`: its pool-wide values (§24.2) apply when it gives a file its policy, which these vectors do not cover.
+
+### `config_edit.json` — the disk commands' edits of the configuration (§10, §18)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `toml` | string | the text of the file |
+| `op` | string | `add`, `remove` or `state` |
+| `disk` | object | with `add`: the `[[disk]]` to append, its keys `id`, `uuid`, `mount`, `fs`, `role`, `domain`, `tags`, `root`, `workdir` and `state`, each written in this order and left out when absent |
+| `id` | string | with `remove` and `state`: the disk |
+| `state` | string | with `state`: the new state, or `""` to take the key out |
+| `result` | string | the whole text after the edit, byte for byte |
+| `error` | boolean | `true` when the edit is refused: no such disk, disks written as an array of inline tables, or a table below a disk |
+
+### `alerts_plan.json` — what the daemon sends after a pass (§23)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `holding` | array of objects | the conditions that hold, each `key` and `count` |
+| `stored` | array of objects | the rows of the table `alerts`: `key`, `first_ns`, `sent_ns` and `count` |
+| `now_ns`, `remind_ns` | integer | the time, and how often a condition that lasts is sent again |
+| `send` | array of objects | what to send, in key order: `key`, and `why`, `onset`, `more` or `reminder` |
+| `store` | array of objects | the rows to write once those are sent, as `stored` |
+| `keep` | array of objects | the rows of the conditions that hold and are not sent now, with their counts now |
+| `drop` | array of strings | the keys of the conditions that ended, in byte order |
+| `error` | boolean | `true` for a key held twice, a negative count, or a `remind_ns` that is not positive |
 
 ### `policy.json` — the effective policy of a file (§11.3, §12.2, §24.2)
 
