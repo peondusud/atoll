@@ -68,33 +68,6 @@ func TestAChmodReachesTheOtherCopy(t *testing.T) {
 	}
 }
 
-// A chown moves neither the time nor the mode: nothing to apply, and only the changed copy's row follows it (specs.md
-// §15.4, Limits).
-func TestAChownAloneAppliesNothing(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("chown takes root")
-	}
-	b := pool(t)
-	before := b.ctimeOf("t1", "a")
-	for uid := 4242; b.ctimeOf("t1", "a") == before; uid++ {
-		if err := os.Chown(filepath.Join(b.dirs["t1"], "media", "a"), uid, uid); err != nil {
-			t.Fatal(err)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	b.now = b.ctimeOf("t1", "a") + settleNS
-	out := b.pass()
-	if !slices.Equal(out.Decisions, []Decision{{Path: "a", Kind: "metadata"}}) || len(out.Operations) != 0 {
-		t.Fatalf("%+v", out)
-	}
-	if got := b.count("SELECT count(*) FROM ops"); got != 0 {
-		t.Errorf("%d operations", got)
-	}
-	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't1' AND ctime_ns = ?", b.ctimeOf("t1", "a")); got != 1 {
-		t.Error("the changed copy's row does not follow it")
-	}
-}
-
 // A copy whose row has no mode, as a migration leaves it, and that holds the mode a chmod gave the other copy: a
 // dry run, which records nothing, reads its mode as unknown and lists an operation; a pass first records the mode
 // its look found, unchanged since its row, and applies nothing (specs.md §9, §15.12).

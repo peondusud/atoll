@@ -91,6 +91,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverUtimens(ctx, db, op, nowNS)
 	case catalog.OpChmod:
 		return d.recoverChmod(ctx, db, op, nowNS)
+	case catalog.OpChown:
+		return d.recoverChown(ctx, db, op, nowNS)
 	default:
 		return fmt.Errorf("reprise: operation %d: no reprise for %q", op.ID, op.Kind)
 	}
@@ -620,6 +622,7 @@ func (d *Disk) FinishMkdir(ctx context.Context, db *sql.DB, op *Op, st *fsx.Stat
 func NewCopyOf(f *watch.FoundFile) *catalog.NewCopy {
 	return &catalog.NewCopy{
 		Path: f.Path, Size: f.Size, MtimeNS: f.MtimeNS, CtimeNS: f.CtimeNS, BtimeNS: f.BtimeNS, FileKey: f.FileKey, Nlink: f.Nlink, Mode: f.Mode,
+		UID: f.UID, GID: f.GID,
 	}
 }
 

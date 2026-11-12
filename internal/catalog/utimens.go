@@ -10,6 +10,7 @@ import (
 const (
 	OpUtimens = "utimens"
 	OpChmod   = "chmod"
+	OpChown   = "chown"
 )
 
 // beginMetaOp journals an operation of a metadata change, with the event that holds what it applies, before anything
@@ -93,4 +94,41 @@ func ChmodMode(ctx context.Context, db *sql.DB, opID int64) (int64, bool, error)
 // FinishChmod says that a mode is applied: the copy takes the mode and change time its disk holds now.
 func FinishChmod(ctx context.Context, db *sql.DB, op *Op, mode, ctimeNS int64) error {
 	return finishMetaOp(ctx, db, op, finishChmodSQL, mode, ctimeNS)
+}
+
+// BeginChown journals the owner a metadata change applies to a copy, in the event's uid and gid.
+func BeginChown(ctx context.Context, db *sql.DB, disk, path, fileKey string, uid, gid, nowNS int64) (*Op, error) {
+	return beginMetaOp(ctx, db, OpChown, disk, path, fileKey, eventData{UID: &uid, GID: &gid}, nowNS)
+}
+
+// ChownOwner gives the owner an operation chown applies, from its event, and false when there is none.
+func ChownOwner(ctx context.Context, db *sql.DB, opID int64) (uid, gid int64, ok bool, err error) {
+	var u, g sql.NullInt64
+	err = db.QueryRowContext(ctx, "SELECT json_extract(data, '$.uid'), json_extract(data, '$.gid') FROM events WHERE kind = ? AND json_extract(data, '$.op') = ?",
+		OpChown, opID).Scan(&u, &g)
+	switch {
+	case isNoRows(err):
+		return 0, 0, false, nil
+	case err != nil:
+		return 0, 0, false, fmt.Errorf("event: %w", err)
+	}
+	return u.Int64, g.Int64, u.Valid && g.Valid, nil
+}
+
+// FinishChown says that an owner is applied: the copy takes the owner, mode and change time its disk holds now, as a
+// chown may clear setuid and setgid.
+func FinishChown(ctx context.Context, db *sql.DB, op *Op, uid, gid, mode, ctimeNS int64) error {
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		if err := markOp(ctx, tx, op.ID, "done"); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, finishChownSQL, op.Disk, []byte(op.Path), op.FileKey, uid, gid, mode, ctimeNS); err != nil {
+			return fmt.Errorf("copy: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("%q: %w", op.Path, err)
+	}
+	return nil
 }

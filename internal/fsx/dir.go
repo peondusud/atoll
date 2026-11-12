@@ -123,6 +123,8 @@ type File interface {
 	// does: a metadata change applied to a copy (specs.md §15.4). Sync is fsync of the file.
 	SetTimes(atime, mtime Time) error
 	SetMode(mode uint32) error
+	// SetOwner sets the owner, as fchown does: a metadata change applied to a copy (specs.md §15.4).
+	SetOwner(uid, gid uint32) error
 	Sync() error
 	// DropCache asks the kernel to forget the file's clean pages, so that the next read comes from the disk: the
 	// scrub's second read of a chunk that did not match (specs.md §16).
@@ -450,6 +452,13 @@ func (f *realFile) SetMode(mode uint32) error {
 	return nil
 }
 
+func (f *realFile) SetOwner(uid, gid uint32) error {
+	if err := unix.Fchown(int(f.file.Fd()), int(uid), int(gid)); err != nil {
+		return fmt.Errorf("chown %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
 func (f *realFile) Sync() error {
 	if err := unix.Fsync(int(f.file.Fd())); err != nil {
 		return fmt.Errorf("fsync %q: %w", f.file.Name(), err)
@@ -659,6 +668,12 @@ func IsDenied(err error) bool {
 // IsExisting says whether a name was already taken.
 func IsExisting(err error) bool {
 	return errors.Is(err, unix.EEXIST)
+}
+
+// IsOwnerRefused says that a driver, or the lack of the right to give a file away, refused an owner: the file keeps
+// its own (specs.md §15.4).
+func IsOwnerRefused(err error) bool {
+	return errors.Is(err, unix.EPERM) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP)
 }
 
 // ErrBusy says that another process holds a lock.

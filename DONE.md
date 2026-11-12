@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The owner applied to the other copies (specs.md §9, §15.4, §15.10, §17.2)
+
+Commit "Apply the owner of a metadata change to the other copies", on `develop`, as the maintainer chose on 2026-11-12.
+
+- `schema/migrations/0006_owner.sql`: `copies.uid` and `copies.gid`, NULL until known; the next look that finds a copy unchanged since its row records its owner, as a `chown` moves the change time. `ops` is made again to take the kind `chown`: SQLite changes a CHECK only so. Its rows, the trash's references to them and its counter are kept, tested from a version-5 catalog whose counter is past its last row. Migrations now run with `PRAGMA defer_foreign_keys = ON` (§9, `schema/README.md`).
+- `solver.MetadataPlan`: the owner of the changed copy whose owner moved last, both ids, goes to each other copy that holds another or an unknown one, as the mode does. 13 more cases in `metadata.json`, 6 in `catalog.json`.
+- An operation `chown`, journaled with a `chown` event that holds `uid` and `gid`, runs before the `chmod` and the `utimens` of the same copy, as a `chown` may clear setuid and setgid. A driver, or a run without `CAP_CHOWN`, that refuses the owner (`EPERM`, `EINVAL`, `EOPNOTSUPP`) leaves the copy its own: the operation is `undone`, the outcome `kept`, and the file is decided all the same. The reprise finishes on the event's owner, undoes quietly on the row's, with an event otherwise.
+- `api/schemas/daemon.schema.json`: the operation `chown`, with `kept`.
+- The conformance runner: `root`, for a scenario that gives files away, which anyone else skips and says so, never counting it as a success; a step `chown`; `uid` and `gid` in trees. Six `daemon-metadata-chown-*` scenarios, root only, run by the CI's containers. Five unit tests in `jobs`: applied, kept, a disk lost, a reprise, and an owner the look records.
+- Measured in qemu on Linux 6.12.116 and 7.3.1: ext4, XFS, btrfs and ntfs3 keep the owner given; ntfs-3g and lowntfs-3g answer `fchown` and keep `0:0`, which the row records, and the next pass applies nothing; the reprise after a crash at `owner-set` is quiet on all six. The mode tests pass again on both.
+- **Decided without the maintainer, to confirm:**
+  - The owner is an operation `chown` of its own, which needed the journal made again; folding it into `chmod` would have spared that.
+  - A refused owner is `kept`, not an error: otherwise each pass would read the whole file again, and fail again. The copy pipeline already leaves a copy another owner so.
+  - The owner scenarios run only as root, and the runner says how many it skipped.
+  - Migrations defer foreign keys to their commit, a rule the Rust version must follow too.
+
 ## Atoll's own empty folders (specs.md §6.1, §17.2, §17.5)
 
 Commit "Remove the empty folders Atoll made", on `develop`.

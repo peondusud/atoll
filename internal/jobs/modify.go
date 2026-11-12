@@ -338,7 +338,7 @@ func (p *pass) applyModification(ctx context.Context, f *catalog.FileRow, in *so
 		look := looks[disk]
 		changed := catalog.ChangedCopy{
 			Disk: disk, FileKey: look.FileKey, Nlink: look.Nlink, Size: look.Size, MtimeNS: look.MtimeNS, CtimeNS: look.CtimeNS,
-			Mode: look.Mode, Replaced: in.Copies[at].Verdict == solver.VerdictReplaced,
+			Mode: look.Mode, UID: look.UID, GID: look.GID, Replaced: in.Copies[at].Verdict == solver.VerdictReplaced,
 		}
 		if look.BtimeNS != nil {
 			changed.BtimeNS = sql.NullInt64{Int64: *look.BtimeNS, Valid: true}

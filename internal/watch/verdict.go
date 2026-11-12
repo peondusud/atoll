@@ -190,9 +190,9 @@ func (c *compared) row(k *catalog.KnownCopy, at *FoundFile) {
 			at.home = true
 			c.r.Known++
 			c.clock(k, v)
-			// Unchanged since its row, its mode cannot have moved: a chmod moves the change time.
-			if !k.Mode.Valid {
-				c.modes = append(c.modes, catalog.CopyMode{FileID: k.FileID, Mode: at.Mode})
+			// Unchanged since its row, its mode and owner cannot have moved: a chmod and a chown move the change time.
+			if !k.Mode.Valid || !k.UID.Valid || !k.GID.Valid {
+				c.modes = append(c.modes, catalog.CopyMode{FileID: k.FileID, Mode: at.Mode, UID: at.UID, GID: at.GID})
 			}
 			return
 		}

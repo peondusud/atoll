@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -35,7 +36,7 @@ func run(bin, scenarios string) error {
 		return fmt.Errorf("read scenarios: %w", err)
 	}
 	var failed []string
-	count := 0
+	count, skipped := 0, 0
 	for _, e := range entries {
 		name := e.Name()
 		if name == "README.md" {
@@ -43,7 +44,13 @@ func run(bin, scenarios string) error {
 		}
 		// Every other file counts, and fails if it is no scenario: a skip would read as a success.
 		count++
-		if err := runFile(absolute, filepath.Join(scenarios, name)); err != nil {
+		err := runFile(absolute, filepath.Join(scenarios, name))
+		switch {
+		case errors.Is(err, errNeedsRoot):
+			// Said, and never counted as a success.
+			skipped++
+			fmt.Fprintf(os.Stderr, "SKIP %s: %v\n", name, err)
+		case err != nil:
 			failed = append(failed, name)
 			fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", name, err)
 		}
@@ -55,6 +62,10 @@ func run(bin, scenarios string) error {
 	if count == 0 {
 		// A folder at the wrong path must not read as a success.
 		return fmt.Errorf("no scenario in %s", scenarios)
+	}
+	if skipped > 0 {
+		fmt.Printf("conformance: %d scenarios, %d of them skipped as they need root\n", count, skipped)
+		return nil
 	}
 	fmt.Printf("conformance: %d scenarios\n", count)
 	return nil

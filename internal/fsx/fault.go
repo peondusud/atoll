@@ -195,6 +195,13 @@ func (f *faultFile) SetMode(mode uint32) error {
 	return f.File.SetMode(mode)
 }
 
+func (f *faultFile) SetOwner(uid, gid uint32) error {
+	if err := f.fail("setowner", f.name); err != nil {
+		return err
+	}
+	return f.File.SetOwner(uid, gid)
+}
+
 func (f *faultFile) Sync() error {
 	if err := f.fail("filesync", f.name); err != nil {
 		return err

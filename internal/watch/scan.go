@@ -412,6 +412,7 @@ func freshFile(c *config.Config, f *FoundFile, r *Report, out *catalog.Walk, top
 	}
 	out.Copies = append(out.Copies, catalog.NewCopy{
 		Path: f.Path, Size: f.Size, MtimeNS: f.MtimeNS, CtimeNS: f.CtimeNS, BtimeNS: f.BtimeNS, FileKey: f.FileKey, Nlink: f.Nlink, Mode: f.Mode,
+		UID: f.UID, GID: f.GID,
 	})
 	r.New++
 	found(f)

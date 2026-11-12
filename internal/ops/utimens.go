@@ -22,6 +22,12 @@ func (d *Disk) SetMode(row *catalog.KnownCopy, mode uint32) (fsx.Stat, error) {
 	return d.setMetadata(row, "mode-set", func(f fsx.File) error { return f.SetMode(mode) })
 }
 
+// SetOwner sets the owner of a copy, as SetMtime sets its time (specs.md §15.4). An error fsx.IsOwnerRefused says is
+// a driver, or a run, that keeps the copy's own.
+func (d *Disk) SetOwner(row *catalog.KnownCopy, uid, gid uint32) (fsx.Stat, error) {
+	return d.setMetadata(row, "owner-set", func(f fsx.File) error { return f.SetOwner(uid, gid) })
+}
+
 func (d *Disk) setMetadata(row *catalog.KnownCopy, point string, set func(fsx.File) error) (fsx.Stat, error) {
 	f, _, err := d.OpenSource(row.Path, row)
 	if err != nil {
@@ -106,6 +112,39 @@ func (d *Disk) recoverChmod(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 		}
 		return nil
 	case row.Mode.Valid && mode == row.Mode.Int64:
+		return d.Undo(ctx, db, op, false, nowNS)
+	default:
+		return d.Undo(ctx, db, op, true, nowNS)
+	}
+}
+
+// recoverChown resolves an owner left planned, as recoverChmod a mode: the owner its event holds, both ids, finishes
+// it, with the mode the chown left; the owner its row says is nothing that happened, or an owner the driver did not
+// keep; anything else changed since.
+func (d *Disk) recoverChown(ctx context.Context, db *sql.DB, op *Op, nowNS int64) error {
+	uid, gid, ok, err := catalog.ChownOwner(ctx, db, op.ID)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	row, st, same, err := d.metadataCopyNow(ctx, db, op)
+	if err != nil {
+		return err
+	}
+	if !same || !ok {
+		return d.Undo(ctx, db, op, true, nowNS)
+	}
+	owner, ownerUID, ownerGID := int64(st.Uid) == uid && int64(st.Gid) == gid, int64(st.Uid), int64(st.Gid)
+	switch {
+	case owner:
+		ctime, err := solver.TimeNS(st.Ctime.Sec, st.Ctime.Nsec)
+		if err != nil {
+			return fmt.Errorf("change time: %w", err)
+		}
+		if err := catalog.FinishChown(ctx, db, op, ownerUID, ownerGID, int64(st.Mode), ctime); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+		return nil
+	case row.UID.Valid && row.GID.Valid && ownerUID == row.UID.Int64 && ownerGID == row.GID.Int64:
 		return d.Undo(ctx, db, op, false, nowNS)
 	default:
 		return d.Undo(ctx, db, op, true, nowNS)

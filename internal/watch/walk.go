@@ -20,6 +20,8 @@ type FoundFile struct {
 	FileKey string
 	Nlink   int64
 	Mode    int64
+	// UID and GID are its owner, 32 bits each, as a walk holds one of these for every file of a disk.
+	UID, GID uint32
 	// What comparing a walk with the rows says of it: the next file with its inode, how many rows moved to
 	// it, and that one did. They are here, and not in maps, as a rename of a whole pool has one of each for
 	// every file.
@@ -188,6 +190,8 @@ func foundFile(path string, st *fsx.Stat, mtime int64) (FoundFile, error) {
 		FileKey: fmt.Sprintf("%d", st.Ino),
 		Nlink:   int64(st.Nlink),
 		Mode:    int64(st.Mode),
+		UID:     st.Uid,
+		GID:     st.Gid,
 	}
 	if st.HasBirth {
 		birth, ok, err := solver.CreationTimeNS(st.Birth.Sec, st.Birth.Nsec)

@@ -137,6 +137,11 @@ func apply(ctx context.Context, db *sql.DB, m schema.Migration) error {
 	if current >= m.Version {
 		return nil
 	}
+	// Foreign keys are checked at the commit, so that a table made again keeps what refers to it (specs.md §9). The
+	// commit turns it off again.
+	if _, err := tx.ExecContext(ctx, "PRAGMA defer_foreign_keys = ON"); err != nil {
+		return fmt.Errorf("defer_foreign_keys: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, m.SQL); err != nil {
 		return fmt.Errorf("apply: %w", err)
 	}

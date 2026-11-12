@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "modernc.org/sqlite" // to read a catalog, as a scenario's expectations do (specs.md §29.4)
@@ -39,13 +40,15 @@ var stepTimeout = 2 * time.Minute
 
 // scenario is one file of conformance/scenarios: see its README.md.
 type scenario struct {
-	FormatVersion int     `json:"format_version"`
-	Spec          string  `json:"spec"`
-	Description   string  `json:"description"`
-	Clock         string  `json:"clock"`
-	Disks         []disk  `json:"disks"`
-	Config        *string `json:"config"`
-	Steps         []step  `json:"steps"`
+	FormatVersion int    `json:"format_version"`
+	Spec          string `json:"spec"`
+	Description   string `json:"description"`
+	Clock         string `json:"clock"`
+	// Root says that the scenario gives files away, which only root may: it is skipped, and said so, otherwise.
+	Root   bool    `json:"root"`
+	Disks  []disk  `json:"disks"`
+	Config *string `json:"config"`
+	Steps  []step  `json:"steps"`
 }
 
 type disk struct {
@@ -74,6 +77,9 @@ type entry struct {
 	MtimeNS *int64  `json:"mtime_ns"`
 	// Mode is a file's mode in octal digits, as "0640": the permission bits, setuid, setgid and sticky.
 	Mode *string `json:"mode"`
+	// UID and GID are a file's owner, which only a scenario that needs root may give.
+	UID *int64 `json:"uid"`
+	GID *int64 `json:"gid"`
 }
 
 type step struct {
@@ -92,6 +98,8 @@ type step struct {
 	Target     string            `json:"target"`
 	MtimeNS    *int64            `json:"mtime_ns"`
 	Mode       *string           `json:"mode"`
+	UID        *int64            `json:"uid"`
+	GID        *int64            `json:"gid"`
 	By         string            `json:"by"`
 	Tree       []entry           `json:"tree"`
 	Query      string            `json:"query"`
@@ -115,6 +123,8 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "path", "path_b64", "mtime_ns"}, true
 	case "chmod":
 		return []string{"disk", "path", "path_b64", "mode"}, true
+	case "chown":
+		return []string{"disk", "path", "path_b64", "uid", "gid"}, true
 	case "advance":
 		return []string{"by"}, true
 	case "tick":
@@ -173,6 +183,8 @@ func parseScenario(data []byte) (*scenario, error) {
 			err = errors.New("no mode")
 		case st.Do == "chmod":
 			_, err = parseMode(*st.Mode)
+		case st.Do == "chown":
+			err = checkOwner(st.UID, st.GID, true)
 		case st.Do == "symlink" && st.Target == "":
 			err = errors.New("no target")
 		}
@@ -237,12 +249,15 @@ func checkEntry(e *entry) error {
 				return err
 			}
 		}
+		if err := checkOwner(e.UID, e.GID, false); err != nil {
+			return err
+		}
 	case "dir":
-		if e.Text != nil || e.Size != nil || e.Target != "" || e.MtimeNS != nil || e.Mode != nil {
+		if e.Text != nil || e.Size != nil || e.Target != "" || e.MtimeNS != nil || e.Mode != nil || e.UID != nil || e.GID != nil {
 			return errors.New("a folder has only a path")
 		}
 	case "symlink":
-		if e.Text != nil || e.Size != nil || e.MtimeNS != nil || e.Mode != nil {
+		if e.Text != nil || e.Size != nil || e.MtimeNS != nil || e.Mode != nil || e.UID != nil || e.GID != nil {
 			return errors.New("a symlink has only a path and a target")
 		}
 		if e.Target == "" {
@@ -267,6 +282,9 @@ type sandbox struct {
 	crashAt string
 }
 
+// errNeedsRoot says that a scenario gives files away, which only root may.
+var errNeedsRoot = errors.New("it needs root")
+
 func runFile(bin, file string) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -275,6 +293,9 @@ func runFile(bin, file string) error {
 	s, err := parseScenario(data)
 	if err != nil {
 		return err
+	}
+	if s.Root && os.Geteuid() != 0 {
+		return errNeedsRoot
 	}
 	dir, err := os.MkdirTemp("", "atoll-scenario-")
 	if err != nil {
@@ -530,10 +551,25 @@ func (b *sandbox) fileStep(s *step) error {
 			return err
 		}
 		return os.Chmod(full, mode)
+	case "chown":
+		return os.Lchown(full, int(*s.UID), int(*s.GID))
 	default: // touch
 		when := time.Unix(0, *s.MtimeNS)
 		return os.Chtimes(full, when, when)
 	}
+}
+
+// checkOwner checks an owner: both ids, from 0 to 2^32-2, as (uid_t)-1 owns nothing, or with whole false neither.
+func checkOwner(uid, gid *int64, whole bool) error {
+	switch {
+	case uid == nil && gid == nil && !whole:
+		return nil
+	case uid == nil || gid == nil:
+		return errors.New("want both uid and gid")
+	case *uid < 0 || *uid >= math.MaxUint32 || *gid < 0 || *gid >= math.MaxUint32:
+		return fmt.Errorf("owner %d:%d: want ids from 0 to 4294967294", *uid, *gid)
+	}
+	return nil
 }
 
 // parseMode reads a mode written in octal digits with a leading 0, as "0640" or "04755": the permission bits,
@@ -905,6 +941,11 @@ func writeEntry(root, rel string, e *entry) error {
 			return err
 		}
 	}
+	if e.UID != nil {
+		if err := os.Lchown(full, int(*e.UID), int(*e.GID)); err != nil {
+			return err
+		}
+	}
 	if e.MtimeNS == nil {
 		return nil
 	}
@@ -919,7 +960,9 @@ type found struct {
 	target  string
 	mtimeNS int64
 	mode    uint32 // for a file: the permission bits, setuid, setgid and sticky
-	empty   bool   // for a folder
+	uid     int64  // for a file
+	gid     int64
+	empty   bool // for a folder
 }
 
 // listTree reads a whole disk, by path relative to its top.
@@ -958,7 +1001,11 @@ func listTree(root string) (map[string]*found, error) {
 			if err != nil {
 				return err
 			}
-			out[rel] = &found{kind: "file", content: content, mtimeNS: info.ModTime().UnixNano(), mode: modeBits(info.Mode())}
+			f := &found{kind: "file", content: content, mtimeNS: info.ModTime().UnixNano(), mode: modeBits(info.Mode())}
+			if st, ok := info.Sys().(*syscall.Stat_t); ok {
+				f.uid, f.gid = int64(st.Uid), int64(st.Gid)
+			}
+			out[rel] = f
 		default:
 			return fmt.Errorf("%q: neither a file, a folder nor a symlink", rel)
 		}
@@ -1058,6 +1105,9 @@ func sameEntry(e *entry, f *found) error {
 			if want, err := parseMode(*e.Mode); err != nil || f.mode != modeBits(want) {
 				return fmt.Errorf("mode %04o, want %s", f.mode, *e.Mode)
 			}
+		}
+		if e.UID != nil && (f.uid != *e.UID || f.gid != *e.GID) {
+			return fmt.Errorf("owner %d:%d, want %d:%d", f.uid, f.gid, *e.UID, *e.GID)
 		}
 	}
 	return nil
