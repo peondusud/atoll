@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The disk commands, part 2: `remove`, `fail`, `replace`, `show` (specs.md §18, §25)
+
+Commit "Drain, fail, replace and show a disk", on `develop`.
+
+- **What depends on a disk.** A file with a copy there, `ok` or `unavailable`, that has fewer copies `ok` on the disks `online`, in `standby` or `readonly` than its level, or that is in `conflict`, as the disk may hold one of its versions (`catalog.ReadDiskHolds`, with what the disk holds by copy state, the files with no copy elsewhere, and the operations left planned there).
+- **`disk remove <id> --evacuate`** marks the disk `draining`, with no `--yes`: it adds copies and removes nothing. **`disk remove <id>`** takes out of the configuration a disk nothing depends on, or a failed one, and refuses one with planned operations. **`disk fail <id>`** marks it `failed`. Both need `--yes`, and without it say what they would do and exit with 3. **`disk replace <id> --with <mount>`** adds the new disk with the old one's domain and tags, and marks the old one draining in the same edit. **`disk show <id>`** gives the disk's configuration, its mount check, what the catalog knows of it and its marker.
+- **Verified.** Four scenarios run each cycle through `daemon --until-idle`: a disk refused at `remove`, evacuated, its copies made on the third disk, then taken out and `retired`, what it held still on it; a disk failed, its replica made elsewhere from the other copy, `show` saying so, then taken out; a disk replaced, the new one with the old one's domain and tags; and the usage errors. A unit test pins what depends on a disk, case by case.
+- **Decided without the maintainer, to confirm:**
+  - What "nothing depends on it" means, above: the catalog's view, refreshed by each scan or pass. Copies on a disk draining, failed or missing do not count, nor a stale or surplus copy on the disk itself.
+  - `disk remove` of a disk in service that nothing depends on, such as an empty one, is allowed without `--evacuate`.
+  - `disk replace` leaves the old disk `draining`: `disk remove` takes it out once drained, rather than the daemon editing the configuration. `--domain` and `--tags` are refused there, as the new disk takes the old one's.
+
 ## The disk commands, part 1: a disk's state, the configuration's edits, `disk add` (specs.md §9, §10, §18, §21.1, §25)
 
 Commits "Keep a disk draining or failed in the configuration", "Edit a disk in the configuration, keeping every other byte" and "Add a disk to the pool", on `develop`.

@@ -67,7 +67,6 @@ Every item here is a **decision**:
 - What the mount check of §10 leaves to do for disks:
   - `atoll disk show`, which could show `time_precision_ns`, and reading `Atoll/disk.toml` at each mount check;
   - the topology check of R-06 at each start, not only at `disk add`, with the catalog's `disks.device`.
-- `disk remove`, `fail`, `replace` and `show`. `disk remove` must refuse a disk with `planned` operations: on a disk no longer in the configuration they wait for good, and every command that writes exits with 4.
 - What the daemon that runs for good (§15.13) leaves:
   - the watcher's limits: a folder that leaves the root under inotify and comes back in another read is watched again from scratch; a path past `PATH_MAX` cannot get a mark of its own on ntfs-3g; the process of an event already gone reads as `user`;
   - the remount after a USB reset of an ntfs-3g disk, through `mount.ntfs-3g`, as the dedicated user, is not tested.

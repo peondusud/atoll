@@ -1,0 +1,335 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.4, \u00a718, \u00a721.1, \u00a725",
+  "description": "A disk with files no other disk holds enough of is refused at disk remove. --evacuate marks it draining: its copies count for no level and it takes no new copy, so the next pass makes them on the third disk, reading them where they are. Drained, it is taken out with --yes, retired in the catalog, and what it holds stays on it.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/b.mkv",
+          "text": "b"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nsettle = \"0s\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), count(*), sum(c.disk_id = 't1') FROM copies c JOIN files f ON f.id = c.file_id WHERE c.state = 'ok' GROUP BY 1 ORDER BY 1",
+      "rows": [
+        [
+          "a.mkv",
+          2,
+          1
+        ],
+        [
+          "b.mkv",
+          2,
+          1
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--evacuate",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t1",
+        "change": "drain",
+        "state_was": "in-service",
+        "depending": 2,
+        "depending_first": [
+          "a.mkv",
+          "b.mkv"
+        ],
+        "only_there": 0,
+        "planned_operations": 0,
+        "done": true,
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--evacuate",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t1",
+        "change": "drain",
+        "state_was": "draining",
+        "depending": 2,
+        "depending_first": [
+          "a.mkv",
+          "b.mkv"
+        ],
+        "only_there": 0,
+        "planned_operations": 0,
+        "done": false,
+        "warnings": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "draining"
+        ],
+        [
+          "t2",
+          "online"
+        ],
+        [
+          "t3",
+          "online"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY 1, 2",
+      "rows": [
+        [
+          "a.mkv",
+          "t1",
+          "ok"
+        ],
+        [
+          "a.mkv",
+          "t2",
+          "ok"
+        ],
+        [
+          "a.mkv",
+          "t3",
+          "ok"
+        ],
+        [
+          "b.mkv",
+          "t1",
+          "ok"
+        ],
+        [
+          "b.mkv",
+          "t2",
+          "ok"
+        ],
+        [
+          "b.mkv",
+          "t3",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "disk": "t1",
+        "change": "remove",
+        "state_was": "draining",
+        "depending": 0,
+        "depending_first": [],
+        "only_there": 0,
+        "planned_operations": 0,
+        "done": false,
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t1",
+        "change": "remove",
+        "state_was": "draining",
+        "depending": 0,
+        "depending_first": [],
+        "only_there": 0,
+        "planned_operations": 0,
+        "done": false,
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t1",
+        "change": "remove",
+        "state_was": "draining",
+        "depending": 0,
+        "depending_first": [],
+        "only_there": 0,
+        "planned_operations": 0,
+        "done": true,
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t2",
+            "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t2",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t3",
+            "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t3",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t2",
+          "online"
+        ],
+        [
+          "t3",
+          "online"
+        ],
+        [
+          "t1",
+          "retired"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/b.mkv",
+          "text": "b"
+        }
+      ]
+    }
+  ]
+}

@@ -401,35 +401,43 @@ func checkCatalogTakes(ctx context.Context, c *config.Config, d *config.Disk) (e
 // it. What it cannot do is a warning, and exit 4: the next scan or pass records the disk, and a later disk add
 // writes its marker.
 func (a *diskAdding) finish(ctx context.Context) int {
-	code := exitOK
-	if err := a.syncCatalog(ctx); err != nil {
-		a.warn(warnCatalogNotUpdated, fmt.Sprintf("the catalog was not updated, %v: the next scan or pass records the disk", err))
-		code = exitPartial
-	}
+	code := recordAndTell(ctx, a.config, a.machine, a.warn, a.stderr, "atoll scan --disk "+a.disk.ID+" records what the disk holds")
 	if a.marker != "" {
 		if err := a.writeMarker(); err != nil {
 			a.warn(warnMarkerNotWritten, fmt.Sprintf("its marker was not written: %v", err))
 			code = exitPartial
 		}
 	}
+	return code
+}
+
+// recordAndTell records every disk's state in the catalog and tells the daemon, once the configuration holds a
+// disk command's edit. What it cannot do is a warning, and exit 4: the next scan or pass records the disks, and
+// systemctl reload atoll tells the daemon. alone says what to do when no daemon runs.
+func recordAndTell(ctx context.Context, c *config.Config, m disks.Machine, warn func(kind, message string), stderr io.Writer, alone string) int {
+	code := exitOK
+	if err := syncCatalog(ctx, c, m); err != nil {
+		warn(warnCatalogNotUpdated, fmt.Sprintf("the catalog was not updated, %v: the next scan or pass records the disks", err))
+		code = exitPartial
+	}
 	told, err := tellDaemon()
 	switch {
 	case err != nil:
-		a.warn(warnDaemonNotTold, fmt.Sprintf("the daemon was not told, %v: systemctl reload atoll", err))
+		warn(warnDaemonNotTold, fmt.Sprintf("the daemon was not told, %v: systemctl reload atoll", err))
 		code = exitPartial
 	case told == 0:
-		report(a.stderr, fmt.Sprintf("no daemon runs: atoll scan --disk %s records what the disk holds", a.disk.ID))
+		report(stderr, "no daemon runs: "+alone)
 	}
 	return code
 }
 
-func (a *diskAdding) syncCatalog(ctx context.Context) (err error) {
-	db, err := catalog.OpenPool(ctx, catalogPath(a.config), a.config.PoolID)
+func syncCatalog(ctx context.Context, c *config.Config, m disks.Machine) (err error) {
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	_, err = watch.CheckDisks(ctx, db, a.config, a.machine, a.machine.Now())
+	_, err = watch.CheckDisks(ctx, db, c, m, m.Now())
 	return err //nolint:wrapcheck // watch says what failed
 }
 

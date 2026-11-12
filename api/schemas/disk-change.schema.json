@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/disk-change.schema.json",
+  "title": "atoll disk remove --json, atoll disk fail --json",
+  "description": "A disk's change of place in the pool, and what the catalog knows it holds (specs.md §18, §25). A change refused gives exit 1 and nothing on standard output.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disk", "change", "state_was", "depending", "depending_first", "only_there", "planned_operations", "done", "warnings"],
+  "properties": {
+    "disk": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+    "change": {
+      "description": "drain: disk remove --evacuate; remove: disk remove; fail: disk fail.",
+      "enum": ["drain", "remove", "fail"]
+    },
+    "state_was": {
+      "description": "The disk's state in the configuration before: in-service when it sets none.",
+      "enum": ["in-service", "draining", "failed"]
+    },
+    "depending": {
+      "description": "The files with a copy on the disk, ok or unavailable, that have fewer copies ok on disks online, in standby or read-only than their level, or that are in conflict.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "depending_first": {
+      "description": "The first ten of them by path in byte order.",
+      "type": "array",
+      "maxItems": 10,
+      "items": { "type": "string" }
+    },
+    "only_there": {
+      "description": "The files with a copy on the disk and none ok or surplus on another.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "planned_operations": { "type": "integer", "minimum": 0 },
+    "done": {
+      "description": "Whether the configuration was changed: false with --dry-run, without --yes for remove and fail, or when there was nothing to change.",
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "enum": ["catalog-not-updated", "daemon-not-told"] }
+    }
+  }
+}

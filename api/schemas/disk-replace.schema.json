@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/disk-replace.schema.json",
+  "title": "atoll disk replace --json",
+  "description": "The new disk, as atoll disk add gives it (disk-add.schema.json), and the disk it replaces (specs.md §18, §25).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["disk", "physical_disks", "dry_run", "warnings", "replaces"],
+  "properties": {
+    "disk": { "$ref": "disk-add.schema.json#/properties/disk" },
+    "physical_disks": { "$ref": "disk-add.schema.json#/properties/physical_disks" },
+    "dry_run": { "type": "boolean" },
+    "warnings": { "$ref": "disk-add.schema.json#/properties/warnings" },
+    "replaces": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+        "state": {
+          "description": "draining, so that its copies are made again elsewhere; failed when it was so already.",
+          "enum": ["draining", "failed"]
+        }
+      }
+    }
+  }
+}
