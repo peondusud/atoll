@@ -308,10 +308,22 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `min_free` | array of strings | the setting: sizes and percentages |
-| `capacity` | integer | the disk's capacity in bytes |
-| `reserved` | integer | what stays free: the smallest of the values |
-| `usable` | integer | what the solver may fill: `capacity` minus `reserved`, or 0 |
+| `capacity` | integer, or `null` | the disk's capacity in bytes; `null` when it is not known, as for a disk no scan has found (§21.1) |
+| `reserved` | integer, or `null` | what stays free: the smallest of the values; with a capacity of `null`, the smallest size, or `null` with percentages only |
+| `usable` | integer | what the solver may fill: `capacity` minus `reserved`, or 0; left out with a capacity of `null` |
 | `error` | boolean | `true` when a value is refused, the list is empty, or `capacity` is negative |
+
+### `event_grouping.json` — the watcher's events grouped per path (§15.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `debounce_ns` | integer | `deletes.debounce`, in nanoseconds |
+| `events` | array of objects | the events, in the order they came: `disk`, `path` or `path_b64` (logical, `""` for the root), `kind` (`created`, `written`, `attrib`, `deleted`, `moved-from`, `moved-to` or `overflow`), `folder` (`true` or left out), `origin` (`view`, `atoll`, `user` or `unknown`) and `at_ns` |
+| `now_ns` | integer | the time the ripe groups are asked for |
+| `ripe` | array of objects | the groups ripe at `now_ns`, in their order: `disk`, `path` or `path_b64`, `folder` (`true` when one of its events names a folder, or left out), `kinds` and `origins` (each a set in byte order), `first_ns` and `last_ns` |
+| `waiting` | integer | how many groups are not ripe yet |
+| `next_due_ns` | integer | the earliest time one of them will be ripe; left out when none waits |
+| `error` | boolean | `true` when an event has a kind or an origin outside the lists, an overflow is not at the root, or the debounce is negative |
 
 ### `capacity_strict.json` — capacity with strict domains (§13.1)
 

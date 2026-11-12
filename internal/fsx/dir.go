@@ -381,6 +381,17 @@ func (d *realDir) SetMtime(t Time) error {
 }
 
 // realOf finds the folder below any wrapping, as a system call takes only a real one.
+// Descriptor gives the descriptor of a folder of a disk, for what the kernel asks of a folder itself, as a
+// watch on it (specs.md §15.1). It stays the folder's: the caller never closes it, and stops using it once
+// the folder is closed.
+func Descriptor(d Dir) (int, error) {
+	r, err := realOf(d)
+	if err != nil {
+		return -1, err
+	}
+	return r.fd(), nil
+}
+
 func realOf(d Dir) (*realDir, error) {
 	for {
 		switch v := d.(type) {

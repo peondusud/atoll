@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The watcher (specs.md §15.1)
+
+Commit "Watch each disk and group its events per path", on `watcher`.
+
+- §15.1 now says what the watcher gives: an event below a disk's root only, at a logical path, `""` for the root or a folder that can no longer be told; what it says (`created`, `written`, `attrib`, `deleted`, `moved-from`, `moved-to`, `overflow`) and whether it names a folder; who made it (`view`, `atoll`, `user`, `unknown`); and how events are grouped per disk and path until `deletes.debounce` has gone by since the last. The watcher only says where to look.
+- `watch.Grouping`, pure, with 20 vectors in `event_grouping.json`.
+- `watch.Watcher` watches each disk the first way that works:
+  - a fanotify mark on the whole filesystem;
+  - else a fanotify mark per folder, for ntfs-3g and lowntfs-3g, with `FAN_UNLIMITED_MARKS`;
+  - else an inotify watch per folder.
+
+  A rename becomes `moved-from` and `moved-to`, and a folder that appears is marked and then listed, as it may have been filled first. Who made an event comes from `/proc`: mergerfs with the view's mount point among its arguments, or Atoll's own executable. A read error or a malformed record counts as an overflow. `fsx.Descriptor` and `fsx.Readlink` let it mark a folder through its handle and read `/proc` without leaving `fsx`.
+- `TestWatcherOnEachDriver` in `test/loopdev` runs each driver by its own way and by inotify, three times on Linux 6.12 and on 7.3. It covers what a user's process, the mergerfs process and Atoll itself do: a folder made with a file at once, a folder moved in with a folder below it and then written in, a folder renamed and then written below, a chmod, a deletion, a create, rename and delete through mergerfs, and nothing from the workdir or elsewhere. `TestWatcherByInotify` runs the watcher's life under the race detector, with no privilege.
+- Judged by mutations: the 22 of the grouping, the decoding and the tree are caught, three of them only once three vectors were added; and the four of the system parts, in qemu: no listing of a folder that appears, Atoll's own process read as a user's, the view's too, and no rename asked of a filesystem mark.
+- The loop that uses it is the next change (TODO.md).
+
 ## The Linux watcher measured (specs.md §15.1, §30)
 
 Commit "Measure fanotify and inotify on each driver", on `watcher-research`.
