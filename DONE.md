@@ -2,6 +2,16 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll catalog backup` and `verify` (specs.md §9, §25)
+
+Commit "Back the catalog up, and check it", on `develop`.
+
+- **`catalog backup`**: SQLite's `VACUUM INTO`, from one snapshot, into `<catalog folder>/backups/catalog-<UTC time>.db` through `.part`, checked whole before it is renamed (integrity check, foreign keys, `pool_id`); the seven newest are kept. With `maintenance.catalog_on_disks`, a copy goes to each disk online and not failed, as `Atoll/catalog/catalog.db`, through a confirmed handle.
+- **`catalog verify`**: SQLite's integrity and foreign key checks on the catalog, exit 4 when they find anything.
+- **Verified**: a unit test of the backups kept and checked, and a scenario of both commands, their usage errors, and a missing catalog.
+- **Left for later, in TODO.md**: the daemon's daily backup, the read-only comparison of the catalog with the disks in `verify`, and `catalog rebuild`.
+- **Decided without the maintainer, to confirm**: the names and the place of the backups, the copy on a disk replaced whole each time, and `verify` without the disk comparison for now.
+
 ## A correction: the qemu runs of this night (test/qemu/run.sh)
 
 Commit "Run the scrub in the daemon", on `develop`.

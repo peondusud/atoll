@@ -1,0 +1,135 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a725",
+  "description": "catalog backup writes a consistent copy of the catalog beside it, in backups/, named by the time in UTC; catalog verify finds a catalog in order. Both take --json and nothing else; with no catalog, both exit with 1.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "x"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "backup"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "verify"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "backup",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "verify",
+        "extra"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "backup",
+        "--json"
+      ],
+      "stdout_json": {
+        "backup": "${SANDBOX}/backups/catalog-20260101T000000Z.db",
+        "removed": [],
+        "disks": []
+      }
+    },
+    {
+      "do": "advance",
+      "by": "1d"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "backup",
+        "--json"
+      ],
+      "stdout_json": {
+        "backup": "${SANDBOX}/backups/catalog-20260102T000000Z.db",
+        "removed": [],
+        "disks": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "verify",
+        "--json"
+      ],
+      "stdout_json": {
+        "problems": []
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "x"
+        }
+      ]
+    }
+  ]
+}

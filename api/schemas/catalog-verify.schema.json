@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/catalog-verify.schema.json",
+  "title": "atoll catalog verify --json",
+  "description": "What SQLite's integrity check and foreign key check say is wrong with the catalog: nothing for a catalog in order (specs.md §9, §25).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["problems"],
+  "properties": {
+    "problems": {
+      "description": "Each a line for a reader, worded by SQLite or as a row without its parent; no contract on the wording.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

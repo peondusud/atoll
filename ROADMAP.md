@@ -44,7 +44,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **`atoll catalog backup | verify | rebuild`**, with daily backups, 7 kept.
+1. **The catalog**: the daemon's daily backup, `verify` against the disks, and `rebuild`; `atoll catalog backup` and its integrity checks are done.
 2. **The owner of a file applied to its other copies.**
 3. **The local API**: a Unix socket, and HTTP with a token.
 4. **The rest of the trash**: `max_size` and its purge order, `restore --to`, the other reasons, and Atoll's empty folders.

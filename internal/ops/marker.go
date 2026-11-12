@@ -84,3 +84,50 @@ func (d *Disk) WriteMarker(text string) error {
 	}
 	return nil
 }
+
+// CatalogFolder holds the latest catalog backup, in the work folder of each disk, with maintenance.catalog_on_disks
+// (specs.md §9).
+const CatalogFolder = "catalog"
+
+// CatalogName is that backup's name.
+const CatalogName = "catalog.db"
+
+// PutCatalog writes a catalog backup in the disk's Atoll/catalog/: the folders made when missing, then the copy in
+// <name>.new, synced, then in place of the one before, and the folder synced. A crash leaves the one before, or the
+// new one, and at worst a <name>.new the next backup replaces.
+func (d *Disk) PutCatalog(src io.Reader) error {
+	f, err := d.makeFolders(components(d.config.Workdir, CatalogFolder), nil)
+	if err != nil {
+		return err
+	}
+	defer f.close()
+	part := CatalogName + ".new"
+	if err := f.Unlink(part); err != nil && !fsx.IsAbsent(err) {
+		return classify(fmt.Errorf("unlink %q: %w", part, err))
+	}
+	w, err := f.CreateFile(part, 0o600)
+	if err != nil {
+		return classify(fmt.Errorf("create %q: %w", part, err))
+	}
+	_, err = io.Copy(w, src)
+	if err == nil {
+		err = w.Sync()
+	}
+	if closeErr := w.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = f.Unlink(part)
+		return classify(fmt.Errorf("write %q: %w", part, err))
+	}
+	if err := f.Unlink(CatalogName); err != nil && !fsx.IsAbsent(err) {
+		return classify(fmt.Errorf("unlink %q: %w", CatalogName, err))
+	}
+	if err := f.Rename(part, f.Dir, CatalogName); err != nil {
+		return classify(fmt.Errorf("rename %q: %w", part, err))
+	}
+	if err := f.Sync(); err != nil {
+		return classify(fmt.Errorf("sync: %w", err))
+	}
+	return nil
+}

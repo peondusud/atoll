@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -78,4 +79,42 @@ func writeSynced(path string, data []byte, like os.FileInfo) (err error) {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	return nil
+}
+
+// RemoveFile removes a file of the system disk, the catalog's or the configuration's, never one of a pool disk.
+func RemoveFile(path string) error {
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove %s: %w", path, err)
+	}
+	return nil
+}
+
+// RenameFile renames a file of the system disk, replacing what is at the new name.
+func RenameFile(from, to string) error {
+	if err := os.Rename(from, to); err != nil {
+		return fmt.Errorf("rename %s: %w", from, err)
+	}
+	return nil
+}
+
+// ListNames gives the names in a folder of the system disk, in no order.
+func ListNames(path string) ([]string, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("list %s: %w", path, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names, nil
+}
+
+// OpenSystemFile opens a file of the system disk for reading: a catalog backup to copy to the disks.
+func OpenSystemFile(path string) (io.ReadCloser, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	return f, nil
 }
