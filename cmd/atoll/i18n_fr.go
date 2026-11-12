@@ -245,4 +245,10 @@ var frenchMessages = map[string]string{
 	"%d copies: %d bytes in theory, %d reachable without moving a copy; %d bytes stored, %d files short\n": "%d copies : %d octets en théorie, %d atteignables sans déplacer de copie ; %d octets stockés, %d fichiers en deçà\n",
 	"spread_mode is strict: each copy of a file in another failure domain, as far as they go\n":            "spread_mode est strict : chaque copie d'un fichier dans un autre domaine de panne, tant qu'il y en a\n",
 	"say what the pool can hold with 1, 2 and 3 copies of every file, in theory and without moving a copy": "dit ce que le pool peut contenir avec 1, 2 et 3 copies de chaque fichier, en théorie et sans déplacer de copie",
+	"balance: --move-originals comes later: for now only Atoll's copies move":                              "balance : --move-originals viendra plus tard : pour l'instant seules les copies d'Atoll bougent",
+	"balance: unknown argument %q": "balance : argument inconnu %q",
+	"%s (%s -> %s): %s\n":          "%s (%s -> %s) : %s\n",
+	"balance: replication.enabled is false: nothing was copied or moved\n":                        "balance : replication.enabled vaut false : rien n'a été copié ni déplacé\n",
+	"%d bytes moved, or to move, and %d copies staying\n":                                         "%d octets déplacés, ou à déplacer, et %d copies qui restent\n",
+	"move the copies Atoll made that break a strict setting of their file to where it wants them": "déplace les copies faites par Atoll qui enfreignent un réglage strict de leur fichier là où il les veut",
 }

@@ -54,6 +54,8 @@ func commandHelps() []commandHelp {
 			"atoll guard confirm --disk <id> [--kind deletions|modifications] [--json]",
 			"atoll guard reject --disk <id> [--kind deletions|modifications] [--json]",
 		}, "show the mass-deletion and mass-modification guards, or answer one that tripped"},
+		{"balance", []string{"atoll balance [--dry-run] [--yes] [--json]"},
+			"move the copies Atoll made that break a strict setting of their file to where it wants them"},
 		{"capacity", []string{"atoll capacity [--json]"},
 			"say what the pool can hold with 1, 2 and 3 copies of every file, in theory and without moving a copy"},
 		{"prune", []string{"atoll prune [--dry-run] [--yes] [--json]"},

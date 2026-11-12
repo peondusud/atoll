@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/balance.schema.json",
+  "title": "atoll balance --json",
+  "description": "Each Atoll copy that breaks a strict setting of its file, by path in byte order, then by the position of its disk: the copy made where the setting wants it, and the old one sent to the trash as rebalance (specs.md §13.3). Exit 0 when each moved, and with --dry-run; 3 when there is something to move and no --yes; 4 when one stayed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "moves",
+    "applied",
+    "bytes"
+  ],
+  "properties": {
+    "moves": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/move"
+      }
+    },
+    "applied": {
+      "type": "boolean",
+      "description": "Whether it was allowed to write: --yes."
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The sizes of the files moved, or to move."
+    }
+  },
+  "$defs": {
+    "move": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "size",
+        "outcome"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The disk of the copy that breaks the setting."
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The disk of the copy made in its place; left out with no-target."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcome": {
+          "description": "to-move without --yes; moved once the copy is made and the old one in the trash; no-target when no disk the setting allows has room; copied when the copy is made and the old one stays, as the plan still keeps it; or why the copy, or the old one's move to the trash, did not happen.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

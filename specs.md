@@ -449,7 +449,12 @@ U(k) = min over j = 0 … k−1 of (S − s1 − … − sj) / (k − j)
 - Inputs: disks (capacity, free space, state, domain, tags, filesystem) and files (size, effective policy, current copies with `created_by`).
 - Output: target placement and a minimal job plan. It prefers creating over moving, moving an Atoll copy over moving a user copy, and smaller volumes first.
 - Pure, deterministic function, covered by property tests; every list it outputs is sorted by a documented key.
-- Hysteresis: rebalancing starts only when the share of bytes correctly placed falls below `[balance].trigger.ratio_below`, or when the bytes to move exceed `or_more_than`.
+- `atoll balance [--dry-run] [--yes] [--json]` moves, by hand, the Atoll copies that break a strict setting of their file, as a change of rule, or of a disk's tags or domain, leaves them.
+  - **Misplaced.** A copy is misplaced when only listed disks are candidates and its disk is not listed (§13.4). With `spread_mode = "strict"`, it is also misplaced when the copies of a file at its level cover fewer failure domains than it must and it doubles up a domain: the youngest such Atoll copy first, as many as domains are missing. A user copy never is.
+  - **A move.** The plan of the pool, made with each misplaced copy counting for nothing, places a replacement where the setting wants it. The copy is made through the copy pipeline (§14.2). The plan, made again, then marks the old copy `surplus`, as the new one stands in for it. Only then does the old copy go to the trash, as `rebalance`.
+  - Only the files with a misplaced copy get a job. With no disk the setting allows that has room, the copy stays: `no-target`.
+  - Without `--yes` it says what it would move and exits with 3; with a copy that stays, it exits with 4. `--move-originals`, which would move user copies, comes later. Output: `api/schemas/balance.schema.json`.
+- Hysteresis: rebalancing starts only when the share of bytes correctly placed falls below `[balance].trigger.ratio_below`, or when the bytes to move exceed `or_more_than`. This and the share of bytes correctly placed come with the daemon's balancing inside `balance.schedule`, later in phase 1b.
 - Status indicator: share of files at the wanted level (`atoll status`, §15.11) and, with `balance` (phase 1b), share of bytes correctly placed.
 - Reachable capacity, for each k: the solver plans without running anything, moving no user copy, with every managed file wanted at k copies. The result is the bytes of the files that reach k copies in that plan, plus the formula of §13.1 applied to the free space that plan leaves, minus `min_free`, on each disk. So it accounts for data outside `media/` and for the trash, and it is what Atoll would really do; there is no second algorithm. It reads the whole catalog and wakes no disk.
 - `atoll capacity [--json]` gives both for k = 1, 2 and 3, from the catalog alone: the disks' capacity, free space and state the last scan recorded, and their files. A file reaches k copies in that plan unless it is left `degraded`, `unavailable`, `name-incompatible` or `name-collision`; none waits for `atoll replicate` there. Bytes are of files: a file of 1 MB at 3 copies counts 1 MB. With `[placement] spread_mode = "strict"`, both use the formula of failure domains. Output: `api/schemas/capacity.schema.json`.
@@ -484,6 +489,7 @@ This is the part of the solver that phase 1a needs: which copies to create, how 
   - `name-incompatible`, `name-collision`: it stays below its level and a search for a disk met a disk that refused its name, past the limit of its branch included (§15.8), or that holds a colliding one; or a refresh met one (above). A disk counts here when it is writable, holds no copy of the file and is not left out by the lists, however little room it has.
 - **Input**: a plan refuses what cannot be: two disks with one `id` or `position`, a negative `position`, size or free space, two files with one path, a path that is not well-formed, two copies of a file on one disk, a copy or entry on an unknown disk, `replicas` outside 0 to 2, or a value outside its closed list.
 - **Output**: jobs in plan order, the refreshes first; a result for each file with a state, a mark or an overflow, by path in byte order, with its states in the order of §4 and its copies by position. A file with no result has the state `ok`, as most files do on a pool in service.
+- **The plan of `atoll balance`** (§13.3): a misplaced Atoll copy counts for nothing, so that one is made where the setting wants it. It stays a source, and its disk still holds a copy. Its file's result lists its disk as `misplaced`. Only the jobs of files with a misplaced copy are run, and the results are not recorded.
 
 ## 14. Replication
 
@@ -1553,7 +1559,7 @@ atoll conflicts list | resolve <path> --keep <disk> [--dry-run] [--yes]   (§15.
 atoll names check [--path <path>]        read-only: names not in NFC, not valid UTF-8, incompatible with a filesystem, or colliding, and paths past a length limit (§15.9)
 atoll guard list | confirm --disk <id> [--kind deletions|modifications] | reject --disk <id> [--kind deletions|modifications]
 atoll prune [--dry-run] [--yes]          surplus copies to the trash (§17.3)
-atoll balance [--dry-run] [--move-originals]
+atoll balance [--dry-run] [--yes]        Atoll's copies a strict setting no longer allows, moved where it wants them (§13.3)
 atoll notify test [--json]               a test alert through each channel set, and a request to each media server (§21.5, §23)
 atoll catalog backup | verify | rebuild  verify: SQLite integrity check, then catalog vs disks (read-only)
 atoll mergerfs-config                    (phase 1 and break glass)

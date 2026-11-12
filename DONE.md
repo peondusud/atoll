@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll balance` (specs.md §13.3, §13.4)
+
+Commit "Move the copies a strict setting no longer allows", on `beta`.
+
+- `atoll balance` moves the copies Atoll made that break a strict setting of their file, as a change of rule or of a disk's tags or domain leaves them.
+- How: the plan of the pool, made with such a copy counting for nothing, places a replacement where the setting wants it. The copy pipeline makes it. The plan, made again, marks the old copy surplus, and only then does it go to the trash, as `rebalance`. A file never has fewer copies than it had during a move, and a user copy never moves.
+- Verified: 12 `plan.json` vectors of the plan's `balance` mode; the scenarios `balance-tags`, `balance-no-target` and `balance-spread`; `TestRetireKeepsWhatThePlanKeeps` and `TestBalanceMoveOriginals`; 17 mutants, each caught but one equivalent (a plan of balance writes nothing of its results, which `DryRun` also ensures).
+- **Decided without the maintainer, to confirm**, the safest reading of a short paragraph of the spec:
+  - **What is misplaced:** only what breaks a strict setting. That is a disk the lists no longer allow, where only listed disks are candidates, or a failure domain doubled up while another is uncovered, with `spread_mode = "strict"`. A copy that overflowed in `prefer` mode stays.
+  - **By hand only.** The daemon's balancing inside `balance.schedule`, its hysteresis and the share of bytes correctly placed come later (TODO.md), and `balance.schedule` still warns of a later phase.
+  - **`--move-originals` comes later:** for now it is refused, with exit 2.
+  - **Only the files with a misplaced copy** get a job, so a run of `atoll balance` copies nothing else.
+  - **New contracts:** `api/schemas/balance.schema.json` and its outcomes (`to-move`, `moved`, `no-target`, `copied`); `plan.json`'s `balance` and `misplaced`; and a scenario step `config`, which rewrites the configuration midway, as a change of rule needs.
+
 ## The copy the lists want, kept (specs.md §13.4)
 
 Commit "Keep the copy the rule's lists want", on `beta`: the first piece of `atoll balance`.

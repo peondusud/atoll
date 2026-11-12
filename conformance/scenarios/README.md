@@ -35,7 +35,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `config` | string | the text of the configuration, written to `${SANDBOX}/atoll.toml`, which each `atoll` step gets through `--config`, before its `args`. Left out, no step gets it |
 | `steps` | array of objects | what happens, in order: below |
 
-`${SANDBOX}`, in `config`, in `args`, in `stdout_json`, in `rows` and in the `text` of a `write` step, is the scenario's temporary folder. An unknown field, or a field on a step it does not apply to, is an error: a typo must not disable a check.
+`${SANDBOX}`, in `config`, in `args`, in `stdout_json`, in `rows` and in the `text` of a `write` or `config` step, is the scenario's temporary folder. An unknown field, or a field on a step it does not apply to, is an error: a typo must not disable a check.
 
 ## Steps
 
@@ -52,6 +52,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `chmod` | `disk`, a path, `mode` | sets a file's mode, written in octal digits with a leading 0, as `"0640"`: the permission bits, setuid, setgid and sticky |
 | `chown` | `disk`, a path, `uid`, `gid` | gives a file an owner, both ids from 0 to 4294967294: only in a scenario with `root` |
 | `advance` | `by` | moves the clock forward, by a duration of `specs.md` §29.5 |
+| `config` | `text` | rewrites the configuration with that text, `${SANDBOX}` replaced as in `config`, for the steps after it, as a user who edits it would. Only in a scenario with a `config` |
 | `tick` | | waits until the real clock behind a change time has moved, which it may not do within a clock tick (`specs.md` §17.1). `advance` moves another clock |
 | `unmount` | `disk` | a failed mount: the disk's folder is left empty and leaves the control file, and its tree is set aside |
 | `mount` | `disk` | brings an unmounted disk back, with its tree. A step fails if something was written to the empty folder meanwhile |

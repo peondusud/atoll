@@ -12,6 +12,10 @@ const EventModified = "modified"
 // ReasonOverwritten sends a stale copy to the trash (specs.md §15.4, §17).
 const ReasonOverwritten = "overwritten"
 
+// ReasonRebalance sends to the trash an Atoll copy that atoll balance made again where its file's strict settings
+// want it (specs.md §13.3, §17).
+const ReasonRebalance = "rebalance"
+
 // What a modification decides (specs.md §15.4).
 const (
 	ModModified = "modified"

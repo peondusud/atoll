@@ -22,6 +22,7 @@ type planVector struct {
 	Jobs    []jobVector    `json:"jobs"`
 	Results []resultVector `json:"results"`
 	Error   bool           `json:"error"`
+	Balance bool           `json:"balance"`
 	Note    string         `json:"note"`
 }
 
@@ -85,13 +86,14 @@ type jobVector struct {
 }
 
 type resultVector struct {
-	Path     *string  `json:"path"`
-	PathB64  *string  `json:"path_b64"`
-	States   []string `json:"states"`
-	Surplus  []string `json:"surplus"`
-	Back     []string `json:"back"`
-	Cancel   []string `json:"cancel"`
-	Overflow bool     `json:"overflow"`
+	Path      *string  `json:"path"`
+	PathB64   *string  `json:"path_b64"`
+	States    []string `json:"states"`
+	Surplus   []string `json:"surplus"`
+	Back      []string `json:"back"`
+	Cancel    []string `json:"cancel"`
+	Misplaced []string `json:"misplaced"`
+	Overflow  bool     `json:"overflow"`
 }
 
 func or[T any](v *T, fallback T) T {
@@ -104,7 +106,7 @@ func or[T any](v *T, fallback T) T {
 // input turns a vector into the input of MakePlan, with the defaults of
 // conformance/vectors/README.md.
 func (v *planVector) input() (Input, error) {
-	var in Input
+	in := Input{Balance: v.Balance}
 	var err error
 	minFree := v.MinFree
 	if minFree == nil {
@@ -171,7 +173,7 @@ func wantResults(t *testing.T, v []resultVector) []Result {
 		for _, s := range r.States {
 			states = append(states, State(s))
 		}
-		results = append(results, Result{Path: path, States: states, Surplus: r.Surplus, Back: r.Back, Cancel: r.Cancel, Overflow: r.Overflow})
+		results = append(results, Result{Path: path, States: states, Surplus: r.Surplus, Back: r.Back, Cancel: r.Cancel, Overflow: r.Overflow, Misplaced: r.Misplaced})
 	}
 	return results
 }

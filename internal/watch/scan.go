@@ -484,6 +484,11 @@ type Replicate struct {
 	Queue func(jobs []PlannedJob) error
 	// DryRun writes nothing of the plan.
 	DryRun bool
+	// Balance makes the plan of atoll balance (specs.md §13.3): Misplaced gets each file with an Atoll copy that
+	// breaks a strict setting, and the disks of those copies, and nothing of the plan is written, as its results are
+	// not the pool's.
+	Balance   bool
+	Misplaced func(path string, disks []string) error
 }
 
 // PlannedJob is a job of the plan, with what queueing it needs of its file.
@@ -514,7 +519,7 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	if err != nil {
 		return err
 	}
-	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries)}
+	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance}
 	var release func(string) bool
 	if rep != nil {
 		release = rep.Release
@@ -535,6 +540,16 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	}
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
+	}
+	if input.Balance {
+		for i := range results {
+			if len(results[i].Misplaced) > 0 && rep.Misplaced != nil {
+				if err := rep.Misplaced(results[i].Path, results[i].Misplaced); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 	if rep != nil && rep.DryRun {
 		return nil
