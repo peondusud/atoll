@@ -1,0 +1,494 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a716, \u00a725",
+  "description": "dupes groups the files that hold the same content under different logical paths, from the catalog alone: never an empty file nor one not hashed yet, which it counts. A copy of a file on another disk is the same file. A group is listed when one of its files is at or below --path, and when its size is at least --min-size; groups by the bytes they hold more than once, the most first; paths in byte order.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same content"
+        },
+        {
+          "path": "media/Films/b.mkv",
+          "text": "same content"
+        },
+        {
+          "path": "media/Series/d.mkv",
+          "text": "same content"
+        },
+        {
+          "path": "media/Films/e.mkv",
+          "text": "hello"
+        },
+        {
+          "path": "media/z.mkv",
+          "text": "hello"
+        },
+        {
+          "path": "media/h1.mkv",
+          "text": "hello"
+        },
+        {
+          "path": "media/h2.mkv",
+          "text": "hello"
+        },
+        {
+          "path": "media/h3.mkv",
+          "text": "hello"
+        },
+        {
+          "path": "media/h4.mkv",
+          "text": "hello"
+        },
+        {
+          "path": "media/c.mkv",
+          "text": "unique stuff"
+        },
+        {
+          "path": "media/empty1",
+          "text": ""
+        },
+        {
+          "path": "media/empty2",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same content"
+        },
+        {
+          "path": "media/z.mkv",
+          "text": "hello"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [],
+        "files": 0,
+        "wasted": 0,
+        "unhashed": 10
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [
+          {
+            "size": 5,
+            "blake3": "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+            "wasted": 25,
+            "paths": [
+              {
+                "path": "Films/e.mkv"
+              },
+              {
+                "path": "h1.mkv"
+              },
+              {
+                "path": "h2.mkv"
+              },
+              {
+                "path": "h3.mkv"
+              },
+              {
+                "path": "h4.mkv"
+              },
+              {
+                "path": "z.mkv"
+              }
+            ]
+          },
+          {
+            "size": 12,
+            "blake3": "2b80d6e264690d8a19de16ffa3c3271cd778c96a1bf300c3231cc692786fed50",
+            "wasted": 24,
+            "paths": [
+              {
+                "path": "Films/b.mkv"
+              },
+              {
+                "path": "Series/d.mkv"
+              },
+              {
+                "path": "a.mkv"
+              }
+            ]
+          }
+        ],
+        "files": 9,
+        "wasted": 49,
+        "unhashed": 0
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--path",
+        "Films",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [
+          {
+            "size": 5,
+            "blake3": "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+            "wasted": 25,
+            "paths": [
+              {
+                "path": "Films/e.mkv"
+              },
+              {
+                "path": "h1.mkv"
+              },
+              {
+                "path": "h2.mkv"
+              },
+              {
+                "path": "h3.mkv"
+              },
+              {
+                "path": "h4.mkv"
+              },
+              {
+                "path": "z.mkv"
+              }
+            ]
+          },
+          {
+            "size": 12,
+            "blake3": "2b80d6e264690d8a19de16ffa3c3271cd778c96a1bf300c3231cc692786fed50",
+            "wasted": 24,
+            "paths": [
+              {
+                "path": "Films/b.mkv"
+              },
+              {
+                "path": "Series/d.mkv"
+              },
+              {
+                "path": "a.mkv"
+              }
+            ]
+          }
+        ],
+        "files": 9,
+        "wasted": 49,
+        "unhashed": 0
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--path",
+        "Series",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [
+          {
+            "size": 12,
+            "blake3": "2b80d6e264690d8a19de16ffa3c3271cd778c96a1bf300c3231cc692786fed50",
+            "wasted": 24,
+            "paths": [
+              {
+                "path": "Films/b.mkv"
+              },
+              {
+                "path": "Series/d.mkv"
+              },
+              {
+                "path": "a.mkv"
+              }
+            ]
+          }
+        ],
+        "files": 3,
+        "wasted": 24,
+        "unhashed": 0
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--path=z.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [
+          {
+            "size": 5,
+            "blake3": "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+            "wasted": 25,
+            "paths": [
+              {
+                "path": "Films/e.mkv"
+              },
+              {
+                "path": "h1.mkv"
+              },
+              {
+                "path": "h2.mkv"
+              },
+              {
+                "path": "h3.mkv"
+              },
+              {
+                "path": "h4.mkv"
+              },
+              {
+                "path": "z.mkv"
+              }
+            ]
+          }
+        ],
+        "files": 6,
+        "wasted": 25,
+        "unhashed": 0
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--path",
+        "Fil",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [],
+        "files": 0,
+        "wasted": 0,
+        "unhashed": 0
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--min-size",
+        "10B",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [
+          {
+            "size": 12,
+            "blake3": "2b80d6e264690d8a19de16ffa3c3271cd778c96a1bf300c3231cc692786fed50",
+            "wasted": 24,
+            "paths": [
+              {
+                "path": "Films/b.mkv"
+              },
+              {
+                "path": "Series/d.mkv"
+              },
+              {
+                "path": "a.mkv"
+              }
+            ]
+          }
+        ],
+        "files": 3,
+        "wasted": 24,
+        "unhashed": 0
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--min-size=13B",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [],
+        "files": 0,
+        "wasted": 0,
+        "unhashed": 0
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--min-size",
+        "0B",
+        "--json"
+      ],
+      "stdout_json": {
+        "groups": [
+          {
+            "size": 5,
+            "blake3": "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f",
+            "wasted": 25,
+            "paths": [
+              {
+                "path": "Films/e.mkv"
+              },
+              {
+                "path": "h1.mkv"
+              },
+              {
+                "path": "h2.mkv"
+              },
+              {
+                "path": "h3.mkv"
+              },
+              {
+                "path": "h4.mkv"
+              },
+              {
+                "path": "z.mkv"
+              }
+            ]
+          },
+          {
+            "size": 12,
+            "blake3": "2b80d6e264690d8a19de16ffa3c3271cd778c96a1bf300c3231cc692786fed50",
+            "wasted": 24,
+            "paths": [
+              {
+                "path": "Films/b.mkv"
+              },
+              {
+                "path": "Series/d.mkv"
+              },
+              {
+                "path": "a.mkv"
+              }
+            ]
+          }
+        ],
+        "files": 9,
+        "wasted": 49,
+        "unhashed": 0
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "extra"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--path",
+        "/abs"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--min-size",
+        "big"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--min-size",
+        "10"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--min-size"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "dupes",
+        "--path",
+        "a",
+        "--path",
+        "b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

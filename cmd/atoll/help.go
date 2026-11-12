@@ -40,6 +40,8 @@ func commandHelps() []commandHelp {
 			"read the copies due and check each chunk against its hash"},
 		{"repair", []string{"atoll repair <path> [--disk <id>] [--mode chunk|file] [--dry-run] [--yes] [--json]"},
 			"repair the corrupt copies of the files at or below a path from healthy ones"},
+		{"dupes", []string{"atoll dupes [--path <path>] [--min-size <size>] [--json]"},
+			"list the files that hold the same content under different paths, from the catalog"},
 		{"trash", []string{
 			"atoll trash list [--json]",
 			"atoll trash restore <path> [--to <disk>] [--dry-run] [--yes] [--json]",

@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The report of duplicates (specs.md §16)
+
+Commit "Report the files that hold the same content", on `develop`.
+
+- R-15, the beta's second piece. `atoll dupes [--path <path>] [--min-size <size>]` groups the files that hold the same content under different logical paths, from the catalog alone: it reads no disk and takes no lock. A group is two files or more of one size and one BLAKE3. It never holds an empty file, nor one not hashed yet, which `unhashed` counts. Groups go by the bytes they hold more than once, the most first.
+- Verified: the scenario `dupes.json`, with a quick scan then a full one, each filter and the order; eight mutants, each caught.
+- **Decided without the maintainer, to confirm:**
+  - A group is listed when one of its files is at or below `--path`, with all its files, so that a folder's duplicates elsewhere show.
+  - An empty file is never a duplicate; two hard links of one file are, as each logical path is a file.
+  - `--min-size` takes a size with its unit, `10B`, as the configuration writes it; 1 byte by default.
+  - The order: by the bytes a group holds more than once, then by hash.
+  - New contracts: `atoll dupes` and `api/schemas/dupes.schema.json`.
+
 ## The repair of a corrupt copy (specs.md §16.1)
 
 Commit "Repair a corrupt copy from a healthy one", on `develop`.

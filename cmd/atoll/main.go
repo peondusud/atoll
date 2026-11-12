@@ -101,6 +101,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runScrub(configPath, args[1:], stdout, stderr)
 	case "repair":
 		return runRepair(configPath, args[1:], stdout, stderr)
+	case "dupes":
+		return runDupes(configPath, args[1:], stdout, stderr)
 	case "catalog":
 		return runCatalog(configPath, args[1:], stdout, stderr)
 	default:

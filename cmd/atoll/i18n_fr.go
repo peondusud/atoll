@@ -219,4 +219,9 @@ var frenchMessages = map[string]string{
 	"to repair with --yes":                 "à réparer avec --yes",
 	"reads right after all":                "se lit bien finalement",
 	"no healthy copy to repair it from":    "aucune copie saine pour le réparer",
+	"list the files that hold the same content under different paths, from the catalog": "lister les fichiers qui ont le même contenu sous des chemins différents, d'après le catalogue",
+	"--min-size: %q is no size":                           "--min-size : %q n'est pas une taille",
+	"%d groups, %d files, %d bytes held more than once\n": "%d groupes, %d fichiers, %d octets en plus d'un exemplaire\n",
+	"%d bytes, %d times, blake3 %s:\n":                    "%d octets, %d fois, blake3 %s :\n",
+	"%d files not hashed yet, which a full scan reads\n":  "%d fichiers pas encore hachés, que lit un scan complet\n",
 }
