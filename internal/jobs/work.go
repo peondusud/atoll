@@ -373,6 +373,7 @@ func (p *pass) runFolderJob(ctx context.Context, d *config.Disk, handle *ops.Dis
 		return fmt.Errorf("catalog: %w", err)
 	}
 	p.session.MarkChanged()
+	p.session.Left(d.ID, job.From)
 	p.record(Operation{Disk: d.ID, Kind: KindFolder, Path: job.From, To: job.To, Outcome: trash.OutcomeRenamed})
 	return nil
 }
@@ -735,6 +736,7 @@ func (p *pass) renameOne(ctx context.Context, d *config.Disk, handle *ops.Disk, 
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	p.session.MarkChanged()
+	p.session.Left(d.ID, r.Place)
 	return trash.OutcomeRenamed, nil
 }
 

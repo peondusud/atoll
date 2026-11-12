@@ -298,6 +298,36 @@
       "note": "not a folder"
     },
     {
+      "kind": "rmdir",
+      "source": "absent",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "the folder is gone"
+    },
+    {
+      "kind": "rmdir",
+      "source": "same",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "nothing happened"
+    },
+    {
+      "kind": "rmdir",
+      "source": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "another file or folder at that name"
+    },
+    {
       "kind": "trash",
       "target": "same",
       "source": "lost",
@@ -353,20 +383,127 @@
       "error": true
     },
     {
-      "kind": "rmdir",
+      "kind": "repair",
       "source": "same",
       "error": true,
       "note": "no reprise for that kind yet"
     },
-    {"kind": "rename", "target": "same", "source": "same", "action": "finish", "remove_source": true, "remove_target": false, "move_back": false, "warn": false, "note": "link was interrupted: the source name goes"},
-    {"kind": "rename", "target": "same", "source": "absent", "action": "finish", "remove_source": false, "remove_target": false, "move_back": false, "warn": false, "note": "the move went through"},
-    {"kind": "rename", "target": "same", "source": "other", "action": "finish", "remove_source": false, "remove_target": false, "move_back": false, "warn": false, "note": "a new file at the source, for the next look"},
-    {"kind": "rename", "target": "absent", "source": "same", "action": "undo", "remove_source": false, "remove_target": false, "move_back": false, "warn": false, "note": "nothing happened"},
-    {"kind": "rename", "target": "absent", "source": "absent", "action": "undo", "remove_source": false, "remove_target": false, "move_back": false, "warn": true, "note": "both names gone: not what an operation leaves"},
-    {"kind": "rename", "target": "absent", "source": "other", "action": "undo", "remove_source": false, "remove_target": false, "move_back": false, "warn": true, "note": "another file at the source, and nothing at the target"},
-    {"kind": "rename", "target": "other", "source": "absent", "action": "undo", "remove_source": false, "remove_target": false, "move_back": false, "warn": true, "note": "a logical path is anyone's: what is at the target stays, unlike in the trash"},
-    {"kind": "rename", "target": "other", "source": "same", "action": "undo", "remove_source": false, "remove_target": false, "move_back": false, "warn": true, "note": "what took the target stays, and so does the copy"},
-    {"kind": "rename", "target": "other", "source": "other", "action": "undo", "remove_source": false, "remove_target": false, "move_back": false, "warn": true, "note": "neither name holds the file"},
-    {"kind": "rename", "target": "same", "error": true, "note": "a rename has two names"}
+    {
+      "kind": "rename",
+      "target": "same",
+      "source": "same",
+      "action": "finish",
+      "remove_source": true,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "link was interrupted: the source name goes"
+    },
+    {
+      "kind": "rename",
+      "target": "same",
+      "source": "absent",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "the move went through"
+    },
+    {
+      "kind": "rename",
+      "target": "same",
+      "source": "other",
+      "action": "finish",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "a new file at the source, for the next look"
+    },
+    {
+      "kind": "rename",
+      "target": "absent",
+      "source": "same",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": false,
+      "note": "nothing happened"
+    },
+    {
+      "kind": "rename",
+      "target": "absent",
+      "source": "absent",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "both names gone: not what an operation leaves"
+    },
+    {
+      "kind": "rename",
+      "target": "absent",
+      "source": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "another file at the source, and nothing at the target"
+    },
+    {
+      "kind": "rename",
+      "target": "other",
+      "source": "absent",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "a logical path is anyone's: what is at the target stays, unlike in the trash"
+    },
+    {
+      "kind": "rename",
+      "target": "other",
+      "source": "same",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "what took the target stays, and so does the copy"
+    },
+    {
+      "kind": "rename",
+      "target": "other",
+      "source": "other",
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "neither name holds the file"
+    },
+    {
+      "kind": "rename",
+      "target": "same",
+      "error": true,
+      "note": "a rename has two names"
+    },
+    {
+      "kind": "rmdir",
+      "target": "same",
+      "source": "same",
+      "error": true,
+      "note": "a folder removed has no target"
+    },
+    {
+      "kind": "rmdir",
+      "source": "lost",
+      "error": true
+    }
   ]
 }

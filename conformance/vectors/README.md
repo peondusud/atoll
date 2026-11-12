@@ -222,8 +222,8 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | string | `trash`, `restore`, `rename`, `unlink` for a purge, or `mkdir` |
-| `source`, `target` | string | `absent`, `same` or `other`, compared with `ops.file_key`, and for `mkdir` with being a folder. An `unlink` has no target, and a `mkdir` no source |
+| `kind` | string | `trash`, `restore`, `rename`, `unlink` for a purge, `mkdir`, or `rmdir` |
+| `source`, `target` | string | `absent`, `same` or `other`, compared with `ops.file_key`, and for `mkdir` with being a folder. An `unlink` or an `rmdir` has no target, and a `mkdir` no source |
 | `changed` | boolean | optional: for `trash`, whether the file is no longer what its row says |
 | `action` | string | `finish` or `undo` |
 | `remove_source`, `remove_target` | boolean | which name must go |

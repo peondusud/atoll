@@ -127,6 +127,10 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 		out.Disks = append(out.Disks, sd)
 	}
 	if opts.Apply {
+		if err := session.RemoveEmptied(ctx); err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+		out.Partial = out.Partial || session.Lost()
 		if err := session.Settle(ctx); err != nil {
 			return nil, fmt.Errorf("%w", err)
 		}

@@ -311,7 +311,7 @@ func plannedOn(list []catalog.Op, disk string) []string {
 		switch op.Kind {
 		case catalog.OpRename:
 			paths = append(paths, op.Path, op.Path2)
-		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpCreate, catalog.OpUtimens, catalog.OpChmod:
+		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpRmdir, catalog.OpCreate, catalog.OpUtimens, catalog.OpChmod:
 			paths = append(paths, op.Path)
 		}
 	}
@@ -1212,6 +1212,9 @@ func (p *pass) finish(ctx context.Context) error {
 	}
 	// What the walks found has served, and working out each file again reads them all.
 	p.seen, p.moves = nil, nil
+	if err := p.session.RemoveEmptied(ctx); err != nil {
+		return fmt.Errorf("%w", err)
+	}
 	if !p.settled {
 		if err := p.session.Settle(ctx); err != nil {
 			return fmt.Errorf("%w", err)

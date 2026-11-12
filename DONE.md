@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Atoll's own empty folders (specs.md §6.1, §17.2, §17.5)
+
+Commit "Remove the empty folders Atoll made", on `develop`.
+
+- At the end of a pass, a prune or a scrub that writes, each folder below the root that Atoll made, and that its own move of that run left empty, a copy sent to the trash or renamed away, goes; then each folder above it that this left empty, the root never. One operation `kind = rmdir` for each, journaled with an `rmdir` event: the name must still hold that folder, by inode; `unlinkat` with `AT_REMOVEDIR`, which only an empty folder passes; the parent's time restored and the parent synced; then the folder's row goes. A folder that holds anything, is gone or is another, stays, and the operation is `undone`.
+- Reprise: nothing at the name finishes it; the folder, by inode, undoes it; anything else undoes it with an event. Three more cases in `op_recovery.json`.
+- Verified: five scenarios, a folder removed while the one above it keeps a folder the user made there, then stays once the user empties it, and kill -9 after the journal, after the removal, after the sync, and with a file made at the name before the reprise; unit tests with EIO on the removal and on the parent's sync, something new in the folder, another folder at its name, and a dry run.
+- Fixed on the way: a disk lost while the scrub moves a copy to the trash now makes the scrub partial.
+- **Decided without the maintainer, to confirm:**
+  - Only what Atoll's own operations of that run emptied goes: a folder the user emptied stays, as an empty folder they kept may be one they want, and so does one a run left empty before it was stopped; nothing tries those again.
+  - These operations are not in a command's output: the journal and the events hold them.
+
 ## `trash.max_size`, and the daemon's purge (specs.md §15.13, §17, §17.4, §23)
 
 Commit "Purge the trash for room, and from the daemon", on `develop`.

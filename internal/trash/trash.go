@@ -70,13 +70,15 @@ type Session struct {
 	reprised map[string]int64
 	// repriseTrashed holds the operations whose copy reached the trash in this run's reprise.
 	repriseTrashed map[int64]bool
+	// emptied holds, by disk, the folders a copy left in this run through Atoll's own operation (specs.md §17.5).
+	emptied map[string]map[string]bool
 }
 
 // Open checks every disk and, when it is going to write, resolves what a crash left.
 func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool) (*Session, error) {
 	s := &Session{
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), slots: map[string]*slot{},
-		reprised: map[string]int64{}, repriseTrashed: map[int64]bool{},
+		reprised: map[string]int64{}, repriseTrashed: map[int64]bool{}, emptied: map[string]map[string]bool{},
 	}
 	text, _ := c.Effective()["trash.retention"].(string)
 	retention, err := value.ParseDuration(text)
@@ -352,6 +354,9 @@ func (s *Session) lose(ctx context.Context, id string, why error) error {
 
 // Finish works out the original, policy and state of each file again, if anything moved.
 func (s *Session) Finish(ctx context.Context) error {
+	if err := s.RemoveEmptied(ctx); err != nil {
+		return err
+	}
 	if !s.changed {
 		return nil
 	}
@@ -400,6 +405,9 @@ func (s *Session) Prune(ctx context.Context, each func(*PruneItem) error) (*Summ
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
 		if len(page) == 0 {
+			if err := s.RemoveEmptied(ctx); err != nil {
+				return nil, err
+			}
 			summary.DiskLost = s.lost
 			return summary, nil
 		}
@@ -573,6 +581,7 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 			return "", fmt.Errorf("catalog: %w", err)
 		}
 		s.changed = true
+		s.Left(c.Disk, place)
 		return OutcomeTrashed, nil
 	}
 	return s.afterFailedMove(ctx, handle, op, moveErr)

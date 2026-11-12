@@ -81,6 +81,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverUnlink(ctx, db, op, nowNS)
 	case catalog.OpMkdir:
 		return d.recoverMkdir(ctx, db, op, nowNS)
+	case catalog.OpRmdir:
+		return d.recoverRmdir(ctx, db, op, nowNS)
 	case catalog.OpRename:
 		return d.recoverRename(ctx, db, op, nowNS, out)
 	case catalog.OpCreate:
