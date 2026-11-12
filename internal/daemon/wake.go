@@ -41,12 +41,16 @@ type WakeInput struct {
 	RescanEveryNS int64
 	Window        value.Window
 	Location      *time.Location
+	// HashPending says that files may be waiting for their hash, which is read inside the window.
+	HashPending bool
 }
 
-// WakeOutput says what to do now, and when to look again.
+// WakeOutput says what to do now, and when to look again. Hash says to read new files' hashes, once any check
+// and pass due are done.
 type WakeOutput struct {
 	Check   bool
 	Because []string
+	Hash    bool
 	WakeNS  int64
 }
 
@@ -96,7 +100,12 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 		}
 		earliest(in.Window.Next(time.Unix(0, max(at, now)).In(in.Location)).UnixNano())
 	}
-	if len(out.Because) > 0 {
+	if in.HashPending {
+		nowLocal := time.Unix(0, now).In(in.Location)
+		out.Hash = in.Window.Contains(nowLocal)
+		earliest(in.Window.Next(nowLocal).UnixNano())
+	}
+	if len(out.Because) > 0 || out.Hash {
 		wake = now
 	}
 	out.WakeNS = max(wake, now)

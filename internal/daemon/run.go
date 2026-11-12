@@ -28,6 +28,10 @@ const checkEvery = 30 * time.Second
 // asked again and again.
 const retryAfter = time.Minute
 
+// hashSlice is how long the daemon reads new files' hashes under the catalog's lock at a time, so that a command
+// never waits long for it, and events and checks come in between.
+const hashSlice = 30 * time.Second
+
 // Options is what Run needs.
 type Options struct {
 	Config  *config.Config
@@ -122,9 +126,11 @@ type loop struct {
 	disks    map[string]*diskState
 
 	first, reloaded, gone, back bool
-	checkDue                    int64
-	passDue                     *int64
-	lastEnd                     *int64
+	// hashPending says that files may be waiting for their hash: set by each pass, cleared once none is left.
+	hashPending bool
+	checkDue    int64
+	passDue     *int64
+	lastEnd     *int64
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -193,7 +199,8 @@ func (l *loop) run(ctx context.Context) error {
 			}
 		}
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
-			RipeOrigins: origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location}
+			RipeOrigins: origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
+			HashPending: l.hashPending && l.opt.Apply}
 		if waiting {
 			in.GroupDueNS = &groupNext
 		}
@@ -207,6 +214,10 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if len(out.Because) > 0 {
 			l.pass(ctx, out.Because)
+			continue
+		}
+		if out.Hash {
+			l.hash(ctx)
 			continue
 		}
 		timer := time.NewTimer(time.Duration(out.WakeNS - now))
@@ -389,6 +400,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		return
 	}
 	l.passDue = nil
+	l.hashPending = true
 	if outcome.NextDue.Valid {
 		next := outcome.NextDue.Int64
 		l.passDue = &next
@@ -403,6 +415,20 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	if l.opt.OnPass != nil {
 		l.opt.OnPass(because, outcome)
 	}
+}
+
+// hash reads new files' hashes for a slice of time, under the catalog's lock (specs.md §15.13).
+func (l *loop) hash(ctx context.Context) {
+	left := false
+	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
+		var err error
+		left, err = watch.HashNew(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Machine.Now()+hashSlice.Nanoseconds())
+		return nil, err
+	})
+	if err != nil && ctx.Err() == nil {
+		l.log.Warn("reading new files' hashes failed: the next pass tries again", "error", err)
+	}
+	l.hashPending = left && err == nil
 }
 
 // locked runs fn on the catalog, under its lock, which it takes after the others' and lets go of last.

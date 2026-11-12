@@ -70,7 +70,6 @@ Every item here is a **decision**:
   - at `disk add`: the block-device topology (R-06), another filesystem with the same identifier (§10), and the warning about `chattr +i`.
 - `disk add` and `disk remove`, and the other `atoll disk` commands. `disk remove` must refuse a disk with `planned` operations: on a disk no longer in the configuration they wait for good, and every command that writes exits with 4.
 - What the daemon that runs for good (§15.13) leaves:
-  - hashing the new files inside `maintenance.window` (§15.1, §18): its passes walk, and record sizes and times, but read no file whole, as `atoll scan` without `--full`;
   - the watcher's limits: a folder that leaves the root under inotify and comes back in another read is watched again from scratch; a path past `PATH_MAX` cannot get a mark of its own on ntfs-3g; the process of an event already gone reads as `user`;
   - the remount after a USB reset of an ntfs-3g disk, through `mount.ntfs-3g`, as the dedicated user, is not tested.
 - The modes `immediate`, which needs the watcher to know a file closed and stable, and `scheduled`, which runs inside `[replication].window`: until then both fall back to `deferred`, which `daemon --until-idle` runs, settle counted from when a file was first seen (§12.2, §12.3, §14.1). The `manual_alert_after` alert for a `manual` file left unprotected.

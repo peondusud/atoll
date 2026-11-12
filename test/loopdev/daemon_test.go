@@ -125,7 +125,10 @@ func TestDaemonRunsForGood(t *testing.T) {
 			v := newVolume(t, tc.fs)
 			at := mountPoint(t)
 			mountVolume(t, v, tc.driver, at, options...)
-			b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n")
+			// The maintenance window around now, for the new files' hashes; a file of solo/ has no copy to make,
+			// so its hash can only come from that reading.
+			window := time.Now().Add(-time.Hour).Format("15:04") + "-" + time.Now().Add(time.Hour).Format("15:04")
+			b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n[maintenance]\nwindow = \""+window+"\"\n[[rule]]\nlabel = \"solo\"\npath = \"solo/**\"\nreplicas = 0\n")
 			pool := viewOf(t, b)
 			keep, other := filepath.Join(b.keep, "media"), filepath.Join(at, "media")
 			passes, stop := runDaemon(t, b, filepath.Join(t.TempDir(), "fstab"))
@@ -140,6 +143,7 @@ func TestDaemonRunsForGood(t *testing.T) {
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%v: %s", err, out)
 			}
+			write(t, b.keep, "solo/x.mkv", "alone")
 			waitPass(t, passes, daemon.BecauseEvents)
 			waitFor(t, "a copy on the other disk", func() bool {
 				data, err := os.ReadFile(filepath.Join(other, "new.mkv"))
@@ -166,6 +170,11 @@ func TestDaemonRunsForGood(t *testing.T) {
 			mustDo(t, db.QueryRowContext(t.Context(), "SELECT group_concat(id || ' ' || state, ', ') FROM (SELECT id, state FROM disks ORDER BY position)").Scan(&states))
 			if states != "k online, v online" {
 				t.Errorf("disks: %s", states)
+			}
+			var hashed string
+			mustDo(t, db.QueryRowContext(t.Context(), "SELECT (f.blake3 IS NOT NULL) || ' ' || (c.verified_ns IS NOT NULL) FROM files f JOIN copies c ON c.file_id = f.id WHERE CAST(f.lpath AS TEXT) = 'solo/x.mkv'").Scan(&hashed))
+			if hashed != "1 1" {
+				t.Errorf("solo/x.mkv: hash and verified %s, want both", hashed)
 			}
 		})
 	}

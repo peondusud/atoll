@@ -436,6 +436,12 @@ func (r *FileReader) Next(ctx context.Context) ([]FileRow, error) {
 	return r.page(ctx, "SELECT * FROM files WHERE lpath > ? ORDER BY lpath LIMIT ?")
 }
 
+// NextUnhashed gives the next files that have no hash yet, and none at the end: the new files the daemon reads
+// inside maintenance.window (specs.md §15.13).
+func (r *FileReader) NextUnhashed(ctx context.Context) ([]FileRow, error) {
+	return r.page(ctx, "SELECT * FROM files WHERE lpath > ? AND blake3 IS NULL ORDER BY lpath LIMIT ?")
+}
+
 // fileColumns are what readFiles scans.
 const fileColumns = `f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns,
 	c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state, c.file_key,

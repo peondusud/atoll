@@ -24,7 +24,7 @@ One JSON file per function. Every file has this envelope:
 - Every case may carry a `note`: a short explanation for reviewers, never read by the tests.
 - Unknown fields are errors, so a typo cannot silently disable a check. Keys are lowercase ASCII and match a field exactly, and no key appears twice in one object: Go's decoder would otherwise match `Name` or `NAME` to `name`, and keep the last of two equal keys, where Rust's fails.
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
-- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`, `first`, `gone`, `back`, `check`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
+- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`, `first`, `reloaded`, `gone`, `back`, `check`, `hash_pending`, `read_hashes`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
 - Integers are exact JSON integers within the signed 64-bit range, without a fraction, an exponent or `-0`; they are never written as strings or floats.
 - Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding), written exactly as the standard encoder writes it: no line break, no other spelling. A case has exactly one of the two.
 - A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
@@ -327,8 +327,11 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `last_pass_end_ns` | integer | when the last pass ended; left out before the first |
 | `rescan_every_ns` | integer | `maintenance.rescan_every` |
 | `window`, `timezone` | string | `maintenance.window`, and the IANA zone its wall clock is in |
+| `reloaded` | boolean | the configuration was read again since the last pass |
+| `hash_pending` | boolean | files may be waiting for their hash |
 | `check` | boolean | `true` when the mount check is due |
-| `because` | array of strings | why a pass is due, in the order `start`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
 | `wake_ns` | integer | when to look again: `now_ns` when something is due |
 | `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, or a `rescan_every_ns` that is not positive |
 

@@ -813,6 +813,55 @@ func hashCopies(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 	return nil
 }
 
+// HashNew reads the copies of the files that have no hash yet, on the disks that pass their mount check, until
+// the time until; it says whether it stopped there with some left (specs.md §15.13). It walks nothing: a copy
+// that is no longer what its row says is left as it is, for the next pass to look at, and so is one on a disk
+// that fails.
+func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64) (left bool, err error) {
+	now := m.Now()
+	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	if err != nil {
+		return false, fmt.Errorf("%w", err)
+	}
+	readers := make(map[string]*diskReader, len(c.Disks))
+	defer func() {
+		for _, r := range readers {
+			r.close()
+		}
+	}()
+	order := make(map[string]int, len(c.Disks))
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		order[d.ID] = i
+		if verdicts[i].State == disks.Missing {
+			continue
+		}
+		reader := &diskReader{report: &Report{ID: d.ID, Verdict: verdicts[i], Walked: true}, skip: map[string]bool{}, notReached: map[string]bool{}}
+		if reader.root, err = m.OpenRoot(d.Mount, d.Root); err != nil {
+			reader.fail(err)
+		}
+		readers[d.ID] = reader
+	}
+	files := catalog.NewFileReader(db)
+	for {
+		page, err := files.NextUnhashed(ctx)
+		if err != nil {
+			return false, fmt.Errorf("catalog: %w", err)
+		}
+		if len(page) == 0 {
+			return false, nil
+		}
+		for i := range page {
+			if m.Now() >= until {
+				return true, nil
+			}
+			if err := hashFile(ctx, db, &page[i], readers, order, now); err != nil {
+				return false, err
+			}
+		}
+	}
+}
+
 func movedFrom(r *Report) []string {
 	list := make([]string, 0, len(r.Moved))
 	for i := range r.Moved {
