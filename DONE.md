@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll catalog verify` against the disks (specs.md §9, §25)
+
+Commit "Compare the disks with the catalog in catalog verify", on `develop`.
+
+- After SQLite's checks, `catalog verify` walks each disk not failed and compares it with the catalog as a scan would (`watch.Compare`), each disk confirmed past the cache first, writing nothing. Each disk comes out as `atoll scan --json` gives it, and a difference is exit 4.
+- A scenario: a disk in step with the catalog, then a file added, one changed and one deleted, which verify reports and the catalog still does not know.
+- **Decided without the maintainer, to confirm:** `verify` takes no lock, as other read-only commands; a catalog SQLite finds damaged is not compared with the disks; a name that cannot be read counts as a difference.
+
 ## The daemon's daily catalog backup (specs.md §9, §15.13)
 
 Commit "Back the catalog up every night", on `develop`.

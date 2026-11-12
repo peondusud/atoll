@@ -192,6 +192,32 @@ type Look struct {
 	ConfirmEach bool
 }
 
+// Compare walks each disk not failed and compares it with the catalog, as a scan would, and writes nothing, to the
+// catalog or to a disk: atoll catalog verify (specs.md §9, §25). Each disk is confirmed past the cache before what its
+// walk found is compared, as a scan's is.
+func Compare(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine) (*Outcome, error) {
+	now := m.Now()
+	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	out := &Outcome{Disks: []Report{}}
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		if d.State == config.DiskFailed {
+			continue
+		}
+		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Confirm: confirmPastCache(m), ConfirmEach: true})
+		if err != nil {
+			return nil, err
+		}
+		report.Seen = nil
+		sortPaths(report)
+		out.Disks = append(out.Disks, *report)
+	}
+	return out, nil
+}
+
 // confirmPastCache confirms a disk as a session does before it writes: a mount check, then a read of its head past
 // the page cache, whose identifier must be the disk's (specs.md §10).
 func confirmPastCache(m disks.Machine) func(context.Context, *config.Disk) (bool, error) {

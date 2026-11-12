@@ -12,6 +12,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // catalogBackupOutput is the output of api/schemas/catalog-backup.schema.json.
@@ -28,7 +29,8 @@ type catalogBackupDisk struct {
 
 // catalogVerifyOutput is the output of api/schemas/catalog-verify.schema.json.
 type catalogVerifyOutput struct {
-	Problems []string `json:"problems"`
+	Problems []string   `json:"problems"`
+	Disks    []scanDisk `json:"disks"`
 }
 
 // runCatalog runs atoll catalog backup and atoll catalog verify (specs.md §9, §25).
@@ -117,9 +119,14 @@ func catalogBackup(ctx context.Context, c *config.Config, m disks.Machine, stder
 	return out, code, nil
 }
 
-// catalogVerify runs SQLite's integrity and foreign key checks on the catalog: exit 4 with a problem.
+// catalogVerify runs SQLite's integrity and foreign key checks on the catalog, then compares each disk with it, as
+// a scan would, writing nothing (specs.md §9, §25): exit 4 with a problem, a difference, or a disk not walked.
 func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, stderr io.Writer) int {
-	out, err := verifyCatalog(ctx, c)
+	m, err := disks.NewMachine()
+	if err != nil {
+		return failure(stderr, err)
+	}
+	out, err := verifyCatalog(ctx, c, m)
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -133,18 +140,33 @@ func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, s
 		if len(out.Problems) == 0 {
 			fmt.Fprintf(&b, "the catalog %s is in order\n", path.Base(catalogPath(c)))
 		}
-		err = writeText(stdout, b.String())
+		err = printScan(&b, scanOutput{Disks: out.Disks, Conflicts: []pathItem{}})
+		if err == nil {
+			err = writeText(stdout, b.String())
+		}
 	}
 	if err != nil {
 		return failure(stderr, err)
 	}
-	if len(out.Problems) > 0 {
+	if len(out.Problems) > 0 || differs(out.Disks) {
 		return exitPartial
 	}
 	return exitOK
 }
 
-func verifyCatalog(ctx context.Context, c *config.Config) (out *catalogVerifyOutput, err error) {
+// differs says whether a disk was not walked, or does not hold what the catalog says: a file it does not know, a
+// copy changed, moved, absent or whose path another file took, or a name that could not be read.
+func differs(list []scanDisk) bool {
+	for i := range list {
+		d := &list[i]
+		if !d.Walked || d.New > 0 || len(d.Changed)+len(d.Moved)+len(d.Absent)+len(d.PathTaken)+len(d.Unreadable) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyCatalog(ctx context.Context, c *config.Config, m disks.Machine) (out *catalogVerifyOutput, err error) {
 	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
@@ -154,5 +176,15 @@ func verifyCatalog(ctx context.Context, c *config.Config) (out *catalogVerifyOut
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	return &catalogVerifyOutput{Problems: append([]string{}, problems...)}, nil
+	out = &catalogVerifyOutput{Problems: append([]string{}, problems...), Disks: []scanDisk{}}
+	// A catalog SQLite finds damaged is not read further: what it says of the disks could be wrong.
+	if len(problems) > 0 {
+		return out, nil
+	}
+	compared, err := watch.Compare(ctx, db, c, m)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	out.Disks = scanOutputFrom(compared).Disks
+	return out, nil
 }

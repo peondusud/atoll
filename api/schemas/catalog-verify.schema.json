@@ -2,15 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/peondusud/atoll/api/schemas/catalog-verify.schema.json",
   "title": "atoll catalog verify --json",
-  "description": "What SQLite's integrity check and foreign key check say is wrong with the catalog: nothing for a catalog in order (specs.md §9, §25).",
+  "description": "What SQLite's integrity check and foreign key check say is wrong with the catalog, then each disk compared with it, as a scan would, writing nothing (specs.md §9, §25).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["problems"],
+  "required": ["problems", "disks"],
   "properties": {
     "problems": {
-      "description": "Each a line for a reader, worded by SQLite or as a row without its parent; no contract on the wording.",
+      "description": "Each a line for a reader, worded by SQLite or as a row without its parent; no contract on the wording. With one, the disks are not compared.",
       "type": "array",
       "items": { "type": "string", "minLength": 1 }
+    },
+    "disks": {
+      "description": "Each disk not failed, in configuration order, as atoll scan --json gives it, with what a scan would have recorded: new files, copies changed, moved, absent, paths taken. hashed is 0, as nothing is read whole.",
+      "type": "array",
+      "items": { "$ref": "scan.schema.json#/$defs/disk" }
     }
   }
 }

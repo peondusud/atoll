@@ -1,0 +1,146 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a725",
+  "description": "catalog verify compares each disk with the catalog as a scan would, and writes nothing: a disk that holds what the catalog says gives exit 0; a file the catalog does not know, a copy changed or one absent gives exit 4, and the catalog still does not know of them, as the scan that follows shows.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "x"
+        },
+        {
+          "path": "media/b.mkv",
+          "text": "yy"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "verify",
+        "--json"
+      ],
+      "stdout_json": {
+        "problems": [],
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 3,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 2,
+            "hashed": 0,
+            "changed": [],
+            "moved": [],
+            "absent": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ]
+      }
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/c.mkv",
+      "text": "zzz"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/a.mkv",
+      "text": "xx"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/b.mkv"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "verify",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "problems": [],
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 5,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 1,
+            "known": 0,
+            "hashed": 0,
+            "changed": [
+              {
+                "path": "a.mkv"
+              }
+            ],
+            "moved": [],
+            "absent": [
+              {
+                "path": "b.mkv"
+              }
+            ],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), size FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a.mkv",
+          1
+        ],
+        [
+          "b.mkv",
+          2
+        ]
+      ]
+    }
+  ]
+}
