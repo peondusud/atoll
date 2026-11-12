@@ -30,6 +30,7 @@ type ChangedCopy struct {
 	CtimeNS  int64
 	BtimeNS  sql.NullInt64
 	Mode     int64
+	UID, GID uint32
 	Replaced bool
 }
 
@@ -177,9 +178,9 @@ func takeLook(ctx context.Context, tx *sql.Tx, nowNS, fileID int64, c *ChangedCo
 		UPDATE copies SET file_key = ?3, nlink = ?4, size = ?5, mtime_ns = ?6, ctime_ns = ?7, btime_ns = ?8, verified_ns = ?9,
 			created_by = CASE WHEN ?10 THEN 'user' ELSE created_by END,
 			first_seen_ns = CASE WHEN ?11 THEN ?12 ELSE first_seen_ns END,
-			mode = ?13
+			mode = ?13, uid = ?14, gid = ?15
 		WHERE file_id = ?1 AND disk_id = ?2`,
-		fileID, c.Disk, c.FileKey, c.Nlink, c.Size, c.MtimeNS, c.CtimeNS, c.BtimeNS, verifiedNS, makeUser, c.Replaced, nowNS, c.Mode)
+		fileID, c.Disk, c.FileKey, c.Nlink, c.Size, c.MtimeNS, c.CtimeNS, c.BtimeNS, verifiedNS, makeUser, c.Replaced, nowNS, c.Mode, c.UID, c.GID)
 	if err != nil {
 		return fmt.Errorf("copy on %q: %w", c.Disk, err)
 	}
@@ -199,15 +200,6 @@ func setChunks(ctx context.Context, tx *sql.Tx, fileID int64, chunks []byte) err
 		return fmt.Errorf("chunks: %w", err)
 	}
 	return nil
-}
-
-// RunningJob says whether a job of a file is running: its operation is one a reprise could not conclude.
-func RunningJob(ctx context.Context, db *sql.DB, fileID int64) (bool, error) {
-	var running bool
-	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM jobs WHERE file_id = ? AND state = 'running')", fileID).Scan(&running); err != nil {
-		return false, fmt.Errorf("jobs: %w", err)
-	}
-	return running, nil
 }
 
 // refreshStale keeps the row of a stale copy that reached the trash, as a pending copy with its replicate job from
@@ -239,7 +231,7 @@ func refreshStale(ctx context.Context, tx *sql.Tx, op *Op, fileID int64) (bool, 
 	_, err = tx.ExecContext(ctx, `
 		UPDATE copies SET state = 'pending', created_by = 'atoll', file_key = NULL, nlink = NULL, size = NULL, mtime_ns = NULL,
 			ctime_ns = NULL, btime_ns = NULL, first_seen_ns = ?3, verified_ns = NULL, gone_ns = NULL, gone_kind = NULL,
-			old_lpath = NULL, old_lpath_key = NULL, mode = NULL
+			old_lpath = NULL, old_lpath_key = NULL, mode = NULL, uid = NULL, gid = NULL
 		WHERE file_id = ?1 AND disk_id = ?2`, fileID, op.Disk, deletedNS)
 	if err != nil {
 		return false, fmt.Errorf("pending copy: %w", err)

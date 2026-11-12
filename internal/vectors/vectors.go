@@ -207,7 +207,7 @@ func checkFlags(data []byte) error {
 		return fmt.Errorf("decode: %w", err)
 	}
 	for i, c := range f.Cases {
-		for _, flag := range []string{"error", "no_key", "absent", "complete", "no_rule", "no_entry", "no_magic", "other_case", "first", "reloaded", "gone", "back", "check", "hash_pending", "read_hashes", "scrub_pending", "scrub"} {
+		for _, flag := range []string{"error", "no_key", "absent", "complete", "no_rule", "no_entry", "no_magic", "other_case", "first", "reloaded", "gone", "back", "check", "hash_pending", "read_hashes", "scrub_pending", "scrub", "backup_pending", "backup"} {
 			if v, ok := c[flag]; ok && string(v) != "true" {
 				return fmt.Errorf("case %d: %q is %s: write true, or leave the field out", i, flag, v)
 			}

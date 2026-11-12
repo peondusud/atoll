@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -53,12 +54,18 @@ func FileAt(ctx context.Context, db *sql.DB, path string) (*FileRow, error) {
 
 // FileByID gives one file, with its copies, and nil when there is none.
 func FileByID(ctx context.Context, db *sql.DB, id int64) (*FileRow, error) {
-	r := NewFileReader(db)
-	rows, err := db.QueryContext(ctx, "SELECT "+fileColumns+" FROM (SELECT * FROM files WHERE id = ?) f LEFT JOIN copies c ON c.file_id = f.id ORDER BY c.disk_id", id)
+	rows, err := db.QueryContext(ctx, fileByIDQuery, id)
 	if err != nil {
 		return nil, fmt.Errorf("files: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	return firstFile(NewFileReader(db), rows)
+}
+
+const fileByIDQuery = "SELECT " + fileColumns + " FROM (SELECT * FROM files WHERE id = ?) f LEFT JOIN copies c ON c.file_id = f.id ORDER BY c.disk_id"
+
+// firstFile gives the file the rows hold, or nil when they hold none.
+func firstFile(r *FileReader, rows *sql.Rows) (*FileRow, error) {
 	list, err := r.readFiles(rows)
 	if err != nil {
 		return nil, err
@@ -67,6 +74,73 @@ func FileByID(ctx context.Context, db *sql.DB, id int64) (*FileRow, error) {
 		return nil, nil //nolint:nilnil // no file there is an answer
 	}
 	return &list[0], nil
+}
+
+// FileFinder reads files one at a time by id, through statements prepared once. A pass that reads thousands of them,
+// as when the mass-modification guard holds every file a tool rewrote, spent most of its time preparing the same
+// queries again: 95 µs a file held, measured, and 20 µs prepared.
+type FileFinder struct {
+	reader              *FileReader
+	byID, path, running *sql.Stmt
+}
+
+// NewFileFinder prepares a FileFinder; Close releases its statements.
+func NewFileFinder(ctx context.Context, db *sql.DB) (*FileFinder, error) {
+	f := &FileFinder{reader: NewFileReader(db)}
+	var err error
+	if f.byID, err = db.PrepareContext(ctx, fileByIDQuery); err == nil {
+		if f.path, err = db.PrepareContext(ctx, "SELECT lpath FROM files WHERE id = ?"); err == nil {
+			f.running, err = db.PrepareContext(ctx, runningJobQuery)
+		}
+	}
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("files: %w", err), f.Close())
+	}
+	return f, nil
+}
+
+// Close releases the statements.
+func (f *FileFinder) Close() error {
+	var errs []error
+	for _, s := range []*sql.Stmt{f.byID, f.path, f.running} {
+		if s != nil {
+			errs = append(errs, s.Close())
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ByID is FileByID.
+func (f *FileFinder) ByID(ctx context.Context, id int64) (*FileRow, error) {
+	rows, err := f.byID.QueryContext(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("files: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return firstFile(f.reader, rows)
+}
+
+// Path gives a file's path, and false when no file has that id.
+func (f *FileFinder) Path(ctx context.Context, id int64) (string, bool, error) {
+	var raw []byte
+	switch err := f.path.QueryRowContext(ctx, id).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("files: %w", err)
+	}
+	return string(raw), true, nil
+}
+
+const runningJobQuery = "SELECT EXISTS(SELECT 1 FROM jobs WHERE file_id = ? AND state = 'running')"
+
+// Running says whether a job of a file is running: its operation is one a reprise could not conclude.
+func (f *FileFinder) Running(ctx context.Context, fileID int64) (bool, error) {
+	var running bool
+	if err := f.running.QueryRowContext(ctx, fileID).Scan(&running); err != nil {
+		return false, fmt.Errorf("jobs: %w", err)
+	}
+	return running, nil
 }
 
 // Waiting counts the copies whose clock has not run out, and says when the first does.
@@ -1083,25 +1157,32 @@ type GuardRead struct {
 	EventsLeft  int64         // those with something left to send
 }
 
+// The reads of the mass-deletion guard, made at every pass for each disk (specs.md §15.6). Each goes over the events
+// of its kinds, and a count over its window, never over the whole log, which only grows (§9): TestGuardReadsUseAnIndex.
+const (
+	guardAnswerQuery = `SELECT json_extract(data, '$.up_to') FROM events
+		WHERE kind IN ('guard-confirm', 'guard-reject') AND json_extract(data, '$.disk') = ?
+		ORDER BY id DESC LIMIT 1`
+	guardEndQuery = `SELECT id FROM events
+		WHERE kind IN ('guard-confirm', 'guard-reject', 'guard-clear') AND json_extract(data, '$.disk') = ?
+		ORDER BY id DESC LIMIT 1`
+	guardSinceQuery = "SELECT ts_ns FROM events WHERE kind = 'guard' AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1"
+	copiesGoneQuery = `SELECT count(*), COALESCE(sum(COALESCE(json_extract(data, '$.nothing_left'), 0) = 0), 0) FROM events
+		WHERE kind = 'copy-gone' AND ts_ns > ?1 AND json_extract(data, '$.disk') = ?2 AND json_extract(data, '$.gone_ns') > ?3`
+)
+
 // ReadGuard reads what the guard of a disk looks at.
 func ReadGuard(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS int64) (*GuardRead, error) {
 	g := &GuardRead{}
-	err := db.QueryRowContext(ctx, `
-		SELECT json_extract(data, '$.up_to') FROM events
-		WHERE kind IN ('guard-confirm', 'guard-reject') AND json_extract(data, '$.disk') = ?
-		ORDER BY id DESC LIMIT 1`, disk).Scan(&g.UpTo)
+	err := db.QueryRowContext(ctx, guardAnswerQuery, disk).Scan(&g.UpTo)
 	if err != nil && !isNoRows(err) {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, `
-		SELECT id FROM events
-		WHERE kind IN ('guard-confirm', 'guard-reject', 'guard-clear') AND json_extract(data, '$.disk') = ?
-		ORDER BY id DESC LIMIT 1`, disk).Scan(&g.LastEventID)
+	err = db.QueryRowContext(ctx, guardEndQuery, disk).Scan(&g.LastEventID)
 	if err != nil && !isNoRows(err) {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, `
-		SELECT ts_ns FROM events WHERE kind = 'guard' AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1`, g.LastEventID, disk).Scan(&g.GuardNS)
+	err = db.QueryRowContext(ctx, guardSinceQuery, g.LastEventID, disk).Scan(&g.GuardNS)
 	switch {
 	case err == nil:
 		g.HasGuard = true
@@ -1121,10 +1202,7 @@ func ReadGuard(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS int
 	if err != nil {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, `
-		SELECT count(*), COALESCE(sum(COALESCE(json_extract(data, '$.nothing_left'), 0) = 0), 0) FROM events
-		WHERE kind = 'copy-gone' AND ts_ns > ?1 AND json_extract(data, '$.disk') = ?2 AND json_extract(data, '$.gone_ns') > ?3`,
-		nowNS-windowNS, disk, upTo).Scan(&g.Events, &g.EventsLeft)
+	err = db.QueryRowContext(ctx, copiesGoneQuery, nowNS-windowNS, disk, upTo).Scan(&g.Events, &g.EventsLeft)
 	if err != nil {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
@@ -1170,6 +1248,33 @@ func TrashJobState(ctx context.Context, db *sql.DB, fileID int64, disk string) (
 		return "", fmt.Errorf("job: %w", err)
 	}
 	return state, nil
+}
+
+// leavingQuery gives the files of a stretch of paths that have a trash job queued for a deletion. It walks the paths
+// and looks up each file's jobs: a join, without statistics, walked every job instead.
+const leavingQuery = `SELECT f.id FROM files f WHERE f.lpath BETWEEN ? AND ? AND EXISTS(
+	SELECT 1 FROM jobs j WHERE j.file_id = f.id AND j.kind = 'trash' AND j.state = 'queued' AND j.reason = 'deleted')`
+
+// Leaving gives the ids of the files from first to last by path whose deletion is decided and waits for a trash job:
+// a copy made of one now would end its deletion (specs.md §13.4). A plan asks a page of files at a time.
+func Leaving(ctx context.Context, db *sql.DB, first, last string) (map[int64]bool, error) {
+	rows, err := db.QueryContext(ctx, leavingQuery, []byte(first), []byte(last))
+	if err != nil {
+		return nil, fmt.Errorf("leaving: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("leaving: %w", err)
+		}
+		ids[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("leaving: %w", err)
+	}
+	return ids, nil
 }
 
 // QueuedTrash says whether a copy has a trash job queued for that reason: a decision leaves it as it is.
@@ -1270,13 +1375,12 @@ func ConfirmGuard(ctx context.Context, db *sql.DB, disk string, nowNS int64, ref
 
 func lastGuard(ctx context.Context, tx *sql.Tx, disk string) (sql.NullInt64, error) {
 	var last int64
-	err := tx.QueryRowContext(ctx, `
-		SELECT id FROM events WHERE kind IN ('guard-confirm', 'guard-reject', 'guard-clear') AND json_extract(data, '$.disk') = ? ORDER BY id DESC LIMIT 1`, disk).Scan(&last)
+	err := tx.QueryRowContext(ctx, guardEndQuery, disk).Scan(&last)
 	if err != nil && !isNoRows(err) {
 		return sql.NullInt64{}, fmt.Errorf("read: %w", err)
 	}
 	var at int64
-	err = tx.QueryRowContext(ctx, "SELECT ts_ns FROM events WHERE kind = 'guard' AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1", last, disk).Scan(&at)
+	err = tx.QueryRowContext(ctx, guardSinceQuery, last, disk).Scan(&at)
 	switch {
 	case isNoRows(err):
 		return sql.NullInt64{}, nil

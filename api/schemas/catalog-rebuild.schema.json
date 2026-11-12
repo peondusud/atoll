@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/catalog-rebuild.schema.json",
+  "title": "atoll catalog rebuild --json",
+  "description": "A new catalog from what the disks hold, the old one set aside (specs.md §9, §25). Without --yes, what it would do, done false.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["catalog", "set_aside", "ops_after", "disks", "conflicts", "done"],
+  "properties": {
+    "catalog": { "type": "string", "minLength": 1 },
+    "set_aside": {
+      "description": "Where the old catalog went, <catalog>.old-<UTC time, YYYYMMDDTHHMMSSZ>; null when there was none, or nothing was done.",
+      "type": ["string", "null"]
+    },
+    "ops_after": {
+      "description": "The highest operation id the disks' trash and tmp/ name: the new catalog's operations come after it.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "disks": {
+      "description": "The full scan that filled the new catalog, as atoll scan --json gives each disk; empty when nothing was done.",
+      "type": "array",
+      "items": { "$ref": "scan.schema.json#/$defs/disk" }
+    },
+    "conflicts": {
+      "description": "The files in conflict after it, as atoll scan --json gives them.",
+      "$ref": "scan.schema.json#/$defs/paths"
+    },
+    "done": { "type": "boolean" }
+  }
+}

@@ -192,6 +192,32 @@ type Look struct {
 	ConfirmEach bool
 }
 
+// Compare walks each disk not failed and compares it with the catalog, as a scan would, and writes nothing, to the
+// catalog or to a disk: atoll catalog verify (specs.md §9, §25). Each disk is confirmed past the cache before what its
+// walk found is compared, as a scan's is.
+func Compare(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine) (*Outcome, error) {
+	now := m.Now()
+	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	out := &Outcome{Disks: []Report{}}
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		if d.State == config.DiskFailed {
+			continue
+		}
+		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Confirm: confirmPastCache(m), ConfirmEach: true})
+		if err != nil {
+			return nil, err
+		}
+		report.Seen = nil
+		sortPaths(report)
+		out.Disks = append(out.Disks, *report)
+	}
+	return out, nil
+}
+
 // confirmPastCache confirms a disk as a session does before it writes: a mount check, then a read of its head past
 // the page cache, whose identifier must be the disk's (specs.md §10).
 func confirmPastCache(m disks.Machine) func(context.Context, *config.Disk) (bool, error) {
@@ -386,6 +412,7 @@ func freshFile(c *config.Config, f *FoundFile, r *Report, out *catalog.Walk, top
 	}
 	out.Copies = append(out.Copies, catalog.NewCopy{
 		Path: f.Path, Size: f.Size, MtimeNS: f.MtimeNS, CtimeNS: f.CtimeNS, BtimeNS: f.BtimeNS, FileKey: f.FileKey, Nlink: f.Nlink, Mode: f.Mode,
+		UID: f.UID, GID: f.GID,
 	})
 	r.New++
 	found(f)
@@ -616,6 +643,10 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 		if len(page) == 0 {
 			return remembered, nil
 		}
+		leaving, err := catalog.Leaving(ctx, db, page[0].Path, page[len(page)-1].Path)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
 		for i := range page {
 			f := &page[i]
 			update, err := settleFile(c, f, position, state)
@@ -630,7 +661,8 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			copies := make([]solver.Copy, 0, len(f.Copies))
 			for j := range f.Copies {
 				cp := &f.Copies[j]
-				plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS}
+				// A copy whose clock runs is no source: nothing is at its name until its file is decided (specs.md §13.4).
+				plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS, Away: cp.GoneNS.Valid}
 				if cp.OldPath != nil {
 					plan.OldPath = *cp.OldPath
 				}
@@ -638,7 +670,7 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			}
 			hold := update.Mode == "manual" && (released == nil || !released(f.Path))
 			input.Files = append(input.Files, solver.File{
-				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Copies: copies,
+				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Leaving: leaving[f.ID], Copies: copies,
 			})
 			entry := settled{id: f.ID, state: f.State, firstSeen: f.FirstSeenNS}
 			if fileChanged(f, &update) {
@@ -733,7 +765,10 @@ func applyResults(files []solver.File, remembered []settled, results []solver.Re
 	for i := range files {
 		f, r := &files[i], &remembered[i]
 		var applying []solver.State
-		if r.state == string(solver.StateConflict) || r.state == string(solver.StateCorrupt) {
+		// Corrupt holds while a copy is: once that copy went to the trash, the file takes the state its copies give
+		// it, and a conflict they still hold is found again by the next pass, from their rows (specs.md §16).
+		corrupt := r.state == string(solver.StateCorrupt) && slices.ContainsFunc(f.Copies, func(c solver.Copy) bool { return c.State == solver.CopyCorrupt })
+		if r.state == string(solver.StateConflict) || corrupt {
 			applying = append(applying, solver.State(r.state))
 		}
 		if next < len(results) && results[next].Path == f.Path {

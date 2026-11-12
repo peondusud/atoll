@@ -2,6 +2,251 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A file once its corrupt copy is gone (specs.md §16)
+
+Commit "End a file's corrupt state with its corrupt copy", on `develop`.
+
+- Found while designing the repair: a file the scrub found a corrupt copy of stayed `corrupt` for good, even once that copy was in the trash and made again from the healthy one. Only the file's state remembers `corrupt`, and every plan kept it, as it keeps a conflict. So `atoll status` said `corrupt` of a file whose copies were all in sync, an alert said so every 24 hours, and a deletion of it never propagated, as no trash job of a corrupt file stands (§15.12).
+- A file is now `corrupt` while a copy of it is: once none is, it takes the state its copies give it. A conflict its copies still hold is found again by the next pass, from their rows, as a conflict's changed copies never take a new look.
+- Verified: `TestScrubQuarantines` follows the file to `pending` once its copy went, then to `ok` once it is made again, and fails without the change; `TestScrubKeepsTheLastCopy` keeps it `corrupt` after a pass while its copies are. Two tests of `watch` had made a file `corrupt` with no corrupt copy, which nothing does: they now set it up as the scrub leaves it, and still find it `corrupt` through an outage and beside a copy that differs.
+
+## A file whose deletion waits (specs.md §13.4)
+
+Commit "Copy nothing of a file whose deletion waits", on `develop`.
+
+- Found while writing the scenario of a full disk: a file deleted on one disk, whose other copy could not go to the trash yet, was copied back to the disk the user deleted it from once its `settle` passed, and that copy, having no queued job, then ended the deletion (§15.12). The user's deletion was undone, on every disk. Any wait did it: a full disk, a disk `readonly`, a guard that holds the job, an `io-error`.
+- The plan now takes a file with a trash job queued for a deletion as leaving: it gets no job, neither a copy nor a refresh, and its pending copies are canceled. It shows `degraded` while it waits, as it holds fewer copies than its level.
+- A plan reads which files are leaving a page of paths at a time, each file's jobs through their index (`TestLeavingReadsItsPage`): a join walked every job.
+- Verified: five plan vectors, with `leaving`, a new field of `plan.json`; the property test, which never sees a job for a leaving file nor a pending copy kept for one; the scenario `daemon-trash-full.json`, where nothing comes back to the disk the files were deleted from ten minutes on; four mutants, each caught.
+- **Decided without the maintainer, to confirm:**
+  - A file leaving shows `degraded`, the state its copies give it, rather than a state of its own.
+  - Only a deletion makes a file leaving: a trash job for another reason leaves the plan as it was.
+
+## A full disk's trash (specs.md §17.1)
+
+Commit "Send nothing more to the trash of a full disk", on `develop`.
+
+- Found by a four-hour soak of the daemon: its 64 MiB disk ran out of inodes after 36 minutes, as each copy sent to the trash takes folders there and the writer sent about two a second, which a retention of 30 days never purged and `max_size`, which counts the files' sizes, never saw. Every pass then tried each of its 2,010 queued moves to the trash, each journaled and undone on `ENOSPC`: 194,000 operations in under an hour, passes of 32 to 35 s, and a catalog of 33 MiB. The daemon's memory did not move: 3.2 to 3.9 MiB of heap in use.
+- A disk that answers `ENOSPC` to a move to its trash takes no more in that session: the rest wait in the queue, and the next session tries one again.
+- The conformance runner gains `full` on an `atoll` step: the disks it names have no room left for that run, `mkdir` and the creation of a file giving `ENOSPC` there (`conformance/scenarios/README.md`).
+- The soak's trash turns over every ten minutes, so that it measures a daemon at work rather than a full disk.
+- Verified: `TestAFullDiskTakesNoMoreForItsTrash`, three moves to a trash with no room, one of them tried, then all three once room comes back; the scenario `daemon-trash-full.json`; two mutants, each caught by both.
+- **Decided without the maintainer, to confirm:**
+  - While a disk is full, one move to its trash is tried per session, journaled and undone: what it costs to notice that room came back, with no table that remembers the disk full.
+  - `full`, on an `atoll` step and on a disk of the control file, is a new field of the conformance contract.
+
+## NTFS short names (specs.md §15.8)
+
+Commit "Refuse the short name of another entry on NTFS", on `develop`.
+
+- Windows gives a long name a short one, `FILMNA~1.MKV` for `Film Name.mkv`, which no Linux driver lists and each finds at a look. A copy or a rename to such a name on an NTFS disk was looked at with `stat` alone: through the short name of a folder, a copy landed in the folder it names, and its row then read as moved, which would have renamed the user's file on the other disks; at the short name of a file, a conflict at every pass on ntfs3, and on ntfs-3g a new name Windows would read as the same.
+- On a disk the configuration says is `ntfs`, the looks before a copy, a rename and the folders they make refuse a name of the short form (`names.ShortForm`, 21 vectors in `short_form.json`) that its folder does not list, when a look at it or at it in capitals finds an entry: `name-refused`, before anything is written. A folder renamed there goes one copy at a time, each refused.
+- Measured in qemu on Linux 6.12 and 7.3, with real short names set by ntfs-3g: ntfs3, ntfs-3g and lowntfs-3g refuse both a copy through the folder's short name and one at the file's in small letters. The first run of that test showed the copy in small letters made on ntfs-3g and lowntfs-3g, against the research's table, which led to the look in capitals; the research says so.
+- Verified: `TestAShortNameIsNoWayIn`, with ntfs3's and ntfs-3g's answers; `TestShortNamesOnEachNTFSDriver`; six mutants, each failing one of them.
+- **Decided without the maintainer, to confirm:**
+  - Only names of the form Windows gives are looked for, as reading a folder at each look costs: a short name a tool set otherwise is not.
+  - A copy refused so is queued again at each pass and refused again, with nothing written; no table remembers it.
+  - A restore through such a name is a look that fails, `io-error`, with nothing written.
+
+## A folder renamed into the old name of one that waits (specs.md §15.12)
+
+Commit "Hold back what lands in the old name of a folder that waits", on `develop`.
+
+- `mv Dx N; mv D Dx` while `Dx` waits, for a copy below it on another disk whose clock runs, for the guard or for a look that cannot get there: the files of `D` took the name `Dx` at once, the next look read `Dx` as a folder made at `N`, and what only other disks held below `Dx` stayed in the folder that took its name. Before the files of a pass are decided, the folders that wait for what no decision of the pass ends are now worked out, and a copy that moved to a name at or below the old name of one of them waits for it; a folder renamed to below that name waits with its copies. Once the wait ends, the folder that waited leaves first, what only other disks hold follows it, and the rest lands.
+- Only such a wait holds anything back, so that nothing waits for itself, which a cycle would otherwise.
+- Verified: the scenario of that rotation, which now ends with the file only other disks hold at `N`; scenarios of a chain (`mv Dx N; mv D Dx; mv E D`), of a folder renamed below the old name (`mkdir Dx; mv D Dx/D`), and of two folders swapped, which no walk reads as folders renamed, pinned as the limit it is; two mutants, nothing held and no copy held, each failing three of them.
+- **Decided without the maintainer, to confirm:**
+  - A copy held so waits with no line of its own, as one whose debounce runs does.
+  - Two folders that swap their names stay a limit: no walk reads them as renamed, as each name still holds a row, and what only other disks hold below them stays at its path.
+
+## A swap of two names (specs.md §15.12, §17.2)
+
+Commit "Exchange two names that wait for each other", on `develop`.
+
+- A swap of two names on one disk was followed by the rows, and on the other disks each copy waited for a target the other held, `path-taken` at every pass. Once a round of renames moves nothing, the copies left whose targets lead round a cycle back to one of them are now exchanged two at a time, `renameat2` with `RENAME_EXCHANGE`: the first by place reaches its target, the other takes its place, and a cycle of n names ends in n - 1 exchanges. Each side is journaled as a rename before anything moves, so that a reprise finishes or undoes it as any other, and a dry run lists them as `to-rename`.
+- The reprise read the row of a copy by its place alone, and while an exchange is half recorded two rows say they sit at one place: a crash right after the exchange undid the second rename against the wrong row. It now takes the row with the operation's inode.
+- ext4, XFS and btrfs exchange two names; ntfs3, ntfs-3g and lowntfs-3g give `EINVAL` (measured on Linux 6.12 and 7.3), so a disk declared `ntfs` is not asked, and its copies wait as before.
+- Verified: scenarios for two names across a dry run and a pass, three names round, an NTFS disk, and a crash once journaled and once moved; the scenario of a page of decisions, whose swap now ends; `TestFindSwap`; `TestASwapOnEachDriver` in qemu on Linux 6.12 and 7.3, on ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g, with the inodes kept through a cold cache.
+- **Decided without the maintainer, to confirm:**
+  - An exchange is two renames in the journal, not an operation of a kind of its own, so that the reprise needs nothing new. After a crash before the exchange both are undone, with an `op-undone` event each, as each target holds the other copy.
+  - A disk is asked for an exchange by its filesystem in the configuration, not by trying: trying on NTFS would journal and undo two renames at every pass.
+
+## An overwriting move (specs.md §15.12)
+
+Commit "Propagate an overwriting move", on `develop`.
+
+- `mv a b` over `b` on one disk was a limit: `a` was reported `path-taken` at every pass, and the other disks kept the old `a` and `b` for good. The copy of `b` the move overwrote is now `gone`, as its file is nowhere: the walk tells it from a replacement, as the name holds the target of another row's copy `moved` there. So `b` is decided as any deletion, after its debounce, its other copies going to the trash as `deleted`, under the guard as any other; once its row has gone, `a` takes the name, its other copies renamed there with nothing copied again, a pass later at the earliest.
+- Verified: four scenarios, with copies read (the deletion, then the rename), with copies no scan read (`b` kept, and `a` waits), over a file with no other copy (`gone`, then the rename), and under a tripped guard (both wait for `guard confirm`); a unit test of the walk, which fails without the change. The code that set such a copy aside from the modifications went with it.
+- **Decided without the maintainer, to confirm:**
+  - An overwriting move is a deletion of what it overwrote, not a modification of it: its other copies go to the trash as `deleted`, kept for their whole retention, and count for the deletion guard.
+  - Where the other copies of `b` are no peers, two user copies no scan has read, `b` is kept and `a` waits for its name. `b`, then below its level, is copied again to the disk of the move at each pass once `settle` has gone by, which the look before the copy refuses as `conflict`, with nothing written.
+
+## The daemon's soak (specs.md §26)
+
+Commit "Soak the daemon that runs for good", on `develop`.
+
+- `TestDaemonSoak` (`test/loopdev/soak_test.go`), run in qemu with `SOAK=<duration>` (`test/qemu/README.md`): the daemon that runs for good on two ext4 disks of 2,000 files each, while a writer of its own process edits a file, renames another or puts it back, adds a file and deletes the one it added five seconds before, every second. Every tenth of the run it logs the heap in use after a collection, the resident memory and its peak, the goroutines, the open files, the passes and the catalog's size.
+- It fails when the heap grows past the second tenth's by more than a tenth and 8 MiB, the files or goroutines by more than 16, when the daemon makes fewer passes than the run has minutes, when a guard holds a pass, or when the last tenth runs fewer than half the passes of the second.
+- What its first runs found is in the four entries above: a copy tried again at every pass, the files a guard holds read with queries prepared anew, and two reads of the whole journal at every pass. Its guards are now out of the writer's way, a minute's window and counts it never reaches, so that it measures a daemon that decides.
+- A four-minute run on Linux 6.12: 155 passes, each deciding 3 or 4 files and running 4 to 7 operations, none held; the heap in use 2.8 to 4.1 MiB, the resident memory about 30 MiB and at most 44.2 MiB, 8 to 10 goroutines, 21 or 22 open files.
+- A four-hour run on Linux 6.12, on 2026-11-12, after the fixes the second soak called for: 8,341 passes, 780 to 888 a tenth of the run, none held; the heap in use 2.8 to 6.8 MiB from the second tenth on, the resident memory 31.6 to 41.3 MiB and at most 51.0 MiB, 8 or 9 goroutines, 21 to 30 open files; the catalog grew to 22.1 MiB, its events log with it. Nothing grew but the catalog, and the passes kept their pace: it passed.
+
+## The parts of `tmp/` looked for where they are (specs.md §14.2)
+
+Commit "Look up only the parts tmp/ holds", on `develop`.
+
+- Found the same way. Each pass that opens a disk cleans its `tmp/`, and to know which parts it may remove it read every operation `create` the disk ever had into memory, though `tmp/` nearly always holds none: 0.35 s a pass over a million copies, and a map of a million names each time, against a daemon's memory of §26.
+- `tmp/` is listed first; only what it holds is looked for, each part from the id its name gives on, as only its operation and those that resume it name it: 66 ms a pass over a million copies. What is removed is unchanged.
+- Verified: the unit tests of the cleaning, a test of the lookup's plan (`EXPLAIN QUERY PLAN`), and the trash, jobs and daemon tests under the race detector; the conformance suite.
+
+## The events log read through an index (specs.md §9, §15.6)
+
+Commit "Read the guards' events through an index", on `develop`.
+
+- Looked for once the soak had shown passes slowing down: what else a pass reads grows for good. The guards read the events log at every pass, for each disk, and three of their reads went over the whole log, three more over all of it since the last answer to a guard, which most pools never give. `events` is never pruned: over a million events, a pass with nothing to do took 0.8 s, against 64 ms.
+- `schema/migrations/0007_events_by_kind.sql`: an index on `events(kind, ts_ns)`. Each read goes over the events of its kinds, and a count over its window of them: 64 ms over a million events of the kinds a pool writes. It takes a second or two to build over a million events, once.
+- The reads are named constants, and a test explains each (`EXPLAIN QUERY PLAN`): none may scan the log. The indexes vector lists the new one.
+- **Contract to review:** the migration.
+
+## A pass while the mass-modification guard holds (specs.md §15.6, §26)
+
+Commit "Read the files a pass looks at again through prepared statements", on `develop`.
+
+- Found by the same soak. While the mass-modification guard holds a file, each pass reads it again, its row twice and whether a job of it runs, and each read prepared its query anew: 95 µs a file held, measured natively, most of a pass that held 2,000 (260 ms, against 64 ms with nothing held). Under qemu without KVM, that is what slowed the soak's passes from the start.
+- `catalog.FileFinder` prepares those three queries once a pass: 20 µs a file held, 103 ms for 2,000. What a pass decides does not change.
+- Verified: a unit test of the finder against `FileByID`; the catalog and jobs tests under the race detector; the conformance suite.
+
+## A copy that is gone is no source (specs.md §13.4, §14.2)
+
+Commit "Give no job to a file whose only source is gone", on `develop`.
+
+- Found by an hour's soak of the daemon in qemu (`test/loopdev/soak_test.go`). Once its writer had tripped the mass-deletion guard, a file it added and deleted before its copy ran kept its row, held by the guard, with its copy `ok`. The plan read that copy as a source, and each pass queued its copy again, journaled an operation `create` with its `replicate` event, made a part in `tmp/` and dropped it as `changed`. The operations of a pass grew by five at each pass, to 1,131 after an hour, each with its rows in `ops` and `events`, which no one ever removes.
+- A source is a copy whose clock does not run (§13.4): one its last look found `moved`, `gone`, `uncertain` or `own` still counts toward its file's level, and is no source until its file is decided. A job queued before its source went goes with its pending copy as `changed`, and the next plan queues none.
+- A copy that starts from nothing looks at its source before anything is journaled (§14.2): one gone, or no longer what its row says, ends the run as `changed` with no operation, event or part, and waits `settle`. That also covers a source changed while the mass-modification guard holds it, which no row says.
+- Verified: a scenario, a file's only copy gone under a tripped guard, two passes an hour apart that queue and journal nothing, then the copy back and replicated; five plan vectors with copies `away`; unit tests for a job whose source went, and for a source changed or gone before the copy.
+- **Decided without the maintainer, to confirm:**
+  - A copy found `moved` is no source either, until its rename is decided, a debounce at most: a file with no other copy shows `unavailable` meanwhile.
+  - A copy that resumes from its part still journals before it reads its source, as dropping that part needs its operation.
+
+## `atoll init` over a catalog that went missing (specs.md §9, §25)
+
+Commit "Start a new catalog's operations past the disks' ids", on `develop`.
+
+- A catalog `init` creates starts its operations past the highest id the disks' trash and `tmp/` name, as `catalog rebuild` does, so that a new operation's folder of the trash or part never meets an old one. A disk whose folders cannot be read is a warning on standard error.
+- A scenario: an id in `tmp/` and another in a trash, the counter past both, the folders left as they are, and a second `init` that keeps the catalog.
+
+## `atoll trash restore --to` (specs.md §14.2, §17.2, §17.4)
+
+Commit "Restore an entry of the trash to another disk", on `develop`.
+
+- `--to <disk>` puts each entry on that disk: moved back when it is the entry's own, copied there otherwise through the copy pipeline, from the trash it is in, which keeps it. One operation `create` on the target, journaled with a `restore` event whose `source` is the entry's disk: the part made in `tmp/`, the file of the trash read once with each chunk hashed, looked at again, its times, mode and owner given, synced, read again without its cache against every chunk and the entry's whole-file hash, the missing parents made like the same folders of the trash, then the part takes the path without replacing anything. The copy is recorded as a restored copy, the user's.
+- The reprise of a `create` with no job and a `restore` event records the copy as a restored one, never as a replica of what the path holds; it also removes a part made before its inode could be recorded, whose name, of the operation's id, is the operation's alone.
+- `api/schemas/trash-restore.schema.json`: `to` on each entry with `--to`, for review.
+- Verified: three scenarios, the copy with the entry left in its trash, the move back to its own disk, a disk the configuration does not list, a path taken, a dry run, and kill -9 once copied and once moved; unit tests with EIO on the trash's read, a file of the trash replaced, a part whose sync fails, a target that cannot be written to.
+- **Decided without the maintainer, to confirm:**
+  - The entry stays in its trash once copied, to expire as any other: a copy never takes away what it copies from.
+  - An entry on a `readonly` or `draining` disk may be copied from, as its trash can be read; the target must be `online` or `standby`.
+  - The copy is unverified, as a restored copy is, though it was read back.
+
+## `--help`, and the CLI in French (specs.md §25)
+
+Commit "Give the CLI its help and its French", on `develop`.
+
+- `atoll --help`, `-h` and `help` list the commands; `atoll help <command>`, and `--help` or `-h` among a command's arguments before a `--`, give its synopsis and what it does, exit 0.
+- What the CLI writes for people is in French when the first of `LC_ALL`, `LC_MESSAGES` and `LANG` that is set starts with `fr`: 175 messages and the help, through `T()`, whose key is the English text. A test reads every `T("…")` of the sources and requires its French, with the same verbs in the same order and the same line breaks, and no French nothing asks for. The JSON outputs, the words they share with the human output, names, paths, keys, the daemon's log and the details of an error from below the CLI stay in English.
+- `atoll rules explain` writes a time as the configuration does, `settle = 10m`, never in nanoseconds (`value.FormatDuration`, read back by `ParseDuration`).
+- `guard confirm` and `reject` say their answer in a sentence of their own, rather than with the English verb inside it.
+- **Decided without the maintainer, to confirm:**
+  - The outcomes, reasons, states and decisions the JSON shares stay in English in the human output too, as a search reads them; so do the synopses' placeholders, such as `<path>`.
+  - A duration is written in days rather than weeks: `7d`, not `1w`.
+  - French typography puts a space before a colon, a plain one, as a terminal shows it.
+
+## The local API (specs.md §25.1, §26, §29.5)
+
+Commit "Answer questions over a local API", on `develop`, as the maintainer chose on 2026-11-12.
+
+- The daemon that runs for good answers `GET /v1/health`, `/v1/status`, `/v1/disks`, `/v1/disks/{id}`, `/v1/trash` and `/v1/guards`, each with what that command's `--json` gives, made by the command's own writer with the configuration the daemon runs with, a reload included. `api/openapi.yaml` describes it.
+- On the Unix socket `api.socket` (`/run/atoll/atoll.sock`), made with mode 0660, never wider for a moment, in the folder the unit's `RuntimeDirectory` makes; a socket an earlier run left is replaced, anything else stays. Over TCP on `api.listen`, a loopback address or one of the Tailscale network, every request carries the Bearer token `api.token_file` holds, read again at each request and compared in constant time.
+- Configuration: `[api]` with `socket`, `listen` and `token_file`; `api.listen` follows a grammar of its own (§29.5), with 37 vectors in `listen.json`, parsed in-house so that the Rust version can match it; `listen` without `token_file` is refused. 12 cases in `config.json`.
+- Verified: each answer equals its command's output byte for byte; 405 for any method but GET, 404 for another path or disk, 503 for a catalog that cannot be used; the token missing, wrong, changed, empty or gone; the socket's mode, a stale socket replaced, a file at its path left alone, the socket gone at the stop; a round trip over TCP.
+- **Decided without the maintainer, to confirm:**
+  - The alpha's API only answers: moving and deleting stay with the CLI, which takes the catalog's lock.
+  - A socket or a TCP address that cannot be opened leaves that side off, with a line of the log, rather than stopping the daemon.
+  - The token is read at each request, so that a new one takes effect without a reload; HEAD is refused like any method but GET.
+  - Every answer that cannot be made is 503, with its error.
+
+## The owner applied to the other copies (specs.md §9, §15.4, §15.10, §17.2)
+
+Commit "Apply the owner of a metadata change to the other copies", on `develop`, as the maintainer chose on 2026-11-12.
+
+- `schema/migrations/0006_owner.sql`: `copies.uid` and `copies.gid`, NULL until known; the next look that finds a copy unchanged since its row records its owner, as a `chown` moves the change time. `ops` is made again to take the kind `chown`: SQLite changes a CHECK only so. Its rows, the trash's references to them and its counter are kept, tested from a version-5 catalog whose counter is past its last row. Migrations now run with `PRAGMA defer_foreign_keys = ON` (§9, `schema/README.md`).
+- `solver.MetadataPlan`: the owner of the changed copy whose owner moved last, both ids, goes to each other copy that holds another or an unknown one, as the mode does. 13 more cases in `metadata.json`, 6 in `catalog.json`.
+- An operation `chown`, journaled with a `chown` event that holds `uid` and `gid`, runs before the `chmod` and the `utimens` of the same copy, as a `chown` may clear setuid and setgid. A driver, or a run without `CAP_CHOWN`, that refuses the owner (`EPERM`, `EINVAL`, `EOPNOTSUPP`) leaves the copy its own: the operation is `undone`, the outcome `kept`, and the file is decided all the same. The reprise finishes on the event's owner, undoes quietly on the row's, with an event otherwise.
+- `api/schemas/daemon.schema.json`: the operation `chown`, with `kept`.
+- The conformance runner: `root`, for a scenario that gives files away, which anyone else skips and says so, never counting it as a success; a step `chown`; `uid` and `gid` in trees. Six `daemon-metadata-chown-*` scenarios, root only, run by the CI's containers. Five unit tests in `jobs`: applied, kept, a disk lost, a reprise, and an owner the look records.
+- Measured in qemu on Linux 6.12.116 and 7.3.1: ext4, XFS, btrfs and ntfs3 keep the owner given; ntfs-3g and lowntfs-3g answer `fchown` and keep `0:0`, which the row records, and the next pass applies nothing; the reprise after a crash at `owner-set` is quiet on all six. The mode tests pass again on both.
+- **Decided without the maintainer, to confirm:**
+  - The owner is an operation `chown` of its own, which needed the journal made again; folding it into `chmod` would have spared that.
+  - A refused owner is `kept`, not an error: otherwise each pass would read the whole file again, and fail again. The copy pipeline already leaves a copy another owner so.
+  - The owner scenarios run only as root, and the runner says how many it skipped.
+  - Migrations defer foreign keys to their commit, a rule the Rust version must follow too.
+
+## Atoll's own empty folders (specs.md §6.1, §17.2, §17.5)
+
+Commit "Remove the empty folders Atoll made", on `develop`.
+
+- At the end of a pass, a prune or a scrub that writes, each folder below the root that Atoll made, and that its own move of that run left empty, a copy sent to the trash or renamed away, goes; then each folder above it that this left empty, the root never. One operation `kind = rmdir` for each, journaled with an `rmdir` event: the name must still hold that folder, by inode; `unlinkat` with `AT_REMOVEDIR`, which only an empty folder passes; the parent's time restored and the parent synced; then the folder's row goes. A folder that holds anything, is gone or is another, stays, and the operation is `undone`.
+- Reprise: nothing at the name finishes it; the folder, by inode, undoes it; anything else undoes it with an event. Three more cases in `op_recovery.json`.
+- Verified: five scenarios, a folder removed while the one above it keeps a folder the user made there, then stays once the user empties it, and kill -9 after the journal, after the removal, after the sync, and with a file made at the name before the reprise; unit tests with EIO on the removal and on the parent's sync, something new in the folder, another folder at its name, and a dry run.
+- Fixed on the way: a disk lost while the scrub moves a copy to the trash now makes the scrub partial.
+- **Decided without the maintainer, to confirm:**
+  - Only what Atoll's own operations of that run emptied goes: a folder the user emptied stays, as an empty folder they kept may be one they want, and so does one a run left empty before it was stopped; nothing tries those again.
+  - These operations are not in a command's output: the journal and the events hold them.
+
+## `trash.max_size`, and the daemon's purge (specs.md §15.13, §17, §17.4, §23)
+
+Commit "Purge the trash for room, and from the daemon", on `develop`.
+
+- What a purge reaches is a pure function, `solver.ChoosePurge`, with 29 vectors in `conformance/vectors/trash_purge.json`: what has reached its time; then, on each disk whose trash holds more than `trash.max_size` of its capacity, surplus and rebalance, then overwritten, repaired and quarantined, the oldest first, until it holds no more. Deleted and renamed entries go only at their time.
+- `atoll trash purge` says why each entry goes (`expired`, `max-size`, `older-than`) and which disks' trash stays full (`full`). New fields of `api/schemas/trash-purge.schema.json`, for review; the 17 scenarios that read that output take them.
+- The daemon purges after each pass, under the same lock, as `trash purge --yes` does, and works out the alerts after it: `trash-full:<id>` for a disk whose trash is still full.
+- Verified: the vectors; a scenario where a disk's trash past 0.5 % loses its surplus copies, then an overwritten one, keeps a deleted one until its time, and stays `full` until then, and where `--older-than` purges nothing for room; unit tests of the alert and of the daemon's purge, with and without `--dry-run`.
+- **Decided without the maintainer, to confirm:**
+  - A trash is counted as the sizes of its entries in the catalog, not by the disk's free space; an entry of unknown size counts for nothing and never goes for room; a hard-linked one counts with its size.
+  - The capacity is the one the catalog last recorded; a disk with none recorded is never purged for room, nor full.
+  - "Reached" is read as "more than": at the limit exactly, nothing goes.
+  - `--older-than` purges nothing for room, as the user chose what goes.
+  - The daemon purges after every pass, not once a day, and only reads the catalog when nothing is due; `--dry-run` purges nothing.
+  - `trash-full` covers the disks that hold their files now, whatever their role, with priority 3, and is sent again every 24 h while it holds.
+
+## `atoll catalog rebuild` (specs.md §9, §25)
+
+Commit "Rebuild the catalog from the disks", on `develop`.
+
+- A new catalog is made beside the old one, its operations started past the highest id the disks' `trash/` and `tmp/` name, then filled by a full scan, which reads every copy whole; copies with different hashes at one path are a conflict. The old catalog, its log moved into it or set aside with it, trades names with the new one in one step (`RENAME_EXCHANGE`), and is kept as `<catalog>.old-<UTC time>`. It works when the old catalog cannot be opened.
+- Without `--yes` it says what it would do (exit 3); `--dry-run` likewise with 0.
+- Verified: unit tests of the swap, the log set aside and the operation ids; a scenario: a conflict found again, ids past the trash and `tmp/`, the disks' folders left as they are, and `verify` finding the new catalog in step.
+- **Decided without the maintainer, to confirm:**
+  - The old catalog is set aside beside the new one, never removed, under that name.
+  - The disks' trash entries are not listed in the new catalog: they stay on the disks, and `trash list` does not show them. Listing them again needs their reasons, which only the old catalog knew.
+  - A disk whose trash and `tmp/` cannot be read is a warning: a new operation may then meet an old one there once, which costs it an `io-error`.
+
+## `atoll catalog verify` against the disks (specs.md §9, §25)
+
+Commit "Compare the disks with the catalog in catalog verify", on `develop`.
+
+- After SQLite's checks, `catalog verify` walks each disk not failed and compares it with the catalog as a scan would (`watch.Compare`), each disk confirmed past the cache first, writing nothing. Each disk comes out as `atoll scan --json` gives it, and a difference is exit 4.
+- A scenario: a disk in step with the catalog, then a file added, one changed and one deleted, which verify reports and the catalog still does not know.
+- **Decided without the maintainer, to confirm:** `verify` takes no lock, as other read-only commands; a catalog SQLite finds damaged is not compared with the disks; a name that cannot be read counts as a difference.
+
+## The daemon's daily catalog backup (specs.md §9, §15.13)
+
+Commit "Back the catalog up every night", on `develop`.
+
+- Once for each stretch of `maintenance.window`, after the new files' hashes and before the scrub, the daemon backs the catalog up under its lock, through `jobs.BackupCatalog`, which `atoll catalog backup` now shares. `Wake` says when, with four more vectors in `daemon_wake.json`.
+- `TestRunBacksUp`: a window around now, one backup after the first pass, and none more for a pass in the same stretch.
+- **Decided without the maintainer, to confirm:** a backup that fails is not tried again before the next stretch, with a line of the log; no alert says it yet.
+
 ## A nested btrfs subvolume is another mount (specs.md §15.10)
 
 Commit "Leave a nested btrfs subvolume out of the walk", on `develop`, as the maintainer chose on 2026-11-12.

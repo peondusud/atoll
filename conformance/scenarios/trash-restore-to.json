@@ -1,0 +1,303 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a714.2, \u00a717.2, \u00a717.4",
+  "description": "restore --to copies an entry to another disk through the copy pipeline, and the entry stays in its trash; to its own disk it is moved back. A disk the configuration does not list is a usage error, and a path taken stays.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes"
+      ]
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--to",
+        "t9",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--to",
+        "t2",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "a",
+            "disk": "t3",
+            "to": "t2",
+            "op": 1,
+            "outcome": "path-taken"
+          }
+        ],
+        "applied": true
+      },
+      "exit": 4
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--to=t1",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "a",
+            "disk": "t3",
+            "to": "t1",
+            "op": 1,
+            "outcome": "to-restore"
+          }
+        ],
+        "applied": false
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--to",
+        "t1",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "a",
+            "disk": "t3",
+            "to": "t1",
+            "op": 1,
+            "outcome": "restored"
+          }
+        ],
+        "applied": true
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/1/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "user",
+          "ok"
+        ],
+        [
+          "t2",
+          "user",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, disk_id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          1,
+          "t3",
+          "trash",
+          "done"
+        ],
+        [
+          2,
+          "t1",
+          "create",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT json_extract(data, '$.source') FROM events WHERE kind = 'restore'",
+      "rows": [
+        [
+          "t3"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "a",
+            "disk": "t3",
+            "reason": "surplus",
+            "size": 1024,
+            "blake3": "${ANY}",
+            "deleted": "2026-01-01T00:00:00.000000000Z",
+            "expires": "2026-01-31T00:00:00.000000000Z",
+            "op": 1
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--to",
+        "t3",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "a",
+            "disk": "t3",
+            "to": "t3",
+            "op": 1,
+            "outcome": "restored"
+          }
+        ],
+        "applied": true
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/trash",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": []
+      }
+    }
+  ]
+}

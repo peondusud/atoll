@@ -31,6 +31,13 @@ The work goes to the `develop` branch, with one pull request once the big work i
   - **The choices DONE.md listed as "to confirm"** are confirmed.
   - **Catalog backups.** They are daily, in `<catalog folder>/backups/`, 7 kept. With `catalog_on_disks`, the latest also goes in each disk's `Atoll/catalog/`. A rebuild sets the old catalog aside.
 
+## Decisions for the beta (the maintainer, 2026-11-12)
+
+- **Order:** repair and quarantine of corrupt copies, then the duplicate report (R-14, R-15); the `immediate` and `scheduled` modes; Gotify and SMTP alerts, and SMART; notifications to Plex, Emby and Jellyfin; `atoll conflicts resolve`; failure domains and tags as hard constraints, with `atoll balance` and `atoll capacity`; the link guard last.
+- **Plex** reads each disk's folders today. So its libraries move to the merged view, as §21.4 says, before the first replica, and a scan notification names a folder as that view shows it.
+- **Hard links:** none in the maintainer's library for now, but the link guard must handle them, for users whose Sonarr or Radarr link a torrent client's file into `media/`.
+- **Alerts:** Gotify and SMTP, both, beside ntfy.
+
 ## Names (specs.md §30)
 
 To decide before the solver, the scanner and `atoll names check` need them:
@@ -38,7 +45,6 @@ To decide before the solver, the scanner and `atoll names check` need them:
 - **decision**, before phase 2a: should Atoll's own view refuse, with an error, a rename that a copy's filesystem refuses, instead of following §15.3?
 - Pin in `test/loopdev` what mergerfs and ntfs3 do with a refused name or an `ads` stream (`docs/research/name-compatibility.md`), re-reading through a cold cache, so that a release that changes it fails a test. The measurements so far were throwaway scripts in qemu; `make test-qemu` runs `test/loopdev` on both kernels, and its guest now has mergerfs, which `TestBreakGlass` mounts.
 - Measure on the maintainer's Windows machine, with their go-ahead, what a report says is not established: which reserved names Windows 11 still refuses, and what Windows does with `Film.mkv` beside `film.mkv` on an NTFS volume (a VHD).
-- NTFS 8.3 short names: never decide that a file exists with `stat` alone, and treat an `EEXIST` without a visible exact entry as name-incompatible.
 - `disk add`: refuse ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase`, ntfs3 `ads` and lowntfs-3g `ignore_case`, which the mount check of §10 already reports. Watch `FS_CASEFOLD_FL` on folders under `<root>/`.
 - **decision**: the `ntfs` driver of Linux 7.1 and later (§10, §15.8, §22), the only NTFS driver of Debian 14's kernel: support it like ntfs3, keep it `readonly`, or something in between. Measured in `docs/research/ntfs-driver.md`, whose last section lists the decisions it needs. Until then a disk mounted with it is `readonly`.
 
@@ -52,18 +58,16 @@ To decide before the solver, the scanner and `atoll names check` need them:
 
 Every item here is a **decision**:
 
-- `api/openapi.yaml` and `api/schemas/` for the `--json` outputs.
+- The local API's commands that write (moving, deleting, answering a guard), which the alpha leaves to the CLI (§25.1).
 
 ## Phase 1a, the alpha, not started (specs.md §28)
 
 - Configuration in the shell (§24.3, §10):
   - in `atoll rules check`, the rules that no file reaches or that an earlier one hides (§11.3);
-  - `--help`, the French translation of the CLI, and human output that writes durations as the configuration does: `atoll rules explain` prints `settle_ns = 600000000000`;
   - the fallbacks of §12.2 for the modes, when jobs act on them: `rules.Policy` holds what the configuration asks for, and `atoll scan` already gives the plan only what has an effect;
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
-- The catalog: the daemon's daily backup inside `maintenance.window`; in `catalog verify`, the read-only comparison of the catalog with the disks; and `catalog rebuild`, which sets the old catalog aside. `catalog backup` and the integrity checks are done.
-- `catalog rebuild` must start `ops.id` past the ids in each disk's trash and in each `tmp/`, as must `atoll init` over a catalog that went missing, so that a new operation's folder or `<op id>.part` does not meet an old one (§14.2, §17): both restart `sqlite_sequence`. Until then such a meeting costs one `io-error`, and the next run takes another id.
-- Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. The daemon that runs for good, with its watcher and its grouping, is still to measure over hours of changes.
+- After `catalog rebuild`, the disks' trash entries are not in the new catalog: list them again from `trash/<date>/<op id>/`, with a reason to choose, and their expiry from the date.
+- Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. The daemon that runs for good, with its watcher and its grouping, held four hours of a change every second on 4,000 files, its heap in use between 2.8 and 6.8 MiB with no growth (§26). Over days, and on 200,000 files, it is still to measure: `SOAK=72h SOAK_FILES=200000`.
 - What the mount check of §10 leaves to do for disks:
   - `atoll disk show`, which could show `time_precision_ns`, and reading `Atoll/disk.toml` at each mount check;
   - the topology check of R-06 at each start, not only at `disk add`, with the catalog's `disks.device`.
@@ -72,15 +76,14 @@ Every item here is a **decision**:
   - the remount after a USB reset of an ntfs-3g disk, through `mount.ntfs-3g`, as the dedicated user, is not tested.
 - The modes `immediate`, which needs the watcher to know a file closed and stable, and `scheduled`, which runs inside `[replication].window`: until then both fall back to `deferred`, which `daemon --until-idle` runs, settle counted from when a file was first seen (§12.2, §12.3, §14.1).
 - What the copy pipeline leaves for later (§14): one copy at a time, in one pass, is all the daemon runs, so `max_parallel_per_disk` waits for its loop; the creation time set after the rename on Windows (§7).
-- A folder renamed on one disk into the old name of one that waits there (`mv Dx N; mv D Dx`, while a copy below Dx on another disk has a clock running, is held by the guard, or cannot be read): what only other disks hold below Dx stays there, in the folder now named Dx (specs.md §15.12, `daemon-folder-rotation-while-waiting`). The fix holds back what lands in that old name, folders and copies moved in from elsewhere, until the one that waits is decided. It needs that wait known before the files of a pass are decided, and must not block a cycle, where each folder lands in the other's old name.
-- The owner applied to the other copies (§15.4, Limits), which the maintainer chose to leave for later when the mode came: it would take `copies.uid` and `copies.gid`, recorded as `copies.mode` is, and operations `chown` journaled with their reprise. Until then a `chown` is a metadata change that applies nothing. The grouping of events per path comes with the watcher (§15.1).
-- What modifications leave as limits (§15.4, §15.12): an overwriting move (`mv P Q`, Q there) and a swap of two names on one disk, and a copy replaced by anything but a regular file, which are only reported. `deletes.direct = "restore"` (§15.5), which the copy pipeline now allows, still propagates nothing.
+- The grouping of events per path comes with the watcher (§15.1).
+- What modifications leave as limits (§15.4, §15.12): a swap of two names whose other copies are on NTFS, whose drivers cannot exchange two names, and a copy replaced by anything but a regular file, which are only reported. `deletes.direct = "restore"` (§15.5), which the copy pipeline now allows, still propagates nothing.
 - What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), were confirmed on 2026-11-12.
 - A volume that ntfs3 left with names that disagree (§17.2) shows only as a warning in the log and exit 4 on every run on that disk: say what to do, which is a repair of the volume, in an alert, which §23 does not list yet, and in `atoll status`.
-- The rest of the trash (§17): `[trash].max_size` and its purging order, the `.chunks` folders with `repair`, `restore --to` with the copy pipeline, the link guard, the reasons other than `surplus`, `deleted` and `renamed`, and removing Atoll's own folders below the root once they are empty (§6.1). A folder's attributes other than its mode and owner wait for the pipeline.
+- The rest of the trash (§17): the `.chunks` folders with `repair`, the link guard, and the reasons `rebalance` and `repaired`, which come with balancing and repair. A folder Atoll emptied in a run that was stopped before its end stays, as nothing records it (§17.5). A folder's attributes other than its mode and owner wait for the pipeline.
 - The scrub: `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`, and `repair` (phase 1b) must look for the conflict again before it clears that.
 - The settings of the openmediavault mergerfs plugin from `atoll mergerfs-config` (§21.1), which the maintainer left for later: the fstab line and `--json` are done.
-- What the alerts leave (§23): Gotify and SMTP, SMART and a volume marked dirty, with phase 1b; the trash full, with `trash.max_size`. The counts read the whole of `files` after each pass, with no index: to measure on 200,000 files, before an index on the states that alert.
+- What the alerts leave (§23): Gotify and SMTP, SMART and a volume marked dirty, with phase 1b. The counts read the whole of `files` after each pass, with no index: to measure on 200,000 files, before an index on the states that alert.
 - The operation journal (`ops`) covers the trash, the renames of propagation, files and folders, and the copies (`create`) so far (§14.2, §17.1, §17.2). Each new kind of operation needs its own reprise, with kill -9 at each step and fault injection.
 - The break-glass test runs in `test/loopdev` (`TestBreakGlass`), so in the CI's qemu job, on two disks and every driver. What it leaves: a pool of more disks, a disk away when Atoll goes, and, once Atoll's own view comes (phase 2a), comparing that view with plain mergerfs.
 

@@ -190,9 +190,9 @@ func (c *compared) row(k *catalog.KnownCopy, at *FoundFile) {
 			at.home = true
 			c.r.Known++
 			c.clock(k, v)
-			// Unchanged since its row, its mode cannot have moved: a chmod moves the change time.
-			if !k.Mode.Valid {
-				c.modes = append(c.modes, catalog.CopyMode{FileID: k.FileID, Mode: at.Mode})
+			// Unchanged since its row, its mode and owner cannot have moved: a chmod and a chown move the change time.
+			if !k.Mode.Valid || !k.UID.Valid || !k.GID.Valid {
+				c.modes = append(c.modes, catalog.CopyMode{FileID: k.FileID, Mode: at.Mode, UID: at.UID, GID: at.GID})
 			}
 			return
 		}
@@ -299,6 +299,15 @@ func (c *compared) resolve(ctx context.Context, db *sql.DB, d *config.Disk, w *W
 			o.target.claims++
 		}
 		if v == solver.VerdictGone {
+			gone[o.k.fileKey] = true
+		}
+	}
+	// A row whose name holds the file another row's copy moved to, its own file nowhere, lost that file to an
+	// overwriting move, as `mv a b` over b loses b's: it is gone, so that its file is decided as a deletion, and the
+	// file that moved takes the name once it is free (specs.md §15.12). Any other file at its name replaced it.
+	for _, o := range c.open {
+		if o.verdict == solver.VerdictReplaced && o.at != nil && o.at.claims > 0 {
+			o.verdict = solver.VerdictGone
 			gone[o.k.fileKey] = true
 		}
 	}

@@ -79,10 +79,17 @@ func TestScrubQuarantines(t *testing.T) {
 	if n := b.count("SELECT count(*) FROM events WHERE kind = 'corrupt' AND json_extract(data, '$.disk') = 't2' AND json_extract(data, '$.path') = 'a.mkv'"); n != 1 {
 		t.Errorf("%d corrupt events", n)
 	}
+	// Corrupt while a copy is, and no longer: once the copy went, the file takes the state its copies give it.
+	if got := b.text("SELECT state FROM files WHERE CAST(lpath AS TEXT) = 'a.mkv'"); got != "pending" {
+		t.Errorf("the file is %s once its corrupt copy went", got)
+	}
 	b.settle()
 	data, err := os.ReadFile(filepath.Join(b.dirs["t2"], "media", "a.mkv"))
 	if err != nil || string(data) != "a film" {
 		t.Errorf("made again: %q, %v", data, err)
+	}
+	if got := b.text("SELECT state FROM files WHERE CAST(lpath AS TEXT) = 'a.mkv'"); got != "ok" {
+		t.Errorf("the file is %s once its copy is made again", got)
 	}
 }
 
@@ -111,6 +118,10 @@ func TestScrubKeepsTheLastCopy(t *testing.T) {
 	}
 	if n := b.count("SELECT count(*) FROM trash"); n != 0 {
 		t.Errorf("%d in the trash", n)
+	}
+	b.settle()
+	if got := b.text("SELECT state FROM files"); got != "corrupt" {
+		t.Errorf("file %s after a pass, its copies still corrupt", got)
 	}
 }
 

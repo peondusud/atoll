@@ -37,9 +37,17 @@ Environment variables of the second command, passed with `-e NAME=value` (`make 
 | `TIMEOUT` | `3000s` | the tests' own timeout, in each guest |
 | `QEMU_TIMEOUT` | `3600` | seconds before a guest is stopped |
 | `QEMU_MEMORY` | `6144` | the guest's memory in MiB; the loop images take up to 2 GiB of it |
+| `SOAK` | none | runs `TestDaemonSoak` for that long, such as `4h`: the daemon that runs for good under a writer, its memory logged every tenth of the run. Raise `TIMEOUT` and `QEMU_TIMEOUT` past it, by 20 minutes for the first pass |
+| `SOAK_FILES` | `2000` | the files each disk of the soak starts with |
 
 For example, the tests of a device that fails during an operation, twice, on Debian's kernel only:
 
 ```powershell
 docker run --rm -e KERNELS=debian -e RUN=TestADeviceThatFails -e COUNT=2 -v "${PWD}:/src:ro" -v "${PWD}/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
+```
+
+And the daemon's soak, for four hours:
+
+```powershell
+docker run --rm -e KERNELS=debian -e RUN=TestDaemonSoak -e VERBOSE=1 -e SOAK=4h -e TIMEOUT=16000s -e QEMU_TIMEOUT=16500 -v "${PWD}:/src:ro" -v "${PWD}/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
 ```

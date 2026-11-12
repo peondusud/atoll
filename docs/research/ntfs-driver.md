@@ -121,6 +121,7 @@ Short names (8.3), set with ntfs-3g's `system.ntfs_dos_name` on `Film Name.mkv` 
 
 - A short name answers whatever its case on `ntfs` and ntfs3, and is never replaced. `MEDIA` does not, though ntfs-3g reads it back as the short name of `media`: ntfs-3g seems to have made `media` one name of both namespaces, which only `nocase` folds. So the `ignore-case` check of §10 reads such a `media` root correctly: Atoll's check gave `online` on ntfs3 and ntfs-3g. A root folder whose short name differs from it only in case was not tried.
 - A rename by `ntfs` drops the short name, as its documentation says: after `Film Name.mkv` became `Film Name 2.mkv`, ntfs-3g found no `system.ntfs_dos_name`.
+- Measured again on 2026-11-12, by `TestShortNamesOnEachNTFSDriver` on Linux 6.12 and 7.3, with the short names set by ntfs-3g: Atoll's copy of `filmna~1.mkv` beside `Film Name.mkv` (`FILMNA~1.MKV`) was made on ntfs-3g and lowntfs-3g, through `link` after `renameat2` gave `EINVAL`, where the table above says `EEXIST` for `link`. ntfs3 found the other file at the look. So the look before a copy reads a name of the short form in capitals too, and refuses it on every driver before anything is written (`specs.md` §15.8).
 
 ## Times
 

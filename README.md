@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="The logo of Atoll: four islets on one reef around a lagoon" width="128" align="right">
+
 # Atoll
 
 Atoll adds file-level redundancy to heterogeneous disks (SATA, USB DAS) that hold a media library (Plex, Emby, Jellyfin), without moving existing files.

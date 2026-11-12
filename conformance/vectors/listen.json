@@ -1,0 +1,197 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725.1, \u00a729.5",
+  "description": "api.listen: an IPv4 address in four decimal parts with no leading zero, or an IPv6 address in brackets with no zone, then a port from 1 to 65535 with no leading zero. The address must be a loopback one or one of the Tailscale network.",
+  "cases": [
+    {
+      "input": "127.0.0.1:7341",
+      "address": "127.0.0.1",
+      "port": 7341
+    },
+    {
+      "input": "127.255.255.254:1",
+      "address": "127.255.255.254",
+      "port": 1,
+      "note": "all of 127.0.0.0/8 is loopback"
+    },
+    {
+      "input": "[::1]:7341",
+      "address": "::1",
+      "port": 7341
+    },
+    {
+      "input": "[0:0:0:0:0:0:0:1]:65535",
+      "address": "::1",
+      "port": 65535,
+      "note": "an IPv6 address in any of its forms; the port at its highest"
+    },
+    {
+      "input": "100.64.0.0:80",
+      "address": "100.64.0.0",
+      "port": 80,
+      "note": "the first address of the Tailscale network"
+    },
+    {
+      "input": "100.127.255.255:80",
+      "address": "100.127.255.255",
+      "port": 80,
+      "note": "its last"
+    },
+    {
+      "input": "100.101.102.103:7341",
+      "address": "100.101.102.103",
+      "port": 7341
+    },
+    {
+      "input": "[fd7a:115c:a1e0::1]:7341",
+      "address": "fd7a:115c:a1e0::1",
+      "port": 7341
+    },
+    {
+      "input": "[FD7A:115C:A1E0:AB12:4843:CD96:6258:B240]:443",
+      "address": "fd7a:115c:a1e0:ab12:4843:cd96:6258:b240",
+      "port": 443,
+      "note": "the address in its canonical form"
+    },
+    {
+      "input": "",
+      "error": true,
+      "note": "empty: the configuration writes none as an empty string, which is no address"
+    },
+    {
+      "input": "100.63.255.255:80",
+      "error": true,
+      "note": "just below the Tailscale network"
+    },
+    {
+      "input": "100.128.0.0:80",
+      "error": true,
+      "note": "just past it"
+    },
+    {
+      "input": "[fd7a:115c:a1e1::1]:80",
+      "error": true,
+      "note": "past the Tailscale IPv6 prefix"
+    },
+    {
+      "input": "192.168.1.10:7341",
+      "error": true,
+      "note": "a local network address"
+    },
+    {
+      "input": "0.0.0.0:7341",
+      "error": true,
+      "note": "the unspecified address would listen everywhere"
+    },
+    {
+      "input": "[::]:7341",
+      "error": true,
+      "note": "likewise in IPv6"
+    },
+    {
+      "input": "localhost:7341",
+      "error": true,
+      "note": "a name would be resolved"
+    },
+    {
+      "input": "127.0.0.1",
+      "error": true,
+      "note": "no port"
+    },
+    {
+      "input": "127.0.0.1:",
+      "error": true,
+      "note": "an empty port"
+    },
+    {
+      "input": "127.0.0.1:0",
+      "error": true,
+      "note": "port 0"
+    },
+    {
+      "input": "127.0.0.1:65536",
+      "error": true,
+      "note": "past 65535"
+    },
+    {
+      "input": "127.0.0.1:07341",
+      "error": true,
+      "note": "a leading zero"
+    },
+    {
+      "input": "127.0.0.1:+80",
+      "error": true,
+      "note": "a sign"
+    },
+    {
+      "input": "127.0.0.1:123456",
+      "error": true,
+      "note": "six digits"
+    },
+    {
+      "input": "127.000.0.1:80",
+      "error": true,
+      "note": "a part with leading zeros"
+    },
+    {
+      "input": "127.0.0.01:80",
+      "error": true,
+      "note": "likewise"
+    },
+    {
+      "input": "127.0.0:80",
+      "error": true,
+      "note": "three parts"
+    },
+    {
+      "input": "127.0.0.256:80",
+      "error": true,
+      "note": "a part past 255"
+    },
+    {
+      "input": "127.0.0.1.1:80",
+      "error": true,
+      "note": "five parts"
+    },
+    {
+      "input": "::1:7341",
+      "error": true,
+      "note": "IPv6 without brackets"
+    },
+    {
+      "input": "[::1]",
+      "error": true,
+      "note": "brackets with no port"
+    },
+    {
+      "input": "[127.0.0.1]:80",
+      "error": true,
+      "note": "IPv4 in brackets"
+    },
+    {
+      "input": "[::ffff:127.0.0.1]:80",
+      "error": true,
+      "note": "an IPv4 address written as IPv6"
+    },
+    {
+      "input": "[fe80::1%eth0]:80",
+      "error": true,
+      "note": "a zone"
+    },
+    {
+      "input": " 127.0.0.1:80",
+      "error": true,
+      "note": "a leading space"
+    },
+    {
+      "input": "127.0.0.1:80 ",
+      "error": true,
+      "note": "a trailing space"
+    },
+    {
+      "input": "http://127.0.0.1:80",
+      "error": true,
+      "note": "a URL"
+    }
+  ]
+}

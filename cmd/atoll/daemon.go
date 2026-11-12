@@ -85,14 +85,14 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 		case "--foreground":
 			flag = &foreground
 		default:
-			return usage(stderr, fmt.Sprintf("daemon: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("daemon: unknown argument %q"), a))
 		}
 		if err := setFlag(flag, a); err != nil {
 			return usage(stderr, "daemon: "+err.Error())
 		}
 	}
 	if !untilIdle && asJSON {
-		return usage(stderr, "daemon: --json goes with --until-idle")
+		return usage(stderr, T("daemon: --json goes with --until-idle"))
 	}
 	c, err := load(configPath)
 	if err != nil {
@@ -150,7 +150,18 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 		}
 	}()
 	log := slog.New(slog.NewTextHandler(stderr, nil))
-	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: func() (*config.Config, error) { return load(configPath) }}
+	// The local API answers with the configuration the daemon runs with, the one a reload takes too (specs.md §25.1).
+	api := newAPIServer(c, machine, log)
+	stopAPI := api.start(ctx, c)
+	defer stopAPI()
+	load := func() (*config.Config, error) {
+		next, err := load(configPath)
+		if err == nil {
+			api.current.Store(next)
+		}
+		return next, err
+	}
+	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: load}
 	if err := daemon.Run(ctx, opts); err != nil {
 		return failure(stderr, err)
 	}
@@ -245,7 +256,7 @@ func (j *jsonDaemon) encoded(v any, indent string) (string, error) {
 	enc.SetEscapeHTML(false)
 	enc.SetIndent(indent, "  ")
 	if err := enc.Encode(v); err != nil {
-		return "", fmt.Errorf("writing the output: %w", err)
+		return "", fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return strings.TrimSuffix(j.buffer.String(), "\n"), nil
 }
@@ -367,18 +378,18 @@ func (t *textDaemon) Operation(op *jobs.Operation) error {
 func (t *textDaemon) end(o *jobs.Outcome) error {
 	var text strings.Builder
 	if o.DryRun {
-		text.WriteString("a dry run: nothing was written\n")
+		text.WriteString(T("a dry run: nothing was written\n"))
 	}
 	for i := range o.Guards {
 		g := &o.Guards[i]
 		if g.Kind == jobs.GuardModifications {
-			fmt.Fprintf(&text, "%s: the mass-modification guard holds what changed after %d files modified: atoll guard list\n", g.Disk, g.Count)
+			fmt.Fprintf(&text, T("%s: the mass-modification guard holds what changed after %d files modified: atoll guard list\n"), g.Disk, g.Count)
 			continue
 		}
-		fmt.Fprintf(&text, "%s: the mass-deletion guard holds %d copies: atoll guard list\n", g.Disk, g.Count)
+		fmt.Fprintf(&text, T("%s: the mass-deletion guard holds %d copies: atoll guard list\n"), g.Disk, g.Count)
 	}
 	if o.NextDue.Valid {
-		fmt.Fprintf(&text, "%d copies wait until %s\n", o.Waiting, timeText(o.NextDue.Int64))
+		fmt.Fprintf(&text, T("%d copies wait until %s\n"), o.Waiting, timeText(o.NextDue.Int64))
 	}
 	return writeText(t.w, text.String())
 }
@@ -409,7 +420,7 @@ type guardAnswer struct {
 
 func runGuard(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "guard: want list, confirm or reject")
+		return usage(stderr, T("guard: want list, confirm or reject"))
 	}
 	switch args[0] {
 	case "list":
@@ -417,7 +428,7 @@ func runGuard(configPath string, args []string, stdout, stderr io.Writer) int {
 	case "confirm", "reject":
 		return guardAct(configPath, args[0], args[1:], stdout, stderr)
 	default:
-		return usage(stderr, fmt.Sprintf("guard: unknown command %q", args[0]))
+		return usage(stderr, fmt.Sprintf(T("guard: unknown command %q"), args[0]))
 	}
 }
 
@@ -425,7 +436,7 @@ func guardList(configPath string, args []string, stdout, stderr io.Writer) int {
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
-			return usage(stderr, fmt.Sprintf("guard list: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("guard list: unknown argument %q"), a))
 		}
 		if err := setFlag(&asJSON, a); err != nil {
 			return usage(stderr, "guard list: "+err.Error())
@@ -597,25 +608,25 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 		case strings.HasPrefix(a, "--kind=") && kind == "":
 			kind = strings.TrimPrefix(a, "--kind=")
 		default:
-			return usage(stderr, fmt.Sprintf("guard %s: unknown argument %q", what, a))
+			return usage(stderr, fmt.Sprintf(T("guard %s: unknown argument %q"), what, a))
 		}
 	}
 	if disk == "" {
-		return usage(stderr, fmt.Sprintf("guard %s: want --disk", what))
+		return usage(stderr, fmt.Sprintf(T("guard %s: want --disk"), what))
 	}
 	switch kind {
 	case "":
 		kind = jobs.GuardDeletions
 	case jobs.GuardDeletions, jobs.GuardModifications:
 	default:
-		return usage(stderr, fmt.Sprintf("guard %s: --kind is deletions or modifications, not %q", what, kind))
+		return usage(stderr, fmt.Sprintf(T("guard %s: --kind is deletions or modifications, not %q"), what, kind))
 	}
 	c, err := load(configPath)
 	if err != nil {
 		return failure(stderr, err)
 	}
 	if !hasDisk(c, disk) {
-		return failure(stderr, fmt.Errorf("guard: no disk %q in the configuration", disk))
+		return failure(stderr, fmt.Errorf(T("guard: no disk %q in the configuration"), disk))
 	}
 	upTo, err := actOnGuard(c, what, kind, disk, stderr)
 	if err != nil {
@@ -629,9 +640,17 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 	if asJSON {
 		err = writeJSON(stdout, answer)
 	} else if upTo.Valid {
-		err = writeText(stdout, fmt.Sprintf("%s: %s up to %s\n", disk, what, *answer.UpTo))
+		format := "%s: confirm up to %s\n"
+		if what == "reject" {
+			format = "%s: reject up to %s\n"
+		}
+		err = writeText(stdout, fmt.Sprintf(T(format), disk, *answer.UpTo))
 	} else {
-		err = writeText(stdout, fmt.Sprintf("%s: nothing to %s\n", disk, what))
+		format := "%s: nothing to confirm\n"
+		if what == "reject" {
+			format = "%s: nothing to reject\n"
+		}
+		err = writeText(stdout, fmt.Sprintf(T(format), disk))
 	}
 	if err != nil {
 		return failure(stderr, err)

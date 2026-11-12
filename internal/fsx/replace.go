@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // ErrChangedMeanwhile says that a file no longer holds what was read of it.
@@ -117,4 +119,13 @@ func OpenSystemFile(path string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	return f, nil
+}
+
+// ExchangeFiles swaps two names of one folder of the system disk, both at once (renameat2 with RENAME_EXCHANGE): at no
+// moment is either name free.
+func ExchangeFiles(a, b string) error {
+	if err := unix.Renameat2(unix.AT_FDCWD, a, unix.AT_FDCWD, b, unix.RENAME_EXCHANGE); err != nil {
+		return fmt.Errorf("exchange %s and %s: %w", a, b, err)
+	}
+	return nil
 }

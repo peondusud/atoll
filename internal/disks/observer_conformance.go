@@ -44,6 +44,8 @@ type controlDisk struct {
 	// under its mount point has the immutable flag (specs.md §10).
 	Device    string `json:"device"`
 	Immutable bool   `json:"immutable"`
+	// Full says that an atoll step of the scenario said the disk has no room left, for that run.
+	Full bool `json:"full"`
 }
 
 // NewMachine gives what a conformance build sees: the folders listed in the control file as
@@ -152,10 +154,12 @@ func (f folders) OpenTop(mount string) (fsx.Dir, error) {
 	}
 	return fsx.Fault(top, func(call, name string) error {
 		switch {
-		case call == "rename" && d.Renameat2 != nil && !*d.Renameat2:
+		case (call == "rename" || call == "exchange") && d.Renameat2 != nil && !*d.Renameat2:
 			return unix.EINVAL
 		case (call == "rename" || call == "plainrename" || call == "link" || call == "mkdir") && slices.Contains(d.Refuses, name):
 			return unix.EINVAL
+		case (call == "mkdir" || call == "create") && d.Full:
+			return unix.ENOSPC
 		default:
 			return nil
 		}

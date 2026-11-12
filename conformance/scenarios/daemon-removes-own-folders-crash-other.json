@@ -1,0 +1,172 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a76.1, \u00a717.2, \u00a717.5",
+  "description": "A pass killed once a folder is removed, and a file made at its name before the next run: that file is someone else's, and stays; the operation is undone, with an event.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/show/s1/e1",
+          "size": 10,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/show/s1/e2",
+          "size": 20,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), created_by FROM entries WHERE disk_id = 't2' ORDER BY lpath",
+      "rows": [
+        [
+          "show",
+          "atoll"
+        ],
+        [
+          "show/s1",
+          "atoll"
+        ]
+      ]
+    },
+    {
+      "do": "mkdir",
+      "disk": "t2",
+      "path": "media/show/notes"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/show/s1/e1"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/show/s1/e2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "crash_at": "rmdir-removed",
+      "exit": 137
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/show/s1",
+      "text": "mine"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, CAST(path AS TEXT), state FROM ops WHERE kind = 'rmdir'",
+      "rows": [
+        [
+          "rmdir",
+          "show/s1",
+          "undone"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM events WHERE kind = 'op-undone'",
+      "rows": [
+        [
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/show/notes",
+          "kind": "dir"
+        },
+        {
+          "path": "media/show/s1",
+          "text": "mine"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/*/show/s1/e1",
+          "size": 10
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/*/show/s1/e2",
+          "size": 20
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    }
+  ]
+}

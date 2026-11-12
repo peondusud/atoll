@@ -21,7 +21,7 @@ import (
 
 func runRules(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "rules: want check or explain")
+		return usage(stderr, T("rules: want check or explain"))
 	}
 	switch args[0] {
 	case "check":
@@ -29,7 +29,7 @@ func runRules(configPath string, args []string, stdout, stderr io.Writer) int {
 	case "explain":
 		return rulesExplain(configPath, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, fmt.Sprintf("rules: unknown command %q", args[0]))
+		return usage(stderr, fmt.Sprintf(T("rules: unknown command %q"), args[0]))
 	}
 }
 
@@ -61,7 +61,7 @@ func lookUpZone(zone string) error {
 		return errors.New(`unknown time zone "Local": the machine's own is "local"`)
 	}
 	if _, err := time.LoadLocation(zone); err != nil {
-		return fmt.Errorf("time zone %q: %w", zone, err)
+		return fmt.Errorf(T("time zone %q: %w"), zone, err)
 	}
 	return nil
 }
@@ -88,7 +88,7 @@ func rulesCheck(configPath string, args []string, stdout, stderr io.Writer) int 
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
-			return usage(stderr, fmt.Sprintf("rules check: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("rules check: unknown argument %q"), a))
 		}
 		if err := setFlag(&asJSON, a); err != nil {
 			return usage(stderr, "rules check: "+err.Error())
@@ -135,16 +135,16 @@ func printCheck(w io.Writer, out checkOutput) error {
 	var text strings.Builder
 	for _, p := range out.Problems {
 		if p.Key == "" {
-			fmt.Fprintf(&text, "problem: %s\n", p.Message)
+			fmt.Fprintf(&text, T("problem: %s\n"), p.Message)
 		} else {
-			fmt.Fprintf(&text, "problem: %s: %s\n", p.Key, p.Message)
+			fmt.Fprintf(&text, T("problem: %s: %s\n"), p.Key, p.Message)
 		}
 	}
 	for _, warning := range out.Warnings {
-		fmt.Fprintf(&text, "warning: %s: %s\n", warning.Key, warning.Message)
+		fmt.Fprintf(&text, T("warning: %s: %s\n"), warning.Key, warning.Message)
 	}
 	if out.Valid {
-		text.WriteString("the configuration is valid\n")
+		text.WriteString(T("the configuration is valid\n"))
 	}
 	return writeText(w, text.String())
 }
@@ -172,7 +172,7 @@ func parseExplain(args []string) (explainArgs, error) {
 		case a == "--size":
 			i++
 			if i == len(args) {
-				return out, errors.New("--size needs a size")
+				return out, errors.New(T("--size needs a size"))
 			}
 			if err := out.setSize(args[i]); err != nil {
 				return out, err
@@ -182,13 +182,13 @@ func parseExplain(args []string) (explainArgs, error) {
 				return out, err
 			}
 		case strings.HasPrefix(a, "-"):
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		default:
 			paths = append(paths, a)
 		}
 	}
 	if len(paths) != 1 {
-		return out, fmt.Errorf("want one path, got %d", len(paths))
+		return out, fmt.Errorf(T("want one path, got %d"), len(paths))
 	}
 	out.path = paths[0]
 	// Only its form counts here: a name a filesystem refuses still has a policy.
@@ -200,7 +200,7 @@ func parseExplain(args []string) (explainArgs, error) {
 
 func (e *explainArgs) setSize(text string) error {
 	if e.size != nil {
-		return errors.New("--size comes twice")
+		return errors.New(T("--size comes twice"))
 	}
 	size, err := value.ParseSize(text)
 	if err != nil {
@@ -284,19 +284,25 @@ func listOrEmpty(list []string) []string {
 func printExplain(w io.Writer, out explainOutput) error {
 	var text strings.Builder
 	if out.Rule != nil {
-		fmt.Fprintf(&text, "rule: %s\n", *out.Rule)
+		fmt.Fprintf(&text, T("rule: %s\n"), *out.Rule)
 	} else {
-		text.WriteString("no rule matches\n")
+		text.WriteString(T("no rule matches\n"))
 	}
 	for _, key := range slices.Sorted(maps.Keys(out.Policy)) {
-		fmt.Fprintf(&text, "%s = %v (%s)\n", key, out.Policy[key], out.Sources[strings.TrimSuffix(key, "_ns")])
+		name, isTime := strings.CutSuffix(key, "_ns")
+		shown := out.Policy[key]
+		// A time is written as the configuration writes it, not in nanoseconds (specs.md §25).
+		if ns, ok := shown.(int64); ok && isTime {
+			shown = value.FormatDuration(time.Duration(ns))
+		}
+		fmt.Fprintf(&text, "%s = %v (%s)\n", name, shown, out.Sources[name])
 	}
 	return writeText(w, text.String())
 }
 
 func writeText(w io.Writer, text string) error {
 	if _, err := io.WriteString(w, text); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
 }
@@ -306,7 +312,7 @@ func writeJSON(w io.Writer, v any) error {
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(v); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
 }

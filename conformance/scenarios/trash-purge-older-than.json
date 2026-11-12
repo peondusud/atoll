@@ -144,7 +144,8 @@
       "stdout_json": {
         "applied": true,
         "bytes": 0,
-        "entries": []
+        "entries": [],
+        "full": []
       }
     },
     {
@@ -169,9 +170,11 @@
             "disk": "t3",
             "op": 1,
             "size": 1024,
+            "why": "older-than",
             "outcome": "purged"
           }
-        ]
+        ],
+        "full": []
       }
     },
     {
@@ -207,9 +210,11 @@
             "disk": "t3",
             "op": 2,
             "size": 1,
+            "why": "older-than",
             "outcome": "purged"
           }
-        ]
+        ],
+        "full": []
       }
     },
     {

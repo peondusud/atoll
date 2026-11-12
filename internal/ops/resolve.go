@@ -77,6 +77,12 @@ func ResolveUnlink(source Seen) (Decision, error) {
 	return Decision{Warn: true}, nil
 }
 
+// ResolveRmdir decides for a folder removed below the root, from what its name holds: same says that it is the folder,
+// by inode (specs.md §17.2, §17.5).
+func ResolveRmdir(source Seen) (Decision, error) {
+	return ResolveUnlink(source)
+}
+
 // ResolveMkdir decides for a folder made below the root: same says that it is a folder.
 func ResolveMkdir(target Seen) (Decision, error) {
 	if err := knownSeen(target); err != nil {

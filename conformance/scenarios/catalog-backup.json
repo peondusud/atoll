@@ -45,7 +45,7 @@
       "do": "atoll",
       "args": [
         "catalog",
-        "rebuild"
+        "restore"
       ],
       "exit": 2
     },
@@ -118,7 +118,30 @@
         "--json"
       ],
       "stdout_json": {
-        "problems": []
+        "problems": [],
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 1,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 1,
+            "hashed": 0,
+            "changed": [],
+            "moved": [],
+            "absent": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ]
       }
     },
     {

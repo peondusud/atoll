@@ -59,25 +59,25 @@ func parseDiskID(args []string, allowed ...string) (diskIDArgs, error) {
 			flags = false
 		case flags && strings.HasPrefix(a, "--"):
 			if !slices.Contains(allowed, a) {
-				return out, fmt.Errorf("unknown argument %q", a)
+				return out, fmt.Errorf(T("unknown argument %q"), a)
 			}
 			if out.flags[a] {
-				return out, fmt.Errorf("%s comes twice", a)
+				return out, fmt.Errorf(T("%s comes twice"), a)
 			}
 			out.flags[a] = true
 		case out.id != "":
-			return out, fmt.Errorf("one disk, not %q too", a)
+			return out, fmt.Errorf(T("one disk, not %q too"), a)
 		case !layout.IsIdentifier(a):
-			return out, fmt.Errorf("%q is no disk id", a)
+			return out, fmt.Errorf(T("%q is no disk id"), a)
 		default:
 			out.id = a
 		}
 	}
 	if out.id == "" {
-		return out, errors.New("which disk?")
+		return out, errors.New(T("which disk?"))
 	}
 	if out.flags["--dry-run"] && out.flags["--yes"] {
-		return out, errors.New("--dry-run and --yes do not go together")
+		return out, errors.New(T("--dry-run and --yes do not go together"))
 	}
 	return out, nil
 }
@@ -89,7 +89,7 @@ func diskOfConfig(c *config.Config, id string) (*config.Disk, error) {
 			return &c.Disks[i], nil
 		}
 	}
-	return nil, fmt.Errorf("the configuration has no disk %q", id)
+	return nil, fmt.Errorf(T("the configuration has no disk %q"), id)
 }
 
 func stateName(d *config.Disk) string {
@@ -165,17 +165,17 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 	code := exitOK
 	switch {
 	case newText == nil:
-		report(stderr, fmt.Sprintf("disk %s is %s already: nothing to do", d.ID, stateName(d)))
+		report(stderr, fmt.Sprintf(T("disk %s is %s already: nothing to do"), d.ID, stateName(d)))
 	case dryRun:
 	case change != changeDrain && !parsed.flags["--yes"]:
 		code = exitConfirm
 	default:
 		edited, err := config.Parse(newText)
 		if err != nil {
-			return failure(stderr, fmt.Errorf("disk %s: the configuration would not load: %w", verbOf(change), err))
+			return failure(stderr, fmt.Errorf(T("disk %s: the configuration would not load: %w"), verbOf(change), err))
 		}
 		if err := fsx.ReplaceFile(configPath, text, newText); err != nil {
-			return failure(stderr, fmt.Errorf("disk %s: the configuration is unchanged: %w", verbOf(change), err))
+			return failure(stderr, fmt.Errorf(T("disk %s: the configuration is unchanged: %w"), verbOf(change), err))
 		}
 		out.Done = true
 		code = recordAndTell(ctx, edited, m, warn, stderr, "the next scan or pass takes it in")
@@ -223,7 +223,7 @@ func changedText(text []byte, d *config.Disk, change string, out *diskChangeOutp
 	case changeDrain:
 		switch d.State {
 		case config.DiskFailed:
-			return nil, errors.New("a failed disk is never read again, so nothing can be evacuated from it: atoll disk remove takes it out")
+			return nil, errors.New(T("a failed disk is never read again, so nothing can be evacuated from it: atoll disk remove takes it out"))
 		case config.DiskDraining:
 			return nil, nil
 		}
@@ -236,12 +236,12 @@ func changedText(text []byte, d *config.Disk, change string, out *diskChangeOutp
 	default:
 		switch {
 		case out.PlannedOperations > 0:
-			return nil, fmt.Errorf("%d operations wait on it: mount it, and let the daemon or atoll daemon --until-idle end them", out.PlannedOperations)
+			return nil, fmt.Errorf(T("%d operations wait on it: mount it, and let the daemon or atoll daemon --until-idle end them"), out.PlannedOperations)
 		case d.State == config.DiskDraining && out.Depending > 0:
-			return nil, fmt.Errorf("it is draining, and %d files still depend on it, among them %s: remove it once none does (atoll disk show %s)",
+			return nil, fmt.Errorf(T("it is draining, and %d files still depend on it, among them %s: remove it once none does (atoll disk show %s)"),
 				out.Depending, strings.Join(out.DependingFirst, ", "), d.ID)
 		case d.State != config.DiskFailed && out.Depending > 0:
-			return nil, fmt.Errorf("%d files depend on it, among them %s: atoll disk remove %s --evacuate first, then remove it once none does",
+			return nil, fmt.Errorf(T("%d files depend on it, among them %s: atoll disk remove %s --evacuate first, then remove it once none does"),
 				out.Depending, strings.Join(out.DependingFirst, ", "), d.ID)
 		}
 		return config.RemoveDisk(text, d.ID) //nolint:wrapcheck // likewise
@@ -250,20 +250,20 @@ func changedText(text []byte, d *config.Disk, change string, out *diskChangeOutp
 
 func diskChangeText(out *diskChangeOutput) string {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "disk %s, %s: %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n",
+	fmt.Fprintf(&b, T("disk %s, %s: %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n"),
 		out.Disk, out.StateWas, out.Depending, out.OnlyThere, out.PlannedOperations)
 	for _, p := range out.DependingFirst {
 		fmt.Fprintf(&b, "  %s\n", p)
 	}
 	switch {
 	case out.Done && out.Change == changeDrain:
-		b.WriteString("marked draining: the daemon makes elsewhere what it holds\n")
+		b.WriteString(T("marked draining: the daemon makes elsewhere what it holds\n"))
 	case out.Done && out.Change == changeFail:
-		b.WriteString("marked failed: the daemon makes the replicas of its files elsewhere\n")
+		b.WriteString(T("marked failed: the daemon makes the replicas of its files elsewhere\n"))
 	case out.Done:
-		b.WriteString("taken out of the configuration: what it holds stays on it\n")
+		b.WriteString(T("taken out of the configuration: what it holds stays on it\n"))
 	default:
-		b.WriteString("nothing written\n")
+		b.WriteString(T("nothing written\n"))
 	}
 	return b.String()
 }
@@ -392,26 +392,26 @@ func showDisk(ctx context.Context, c *config.Config, m disks.Machine, d *config.
 
 func diskShowText(out *diskShowOutput) string {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "disk %s: %s %s, mounted at %s, %s", out.ID, out.FS, out.UUID, out.Mount, out.State)
+	fmt.Fprintf(&b, T("disk %s: %s %s, mounted at %s, %s"), out.ID, out.FS, out.UUID, out.Mount, out.State)
 	if out.Reason != nil {
 		fmt.Fprintf(&b, " (%s)", *out.Reason)
 	}
-	fmt.Fprintf(&b, "\n  configured: %s, role %s", out.Configured, out.Role)
+	fmt.Fprintf(&b, T("\n  configured: %s, role %s"), out.Configured, out.Role)
 	if out.Domain != nil {
-		fmt.Fprintf(&b, ", domain %s", *out.Domain)
+		fmt.Fprintf(&b, T(", domain %s"), *out.Domain)
 	}
 	if len(out.Tags) > 0 {
-		fmt.Fprintf(&b, ", tags %s", strings.Join(out.Tags, ", "))
+		fmt.Fprintf(&b, T(", tags %s"), strings.Join(out.Tags, ", "))
 	}
 	if out.CapacityBytes != nil {
-		fmt.Fprintf(&b, "\n  %d bytes, %d free", *out.CapacityBytes, *out.FreeBytes)
+		fmt.Fprintf(&b, T("\n  %d bytes, %d free"), *out.CapacityBytes, *out.FreeBytes)
 	}
 	states := make([]string, 0, len(out.Copies))
 	for state, n := range out.Copies {
 		states = append(states, fmt.Sprintf("%s %d", state, n))
 	}
 	slices.Sort(states)
-	fmt.Fprintf(&b, "\n  copies: %s\n  %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n",
+	fmt.Fprintf(&b, T("\n  copies: %s\n  %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n"),
 		strings.Join(states, ", "), out.Depending, out.OnlyThere, out.Planned)
 	for _, p := range out.DependingFirst {
 		fmt.Fprintf(&b, "    %s\n", p)
@@ -443,7 +443,7 @@ func diskReplace(configPath string, args []string, stdout, stderr io.Writer) int
 		return usage(stderr, "disk replace: "+err.Error())
 	}
 	if parsed.domain != "" || parsed.tags != nil {
-		return usage(stderr, "disk replace: the new disk takes the domain and tags of the old one")
+		return usage(stderr, T("disk replace: the new disk takes the domain and tags of the old one"))
 	}
 	text, err := fsx.ReadFile(configPath)
 	if err != nil {
@@ -481,13 +481,13 @@ func diskReplace(configPath string, args []string, stdout, stderr io.Writer) int
 			return failure(stderr, fmt.Errorf("disk replace: %w", err))
 		}
 		if a.config, err = config.Parse(a.text); err != nil {
-			return failure(stderr, fmt.Errorf("disk replace: the configuration would not load: %w", err))
+			return failure(stderr, fmt.Errorf(T("disk replace: the configuration would not load: %w"), err))
 		}
 	}
 	code := exitOK
 	if !parsed.dryRun {
 		if err := fsx.ReplaceFile(configPath, text, a.text); err != nil {
-			return failure(stderr, fmt.Errorf("disk replace: the configuration is unchanged: %w", err))
+			return failure(stderr, fmt.Errorf(T("disk replace: the configuration is unchanged: %w"), err))
 		}
 		code = a.finish(ctx)
 	}
@@ -495,7 +495,7 @@ func diskReplace(configPath string, args []string, stdout, stderr io.Writer) int
 	if parsed.asJSON {
 		err = writeJSON(stdout, out)
 	} else {
-		err = writeText(stdout, diskAddText(&a.out, configPath)+fmt.Sprintf("disk %s: %s\n", d.ID, out.Replaces.State))
+		err = writeText(stdout, diskAddText(&a.out, configPath)+fmt.Sprintf(T("disk %s: %s\n"), d.ID, out.Replaces.State))
 	}
 	if err != nil {
 		return failure(stderr, err)
@@ -515,18 +515,18 @@ func splitReplace(args []string) (old string, rest []string, err error) {
 			flags = false
 		case flags && (a == "--with" || strings.HasPrefix(a, "--with=")):
 			if with != "" {
-				return "", nil, errors.New("--with comes twice")
+				return "", nil, errors.New(T("--with comes twice"))
 			}
 			value, inline := strings.CutPrefix(a, "--with=")
 			if !inline {
 				if i+1 == len(args) {
-					return "", nil, errors.New("--with needs a mount point")
+					return "", nil, errors.New(T("--with needs a mount point"))
 				}
 				i++
 				value = args[i]
 			}
 			if value == "" {
-				return "", nil, errors.New("--with needs a mount point")
+				return "", nil, errors.New(T("--with needs a mount point"))
 			}
 			with = value
 		case flags && strings.HasPrefix(a, "--"):
@@ -536,15 +536,15 @@ func splitReplace(args []string) (old string, rest []string, err error) {
 				rest = append(rest, args[i])
 			}
 		case old != "":
-			return "", nil, fmt.Errorf("one disk to replace, not %q too", a)
+			return "", nil, fmt.Errorf(T("one disk to replace, not %q too"), a)
 		case !layout.IsIdentifier(a):
-			return "", nil, fmt.Errorf("%q is no disk id", a)
+			return "", nil, fmt.Errorf(T("%q is no disk id"), a)
 		default:
 			old = a
 		}
 	}
 	if old == "" || with == "" {
-		return "", nil, errors.New("want <id> --with <mount point>")
+		return "", nil, errors.New(T("want <id> --with <mount point>"))
 	}
 	return old, append(rest, "--", with), nil
 }

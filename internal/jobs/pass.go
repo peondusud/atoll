@@ -134,12 +134,13 @@ type pass struct {
 	cleared map[string][]string
 	// the folders, by disk, found renamed and left waiting in this pass
 	waited map[string][]string
+	// the folders, by disk, found renamed that wait for what no decision of this pass ends, worked out before the files
+	// are decided: what lands at or below the old name of one of them waits for it
+	held map[string][]watch.FolderMove
 	// the copies, by disk, moved to a name another file holds: their rows cannot leave where they say
 	stuck map[string]map[int64]bool
 	// the folders found renamed that copies came with, as the rows said before any decision of this pass
 	realMoves map[folderKey]bool
-	// by disk, the names a copy of another file was found moved to, while modifications are decided
-	targets map[string]map[string]bool
 	// by disk, the names of the operations left planned, which only a reprise can tell of
 	planned map[string][]string
 	// the operations utimens of the modifications, until every decision is out
@@ -187,7 +188,7 @@ func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, a
 	}
 	defer session.Close()
 	p.session = session
-	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.work, p.cleanJobs, p.copies, p.finish} {
+	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.work, p.cleanJobs, p.copies, p.finish} {
 		if err := step(ctx); err != nil {
 			return nil, err
 		}
@@ -311,7 +312,7 @@ func plannedOn(list []catalog.Op, disk string) []string {
 		switch op.Kind {
 		case catalog.OpRename:
 			paths = append(paths, op.Path, op.Path2)
-		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpCreate, catalog.OpUtimens, catalog.OpChmod:
+		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpRmdir, catalog.OpCreate, catalog.OpUtimens, catalog.OpChmod, catalog.OpChown:
 			paths = append(paths, op.Path)
 		}
 	}
@@ -665,7 +666,9 @@ func (p *pass) decidePage(ctx context.Context, page []catalog.FileRow, positions
 	}
 	rows := make(map[string]*catalog.FileRow, len(queue))
 	for _, f := range queue {
-		in.Files = append(in.Files, p.propFile(f, "", positions))
+		file := p.propFile(f, "", positions)
+		p.holdLanding(&file)
+		in.Files = append(in.Files, file)
 		rows[f.Path] = f
 	}
 	decisions, err := solver.Decide(in)
@@ -945,6 +948,52 @@ func (p *pass) readFolders(ctx context.Context) error {
 	return nil
 }
 
+// readHeld works out, before the files are decided, the folders found renamed that wait for what no decision of this
+// pass ends: a clock of a copy below them on another disk, the guard, or a look that cannot get there. A copy that
+// moved to a name at or below the old name of one of them waits for it, as it would otherwise take that name before
+// the one that waits leaves it; a folder renamed to there waits with its copies. Only a wait of that kind holds
+// anything back, so that what waits never waits for itself (specs.md §15.12).
+func (p *pass) readHeld(ctx context.Context) error {
+	positions, err := p.positions(ctx)
+	if err != nil {
+		return err
+	}
+	held := map[string][]watch.FolderMove{}
+	for i := range p.config.Disks {
+		id := p.config.Disks[i].ID
+		for _, move := range p.moves[id] {
+			if !p.realMoves[folderKey{id, move.From}] {
+				continue
+			}
+			waits, err := p.folderWaits(ctx, id, move, positions)
+			if err != nil {
+				return err
+			}
+			if waits {
+				held[id] = append(held[id], move)
+			}
+		}
+	}
+	p.held = held
+	return nil
+}
+
+// landsIn says whether a name is at or below the old name of one of those folders.
+func landsIn(folders []watch.FolderMove, name string) bool {
+	return slices.ContainsFunc(folders, func(h watch.FolderMove) bool { return isAtOrBelow(name, h.From) })
+}
+
+// holdLanding keeps a copy that moved to a name at or below the old name of a folder held on its disk from being due:
+// its file waits, as the copies below that folder's old name must leave it first (readHeld).
+func (p *pass) holdLanding(f *solver.PropFile) {
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		if c.Verdict == solver.VerdictMoved && landsIn(p.held[c.Disk], c.Target) {
+			c.Due = false
+		}
+	}
+}
+
 // topMoves leaves out the folders that only moved with a folder above them.
 func topMoves(list []watch.FolderMove) []watch.FolderMove {
 	return slices.DeleteFunc(slices.Clone(list), func(m watch.FolderMove) bool { return isBelowAnother(list, m) })
@@ -1212,6 +1261,9 @@ func (p *pass) finish(ctx context.Context) error {
 	}
 	// What the walks found has served, and working out each file again reads them all.
 	p.seen, p.moves = nil, nil
+	if err := p.session.RemoveEmptied(ctx); err != nil {
+		return fmt.Errorf("%w", err)
+	}
 	if !p.settled {
 		if err := p.session.Settle(ctx); err != nil {
 			return fmt.Errorf("%w", err)

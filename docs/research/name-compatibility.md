@@ -178,7 +178,7 @@ The rule Atoll keeps (§15.8) is the Windows 10 superset, as a fixed table. The 
 These are listed in `specs.md` §30:
 
 - **Renames through Atoll's own view (phase 2a).** Should a rename that a copy's filesystem refuses fail with an error, which mergerfs cannot do, instead of following §15.3?
-- **8.3 short names.** Both Linux drivers refuse to create a name equal to another file's short name. ntfs-3g's `stat` of that name returns the other file. So existence on NTFS must never be decided by `stat` alone.
+- **8.3 short names**, settled in `specs.md` §15.8: a look at a name of the short form that a folder does not list, at it or in capitals, finds the entry it names, and such a name is refused as a target. Measured again on each driver (`ntfs-driver.md`).
 - **Mount checks.**
   - ntfs3 must run with `iocharset=utf8`.
   - A listed entry whose `lstat` fails is a name the driver cannot read: ntfs3 drops unpaired surrogates written by Windows or ntfs-3g. It must never count as a missing file.

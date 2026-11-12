@@ -55,6 +55,11 @@
           "type": "string",
           "minLength": 1
         },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "With --to: the disk the entry goes to, its own or another, which takes a copy of it (specs.md §17.4)."
+        },
         "op": {
           "type": "integer",
           "minimum": 1

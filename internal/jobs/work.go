@@ -272,10 +272,13 @@ func (p *pass) folderReady(ctx context.Context, d *config.Disk, handle *ops.Disk
 		return false, from, nil
 	}
 	taken, _, err := handle.LookAt(job.To)
-	if err != nil {
+	switch {
+	case errors.Is(err, ops.ErrNameRefused):
+		// A short name of another entry on the way: the copies follow one by one, and each is refused.
+		return false, from, nil //nolint:nilerr // a name refused is this job's answer
+	case err != nil:
 		return false, from, fmt.Errorf("%w: %w", errLook, err)
-	}
-	if taken {
+	case taken:
 		return false, from, nil
 	}
 	fit, err := p.fitsBelow(ctx, d, job)
@@ -373,6 +376,7 @@ func (p *pass) runFolderJob(ctx context.Context, d *config.Disk, handle *ops.Dis
 		return fmt.Errorf("catalog: %w", err)
 	}
 	p.session.MarkChanged()
+	p.session.Left(d.ID, job.From)
 	p.record(Operation{Disk: d.ID, Kind: KindFolder, Path: job.From, To: job.To, Outcome: trash.OutcomeRenamed})
 	return nil
 }
@@ -554,9 +558,16 @@ func (p *pass) runRenames(ctx context.Context, d *config.Disk, handle *ops.Disk)
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	for {
-		moved, refused, last, err := p.renameRound(ctx, d, handle, waiting)
+		moved, refused, last, stuck, err := p.renameRound(ctx, d, handle, waiting)
 		if err != nil {
 			return nil, err
+		}
+		if !moved && p.session.Writable(d.ID) {
+			// Copies that wait round a cycle, each at another's target, as a swap of two names leaves them: only an
+			// exchange of two names gets the first of them there (specs.md §15.12).
+			if moved, err = p.swapOne(ctx, d, handle, stuck); err != nil {
+				return nil, err
+			}
 		}
 		if !moved || !p.session.Writable(d.ID) {
 			for i := range last {
@@ -568,10 +579,10 @@ func (p *pass) runRenames(ctx context.Context, d *config.Disk, handle *ops.Disk)
 }
 
 // renameRound goes over the copies behind once. What it could not do is only said once the last round
-// has run, as an earlier one may have been in its way.
-func (p *pass) renameRound(ctx context.Context, d *config.Disk, handle *ops.Disk, waiting []catalog.FolderJob) (bool, []catalog.RenameRow, []Operation, error) {
+// has run, as an earlier one may have been in its way. It gives the copies whose target was taken.
+func (p *pass) renameRound(ctx context.Context, d *config.Disk, handle *ops.Disk, waiting []catalog.FolderJob) (bool, []catalog.RenameRow, []Operation, []catalog.RenameRow, error) {
 	moved := false
-	var refused []catalog.RenameRow
+	var refused, stuck []catalog.RenameRow
 	var stayed []Operation
 	err := eachPending(ctx, p.db, d.ID, func(rows []catalog.RenameRow) error {
 		for i := range rows {
@@ -597,13 +608,115 @@ func (p *pass) renameRound(ctx context.Context, d *config.Disk, handle *ops.Disk
 			case trash.OutcomeNameRefused:
 				refused = append(refused, *row)
 				stayed = append(stayed, Operation{Disk: d.ID, Kind: KindRename, Path: row.Place, To: row.Target, Outcome: outcome})
+			case trash.OutcomePathTaken:
+				stuck = append(stuck, *row)
+				stayed = append(stayed, Operation{Disk: d.ID, Kind: KindRename, Path: row.Place, To: row.Target, Outcome: outcome})
 			default:
 				stayed = append(stayed, Operation{Disk: d.ID, Kind: KindRename, Path: row.Place, To: row.Target, Outcome: outcome})
 			}
 		}
 		return nil
 	})
-	return moved, refused, stayed, err
+	return moved, refused, stayed, stuck, err
+}
+
+// swapOne finds a copy whose target holds another copy that waits, from which the targets lead back to the first, as
+// a swap of two names leaves them, and exchanges the names of those two (specs.md §15.12). A driver that cannot
+// exchange two names, as no NTFS driver can, leaves them waiting, a limit.
+func (p *pass) swapOne(ctx context.Context, d *config.Disk, handle *ops.Disk, stuck []catalog.RenameRow) (bool, error) {
+	if !canExchange(d.FS) {
+		return false, nil
+	}
+	i, j := findSwap(len(stuck), func(k int) string { return stuck[k].Place }, func(k int) string { return stuck[k].Target })
+	if i < 0 {
+		return false, nil
+	}
+	return p.exchange(ctx, d, handle, &stuck[i], &stuck[j])
+}
+
+// findSwap finds, among copies that wait for a target another of them holds, by place, the first whose targets lead
+// round a cycle back to it, and the one at its target: exchanging their names gets the first there. -1 when none
+// does. A real pass and a dry run take the same, in the same order.
+func findSwap(n int, place, target func(int) string) (int, int) {
+	at := make(map[string]int, n)
+	for k := range n {
+		at[place(k)] = k
+	}
+	for i := range n {
+		j, ok := at[target(i)]
+		if !ok {
+			continue
+		}
+		next := j
+		for range n {
+			if next == i {
+				break
+			}
+			if next, ok = at[target(next)]; !ok {
+				break
+			}
+		}
+		if ok && next == i {
+			return i, j
+		}
+	}
+	return -1, -1
+}
+
+// canExchange says whether a filesystem's driver exchanges two names: ext4, XFS and btrfs do; ntfs3, ntfs-3g and
+// lowntfs-3g refuse the flag.
+func canExchange(fs names.Filesystem) bool {
+	return fs == names.Ext4 || fs == names.XFS || fs == names.Btrfs
+}
+
+// exchange swaps the names of r and of s, which sits at the target of r: r reaches it, and s takes the place of r,
+// which is its own target, or the next one round the cycle, from where a later round goes on. Each is journaled as a
+// rename, so that a reprise finishes or undoes it as any other (specs.md §15.12, §17.2).
+func (p *pass) exchange(ctx context.Context, d *config.Disk, handle *ops.Disk, r, s *catalog.RenameRow) (bool, error) {
+	a, err := catalog.BeginRename(ctx, p.db, d.ID, r.Place, r.Target, r.FileKey.String, p.now)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	b, err := catalog.BeginRename(ctx, p.db, d.ID, s.Place, r.Place, s.FileKey.String, p.now)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	p.machine.Checkpoint("journaled")
+	knownA, knownB := rowOfRename(r), rowOfRename(s)
+	movedA, movedB, seenA, seenB, err := handle.ExchangeFiles(a, b, knownA, knownB)
+	if err != nil {
+		for _, op := range []*catalog.Op{a, b} {
+			// A swap the driver refused moved nothing, as no look is needed to tell: both are undone, with no event.
+			if errors.Is(err, ops.ErrPathTaken) {
+				if err := handle.Undo(ctx, p.db, op, false, p.now); err != nil {
+					return false, fmt.Errorf("%w", err)
+				}
+				continue
+			}
+			if _, failed := p.session.AfterFailedMove(ctx, handle, op, err); failed != nil {
+				return false, fmt.Errorf("%w", failed)
+			}
+		}
+		return false, nil
+	}
+	for _, one := range []struct {
+		op          *catalog.Op
+		known       *catalog.KnownCopy
+		moved       *ops.Moved
+		seen        *fsx.Stat
+		path, place string
+	}{{a, knownA, movedA, seenA, r.Place, r.Target}, {b, knownB, movedB, seenB, s.Place, r.Place}} {
+		done := &catalog.RenameDone{Nlink: int64(one.moved.Stat.Nlink)}
+		if ops.IsUntouched(one.known, one.seen) {
+			done.Ctime = ops.TimeOf(one.moved.Stat.Ctime)
+		}
+		if err := catalog.FinishRename(ctx, p.db, one.op, done, one.moved.Links()); err != nil {
+			return false, fmt.Errorf("catalog: %w", err)
+		}
+		p.record(Operation{Disk: d.ID, Kind: KindRename, Path: one.path, To: one.place, Outcome: trash.OutcomeRenamed})
+	}
+	p.session.MarkChanged()
+	return true, nil
 }
 
 func belowAJob(jobs []catalog.FolderJob, place string) bool {
@@ -672,9 +785,12 @@ func (p *pass) lookBefore(ctx context.Context, d *config.Disk, handle *ops.Disk,
 	case !sourceSame:
 		return trash.OutcomeChanged, false, nil
 	}
-	// Something at the target, or a parent of it that is no folder.
+	// Something at the target, or a parent of it that is no folder, or the short name of another entry on the way.
 	taken, _, err := handle.LookAt(r.Target)
-	if err != nil {
+	switch {
+	case errors.Is(err, ops.ErrNameRefused):
+		return trash.OutcomeNameRefused, false, nil
+	case err != nil:
 		return "", false, fmt.Errorf("%w: %w", errLook, err)
 	}
 	if taken {
@@ -735,6 +851,7 @@ func (p *pass) renameOne(ctx context.Context, d *config.Disk, handle *ops.Disk, 
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	p.session.MarkChanged()
+	p.session.Left(d.ID, r.Place)
 	return trash.OutcomeRenamed, nil
 }
 
@@ -803,6 +920,10 @@ func (p *pass) runTrashJobs(ctx context.Context, d *config.Disk) error {
 	for i := range list {
 		if !p.session.Writable(d.ID) {
 			return p.reportJobsUnavailable(ctx, d.ID, list[i:])
+		}
+		// A disk with no room for the last one takes no more in this pass: they wait in the queue (specs.md §17.1).
+		if p.session.Full(d.ID) {
+			return nil
 		}
 		if list[i].State == catalog.JobCanceled {
 			continue
@@ -1303,7 +1424,7 @@ func (p *pass) listOn(ctx context.Context, d *config.Disk, handle *ops.Disk, pla
 	}
 	// The jobs a refused rename queues come after those of the modifications, which are queued before the work.
 	decided := len(plan.trashes)
-	for _, left := range p.renameRounds(d.ID, rest, whole) {
+	for _, left := range p.renameRounds(d, rest, whole) {
 		p.operated(Operation{Disk: d.ID, Kind: KindRename, Path: left.row.Place, To: left.row.Target, Outcome: left.outcome})
 		if g := p.guards[d.ID]; left.outcome == trash.OutcomeNameRefused && g != nil && !g.tripped && g.wishes[left.row.FileID] && !onlyAFolderCan(d, left.row.Place, left.row.Target) {
 			plan.trashes = append(plan.trashes, Operation{Disk: d.ID, Kind: KindTrash, Path: left.row.Place, Reason: reasonRenamed, Outcome: OutcomeToTrash})
@@ -1335,30 +1456,56 @@ func isFreed(freed map[string]bool, path string) bool {
 	}
 }
 
-// renameRounds takes the rounds a real pass takes: what one rename frees lets another go. It says what
-// would rename as it goes, and gives what stays.
-func (p *pass) renameRounds(disk string, rest []plannedRename, whole []catalog.FolderJob) []plannedRename {
+// renameRounds takes the rounds a real pass takes: what one rename frees lets another go, and once none can, a swap
+// of two names undoes the first of a cycle. It says what would rename as it goes, and gives what stays.
+func (p *pass) renameRounds(d *config.Disk, rest []plannedRename, whole []catalog.FolderJob) []plannedRename {
+	disk := d.ID
 	freed := map[string]bool{}
 	for i := range whole {
 		freed[whole[i].From] = true
 	}
-	for moved := true; moved; {
-		moved = false
-		var stayed []plannedRename
-		for _, r := range rest {
-			switch {
-			case r.outcome == OutcomeAlready:
-				p.operated(Operation{Disk: disk, Kind: KindRename, Path: r.row.Place, To: r.row.Target, Outcome: OutcomeAlready})
-				moved = true
-			case r.goOn, r.outcome == trash.OutcomePathTaken && isFreed(freed, r.row.Target):
-				p.operated(Operation{Disk: disk, Kind: KindRename, Path: r.row.Place, To: r.row.Target, Outcome: OutcomeToRename})
-				freed[r.row.Place] = true
-				moved = true
-			default:
-				stayed = append(stayed, r)
+	for {
+		for moved := true; moved; {
+			moved = false
+			var stayed []plannedRename
+			for _, r := range rest {
+				switch {
+				case r.outcome == OutcomeAlready:
+					p.operated(Operation{Disk: disk, Kind: KindRename, Path: r.row.Place, To: r.row.Target, Outcome: OutcomeAlready})
+					moved = true
+				case r.goOn, r.outcome == trash.OutcomePathTaken && isFreed(freed, r.row.Target):
+					p.operated(Operation{Disk: disk, Kind: KindRename, Path: r.row.Place, To: r.row.Target, Outcome: OutcomeToRename})
+					freed[r.row.Place] = true
+					moved = true
+				default:
+					stayed = append(stayed, r)
+				}
+			}
+			rest = stayed
+		}
+		if !canExchange(d.FS) {
+			return rest
+		}
+		var stuck []int
+		for k := range rest {
+			if rest[k].outcome == trash.OutcomePathTaken {
+				stuck = append(stuck, k)
 			}
 		}
-		rest = stayed
+		i, j := findSwap(len(stuck), func(k int) string { return rest[stuck[k]].row.Place }, func(k int) string { return rest[stuck[k]].row.Target })
+		if i < 0 {
+			return rest
+		}
+		r, s := rest[stuck[i]].row, rest[stuck[j]].row
+		p.operated(Operation{Disk: disk, Kind: KindRename, Path: r.Place, To: r.Target, Outcome: OutcomeToRename})
+		p.operated(Operation{Disk: disk, Kind: KindRename, Path: s.Place, To: r.Place, Outcome: OutcomeToRename})
+		// s takes the place of r, from where it waits for its own target, unless that was it.
+		after := *s
+		after.Place = r.Place
+		rest = slices.DeleteFunc(rest, func(q plannedRename) bool { return q.row == r || q.row == s })
+		if after.Place != after.Target {
+			rest = append(rest, plannedRename{row: &after, outcome: trash.OutcomePathTaken})
+			slices.SortFunc(rest, func(a, b plannedRename) int { return strings.Compare(a.row.Place, b.row.Place) })
+		}
 	}
-	return rest
 }

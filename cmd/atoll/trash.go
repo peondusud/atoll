@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func (f *writeFlags) take(a string) (bool, error) {
 
 func (f *writeFlags) check() error {
 	if f.dryRun && f.yes {
-		return errors.New("--dry-run and --yes do not go together")
+		return errors.New(T("--dry-run and --yes do not go together"))
 	}
 	return nil
 }
@@ -96,7 +97,7 @@ func session(c *config.Config, stdout, stderr io.Writer, apply bool, run func(*t
 		return fmt.Errorf("%w", err)
 	}
 	if err := buffered.Flush(); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
 }
@@ -126,8 +127,9 @@ type pruneCopy struct {
 
 // writeSummary is the rest of the output of a command that moves or deletes.
 type writeSummary struct {
-	Applied bool   `json:"applied"`
-	Bytes   *int64 `json:"bytes,omitempty"`
+	Applied bool      `json:"applied"`
+	Bytes   *int64    `json:"bytes,omitempty"`
+	Full    *[]string `json:"full,omitempty"`
 }
 
 func runPrune(configPath string, args []string, stdout, stderr io.Writer) int {
@@ -138,7 +140,7 @@ func runPrune(configPath string, args []string, stdout, stderr io.Writer) int {
 			return usage(stderr, "prune: "+err.Error())
 		}
 		if !known {
-			return usage(stderr, fmt.Sprintf("prune: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("prune: unknown argument %q"), a))
 		}
 	}
 	if err := flags.check(); err != nil {
@@ -176,23 +178,32 @@ func endWrite(out io.Writer, list *jsonList, asJSON bool, summary *trash.Summary
 		if withBytes {
 			rest.Bytes = &summary.Bytes
 		}
+		if summary.Full != nil {
+			rest.Full = &summary.Full
+		}
 		return list.end(rest)
+	}
+	for _, id := range summary.Full {
+		line := fmt.Sprintf(T("the trash of %s still holds more than trash.max_size: what is left there waits for its time\n"), id)
+		if err := writeText(out, line); err != nil {
+			return err
+		}
 	}
 	switch {
 	case !summary.Applied && summary.ToDo > 0 && withBytes:
-		return writeText(out, fmt.Sprintf("%d to do, %d bytes, and %d staying: nothing was written\n", summary.ToDo, summary.Bytes, summary.Stayed))
+		return writeText(out, fmt.Sprintf(T("%d to do, %d bytes, and %d staying: nothing was written\n"), summary.ToDo, summary.Bytes, summary.Stayed))
 	case !summary.Applied && summary.ToDo > 0:
-		return writeText(out, fmt.Sprintf("%d to do, and %d staying: nothing was written\n", summary.ToDo, summary.Stayed))
+		return writeText(out, fmt.Sprintf(T("%d to do, and %d staying: nothing was written\n"), summary.ToDo, summary.Stayed))
 	case withBytes:
-		return writeText(out, fmt.Sprintf("%d bytes, and %d staying\n", summary.Bytes, summary.Stayed))
+		return writeText(out, fmt.Sprintf(T("%d bytes, and %d staying\n"), summary.Bytes, summary.Stayed))
 	default:
-		return writeText(out, fmt.Sprintf("%d staying\n", summary.Stayed))
+		return writeText(out, fmt.Sprintf(T("%d staying\n"), summary.Stayed))
 	}
 }
 
 func runTrash(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "trash: want list, restore or purge")
+		return usage(stderr, T("trash: want list, restore or purge"))
 	}
 	switch args[0] {
 	case "list":
@@ -202,7 +213,7 @@ func runTrash(configPath string, args []string, stdout, stderr io.Writer) int {
 	case "purge":
 		return trashPurge(configPath, args[1:], stdout, stderr)
 	default:
-		return usage(stderr, fmt.Sprintf("trash: unknown command %q", args[0]))
+		return usage(stderr, fmt.Sprintf(T("trash: unknown command %q"), args[0]))
 	}
 }
 
@@ -223,7 +234,7 @@ func trashList(configPath string, args []string, stdout, stderr io.Writer) int {
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
-			return usage(stderr, fmt.Sprintf("trash list: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("trash list: unknown argument %q"), a))
 		}
 		if err := setFlag(&asJSON, a); err != nil {
 			return usage(stderr, "trash list: "+err.Error())
@@ -261,7 +272,7 @@ func writeTrash(c *config.Config, asJSON bool, stdout io.Writer) (err error) {
 		if asJSON {
 			return list.item(entry)
 		}
-		return writeText(out, fmt.Sprintf("%s (%s): %s, trashed %s, until %s\n", shownPath(e.Path), e.Disk, e.Reason, entry.Deleted, entry.Expires))
+		return writeText(out, fmt.Sprintf(T("%s (%s): %s, trashed %s, until %s\n"), shownPath(e.Path), e.Disk, e.Reason, entry.Deleted, entry.Expires))
 	})
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -272,7 +283,7 @@ func writeTrash(c *config.Config, asJSON bool, stdout io.Writer) (err error) {
 		}
 	}
 	if err := out.Flush(); err != nil {
-		return fmt.Errorf("writing the output: %w", err)
+		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
 }
@@ -282,6 +293,7 @@ type restoreEntry struct {
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	Disk    string `json:"disk"`
+	To      string `json:"to,omitempty"`
 	Op      int64  `json:"op"`
 	Outcome string `json:"outcome"`
 }
@@ -289,6 +301,8 @@ type restoreEntry struct {
 type restoreArgs struct {
 	writeFlags
 	under string
+	// to is the disk --to names, empty without it (specs.md §17.4).
+	to string
 }
 
 func parseRestore(args []string) (restoreArgs, error) {
@@ -301,18 +315,34 @@ func parseRestore(args []string) (restoreArgs, error) {
 			break
 		}
 		known, err := out.take(a)
+		to, isTo := strings.CutPrefix(a, "--to=")
 		switch {
 		case err != nil:
 			return out, err
 		case known:
+		case a == "--to" || isTo:
+			if out.to != "" {
+				return out, errors.New(T("--to comes twice"))
+			}
+			if a == "--to" {
+				if i+1 == len(args) {
+					return out, errors.New(T("--to needs a disk id"))
+				}
+				i++
+				to = args[i]
+			}
+			if to == "" {
+				return out, errors.New(T("--to needs a disk id"))
+			}
+			out.to = to
 		case strings.HasPrefix(a, "-"):
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		default:
 			paths = append(paths, a)
 		}
 	}
 	if len(paths) != 1 {
-		return out, fmt.Errorf("want one path, got %d", len(paths))
+		return out, fmt.Errorf(T("want one path, got %d"), len(paths))
 	}
 	out.under = paths[0]
 	if _, err := names.CheckPath(out.under, names.Ext4); err != nil {
@@ -330,16 +360,29 @@ func trashRestore(configPath string, args []string, stdout, stderr io.Writer) in
 	if err != nil {
 		return failure(stderr, err)
 	}
+	if parsed.to != "" && !slices.ContainsFunc(c.Disks, func(d config.Disk) bool { return d.ID == parsed.to }) {
+		return usage(stderr, fmt.Sprintf(T("trash restore: --to: the configuration has no disk %q"), parsed.to))
+	}
 	code := exitOK
 	err = session(c, stdout, stderr, parsed.yes, func(s *trash.Session, out *bufio.Writer) error {
 		list := newJSONList(out, "entries")
-		summary, err := s.Restore(context.Background(), parsed.under, func(item *trash.EntryItem) error {
+		each := func(item *trash.EntryItem) error {
 			if !parsed.asJSON {
+				if parsed.to != "" {
+					return writeText(out, fmt.Sprintf(T("%s (%s, to %s): %s\n"), shownPath(item.Path), item.Disk, parsed.to, item.Outcome))
+				}
 				return writeText(out, fmt.Sprintf("%s (%s): %s\n", shownPath(item.Path), item.Disk, item.Outcome))
 			}
 			path, b64 := encodePath(item.Path)
-			return list.item(restoreEntry{Path: path, PathB64: b64, Disk: item.Disk, Op: item.OpID, Outcome: item.Outcome})
-		})
+			return list.item(restoreEntry{Path: path, PathB64: b64, Disk: item.Disk, To: parsed.to, Op: item.OpID, Outcome: item.Outcome})
+		}
+		var summary *trash.Summary
+		var err error
+		if parsed.to != "" {
+			summary, err = s.RestoreTo(context.Background(), parsed.under, parsed.to, each)
+		} else {
+			summary, err = s.Restore(context.Background(), parsed.under, each)
+		}
 		if err != nil {
 			return fmt.Errorf("%w", err)
 		}
@@ -359,6 +402,7 @@ type purgeEntry struct {
 	Disk    string `json:"disk"`
 	Op      int64  `json:"op"`
 	Size    *int64 `json:"size"`
+	Why     string `json:"why"`
 	Outcome string `json:"outcome"`
 }
 
@@ -382,15 +426,15 @@ func parsePurge(args []string) (purgeArgs, error) {
 		switch {
 		case isOlder:
 		case a != "--older-than":
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		case i+1 == len(args):
-			return out, errors.New("--older-than needs a duration")
+			return out, errors.New(T("--older-than needs a duration"))
 		default:
 			i++
 			text = args[i]
 		}
 		if out.olderThan != nil {
-			return out, errors.New("--older-than comes twice")
+			return out, errors.New(T("--older-than comes twice"))
 		}
 		duration, err := value.ParseDuration(text)
 		if err != nil {
@@ -415,10 +459,10 @@ func trashPurge(configPath string, args []string, stdout, stderr io.Writer) int 
 		list := newJSONList(out, "entries")
 		summary, err := s.Purge(context.Background(), parsed.olderThan, func(item *trash.EntryItem) error {
 			if !parsed.asJSON {
-				return writeText(out, fmt.Sprintf("%s (%s): %s\n", shownPath(item.Path), item.Disk, item.Outcome))
+				return writeText(out, fmt.Sprintf("%s (%s): %s, %s\n", shownPath(item.Path), item.Disk, item.Outcome, item.Why))
 			}
 			path, b64 := encodePath(item.Path)
-			return list.item(purgeEntry{Path: path, PathB64: b64, Disk: item.Disk, Op: item.OpID, Size: nullInt(item.Size), Outcome: item.Outcome})
+			return list.item(purgeEntry{Path: path, PathB64: b64, Disk: item.Disk, Op: item.OpID, Size: nullInt(item.Size), Why: item.Why, Outcome: item.Outcome})
 		})
 		if err != nil {
 			return fmt.Errorf("%w", err)

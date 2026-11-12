@@ -1,0 +1,149 @@
+openapi: 3.1.0
+info:
+  title: Atoll local API
+  version: "1"
+  description: >-
+    What the daemon that runs for good answers about the pool (specs.md §25.1). It only answers: a command that moves
+    or deletes goes through the CLI. Each answer is what the command named in its description gives with --json, with
+    that command's schema, made whole before it is sent.
+  license:
+    name: GPL-3.0-or-later
+servers:
+  - url: http://atoll
+    description: >-
+      The Unix socket api.socket (/run/atoll/atoll.sock by default), mode 0660; any host name serves. No token is asked
+      for: the socket's permissions say who may ask.
+  - url: "http://{listen}"
+    description: >-
+      HTTP over TCP on api.listen, a loopback address or one of the Tailscale network (specs.md §29.5). Every request
+      carries the Bearer token api.token_file holds.
+    variables:
+      listen:
+        default: 127.0.0.1:7341
+paths:
+  /v1/health:
+    get:
+      operationId: health
+      summary: Atoll's version.
+      responses:
+        "200":
+          description: The daemon answers.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [version]
+                properties:
+                  version:
+                    type: string
+                    minLength: 1
+                    description: The version the binary was built as, "(devel)" for a build from a working tree.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+  /v1/status:
+    get:
+      operationId: status
+      summary: What atoll status --json gives (specs.md §15.11).
+      responses:
+        "200":
+          description: The pool's state.
+          content:
+            application/json:
+              schema: { $ref: "schemas/status.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /v1/disks:
+    get:
+      operationId: diskList
+      summary: What atoll disk list --json gives (specs.md §10, §25).
+      responses:
+        "200":
+          description: Each disk of the configuration, with its mount check.
+          content:
+            application/json:
+              schema: { $ref: "schemas/disk-list.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /v1/disks/{id}:
+    get:
+      operationId: diskShow
+      summary: What atoll disk show <id> --json gives (specs.md §18, §25).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The disk's id in the configuration.
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: The disk.
+          content:
+            application/json:
+              schema: { $ref: "schemas/disk-show.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /v1/trash:
+    get:
+      operationId: trashList
+      summary: What atoll trash list --json gives (specs.md §17.4).
+      responses:
+        "200":
+          description: Each entry of the trash whose operation is done.
+          content:
+            application/json:
+              schema: { $ref: "schemas/trash-list.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /v1/guards:
+    get:
+      operationId: guardList
+      summary: What atoll guard list --json gives (specs.md §15.6).
+      responses:
+        "200":
+          description: Each guard of each disk.
+          content:
+            application/json:
+              schema: { $ref: "schemas/guard-list.schema.json" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+components:
+  securitySchemes:
+    token:
+      type: http
+      scheme: bearer
+      description: Over TCP only, the token api.token_file holds, read again at each request.
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error: { type: string, minLength: 1 }
+  responses:
+    Unauthorized:
+      description: Over TCP, a request without the token, or with another. Nothing more is said.
+    MethodNotAllowed:
+      description: Any method but GET. The Allow header says GET.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Another path, or a disk the configuration does not list.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: An answer that could not be made, as when the catalog cannot be used.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+security:
+  - {}
+  - token: []

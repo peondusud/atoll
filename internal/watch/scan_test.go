@@ -186,7 +186,8 @@ func TestCorruptOutlivesAnOutage(t *testing.T) {
 	b := newBench(t, "t1")
 	b.write("t1", "a", "x")
 	b.scan(Options{})
-	if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'"); err != nil {
+	// As the scrub leaves a file it found a corrupt copy of (specs.md §16).
+	if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'; UPDATE copies SET state = 'corrupt'"); err != nil {
 		t.Fatal(err)
 	}
 	b.wrap = failing("names", "", syscall.EIO)
@@ -221,7 +222,7 @@ func TestCorruptStaysWhenCopiesDiffer(t *testing.T) {
 			b := newBench(t, "t1", "t2")
 			b.write("t1", "a", "x")
 			b.scan(Options{})
-			if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'"); err != nil {
+			if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'; UPDATE copies SET state = 'corrupt'"); err != nil {
 				t.Fatal(err)
 			}
 			b.write("t2", "a", tc.text)
@@ -1073,6 +1074,24 @@ func TestWhatMakesACopyChanged(t *testing.T) {
 	}
 	if r := b.scan(Options{}).Disks[0]; !slices.Equal(r.Changed, []string{"a"}) {
 		t.Errorf("after a chmod: %+v", r)
+	}
+}
+
+// An overwriting move, `mv a b` over b, loses the file of b: its copy is gone, as that file is nowhere, not replaced,
+// and the copy of a moved to b (specs.md §15.12). Another file at its name, as above, replaced it.
+func TestAnOverwritingMoveLosesTheFileOfItsTarget(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "x")
+	b.write("t1", "b", "y")
+	b.scan(Options{})
+	pastTick()
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Rename(filepath.Join(media, "a"), filepath.Join(media, "b")); err != nil {
+		t.Fatal(err)
+	}
+	r := b.scan(Options{}).Disks[0]
+	if !slices.Equal(r.Absent, []string{"b"}) || len(r.Changed) != 0 || !slices.Equal(r.Moved, []MovedCopy{{Path: "a", To: "b"}}) {
+		t.Errorf("%+v", r)
 	}
 }
 

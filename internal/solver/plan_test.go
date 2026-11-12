@@ -46,6 +46,7 @@ type copyVector struct {
 	CreatedBy   *string `json:"created_by"`
 	FirstSeenNS int64   `json:"first_seen_ns"`
 	OldPath     string  `json:"old_path"`
+	Away        bool    `json:"away"`
 }
 
 type policyVector struct {
@@ -65,6 +66,7 @@ type fileVector struct {
 	Size    int64        `json:"size"`
 	Copies  []copyVector `json:"copies"`
 	Manual  bool         `json:"manual"`
+	Leaving bool         `json:"leaving"`
 	Policy  policyVector `json:"policy"`
 }
 
@@ -124,7 +126,7 @@ func (v *planVector) input() (Input, error) {
 		if err != nil {
 			return in, err
 		}
-		file := File{Path: path, Size: f.Size, Hold: f.Manual, Placement: &Placement{
+		file := File{Path: path, Size: f.Size, Hold: f.Manual, Leaving: f.Leaving, Placement: &Placement{
 			Replicas: or(f.Policy.Replicas, 1), Priority: f.Policy.Priority,
 			Tags: f.Policy.Tags, TagsMode: or(f.Policy.TagsMode, "prefer"), Domains: f.Policy.Domains,
 			Spread: or(f.Policy.Spread, "domain"), SpreadMode: or(f.Policy.SpreadMode, "prefer"),
@@ -133,7 +135,7 @@ func (v *planVector) input() (Input, error) {
 		for _, c := range f.Copies {
 			file.Copies = append(file.Copies, Copy{
 				Disk: c.Disk, State: CopyState(or(c.State, "ok")),
-				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS, OldPath: c.OldPath,
+				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS, OldPath: c.OldPath, Away: c.Away,
 			})
 		}
 		in.Files = append(in.Files, file)
@@ -315,7 +317,7 @@ func randomInput(x *xorshift) Input {
 	x.shuffle(paths)
 	for _, path := range paths[:x.intn(len(paths)+1)] {
 		f := File{
-			Path: path, Size: int64(x.intn(120)), Hold: x.intn(6) == 0,
+			Path: path, Size: int64(x.intn(120)), Hold: x.intn(6) == 0, Leaving: x.intn(8) == 0,
 			Placement: &Placement{
 				Replicas: x.intn(3), Priority: oneOf(x, 0, 0, 0, 5, -5),
 				Tags: oneOf(x, nil, nil, []string{"x"}, []string{"z"}), TagsMode: oneOf(x, ModePrefer, ModeStrict),
@@ -405,6 +407,11 @@ func TestPlanProperties(t *testing.T) {
 				reach[string(s)]++
 			}
 		}
+		for i := range in.Files {
+			if in.Files[i].Leaving && slices.ContainsFunc(in.Files[i].Copies, func(c Copy) bool { return c.State == CopyPending }) {
+				reach["leaving"]++
+			}
+		}
 	}
 	// The generator must reach what it is meant to test.
 	if withJobs < 2000 {
@@ -412,7 +419,7 @@ func TestPlanProperties(t *testing.T) {
 	}
 	for _, what := range []string{
 		"refresh", "replicate", "surplus", "back", "cancel", "overflow",
-		"unavailable", "name-incompatible", "name-collision", "degraded", "pending", "unprotected",
+		"unavailable", "name-incompatible", "name-collision", "degraded", "pending", "unprotected", "leaving",
 	} {
 		if reach[what] < 100 {
 			t.Errorf("the generator reached %q only %d times", what, reach[what])
@@ -466,6 +473,9 @@ func checkPlan(t *testing.T, round int, in Input, plan Plan) {
 			t.Errorf("round %d: two jobs put %q on %q", round, j.Path, j.Dst)
 		}
 		jobsOn[mark] = true
+		if f.Leaving {
+			t.Errorf("round %d: job %+v of a file whose deletion waits", round, j)
+		}
 		i := slices.IndexFunc(f.Copies, func(c Copy) bool { return c.Disk == j.Dst })
 		switch j.Kind {
 		case JobRefresh:
@@ -588,6 +598,9 @@ func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Di
 		d := &planDisk{Disk: disks[c.Disk]}
 		if c.State == CopyPending && slices.Contains(r.Cancel, c.Disk) {
 			continue
+		}
+		if c.State == CopyPending && f.Leaving {
+			t.Errorf("round %d: %q, whose deletion waits, keeps its pending copy on %s", round, f.Path, c.Disk)
 		}
 		if !counts(c, d) {
 			if slices.Contains(r.Surplus, c.Disk) || slices.Contains(r.Back, c.Disk) {

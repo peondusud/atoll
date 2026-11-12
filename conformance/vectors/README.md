@@ -40,6 +40,15 @@ One JSON file per function. Every file has this envelope:
 | `nanoseconds` | integer | the duration in nanoseconds |
 | `error` | boolean | `true` when `input` is rejected |
 
+### `listen.json` — `api.listen` (§25.1, §29.5)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `input` | string | the value as written in the configuration |
+| `address` | string | the address, in its canonical form: dotted decimal, or RFC 5952 for IPv6 |
+| `port` | integer | the port |
+| `error` | boolean | `true` when `input` is rejected |
+
 ### `size.json` — sizes (§29.5)
 
 | Field | Type | Meaning |
@@ -145,6 +154,13 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `with` | array of strings | the exact names on the target that the path collides with at that component, in byte order; an empty array means no collision |
 | `error` | boolean | `true` when `path` or a name on the target is not a well-formed logical path |
 
+### `short_form.json` — the form of a short name on NTFS (§15.8)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | one component |
+| `short` | boolean | whether it has the form Windows gives the short name of a longer one, which a look on an NTFS disk must not take for a name of its own |
+
 ### `branch_path.json` — the path limit of a mergerfs branch (§15.8)
 
 | Field | Type | Meaning |
@@ -205,12 +221,25 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `outcomes` | array of objects | for each `surplus` copy, by position: `disk` and `outcome` |
 | `error` | boolean | `true` when a state or a creator is unknown, or a disk or position appears twice |
 
+### `trash_purge.json` — what a purge of the trash reaches, and why (§17, §17.4)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `now_ns` | integer | the time of the purge |
+| `older_than_ns` | integer or null | `--older-than`, in nanoseconds; null for the retention and `max_size` |
+| `max_size` | string | `trash.max_size`, a percentage (§29.5) |
+| `disks` | array of objects | `id`, and `capacity` as the catalog last recorded it, null when none was |
+| `entries` | array of objects | the trash, in any order: `disk`, `op`, `reason`, `size` (null when unknown), `deleted_ns`, `expires_ns`, and `held` for an entry that reached the trash in this run's reprise |
+| `purge` | array of objects | what goes, by operation: `op` and `why`, one of `expired`, `older-than` and `max-size` |
+| `full` | array of strings | the disks whose trash still holds more than `max_size` of their capacity once those are gone, by id in byte order |
+| `error` | boolean | `true` when a reason is unknown, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
+
 ### `op_recovery.json` — what a reprise does with an operation (§17.2)
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | string | `trash`, `restore`, `rename`, `unlink` for a purge, or `mkdir` |
-| `source`, `target` | string | `absent`, `same` or `other`, compared with `ops.file_key`, and for `mkdir` with being a folder. An `unlink` has no target, and a `mkdir` no source |
+| `kind` | string | `trash`, `restore`, `rename`, `unlink` for a purge, `mkdir`, or `rmdir` |
+| `source`, `target` | string | `absent`, `same` or `other`, compared with `ops.file_key`, and for `mkdir` with being a folder. An `unlink` or an `rmdir` has no target, and a `mkdir` no source |
 | `changed` | boolean | optional: for `trash`, whether the file is no longer what its row says |
 | `action` | string | `finish` or `undo` |
 | `remove_source`, `remove_target` | boolean | which name must go |
@@ -255,9 +284,9 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
-| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, `reachable` when it is on a disk the pass can write to, where its look reached it, and `precision_ns`, its disk's `time_precision_ns`, absent when unknown, which compares exactly (§9); `row_mode`, the mode its row says, absent when it has none, and for a changed copy `look_mode`, the mode its look found; both integers, and a mode absent is unknown. Booleans are `false` when absent |
-| `plan` | object | `mtime`, the time applied, and `from`, the changed copy that gives it, both absent when no time moved; `apply`, the copies that get it through an operation `utimens`; `mode` and `mode_from`, the same for the mode, and `chmod`, the copies that get it through an operation `chmod`; `stale`, those that go stale instead, once whatever they lack; each by position, absent when empty |
-| `error` | boolean | `true` on an unknown state, a pending copy, a disk or a position that appears twice, or a mode outside 0 to 4095 (`07777`) |
+| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, `reachable` when it is on a disk the pass can write to, where its look reached it, and `precision_ns`, its disk's `time_precision_ns`, absent when unknown, which compares exactly (§9); `row_mode`, the mode its row says, absent when it has none, and for a changed copy `look_mode`, the mode its look found; both integers, and a mode absent is unknown; `row_owner` and `look_owner` likewise, each an object of `uid` and `gid`. Booleans are `false` when absent |
+| `plan` | object | `mtime`, the time applied, and `from`, the changed copy that gives it, both absent when no time moved; `apply`, the copies that get it through an operation `utimens`; `mode` and `mode_from`, the same for the mode, and `chmod`, the copies that get it through an operation `chmod`; `owner` and `owner_from`, the same for the owner, an object of `uid` and `gid`, and `chown`, the copies that get it through an operation `chown`; `stale`, those that go stale instead, once whatever they lack; each by position, absent when empty |
+| `error` | boolean | `true` on an unknown state, a pending copy, a disk or a position that appears twice, a mode outside 0 to 4095 (`07777`), or an id outside 0 to 4294967295 |
 
 ### `guard.json` — whether the guard of a disk trips (§15.6, §29.5)
 
@@ -334,10 +363,12 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `scrub_window` | string | `integrity.window` |
 | `scrub_budget_ns` | integer | `integrity.scrub_budget`, which must be positive when `scrub_pending` |
 | `scrub_spent_ns`, `scrub_spent_opened_ns` | integer | what the scrub spent, and when the stretch of its window it spent it in began |
+| `backup_pending` | boolean | the stretch of the window that holds now, or the next one, has no catalog backup yet |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
 | `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
-| `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, and no hash to read |
+| `backup` | boolean | `true` when the catalog is to be backed up now: `backup_pending`, inside the window, and no hash to read |
+| `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, no hash to read and no backup due |
 | `scrub_opened_ns` | integer | with `scrub_pending`, inside `scrub_window`, when this stretch of it began; left out otherwise |
 | `wake_ns` | integer | when to look again: `now_ns` when something is due |
 | `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, a `rescan_every_ns` that is not positive, or a scrub budget that is not, with `scrub_pending` |
@@ -439,8 +470,8 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 | Field | Type | Meaning |
 |---|---|---|
 | `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`) |
-| `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `policy` (below) |
-| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0) |
+| `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `leaving` (`false`), for a file whose deletion is decided and waits for a trash job (`specs.md` §13.4); `policy` (below) |
+| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source |
 | `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`) |
 | `entries` | array of objects | `disk`, `path`, `kind`: `dir`, `symlink` or `ignored` |
 | `min_free` | array of strings | as in the configuration; `["0%"]` when left out |

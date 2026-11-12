@@ -25,15 +25,15 @@ type notifyOutput struct {
 // runNotify runs atoll notify test: a test alert through each channel set (specs.md §23). It needs no catalog.
 func runNotify(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, "notify: want test")
+		return usage(stderr, T("notify: want test"))
 	}
 	if args[0] != "test" {
-		return usage(stderr, fmt.Sprintf("notify: unknown command %q", args[0]))
+		return usage(stderr, fmt.Sprintf(T("notify: unknown command %q"), args[0]))
 	}
 	asJSON := false
 	for _, a := range args[1:] {
 		if a != "--json" {
-			return usage(stderr, fmt.Sprintf("notify test: unknown argument %q", a))
+			return usage(stderr, fmt.Sprintf(T("notify test: unknown argument %q"), a))
 		}
 		if err := setFlag(&asJSON, a); err != nil {
 			return usage(stderr, "notify test: "+err.Error())
@@ -45,11 +45,11 @@ func runNotify(configPath string, args []string, stdout, stderr io.Writer) int {
 	}
 	channels := alerts.Channels(c)
 	if len(channels) == 0 {
-		return failure(stderr, errors.New("notify test: no channel is set: alerts.ntfy is empty"))
+		return failure(stderr, errors.New(T("notify test: no channel is set: alerts.ntfy is empty")))
 	}
 	m := &alerts.Message{
 		Key: "test", Title: "Atoll: a test alert", Priority: 3,
-		Body: fmt.Sprintf("atoll notify test, from the pool %s: its alerts reach you here.", c.PoolID),
+		Body: fmt.Sprintf(T("atoll notify test, from the pool %s: its alerts reach you here."), c.PoolID),
 	}
 	out := notifyOutput{Channels: make([]notifyChannel, 0, len(channels))}
 	code := exitOK
@@ -59,9 +59,9 @@ func runNotify(configPath string, args []string, stdout, stderr io.Writer) int {
 		if err := ch.Send(context.Background(), m); err != nil {
 			line.Sent, line.Error = false, err.Error()
 			code = exitPartial
-			fmt.Fprintf(&text, "%s: not sent: %s\n", line.Channel, line.Error)
+			fmt.Fprintf(&text, T("%s: not sent: %s\n"), line.Channel, line.Error)
 		} else {
-			fmt.Fprintf(&text, "%s: sent\n", line.Channel)
+			fmt.Fprintf(&text, T("%s: sent\n"), line.Channel)
 		}
 		out.Channels = append(out.Channels, line)
 	}

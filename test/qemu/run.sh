@@ -72,6 +72,8 @@ mkdir -p /opt/atoll/repo/test/loopdev
 args=(-test.count="${COUNT:-1}" -test.timeout="${TIMEOUT:-3000s}")
 [ -n "${RUN:-}" ] && args+=(-test.run="$RUN")
 [ "${VERBOSE:-0}" = 1 ] && args+=(-test.v)
+# The soak of the daemon that runs for good (test/loopdev/soak_test.go): SOAK=30m, SOAK_FILES=2000.
+[ -n "${SOAK:-}" ] && args+=(-atoll.soak="$SOAK" -atoll.soak-files="${SOAK_FILES:-2000}")
 printf '%s\n' "${args[@]}" >/opt/atoll/args
 
 initramfs() {

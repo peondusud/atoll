@@ -10,6 +10,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 )
 
@@ -39,25 +40,25 @@ func parseInit(args []string) (initArgs, error) {
 		case "--catalog":
 			target = &out.catalog
 		default:
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		}
 		if !hasValue {
 			i++
 			if i == len(args) {
-				return out, fmt.Errorf("%s needs a value", name)
+				return out, fmt.Errorf(T("%s needs a value"), name)
 			}
 			value = args[i]
 		}
 		if *target != nil {
-			return out, fmt.Errorf("%s comes twice", name)
+			return out, fmt.Errorf(T("%s comes twice"), name)
 		}
 		*target = &value
 	}
 	if (out.poolID == nil) != (out.viewMount == nil) {
-		return out, errors.New("--pool-id and --view-mount come together")
+		return out, errors.New(T("--pool-id and --view-mount come together"))
 	}
 	if out.catalog != nil && out.poolID == nil {
-		return out, errors.New("--catalog needs --pool-id and --view-mount")
+		return out, errors.New(T("--catalog needs --pool-id and --view-mount"))
 	}
 	return out, nil
 }
@@ -113,14 +114,14 @@ func runInit(configPath string, args []string, stdout, stderr io.Writer) int {
 			return usage(stderr, "init: "+err.Error())
 		}
 	}
-	out, err := initialize(configPath, text)
+	out, err := initialize(configPath, text, stderr)
 	if err != nil {
 		return failure(stderr, err)
 	}
 	if parsed.asJSON {
 		err = writeJSON(stdout, out)
 	} else {
-		err = writeText(stdout, fmt.Sprintf("configuration: %s\ncatalog: %s\n", out.Configuration, out.Catalog))
+		err = writeText(stdout, fmt.Sprintf(T("configuration: %s\ncatalog: %s\n"), out.Configuration, out.Catalog))
 	}
 	if err != nil {
 		return failure(stderr, err)
@@ -129,7 +130,7 @@ func runInit(configPath string, args []string, stdout, stderr io.Writer) int {
 }
 
 // initialize creates what is missing. text is the configuration to write, or empty.
-func initialize(configPath, text string) (initOutput, error) {
+func initialize(configPath, text string, stderr io.Writer) (initOutput, error) {
 	out := initOutput{Configuration: "kept", Catalog: "kept"}
 	exists, err := fsx.Exists(configPath)
 	if err != nil {
@@ -137,9 +138,9 @@ func initialize(configPath, text string) (initOutput, error) {
 	}
 	switch {
 	case exists && text != "":
-		return out, fmt.Errorf("the configuration %q already exists: --pool-id, --view-mount and --catalog are for a new one", configPath)
+		return out, fmt.Errorf(T("the configuration %q already exists: --pool-id, --view-mount and --catalog are for a new one"), configPath)
 	case !exists && text == "":
-		return out, fmt.Errorf("no configuration at %q: give --pool-id and --view-mount to write one", configPath)
+		return out, fmt.Errorf(T("no configuration at %q: give --pool-id and --view-mount to write one"), configPath)
 	case !exists:
 		if err := fsx.MkdirAll(path.Dir(configPath)); err != nil {
 			return out, fmt.Errorf("configuration: %w", err)
@@ -159,8 +160,49 @@ func initialize(configPath, text string) (initOutput, error) {
 	}
 	if created {
 		out.Catalog = "created"
+		if err := startPastTheDisks(c, stderr); err != nil {
+			return out, err
+		}
 	}
 	return out, nil
+}
+
+// startPastTheDisks starts a new catalog's operations past the highest id the disks' trash and tmp/ name, as catalog
+// rebuild does, so that none meets an old one there, as when a catalog went missing (specs.md §9, §25).
+func startPastTheDisks(c *config.Config, stderr io.Writer) (err error) {
+	if len(c.Disks) == 0 {
+		return nil
+	}
+	m, err := disks.NewMachine()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	var after int64
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		if d.State == config.DiskFailed {
+			continue
+		}
+		highest, err := highestOpID(m, d)
+		if err != nil {
+			report(stderr, fmt.Sprintf(T("warning: disk %s: the operations its trash and tmp/ name are not known (%v): a new one may meet an old one there, which costs it one io-error"), d.ID, err))
+			continue
+		}
+		after = max(after, highest)
+	}
+	if after == 0 {
+		return nil
+	}
+	ctx := context.Background()
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	if err := catalog.StartOpsAfter(ctx, db, after); err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	return nil
 }
 
 func catalogPath(c *config.Config) string {

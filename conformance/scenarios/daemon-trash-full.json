@@ -1,0 +1,468 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.4, \u00a717.1",
+  "description": "A disk with no room for a move to its trash takes no more in that run: of three copies to send there, one is tried and undone, the others wait in the queue untried. Nothing is copied back to the disk the files were deleted from while their deletion waits, and all three go once room comes back.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "a"
+        },
+        {
+          "path": "media/b",
+          "text": "b"
+        },
+        {
+          "path": "media/c",
+          "text": "c"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "a"
+        },
+        {
+          "path": "media/b",
+          "text": "b"
+        },
+        {
+          "path": "media/c",
+          "text": "c"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/b"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/c"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 3,
+        "next_due": "2030-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "full": [
+        "t2"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "deleted"
+          },
+          {
+            "path": "b",
+            "decision": "deleted"
+          },
+          {
+            "path": "c",
+            "decision": "deleted"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "a",
+            "reason": "deleted",
+            "outcome": "io-error"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "a"
+        },
+        {
+          "path": "media/b",
+          "text": "b"
+        },
+        {
+          "path": "media/c",
+          "text": "c"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          "t2",
+          "trash",
+          "undone"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, state FROM jobs ORDER BY id",
+      "rows": [
+        [
+          "trash",
+          "queued"
+        ],
+        [
+          "trash",
+          "queued"
+        ],
+        [
+          "trash",
+          "queued"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, c.state, CAST(f.lpath AS TEXT), f.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "t2",
+          "ok",
+          "a",
+          "degraded"
+        ],
+        [
+          "t2",
+          "ok",
+          "b",
+          "degraded"
+        ],
+        [
+          "t2",
+          "ok",
+          "c",
+          "degraded"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "full": [
+        "t2"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "a",
+            "reason": "deleted",
+            "outcome": "io-error"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, c.state, CAST(f.lpath AS TEXT), f.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "t2",
+          "ok",
+          "a",
+          "degraded"
+        ],
+        [
+          "t2",
+          "ok",
+          "b",
+          "degraded"
+        ],
+        [
+          "t2",
+          "ok",
+          "c",
+          "degraded"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "a",
+            "reason": "deleted",
+            "outcome": "trashed"
+          },
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "b",
+            "reason": "deleted",
+            "outcome": "trashed"
+          },
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "c",
+            "reason": "deleted",
+            "outcome": "trashed"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/3/a",
+          "text": "a"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/4/b",
+          "text": "b"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/5/c",
+          "text": "c"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          "t2",
+          "trash",
+          "undone"
+        ],
+        [
+          "t2",
+          "trash",
+          "undone"
+        ],
+        [
+          "t2",
+          "trash",
+          "done"
+        ],
+        [
+          "t2",
+          "trash",
+          "done"
+        ],
+        [
+          "t2",
+          "trash",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM files",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

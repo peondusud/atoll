@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §15.8",
+  "description": "The form Windows gives the short name of a longer one: at most 8 characters before a single dot, the last of them a tilde and digits after at least one other, and at most 3 after the dot, every one of them an ASCII letter of either case, a digit or one of ! # $ % & ' ( ) - @ ^ _ ` { } ~. On NTFS such a name may be the short name of another entry, which every driver answers for and none lists.",
+  "cases": [
+    { "name": "FILMNA~1.MKV", "short": true },
+    { "name": "filmna~1.mkv", "short": true, "note": "ntfs3 answers a short name whatever its case" },
+    { "name": "MEDIAL~1", "short": true, "note": "a folder's: no dot" },
+    { "name": "FILM~123.MKV", "short": true, "note": "more digits, fewer letters" },
+    { "name": "A~1", "short": true },
+    { "name": "F-_(@)~9.A{B", "short": true, "note": "the punctuation a short name may hold, 8 and 3 characters" },
+    { "name": "~1", "short": false, "note": "nothing before the tilde" },
+    { "name": "FILMNAME.MKV", "short": false, "note": "no tilde" },
+    { "name": "FILMNA~.MKV", "short": false, "note": "no digit after the tilde" },
+    { "name": "FILM~1A.MKV", "short": false, "note": "the digits end the part before the dot" },
+    { "name": "FILMNAM~1.MKV", "short": false, "note": "9 characters before the dot" },
+    { "name": "FILMNA~1.MKVX", "short": false, "note": "4 after it" },
+    { "name": "FILMNA~1.", "short": false, "note": "a dot with nothing after it" },
+    { "name": "FILMNA~1.TAR.GZ", "short": false, "note": "two dots" },
+    { "name": ".~1", "short": false, "note": "nothing before the dot" },
+    { "name": "FIL MA~1.MKV", "short": false, "note": "a space" },
+    { "name": "FILM+A~1.MKV", "short": false, "note": "+ is no character of a short name" },
+    { "name": "ÉTÉ~1.MKV", "short": false, "note": "a letter outside ASCII" },
+    { "name": "Film Name.mkv", "short": false },
+    { "name": "S01E01.mkv", "short": false, "note": "an 8.3 name of its own: NTFS compares it without case, as any other" },
+    { "name": "", "short": false }
+  ]
+}

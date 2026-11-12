@@ -42,18 +42,18 @@ func parseScan(args []string) (scanArgs, error) {
 		switch {
 		case isDisk:
 		case a != "--disk":
-			return out, fmt.Errorf("unknown argument %q", a)
+			return out, fmt.Errorf(T("unknown argument %q"), a)
 		case i+1 == len(args):
-			return out, errors.New("--disk needs an id")
+			return out, errors.New(T("--disk needs an id"))
 		default:
 			i++
 			value = args[i]
 		}
 		if value == "" {
-			return out, errors.New("--disk needs an id")
+			return out, errors.New(T("--disk needs an id"))
 		}
 		if diskGiven {
-			return out, errors.New("--disk comes twice")
+			return out, errors.New(T("--disk comes twice"))
 		}
 		diskGiven = true
 		out.opts.Disk = value
@@ -137,7 +137,7 @@ func runScan(configPath string, args []string, stdout, stderr io.Writer) int {
 		return failure(stderr, err)
 	}
 	if parsed.opts.Disk != "" && !hasDisk(c, parsed.opts.Disk) {
-		return failure(stderr, fmt.Errorf("scan: no disk %q in the configuration", parsed.opts.Disk))
+		return failure(stderr, fmt.Errorf(T("scan: no disk %q in the configuration"), parsed.opts.Disk))
 	}
 	outcome, err := scan(c, parsed.opts, stderr)
 	if err != nil {
@@ -224,13 +224,13 @@ func printScan(w io.Writer, out scanOutput) error {
 		}
 		text.WriteString("\n")
 		if d.Walked {
-			fmt.Fprintf(&text, "  %d files, %d bytes, %d folders, %d symlinks, %d ignored; %d new, %d known, %d hashed\n",
+			fmt.Fprintf(&text, T("  %d files, %d bytes, %d folders, %d symlinks, %d ignored; %d new, %d known, %d hashed\n"),
 				d.Files, d.Bytes, d.Folders, d.Symlinks, d.Ignored, d.New, d.Known, d.Hashed)
 		}
 		printPaths(&text, "  changed", d.Changed)
 		for j := range d.Moved {
 			m := &d.Moved[j]
-			fmt.Fprintf(&text, "  moved: %s -> %s\n", shownB64(m.Path, m.PathB64), shownB64(m.To, m.ToB64))
+			fmt.Fprintf(&text, T("  moved: %s -> %s\n"), shownB64(m.Path, m.PathB64), shownB64(m.To, m.ToB64))
 		}
 		printPaths(&text, "  absent", d.Absent)
 		printPaths(&text, "  path taken", d.PathTaken)

@@ -123,9 +123,11 @@
             "disk": "t3",
             "op": 1,
             "size": 1024,
+            "why": "older-than",
             "outcome": "purged"
           }
-        ]
+        ],
+        "full": []
       }
     },
     {

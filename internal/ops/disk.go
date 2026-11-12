@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -348,6 +350,34 @@ func (d *Disk) stat(path []string) (fsx.Stat, bool, error) {
 	return st, true, nil
 }
 
+// isAlias says, on NTFS, whether a name is the short name of another entry of a folder: one the folder does not list,
+// for which a look finds an entry, at that name or in capitals. No driver lists a short name; each finds the entry it
+// names in capitals, ntfs3 in any case, and ntfs3 refuses to create it, while ntfs-3g makes a name in small letters
+// beside it, one Windows would read as the same (docs/research/ntfs-driver.md). So no existence there is decided by a
+// look alone, and the looks before a copy or a rename refuse such a name, before anything is written. Only a name of
+// the short form is looked for, as reading the folder costs (specs.md §15.8).
+func (d *Disk) isAlias(dir fsx.Dir, name string) (bool, error) {
+	if d.config.FS != names.NTFS || !names.ShortForm(name) {
+		return false, nil
+	}
+	listed, err := dir.Names()
+	if err != nil {
+		return false, classify(err)
+	}
+	if slices.Contains(listed, name) {
+		return false, nil
+	}
+	for _, n := range []string{name, strings.ToUpper(name)} {
+		switch _, err := dir.Stat(n); {
+		case err == nil:
+			return true, nil
+		case !fsx.IsAbsent(err):
+			return false, classify(err)
+		}
+	}
+	return false, nil
+}
+
 // StatRoot looks at a logical path on this disk.
 func (d *Disk) StatRoot(logical string) (fsx.Stat, bool, error) {
 	return d.stat(d.rootPlace(logical))
@@ -363,6 +393,11 @@ func (d *Disk) LookAt(logical string) (taken bool, missing []string, err error) 
 	}
 	defer dir.close()
 	for i, name := range parts {
+		if alias, err := d.isAlias(dir.Dir, name); err != nil {
+			return false, nil, err
+		} else if alias {
+			return false, nil, fmt.Errorf("%w: %q is the short name of another entry", ErrNameRefused, name)
+		}
 		st, err := dir.Stat(name)
 		switch {
 		case fsx.IsAbsent(err):
@@ -761,6 +796,90 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 	return moved, &seen, nil
 }
 
+// ExchangeFiles swaps the names of two copies in one step, a holding the first copy and the target of b the second
+// one: renameat2 with RENAME_EXCHANGE (specs.md §15.12). Each name must hold its copy as its row says right before;
+// then each file is synced at its new name and its folder synced, and both folders get their times back, as for a
+// rename. A driver that refuses the swap moved nothing: ErrPathTaken, as the names stay taken.
+func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, movedB *Moved, seenA, seenB *fsx.Stat, err error) {
+	if err := d.Verify(); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	placeA, placeB := d.rootPlace(a.Path), d.rootPlace(b.Path)
+	dirA, err := d.open(placeA[:len(placeA)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return nil, nil, nil, nil, classify(err)
+	}
+	defer dirA.close()
+	dirB, err := d.open(placeB[:len(placeB)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return nil, nil, nil, nil, classify(err)
+	}
+	defer dirB.close()
+	nameA, nameB := placeA[len(placeA)-1], placeB[len(placeB)-1]
+	lookA, err := holds(dirA.Dir, nameA, sameFileAs(rowA))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	lookB, err := holds(dirB.Dir, nameB, sameFileAs(rowB))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	timeA, err := dirA.Info()
+	if err != nil {
+		return nil, nil, nil, nil, classify(err)
+	}
+	timeB, err := dirB.Info()
+	if err != nil {
+		return nil, nil, nil, nil, classify(err)
+	}
+	switch err := dirA.Exchange(nameA, dirB.Dir, nameB); {
+	case err == nil:
+	case fsx.IsAbsent(err):
+		return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrGone, err)
+	case fsx.IsFlagRefused(err):
+		return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrPathTaken, err)
+	default:
+		return nil, nil, nil, nil, classify(err)
+	}
+	if _, err := holds(dirB.Dir, nameB, byKey(a.FileKey)); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if _, err := holds(dirA.Dir, nameA, byKey(b.FileKey)); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	d.machine.Checkpoint("moved")
+	if err := syncEntry(dirB.Dir, nameB); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := syncEntry(dirA.Dir, nameA); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := dirB.Sync(); err != nil {
+		return nil, nil, nil, nil, lost(err)
+	}
+	d.machine.Checkpoint("target-synced")
+	if err := d.restoreBoth(dirA.Dir, dirB.Dir, timeA.Mtime, timeB.Mtime); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := dirA.Sync(); err != nil {
+		return nil, nil, nil, nil, lost(err)
+	}
+	d.machine.Checkpoint("source-synced")
+	if movedA, err = d.movedFrom(dirB.Dir, nameB, &lookA); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if movedB, err = d.movedFrom(dirA.Dir, nameA, &lookB); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return movedA, movedB, &lookA, &lookB, nil
+}
+
 // restoreBoth gives both folders of a move their times back. They may be one folder, and then the time
 // it had before is the one to give.
 func (d *Disk) restoreBoth(source, target fsx.Dir, sourceTime, targetTime fsx.Time) error {
@@ -813,7 +932,7 @@ func (d *Disk) RenameFolder(op *Op) error {
 	if err != nil {
 		return classify(err)
 	}
-	if err := moveFolderNoReplace(source.Dir, name, target.Dir, newName); err != nil {
+	if err := d.moveFolderNoReplace(source.Dir, name, target.Dir, newName); err != nil {
 		return err
 	}
 	if _, err := holdsFolder(target.Dir, newName, op.FileKey); err != nil {
@@ -850,7 +969,7 @@ func holdsFolder(dir fsx.Dir, name, fileKey string) (fsx.Stat, error) {
 	return st, nil
 }
 
-func moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string) error {
+func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string) error {
 	err := source.Rename(name, target, newName)
 	switch {
 	case err == nil:

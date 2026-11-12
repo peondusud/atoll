@@ -30,6 +30,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `format_version` | integer | `1`. The runner refuses any other value |
 | `spec`, `description` | string | for readers; both are required in this folder |
 | `clock` | string | the time of the conformance build, in RFC 3339 with an offset. Left out, it is `2026-01-01T00:00:00Z` |
+| `root` | boolean | `true` for a scenario that gives files away, which only root may: run as anyone else, the runner skips it and says so, and never counts it as a success |
 | `disks` | array of objects | `id`, `uuid`, `fs`, `capacity` in bytes, and `tree`, what the disk holds at the start. A disk is the folder `${SANDBOX}/disks/<id>`. Optional: `renameat2`, `false` for a disk that lacks `RENAME_NOREPLACE`, and `refuses`, the names it refuses as the target of a move or a link; for `atoll disk add`, `device`, the name of the whole disk it stands for, its `id` when left out, so that two disks can share one, and `immutable`, `true` when the folder under its mount point has the immutable flag |
 | `config` | string | the text of the configuration, written to `${SANDBOX}/atoll.toml`, which each `atoll` step gets through `--config`, before its `args`. Left out, no step gets it |
 | `steps` | array of objects | what happens, in order: below |
@@ -40,7 +41,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 
 | `do` | Fields | Meaning |
 |---|---|---|
-| `atoll` | `args`, `exit`, `stdout_json`, `crash_at` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input. `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, for this run only |
+| `atoll` | `args`, `exit`, `stdout_json`, `crash_at`, `full` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input. `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, and `full` the ids of disks that have no room left, for this run only |
 | `write` | `disk`, a path, `text` or `size`, `mtime_ns` | writes a file and any folders above it, replacing the content of what is there in place |
 | `mkdir` | `disk`, a path | creates a folder and its parents |
 | `rename` | `disk`, a path, `to` or `to_b64` | renames, replacing what is at the target as `rename(2)` does |
@@ -49,6 +50,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `symlink` | `disk`, a path, `target` | creates a symbolic link |
 | `touch` | `disk`, a path, `mtime_ns` | sets a modification time |
 | `chmod` | `disk`, a path, `mode` | sets a file's mode, written in octal digits with a leading 0, as `"0640"`: the permission bits, setuid, setgid and sticky |
+| `chown` | `disk`, a path, `uid`, `gid` | gives a file an owner, both ids from 0 to 4294967294: only in a scenario with `root` |
 | `advance` | `by` | moves the clock forward, by a duration of `specs.md` §29.5 |
 | `tick` | | waits until the real clock behind a change time has moved, which it may not do within a clock tick (`specs.md` §17.1). `advance` moves another clock |
 | `unmount` | `disk` | a failed mount: the disk's folder is left empty and leaves the control file, and its tree is set aside |
@@ -64,7 +66,7 @@ A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the to
 
 **`expect_tree`** covers the whole disk. An entry has a path and a `kind`: `file`, when left out, `dir` or `symlink`.
 
-- A file has its content: `text`, a string, or `size`, which means that many bytes of `i mod 251`, the pattern of the official BLAKE3 test vectors. `mtime_ns` and `mode`, written as for `chmod`, are compared when given. In a disk's `tree`, they are set.
+- A file has its content: `text`, a string, or `size`, which means that many bytes of `i mod 251`, the pattern of the official BLAKE3 test vectors. `mtime_ns`, `mode`, written as for `chmod`, and `uid` and `gid`, both or neither, as for `chown`, are compared when given. In a disk's `tree`, they are set.
 - A symlink has its `target`.
 - The folders on the way to a listed entry need no entry, and an empty folder must have one.
 - A component that is exactly `*` matches any one name, for an operation's id in `Atoll/trash/<date>/<op-id>/…`.
@@ -81,7 +83,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
 
 ## The control file
 
-`ATOLL_CONFORMANCE` names `${SANDBOX}/conformance.json`, which only a conformance build reads (`specs.md` §29.4). The runner rewrites it on `advance`, `unmount` and `mount`, and around an `atoll` step with `crash_at`.
+`ATOLL_CONFORMANCE` names `${SANDBOX}/conformance.json`, which only a conformance build reads (`specs.md` §29.4). The runner rewrites it on `advance`, `unmount` and `mount`, and around an `atoll` step with `crash_at` or `full`.
 
 ```json
 {
@@ -100,7 +102,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
 |---|---|
 | `decided` | once a pass has committed what it decided about a page of files, before anything runs on a disk (`specs.md` §15.12) |
 | `modified` | once a pass has committed a modification of one file, before anything runs on a disk (`specs.md` §15.4) |
-| `journaled` | once a `trash`, `restore`, `rename`, `create`, `chmod`, `utimens` or purge operation is committed `planned`, before anything is written to a disk |
+| `journaled` | once a `trash`, `restore`, `rename`, `create`, `chown`, `chmod`, `utimens` or purge operation is committed `planned`, before anything is written to a disk |
 | `copied` | once a `create` has copied the whole source into its `.part` and recorded every chunk hash, before the source is looked at again and the times are restored |
 | `verified` | once a `create` has re-read its `.part` against the chunk hashes and recorded the whole-file hash, before the target is resolved |
 | `trash-folders` | once the folders of a move to the trash are made and synced, before the copy is looked at again and moved. A restore and a purge have none |
@@ -109,10 +111,12 @@ After each `atoll` step, on each disk (`specs.md` §6):
 | `moved` | once the name has moved, a file's or a folder's, or the file of a purge is gone, before any later `fsync` of what holds it. With `renameat2` at `false`, `unlink` has run too, so the source's name is gone, which is not yet synced, and the target folder was synced once already, between `link` and `unlink` |
 | `times-set` | once a `utimens` has set the time on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `mode-set` | once a `chmod` has set the mode on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
+| `owner-set` | once a `chown` has set the owner on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
+| `rmdir-journaled`, `rmdir-removed`, `rmdir-synced` | once the removal of a folder Atoll made is committed `planned`; once the folder is gone, before its parent's time is restored and the parent synced; and after that sync, before the operation is committed `done` (`specs.md` §17.5) |
 | `target-synced` | after `fsync` of the target folder. A purge has none |
 | `source-synced` | after every `fsync`, before the operation is committed `done`, and so before the folders left empty go. For a `create`, the source is the folder of its `.part` |
 
-A disk's entry also holds what the scenario says of it, when it says so: `renameat2`, at `false`, makes `RENAME_NOREPLACE` give `EINVAL` on that disk; and with a name in `refuses`, that, a plain `rename`, `link` and `mkdir` give `EINVAL` for a target of that name, which is compared with the last component only.
+A disk's entry also holds what the scenario says of it, when it says so: `renameat2`, at `false`, makes `RENAME_NOREPLACE` give `EINVAL` on that disk; with a name in `refuses`, that, a plain `rename`, `link` and `mkdir` give `EINVAL` for a target of that name, which is compared with the last component only; and `full`, at `true` for a run whose step names the disk in `full`, makes `mkdir` and the creation of a file give `ENOSPC` there, as a disk with no inode left does.
 
 A disk of the configuration is found here by its `mount`, equal to a `path`, and never by its `id`. To the mount check of `specs.md` §10, a `path` listed here has an entry that names it, with the root `/`, the type `fs` (`ntfs3` for `ntfs`), the mount options `rw` and the superblock options `rw`, plus `iocharset=utf8` on `ntfs3`. Its device answers, and its head holds the magic of `fs` and the identifier `uuid`. Any other folder has no such entry, and fails question 2. Question 10 and `ignore-case` look at the real folder, and the others of the second table find nothing to report.
 

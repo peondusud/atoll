@@ -29,6 +29,45 @@ func TestDurationVectors(t *testing.T) {
 	}
 }
 
+func TestListenVectors(t *testing.T) {
+	type vector struct {
+		Input   string  `json:"input"`
+		Address *string `json:"address"`
+		Port    *uint16 `json:"port"`
+		Error   bool    `json:"error"`
+		Note    string  `json:"note"`
+	}
+	for _, v := range vectors.Load[vector](t, "listen.json") {
+		got, err := ParseListen(v.Input)
+		switch {
+		case v.Error == (v.Address != nil) || (v.Address == nil) != (v.Port == nil):
+			t.Errorf("vector %q: want an address and a port, or an error", v.Input)
+		case v.Error && err == nil:
+			t.Errorf("ParseListen(%q) = %v, want an error (%s)", v.Input, got, v.Note)
+		case !v.Error && err != nil:
+			t.Errorf("ParseListen(%q): %v", v.Input, err)
+		case !v.Error && (got.Address() != *v.Address || got.Port != *v.Port):
+			t.Errorf("ParseListen(%q) = %v, want %s port %d", v.Input, got, *v.Address, *v.Port)
+		}
+	}
+}
+
+// A duration is written in its largest whole unit, and read back as it was (specs.md §29.5).
+func TestFormatDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		0: "0s", time.Second: "1s", 90 * time.Second: "90s", 10 * time.Minute: "10m", time.Hour: "1h", 25 * time.Hour: "25h",
+		24 * time.Hour: "1d", 30 * 24 * time.Hour: "30d", 14 * 24 * time.Hour: "14d", 7 * 24 * time.Hour: "7d", 1500 * time.Millisecond: "1500000000ns",
+	} {
+		got := FormatDuration(d)
+		if got != want {
+			t.Errorf("%v: %q, want %q", d, got, want)
+		}
+		if back, err := ParseDuration(got); want[len(want)-2:] != "ns" && (err != nil || back != d) {
+			t.Errorf("%q read back as %v, %v", got, back, err)
+		}
+	}
+}
+
 func TestSizeVectors(t *testing.T) {
 	type vector struct {
 		Input string `json:"input"`

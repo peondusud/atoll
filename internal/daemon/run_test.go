@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -276,6 +277,117 @@ func TestPassSink(t *testing.T) {
 	}
 	if s.operations != 3 || s.decisions != 1 || s.refused.Count != 2 || !slices.Equal(s.refused.First, []string{"b?", "c?"}) {
 		t.Errorf("%+v", s)
+	}
+}
+
+// Inside maintenance.window, after its first pass, the daemon backs the catalog up, once for that stretch of the
+// window (specs.md §9, §15.13).
+func TestRunBacksUp(t *testing.T) {
+	window := time.Now().Add(-time.Hour).Format("15:04") + "-" + time.Now().Add(time.Hour).Format("15:04")
+	c := bench(t, "[maintenance]\nwindow = \""+window+"\"\n")
+	file, _ := c.Effective()["catalog"].(string)
+	backups := filepath.Join(filepath.Dir(file), catalog.BackupFolder)
+	machine, err := disks.NewMachine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	reload := make(chan struct{})
+	passes := make(chan struct{}, 8)
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{Config: c, Machine: machine, Apply: true, Log: slog.New(slog.DiscardHandler), CheckEvery: time.Hour,
+			Reload: reload, Load: func() (*config.Config, error) { return c, nil },
+			OnPass: func([]string, *jobs.Outcome) { passes <- struct{}{} }})
+	}()
+	count := func() int {
+		entries, _ := os.ReadDir(backups)
+		return len(entries)
+	}
+	<-passes
+	for deadline := time.Now().Add(10 * time.Second); count() == 0 && time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+	}
+	// Another pass in the same stretch makes no other backup.
+	time.Sleep(1100 * time.Millisecond)
+	reload <- struct{}{}
+	<-passes
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := count(); n != 1 {
+		t.Errorf("%d backups", n)
+	}
+}
+
+// syncBuffer is a log the loop writes while a test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
+}
+
+// After a pass, the daemon purges what is due in the trash, as atoll trash purge --yes does: an entry on a disk it
+// cannot write stays, and its log says so. A dry run purges nothing (specs.md §15.13, §17).
+func TestRunPurgesTheTrash(t *testing.T) {
+	for _, apply := range []bool{true, false} {
+		c := bench(t, "")
+		file, _ := c.Effective()["catalog"].(string)
+		db, err := catalog.OpenPool(t.Context(), file, "p")
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := db.ExecContext(t.Context(), "INSERT INTO ops(disk_id, kind, path, path2, file_key, started_ns, state) VALUES ('t1', 'trash', x'61', x'62', '1:2', 0, 'done')")
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, _ := res.LastInsertId()
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, reason, deleted_ns, expires_ns)
+			VALUES (x'61', 't1', x'62', ?, 3, 'deleted', 0, 0)`, op); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		machine, err := disks.NewMachine()
+		if err != nil {
+			t.Fatal(err)
+		}
+		log := &syncBuffer{}
+		ctx, cancel := context.WithCancel(t.Context())
+		passes := make(chan struct{}, 8)
+		done := make(chan error, 1)
+		go func() {
+			done <- Run(ctx, Options{Config: c, Machine: machine, Apply: apply, Log: slog.New(slog.NewTextHandler(log, nil)), CheckEvery: time.Hour,
+				OnPass: func([]string, *jobs.Outcome) { passes <- struct{}{} }})
+		}()
+		select {
+		case <-passes:
+		case <-time.After(10 * time.Second):
+			t.Fatal("no pass")
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		said := log.String()
+		purged := strings.Contains(said, `msg="the trash was purged" entries=0 bytes=0 stayed=1 full=[]`)
+		if purged != apply || strings.Contains(said, "the trash could not") || strings.Contains(said, "purging the trash failed") {
+			t.Errorf("apply %v:\n%s", apply, said)
+		}
 	}
 }
 

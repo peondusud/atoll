@@ -222,6 +222,10 @@ func checkFormat(format string, v any) error {
 		if text != "" {
 			err = checkAbsolutePath(text)
 		}
+	case "atoll-optional-listen":
+		if text != "" {
+			_, err = value.ParseListen(text)
+		}
 	default:
 		err = fmt.Errorf("configuration schema: unknown format %s", format)
 	}

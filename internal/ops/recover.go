@@ -81,6 +81,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverUnlink(ctx, db, op, nowNS)
 	case catalog.OpMkdir:
 		return d.recoverMkdir(ctx, db, op, nowNS)
+	case catalog.OpRmdir:
+		return d.recoverRmdir(ctx, db, op, nowNS)
 	case catalog.OpRename:
 		return d.recoverRename(ctx, db, op, nowNS, out)
 	case catalog.OpCreate:
@@ -89,6 +91,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverUtimens(ctx, db, op, nowNS)
 	case catalog.OpChmod:
 		return d.recoverChmod(ctx, db, op, nowNS)
+	case catalog.OpChown:
+		return d.recoverChown(ctx, db, op, nowNS)
 	default:
 		return fmt.Errorf("reprise: operation %d: no reprise for %q", op.ID, op.Kind)
 	}
@@ -123,7 +127,7 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	if err != nil {
 		return err
 	}
-	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path)
+	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
@@ -291,6 +295,10 @@ func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 			}
 		case inTmp == SeenSame:
 			return d.DropPart(op.Path2)
+		case op.FileKey == "" && inTmp != SeenAbsent:
+			// A part made before its inode could be recorded: its name, of this operation's id, is this operation's
+			// alone, as no id comes back (specs.md §17).
+			return d.DropPart(op.Path2)
 		}
 		return nil
 	}
@@ -309,7 +317,20 @@ func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if err != nil {
 		return fmt.Errorf("reprise: %w", err)
 	}
-	if err := catalog.FinishCreate(ctx, db, op, job, NewCopyOf(&found), nowNS); err != nil {
+	// A copy of a trash entry to another disk is recorded as a restored copy, the user's, never as a replica of what
+	// the path holds now (specs.md §17.4).
+	restore := false
+	if job == nil {
+		if restore, err = catalog.IsRestoreTo(ctx, db, op.ID); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+	}
+	if restore {
+		err = catalog.FinishRestoreTo(ctx, db, op, nowNS, NewCopyOf(&found), linksOf(&st))
+	} else {
+		err = catalog.FinishCreate(ctx, db, op, job, NewCopyOf(&found), nowNS)
+	}
+	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
 	out.Finished = true
@@ -324,7 +345,7 @@ func (d *Disk) recoverRename(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if err := d.syncWay(dst); err != nil {
 		return err
 	}
-	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path)
+	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
@@ -618,6 +639,7 @@ func (d *Disk) FinishMkdir(ctx context.Context, db *sql.DB, op *Op, st *fsx.Stat
 func NewCopyOf(f *watch.FoundFile) *catalog.NewCopy {
 	return &catalog.NewCopy{
 		Path: f.Path, Size: f.Size, MtimeNS: f.MtimeNS, CtimeNS: f.CtimeNS, BtimeNS: f.BtimeNS, FileKey: f.FileKey, Nlink: f.Nlink, Mode: f.Mode,
+		UID: f.UID, GID: f.GID,
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -55,6 +56,8 @@ type eventData struct {
 	Source  string `json:"source,omitempty"`
 	MtimeNS *int64 `json:"mtime_ns,omitempty"`
 	Mode    *int64 `json:"mode,omitempty"`
+	UID     *int64 `json:"uid,omitempty"`
+	GID     *int64 `json:"gid,omitempty"`
 }
 
 // writeEvent writes an event, in the transaction of the operation it speaks of, so before it runs.
@@ -175,10 +178,12 @@ const (
 		SELECT file_id FROM copies WHERE disk_id = ?1 AND old_lpath = ?2
 		UNION ALL
 		SELECT o.file_id FROM files g JOIN copies o ON o.file_id = g.id WHERE g.lpath = ?2 AND o.disk_id = ?1 AND o.old_lpath IS NULL)`
+	// Two rows say they sit at one place only for a moment, as when an exchange of two names is finished one rename
+	// at a time: the one with the operation's inode is the one meant.
 	copyOfSQL = `
-		SELECT f.id, f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key, c.mode
+		SELECT f.id, f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key, c.mode, c.uid, c.gid
 		FROM copies c JOIN files f ON f.id = c.file_id
-		WHERE c.disk_id = ?1 AND ` + copyAtPlace
+		WHERE c.disk_id = ?1 AND ` + copyAtPlace + ` ORDER BY c.file_key IS ?3 DESC LIMIT 1`
 	finishCopySQL = `
 		SELECT c.file_id FROM copies c WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
 	renameRowSQL = `
@@ -188,6 +193,8 @@ const (
 		UPDATE copies AS c SET mtime_ns = ?4, ctime_ns = ?5 WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
 	finishChmodSQL = `
 		UPDATE copies AS c SET mode = ?4, ctime_ns = ?5 WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
+	finishChownSQL = `
+		UPDATE copies AS c SET uid = ?4, gid = ?5, mode = ?6, ctime_ns = ?7 WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
 )
 
 // finishCopy says that a copy went for good: its row, found by disk, place and inode, the job that sent
@@ -227,12 +234,13 @@ func dropFileIfEmpty(ctx context.Context, tx *sql.Tx, fileID int64) error {
 	return nil
 }
 
-// CopyOf gives what a copy's row says, by where it sits, with nothing valid in it when there is none.
-func CopyOf(ctx context.Context, db *sql.DB, disk, path string) (KnownCopy, error) {
+// CopyOf gives what a copy's row says, by where it sits and, of two there, by its inode, with nothing valid in it
+// when there is none.
+func CopyOf(ctx context.Context, db *sql.DB, disk, path, fileKey string) (KnownCopy, error) {
 	row := KnownCopy{Path: path, FilePath: path}
 	var file []byte
-	err := db.QueryRowContext(ctx, copyOfSQL, disk, []byte(path)).
-		Scan(&row.FileID, &file, &row.Size, &row.MtimeNS, &row.CtimeNS, &row.BtimeNS, &row.FileKey, &row.Mode)
+	err := db.QueryRowContext(ctx, copyOfSQL, disk, []byte(path), fileKey).
+		Scan(&row.FileID, &file, &row.Size, &row.MtimeNS, &row.CtimeNS, &row.BtimeNS, &row.FileKey, &row.Mode, &row.UID, &row.GID)
 	if err != nil && !isNoRows(err) {
 		return row, fmt.Errorf("copy: %w", err)
 	}
@@ -551,6 +559,35 @@ func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]
 		return nil, fmt.Errorf("trash: %w", err)
 	}
 	return list, nil
+}
+
+// TrashUsed gives, for each disk whose trash holds entries, the sum of their sizes, an entry of unknown size counting
+// for nothing, and a sum past the largest integer staying there (specs.md §17).
+func TrashUsed(ctx context.Context, db *sql.DB) (map[string]int64, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT t.disk_id, t.size FROM trash t JOIN ops o ON o.id = t.op_id
+		WHERE o.state = 'done' AND t.size > 0`)
+	if err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	used := map[string]int64{}
+	for rows.Next() {
+		var disk string
+		var size int64
+		if err := rows.Scan(&disk, &size); err != nil {
+			return nil, fmt.Errorf("trash: %w", err)
+		}
+		if size > math.MaxInt64-used[disk] {
+			used[disk] = math.MaxInt64
+		} else {
+			used[disk] += size
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	return used, nil
 }
 
 // TrashEntries gives every entry EachTrashEntry would.

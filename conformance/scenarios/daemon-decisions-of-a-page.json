@@ -156,20 +156,38 @@
             "kind": "rename",
             "path": "a",
             "to": "z",
-            "outcome": "path-taken"
+            "outcome": "renamed"
           },
           {
             "disk": "t2",
             "kind": "rename",
             "path": "z",
             "to": "a",
-            "outcome": "path-taken"
+            "outcome": "renamed"
           }
         ],
         "guards": [],
         "waiting": 0,
         "next_due": null
       }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "3"
+        },
+        {
+          "path": "media/n",
+          "text": "2"
+        },
+        {
+          "path": "media/z",
+          "text": "1"
+        }
+      ]
     }
   ]
 }

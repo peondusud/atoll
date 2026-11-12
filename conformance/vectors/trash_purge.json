@@ -1,0 +1,1083 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717, \u00a717.4",
+  "description": "What a purge of the trash reaches, and why. Without older_than_ns: what has reached expires_ns, then, on each disk whose trash holds more than max_size of its capacity, counted as the sizes of its entries, surplus and rebalance, then overwritten, repaired and quarantined, each by deleted_ns, the oldest first, then by operation, until it holds no more. Deleted and renamed entries go only at their time. With older_than_ns: what was trashed at least that long ago, and nothing for room. full lists the disks whose trash still holds more than max_size once those are gone.",
+  "cases": [
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [],
+      "purge": [],
+      "full": [],
+      "note": "an empty trash"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 3000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "deleted",
+          "size": 1000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [],
+      "full": [],
+      "note": "under the limit, nothing has reached its time"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "deleted",
+          "size": 10,
+          "deleted_ns": 0,
+          "expires_ns": 1000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "renamed",
+          "size": 10,
+          "deleted_ns": 0,
+          "expires_ns": 999,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "surplus",
+          "size": 10,
+          "deleted_ns": 0,
+          "expires_ns": 1001,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 4,
+          "reason": "quarantined",
+          "size": 10,
+          "deleted_ns": 0,
+          "expires_ns": 0,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "expired"
+        },
+        {
+          "op": 2,
+          "why": "expired"
+        },
+        {
+          "op": 4,
+          "why": "expired"
+        }
+      ],
+      "full": [],
+      "note": "what reaches its time goes, whatever its reason, at that very time and not a nanosecond before"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 5000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [],
+      "full": [],
+      "note": "exactly at the limit is not over it"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 5001,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "one byte over: the surplus goes"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 2000,
+          "deleted_ns": 10,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 2000,
+          "deleted_ns": 5,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "surplus",
+          "size": 2000,
+          "deleted_ns": 20,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "over the limit: the oldest surplus goes first, and only until the trash holds no more than the limit"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "overwritten",
+          "size": 2000,
+          "deleted_ns": 1,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "rebalance",
+          "size": 2000,
+          "deleted_ns": 50,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "surplus",
+          "size": 2000,
+          "deleted_ns": 60,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "surplus and rebalance go before overwritten, repaired and quarantined, however old those are"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 1000,
+          "deleted_ns": 50,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "quarantined",
+          "size": 3000,
+          "deleted_ns": 30,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "overwritten",
+          "size": 3000,
+          "deleted_ns": 20,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 4,
+          "reason": "repaired",
+          "size": 3000,
+          "deleted_ns": 40,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "max-size"
+        },
+        {
+          "op": 2,
+          "why": "max-size"
+        },
+        {
+          "op": 3,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "once surplus and rebalance are gone, overwritten, repaired and quarantined go, the oldest first"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 7,
+          "reason": "rebalance",
+          "size": 3000,
+          "deleted_ns": 10,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 4,
+          "reason": "surplus",
+          "size": 3000,
+          "deleted_ns": 10,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 4,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "one time: the operation decides"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "deleted",
+          "size": 4000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "renamed",
+          "size": 4000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "surplus",
+          "size": 1000,
+          "deleted_ns": 5,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 3,
+          "why": "max-size"
+        }
+      ],
+      "full": [
+        "t1"
+      ],
+      "note": "deleted and renamed entries never go for room before their time: the disk's trash stays full"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "deleted",
+          "size": 3000,
+          "deleted_ns": 0,
+          "expires_ns": 500,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 2000,
+          "deleted_ns": 10,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "renamed",
+          "size": 2000,
+          "deleted_ns": 10,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "expired"
+        }
+      ],
+      "full": [],
+      "note": "what reaches its time is counted out first: no room is needed after it"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": null,
+          "deleted_ns": 1,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 6000,
+          "deleted_ns": 9,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "overwritten",
+          "size": null,
+          "deleted_ns": 0,
+          "expires_ns": 100,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "max-size"
+        },
+        {
+          "op": 3,
+          "why": "expired"
+        }
+      ],
+      "full": [],
+      "note": "an entry of unknown size counts for nothing and never goes for room, but goes at its time"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": null,
+          "deleted_ns": 1,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [],
+      "full": [],
+      "note": "an entry of unknown size alone is not over any limit"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": null
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 900000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 10,
+          "deleted_ns": 0,
+          "expires_ns": 0,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "expired"
+        }
+      ],
+      "full": [],
+      "note": "a disk with no capacity recorded is never purged for room, nor full; its entries still go at their time"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 6000,
+          "deleted_ns": 1000,
+          "expires_ns": 1000,
+          "held": true
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 1000,
+          "deleted_ns": 5,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "max-size"
+        }
+      ],
+      "full": [
+        "t1"
+      ],
+      "note": "an entry that reached the trash in this run's reprise counts, and does not go, even at its time or for room"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": 600,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "deleted",
+          "size": 4000,
+          "deleted_ns": 400,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 4000,
+          "deleted_ns": 401,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "surplus",
+          "size": 10,
+          "deleted_ns": 900,
+          "expires_ns": 0,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "older-than"
+        }
+      ],
+      "full": [],
+      "note": "with older_than_ns, what was trashed at least that long ago goes, whatever its time, and nothing for room"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": 600,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 9000,
+          "deleted_ns": 900,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "renamed",
+          "size": 100,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "older-than"
+        }
+      ],
+      "full": [
+        "t1"
+      ],
+      "note": "with older_than_ns, a trash over the limit stays so"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": 0,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 10,
+          "deleted_ns": 1000,
+          "expires_ns": 1000,
+          "held": true
+        }
+      ],
+      "purge": [],
+      "full": [],
+      "note": "with older_than_ns, an entry from this run's reprise does not go"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "u2",
+          "capacity": 100000
+        },
+        {
+          "id": "t1",
+          "capacity": 100000
+        },
+        {
+          "id": "a0",
+          "capacity": 10000
+        },
+        {
+          "id": "b1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "u2",
+          "op": 1,
+          "reason": "deleted",
+          "size": 6000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 6000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "a0",
+          "op": 3,
+          "reason": "renamed",
+          "size": 600,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "b1",
+          "op": 4,
+          "reason": "surplus",
+          "size": 4000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "max-size"
+        }
+      ],
+      "full": [
+        "a0",
+        "u2"
+      ],
+      "note": "each disk has its own limit; the full disks come by id in byte order"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "0.5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 1000000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 3000,
+          "deleted_ns": 1,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 2001,
+          "deleted_ns": 2,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "a percentage with a fraction: 0.5% of 1,000,000 bytes is 5,000"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 3000,
+          "deleted_ns": 1,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "rebalance",
+          "size": 3000,
+          "deleted_ns": 2,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "overwritten",
+          "size": 3000,
+          "deleted_ns": 3,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "max-size"
+        },
+        {
+          "op": 2,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "surplus and rebalance go one after another while the trash is still over the limit"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "zz",
+          "op": 1,
+          "reason": "surplus",
+          "size": 1,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "error": true,
+      "note": "an entry on a disk the list does not hold"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "stolen",
+          "size": 1,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "error": true,
+      "note": "a reason outside the closed list"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 1,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "deleted",
+          "size": 1,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "error": true,
+      "note": "one operation twice"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 0,
+          "reason": "surplus",
+          "size": 1,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "error": true,
+      "note": "an operation id below 1"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": -1,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "error": true,
+      "note": "a negative size"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": -1,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [],
+      "error": true,
+      "note": "a negative age"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": -1
+        }
+      ],
+      "entries": [],
+      "error": true,
+      "note": "a negative capacity"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 1
+        },
+        {
+          "id": "t1",
+          "capacity": 2
+        }
+      ],
+      "entries": [],
+      "error": true,
+      "note": "one disk twice"
+    }
+  ]
+}

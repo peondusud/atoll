@@ -150,9 +150,11 @@ type loop struct {
 	scrubSpent  time.Duration
 	scrubOpened int64
 	scrubIdle   int64
-	checkDue    int64
-	passDue     *int64
-	lastEnd     *int64
+	// backupOpened is the stretch of maintenance.window whose catalog backup was made, or tried (specs.md §9).
+	backupOpened int64
+	checkDue     int64
+	passDue      *int64
+	lastEnd      *int64
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -221,15 +223,19 @@ func (l *loop) run(ctx context.Context) error {
 			}
 		}
 		// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
-		opened := l.set.scrubWindow.Opened(time.Unix(0, now).In(l.set.location))
+		nowLocal := time.Unix(0, now).In(l.set.location)
+		opened := l.set.scrubWindow.Opened(nowLocal)
 		idle := !opened.IsZero() && l.scrubIdle == opened.UnixNano()
+		// One catalog backup a stretch of maintenance.window.
+		window := l.set.window.Opened(nowLocal)
+		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
 			RipeOrigins: origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
 			HashPending: l.hashPending && l.opt.Apply,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
-			ScrubSpentOpenedNS: l.scrubOpened}
+			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp}
 		if waiting {
 			in.GroupDueNS = &groupNext
 		}
@@ -247,6 +253,10 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if out.Hash {
 			l.hash(ctx)
+			continue
+		}
+		if out.Backup {
+			l.backup(ctx, window.UnixNano())
 			continue
 		}
 		if out.Scrub {
@@ -425,6 +435,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 			}
 		}
 		l.branches(ctx, db)
+		l.purge(ctx, db)
 		due = l.prepareAlerts(ctx, db, outcome, &sink.refused)
 		return outcome, nil
 	})
@@ -593,6 +604,74 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		now := l.opt.Machine.Now()
 		l.passDue = &now
 	}
+}
+
+// backup backs the catalog up, under its lock, once for the stretch of maintenance.window that began at opened, and
+// with maintenance.catalog_on_disks copies it to the disks (specs.md §9, §15.13). One that fails is not tried again
+// before the next stretch: a line of the log says so.
+func (l *loop) backup(ctx context.Context, opened int64) {
+	l.backupOpened = opened
+	var out *jobs.BackupOutcome
+	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
+		var err error
+		out, err = jobs.BackupCatalog(ctx, db, l.opt.Config, l.opt.Machine)
+		return nil, err
+	})
+	if err != nil {
+		if ctx.Err() == nil {
+			l.log.Error("the catalog backup failed: the next stretch of the maintenance window tries again", "error", err)
+		}
+		return
+	}
+	l.log.Info("the catalog was backed up", "path", out.Path, "removed", len(out.Removed))
+	for _, d := range out.Disks {
+		if d.Err != nil {
+			l.log.Warn("the catalog backup did not reach a disk", "disk", d.ID, "error", d.Err)
+		}
+	}
+}
+
+// purge purges the trash after a pass, under the same lock, as atoll trash purge --yes does: what has reached its
+// time, then what goes for room (specs.md §15.13, §17). It reads the catalog first, and checks no disk when nothing is
+// due. A dry run purges nothing.
+func (l *loop) purge(ctx context.Context, db *sql.DB) {
+	if !l.opt.Apply {
+		return
+	}
+	due, err := trash.PurgeDue(ctx, db, l.opt.Config, l.opt.Machine.Now())
+	if err != nil || !due {
+		if err != nil && ctx.Err() == nil {
+			l.log.Warn("the trash could not be read: the next pass tries again", "error", err)
+		}
+		return
+	}
+	s, err := trash.Open(ctx, db, l.opt.Config, l.opt.Machine, true)
+	if err != nil {
+		if ctx.Err() == nil {
+			l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
+		}
+		return
+	}
+	defer s.Close()
+	var purged, stayed int
+	summary, err := s.Purge(ctx, nil, func(e *trash.EntryItem) error {
+		if e.Outcome == trash.OutcomePurged {
+			purged++
+		} else {
+			stayed++
+		}
+		return nil
+	})
+	if err == nil {
+		err = s.Finish(ctx)
+	}
+	if err != nil {
+		if ctx.Err() == nil {
+			l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
+		}
+		return
+	}
+	l.log.Info("the trash was purged", "entries", purged, "bytes", summary.Bytes, "stayed", stayed, "full", summary.Full)
 }
 
 // locked runs fn on the catalog, under its lock, which it takes after the others' and lets go of last.

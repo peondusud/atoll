@@ -44,6 +44,10 @@ func resolveVector(v *recoveryVector) (Decision, error) {
 		if v.Source == nil && v.Target != nil {
 			return ResolveMkdir(*v.Target)
 		}
+	case "rmdir":
+		if v.Source != nil && v.Target == nil {
+			return ResolveRmdir(*v.Source)
+		}
 	}
 	return Decision{}, errors.New("this kind does not go with these names")
 }
