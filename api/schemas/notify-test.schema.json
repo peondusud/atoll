@@ -22,7 +22,7 @@
       "properties": {
         "channel": {
           "description": "The configuration key that sets the channel.",
-          "enum": ["alerts.ntfy", "alerts.gotify"]
+          "enum": ["alerts.ntfy", "alerts.gotify", "alerts.smtp"]
         },
         "sent": {
           "description": "Whether the server took the alert: a 2xx answer.",

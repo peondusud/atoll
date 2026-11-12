@@ -34,8 +34,7 @@ type Channel interface {
 	Send(ctx context.Context, m *Message) error
 }
 
-// Channels gives the channels the configuration sets, in the order of specs.md §23. SMTP comes later in phase 1b:
-// the configuration says so when it loads.
+// Channels gives the channels the configuration sets, in the order of specs.md §23.
 func Channels(c *config.Config) []Channel {
 	effective := c.Effective()
 	var out []Channel
@@ -46,6 +45,10 @@ func Channels(c *config.Config) []Channel {
 	if url, _ := effective["alerts.gotify"].(string); url != "" {
 		token, _ := effective["alerts.gotify_token_file"].(string)
 		out = append(out, &Gotify{URL: url, TokenFile: token})
+	}
+	if url, _ := effective["alerts.smtp"].(string); url != "" {
+		password, _ := effective["alerts.smtp_password_file"].(string)
+		out = append(out, &SMTP{URL: url, PasswordFile: password})
 	}
 	return out
 }

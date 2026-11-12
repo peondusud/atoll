@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Alerts by mail (specs.md §23)
+
+Commit "Send alerts by mail", on `develop`.
+
+- The beta's second new channel, beside ntfy and Gotify. `alerts.smtp` is `smtp://[user@]host[:port]?from=<address>&to=<address>`, one `from` and one `to` or more, or `smtps://` for TLS from the first byte; the port is 587 or 465 when left out. `smtp` takes `STARTTLS` when the server offers it, and must when a user is given: the password, read at each send from `alerts.smtp_password_file`, never goes in clear, nor in the address. The subject is the alert's title, RFC 2047 when it is not ASCII; the text is in UTF-8, quoted-printable; `X-Priority: 1` marks what ntfy sends at 4.
+- Only Go's standard library: `net/smtp`, `crypto/tls`, `mime`.
+- Verified: against a fake mail server with a certificate of its own, over `STARTTLS` with `AUTH PLAIN` to two recipients, over TLS from the first byte, a password kept out of clear text, a recipient refused; `TestSMTPAddress`, twelve forms of the address; two vectors of `config.json`; the scenario `notify-test-smtp-unreachable.json`.
+- **Decided without the maintainer, to confirm:**
+  - The form of `alerts.smtp`, with `from` and `to` in its query, and a new key, `alerts.smtp_password_file`.
+  - `STARTTLS` is required only when a user is given: a relay that takes mail without a password, on the same network, may be reached in clear.
+  - A server's refusal, such as `550` for a recipient, is its answer, as an HTTP refusal is for ntfy and Gotify.
+
 ## Alerts through Gotify (specs.md §23)
 
 Commit "Send alerts through Gotify", on `develop`.
