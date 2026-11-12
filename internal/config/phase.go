@@ -44,12 +44,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			}
 		case "rule.tags", "rule.domains":
 			phase = "1b"
-		case "integrity.auto_repair":
-			if v == true {
-				phase, effect = "1b", "scrubs only detect"
-			}
-		case "integrity.repair_mode":
-			phase, effect = "1b", "scrubs only detect"
 		case "trash.link_guard":
 			if v == true {
 				phase = "1b"

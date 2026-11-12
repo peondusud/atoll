@@ -318,8 +318,6 @@ func TestLaterPhaseWarnings(t *testing.T) {
 		"disk[3].role",
 		"health.avoid_hotter_than",
 		"health.evacuate_on",
-		"integrity.auto_repair",
-		"integrity.repair_mode",
 		"notify.plex.url",
 		"placement.colocate", // set by the energy preset, unlike new_files, which the file sets
 		"read.classes",
