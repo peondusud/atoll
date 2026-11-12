@@ -661,6 +661,11 @@ func IsDiskLost(err error) bool {
 		errors.Is(err, unix.ENXIO) || errors.Is(err, unix.EROFS) || errors.Is(err, unix.ESTALE)
 }
 
+// IsNoRoom says whether a write found its filesystem full: no block, or no inode, left for it.
+func IsNoRoom(err error) bool {
+	return errors.Is(err, unix.ENOSPC)
+}
+
 // IsFlagRefused says whether renameat2 may have refused its flag rather than the move: ntfs-3g and
 // lowntfs-3g give EINVAL whatever the name (measured). Only link can tell.
 func IsFlagRefused(err error) bool {

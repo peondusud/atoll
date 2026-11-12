@@ -89,7 +89,9 @@ func TestDaemonSoak(t *testing.T) {
 	at := mountPoint(t)
 	mountVolume(t, v, "", at)
 	window := time.Now().Add(-time.Hour).Format("15:04") + "-" + time.Now().Add(2*time.Hour+*soakFor).Format("15:04")
-	b := newPassBenchGuarded(t, v, at, soakGuards, "[defaults]\nsettle = \"0s\"\n[maintenance]\nwindow = \""+window+"\"\n")
+	// The trash turns over every ten minutes: the writer sends about two copies a second there, each with its own
+	// folders, and a retention of 30 days would fill the inodes of these small disks within the hour.
+	b := newPassBenchGuarded(t, v, at, soakGuards, "[defaults]\nsettle = \"0s\"\n[maintenance]\nwindow = \""+window+"\"\n[trash]\nretention = \"10m\"\n")
 	// The same files on both disks: the first pass finds them in step, and has nothing to copy.
 	for i := range *soakFiles {
 		for _, top := range []string{b.keep, at} {

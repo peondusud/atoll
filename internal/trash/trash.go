@@ -72,13 +72,15 @@ type Session struct {
 	repriseTrashed map[int64]bool
 	// emptied holds, by disk, the folders a copy left in this run through Atoll's own operation (specs.md §17.5).
 	emptied map[string]map[string]bool
+	// full holds the disks that had no room for a move to their trash in this run (Full).
+	full map[string]bool
 }
 
 // Open checks every disk and, when it is going to write, resolves what a crash left.
 func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool) (*Session, error) {
 	s := &Session{
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), slots: map[string]*slot{},
-		reprised: map[string]int64{}, repriseTrashed: map[int64]bool{}, emptied: map[string]map[string]bool{},
+		reprised: map[string]int64{}, repriseTrashed: map[int64]bool{}, emptied: map[string]map[string]bool{}, full: map[string]bool{},
 	}
 	text, _ := c.Effective()["trash.retention"].(string)
 	retention, err := value.ParseDuration(text)
@@ -595,7 +597,16 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 		s.Left(c.Disk, place)
 		return OutcomeTrashed, nil
 	}
+	if fsx.IsNoRoom(moveErr) {
+		s.full[c.Disk] = true
+	}
 	return s.afterFailedMove(ctx, handle, op, moveErr)
+}
+
+// Full says that a disk had no room for a move to its trash in this run, as each takes a folder there: what else would
+// go to its trash would be journaled and undone for nothing, at every pass until room comes back (specs.md §17.1).
+func (s *Session) Full(id string) bool {
+	return s.full[id]
 }
 
 // AfterFailedMove is afterFailedMove for what else moves things.

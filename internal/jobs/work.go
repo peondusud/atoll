@@ -921,6 +921,10 @@ func (p *pass) runTrashJobs(ctx context.Context, d *config.Disk) error {
 		if !p.session.Writable(d.ID) {
 			return p.reportJobsUnavailable(ctx, d.ID, list[i:])
 		}
+		// A disk with no room for the last one takes no more in this pass: they wait in the queue (specs.md §17.1).
+		if p.session.Full(d.ID) {
+			return nil
+		}
 		if list[i].State == catalog.JobCanceled {
 			continue
 		}

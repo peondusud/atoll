@@ -88,6 +88,7 @@ type step struct {
 	Exit       int               `json:"exit"`
 	StdoutJSON json.RawMessage   `json:"stdout_json"`
 	CrashAt    string            `json:"crash_at"`
+	Full       []string          `json:"full"`
 	Disk       string            `json:"disk"`
 	Path       *string           `json:"path"`
 	PathB64    *string           `json:"path_b64"`
@@ -110,7 +111,7 @@ type step struct {
 func stepFields(do string) ([]string, bool) {
 	switch do {
 	case "atoll":
-		return []string{"args", "exit", "stdout_json", "crash_at"}, true
+		return []string{"args", "exit", "stdout_json", "crash_at", "full"}, true
 	case "write":
 		return []string{"disk", "path", "path_b64", "text", "size", "mtime_ns"}, true
 	case "mkdir", "delete":
@@ -187,6 +188,8 @@ func parseScenario(data []byte) (*scenario, error) {
 			err = checkOwner(st.UID, st.GID, true)
 		case st.Do == "symlink" && st.Target == "":
 			err = errors.New("no target")
+		case st.Do == "atoll":
+			err = checkFull(s.Disks, st.Full)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("step %d (%s): %w", i, st.Do, err)
@@ -217,6 +220,20 @@ func checkSteps(data []byte) error {
 			if field != "do" && !slices.Contains(allowed, field) {
 				return fmt.Errorf("step %d (%s): %q does not apply to it", i, do, field)
 			}
+		}
+	}
+	return nil
+}
+
+// checkFull refuses a disk said full that the scenario does not have, or one said twice: a typo would check nothing.
+func checkFull(disks []disk, full []string) error {
+	ids := make([]string, len(disks))
+	for i := range disks {
+		ids[i] = disks[i].ID
+	}
+	for i, id := range full {
+		if !slices.Contains(ids, id) || slices.Contains(full[:i], id) {
+			return fmt.Errorf("full: %q is not a disk of the scenario, or is there twice", id)
 		}
 	}
 	return nil
@@ -278,8 +295,9 @@ type sandbox struct {
 	tops   map[string]map[string]bool // by disk id: what the scenario put at the top of it
 	hidden map[string]bool            // the hidden names the scenario gave, on any disk
 	away   map[string]bool            // the disks an unmount step set aside
-	// crashAt is the point an atoll step named, for its run only.
+	// crashAt is the point an atoll step named, and full the disks it said have no room left, for its run only.
 	crashAt string
+	full    []string
 }
 
 // errNeedsRoot says that a scenario gives files away, which only root may.
@@ -389,6 +407,7 @@ func (b *sandbox) writeControl() error {
 		Refuses   []string `json:"refuses,omitempty"`
 		Device    string   `json:"device,omitempty"`
 		Immutable bool     `json:"immutable,omitempty"`
+		Full      bool     `json:"full,omitempty"`
 	}
 	control := struct {
 		Now     string        `json:"now"`
@@ -398,7 +417,8 @@ func (b *sandbox) writeControl() error {
 	for i := range b.s.Disks {
 		d := &b.s.Disks[i]
 		if !b.away[d.ID] {
-			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses, d.Device, d.Immutable})
+			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses, d.Device, d.Immutable,
+				slices.Contains(b.full, d.ID)})
 		}
 	}
 	data, err := json.MarshalIndent(control, "", "  ")
@@ -606,13 +626,13 @@ func modeBits(mode os.FileMode) uint32 {
 }
 
 func (b *sandbox) runAtoll(s *step) (err error) {
-	if s.CrashAt != "" {
-		b.crashAt = s.CrashAt
+	if s.CrashAt != "" || len(s.Full) > 0 {
+		b.crashAt, b.full = s.CrashAt, s.Full
 		if err := b.writeControl(); err != nil {
 			return err
 		}
 		defer func() {
-			b.crashAt = ""
+			b.crashAt, b.full = "", nil
 			err = errors.Join(err, b.writeControl())
 		}()
 	}

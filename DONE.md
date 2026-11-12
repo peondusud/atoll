@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A full disk's trash (specs.md §17.1)
+
+Commit "Send nothing more to the trash of a full disk", on `develop`.
+
+- Found by a four-hour soak of the daemon: its 64 MiB disk ran out of inodes after 36 minutes, as each copy sent to the trash takes folders there and the writer sent about two a second, which a retention of 30 days never purged and `max_size`, which counts the files' sizes, never saw. Every pass then tried each of its 2,010 queued moves to the trash, each journaled and undone on `ENOSPC`: 194,000 operations in under an hour, passes of 32 to 35 s, and a catalog of 33 MiB. The daemon's memory did not move: 3.2 to 3.9 MiB of heap in use.
+- A disk that answers `ENOSPC` to a move to its trash takes no more in that session: the rest wait in the queue, and the next session tries one again.
+- The conformance runner gains `full` on an `atoll` step: the disks it names have no room left for that run, `mkdir` and the creation of a file giving `ENOSPC` there (`conformance/scenarios/README.md`).
+- The soak's trash turns over every ten minutes, so that it measures a daemon at work rather than a full disk.
+- Verified: `TestAFullDiskTakesNoMoreForItsTrash`, three moves to a trash with no room, one of them tried, then all three once room comes back; the scenario `daemon-trash-full.json`; two mutants, each caught by both.
+- **Decided without the maintainer, to confirm:**
+  - While a disk is full, one move to its trash is tried per session, journaled and undone: what it costs to notice that room came back, with no table that remembers the disk full.
+  - `full`, on an `atoll` step and on a disk of the control file, is a new field of the conformance contract.
+
 ## NTFS short names (specs.md §15.8)
 
 Commit "Refuse the short name of another entry on NTFS", on `develop`.

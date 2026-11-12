@@ -180,6 +180,9 @@ func TestRefusingAScenario(t *testing.T) {
 		{"a symlink with no target", "exit 0", steps(file + `{"path": "a", "kind": "symlink"}]}`), "no target"},
 		{"an unknown kind", "exit 0", steps(file + `{"path": "a", "kind": "fifo"}]}`), "unknown kind"},
 		{"a bad entry in a disk", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": [{"path": "a"}]}], "steps": [{"do": "atoll"}]}`, "no content"},
+		{"full: a disk it does not have", "exit 0", steps(`{"do": "atoll", "full": ["x"]}`), "full"},
+		{"full: a disk twice", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": []}], "steps": [{"do": "atoll", "full": ["d", "d"]}]}`, "twice"},
+		{"full on the wrong step", "exit 0", steps(`{"do": "advance", "by": "1m", "full": ["d"]}`), "does not apply"},
 	})
 }
 
@@ -283,7 +286,7 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 	err := runFile(bin, scenarioFile(t, `{"format_version": 1, "spec": "x", "description": "x",
 		"disks": [{"id": "t1", "uuid": "u", "fs": "ext4", "capacity": 1, "tree": [], "renameat2": false, "refuses": ["a"]},
 		          {"id": "t2", "uuid": "v", "fs": "ext4", "capacity": 1, "tree": []}],
-		"steps": [{"do": "atoll", "crash_at": "moved"}, {"do": "atoll"}]}`))
+		"steps": [{"do": "atoll", "crash_at": "moved", "full": ["t2"]}, {"do": "atoll"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,6 +323,14 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 	}
 	if _, there := second["refuses"]; there {
 		t.Errorf("second disk: %v", second)
+	}
+	if _, there := first["full"]; there || second["full"] != true {
+		t.Errorf("full in the first run: %v, %v", first, second)
+	}
+	disks, _ = runs[1]["disks"].([]any)
+	second, _ = disks[1].(map[string]any)
+	if _, there := second["full"]; there {
+		t.Errorf("full in the second run: %v", second)
 	}
 }
 
