@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll names check` (specs.md §15.9, §25)
+
+Commit "Report the names to fix", on `develop`.
+
+- The command reads every logical path of `files` and `entries`, each once (`catalog.AllPaths`), and the disks of the configuration, and gives the report of `names.Check`, which its 56 vectors already pinned. It reads no disk and takes no lock. `--path` keeps a folder and what is below it; `--json` follows `api/schemas/names-check.schema.json`, a name that is not UTF-8 in `path_b64`. Without `--json`, a finding a line, then how many names were checked.
+- Three scenarios: a pool with a name of each kind, the same report with the disk unmounted, `--path` on a folder, on a name whose collision is still found in the whole pool, and on a path the pool does not hold; the usage errors; and no catalog. The report the scenario expects was written from §15.9 before the command ran, and it agreed.
+
 ## ntfy alerts (specs.md §23, §15.13, §25)
 
 Commit "Send alerts through ntfy", on `develop`.

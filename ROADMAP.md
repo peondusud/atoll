@@ -26,7 +26,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **Names.** Name compatibility per filesystem, NFC and NTFS collisions, path lengths, and the name report (§15.7 to §15.9).
 - **Solver and catalog.** Placement, the capacity formula and the original of each file (§7, §12, §13), in a pure solver. The SQLite catalog, with its migrations (§9).
 - **Disks.** Identity read from the superblock, the mount check, and the confirmation of a disk past the page cache before any write (§10).
-- **Commands.** `atoll init`, `scan`, `status`, `rules check` and `explain`, and `disk list` (§15.10, §15.11, §25).
+- **Commands.** `atoll init`, `scan`, `status`, `rules check` and `explain`, `names check`, and `disk list` (§15.9 to §15.11, §25).
 - **Copies.** The copy pipeline (`atoll replicate`), verified before it is renamed into place, and journaled with its reprise after a crash (§14, §17.2).
 - **Propagation.** `atoll daemon --until-idle` propagates renames, deletions and modifications, and applies changes of modification time and mode to the other copies. It runs the `deferred` mode (§12.3, §15.12).
 - **Mass guards.** The guards against mass deletions and mass modifications, with `atoll guard` (§15.6).
@@ -48,7 +48,7 @@ The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "
 4. **The owner of a file applied to its other copies.**
 5. **The local API**: a Unix socket, and HTTP with a token.
 6. **The rest of the trash**: `max_size` and its purge order, `restore --to`, the other reasons, and Atoll's empty folders.
-7. **The command line**: `--help`, the French translation, durations written as the configuration writes them, and `atoll names check`.
+7. **The command line**: `--help`, the French translation, and durations written as the configuration writes them.
 8. **Smaller limits**:
    - an overwriting move or a swap of two names;
    - a folder renamed into the old name of one that waits;

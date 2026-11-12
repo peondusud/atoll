@@ -1,0 +1,105 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.9, \u00a725",
+  "description": "names takes check, which takes --json and --path once each, and nothing else. A usage error comes before the configuration is read, here a configuration with no catalog.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "names"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "list"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "extra"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--path"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--path",
+        "a",
+        "--path",
+        "b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--path",
+        "/abs"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--path="
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "--json",
+        "check"
+      ],
+      "exit": 2
+    }
+  ]
+}

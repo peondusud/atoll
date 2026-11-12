@@ -1,0 +1,267 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.9, \u00a725",
+  "description": "A name of each kind the report finds, after a scan: the folder a:b once, not the file below it; each of two names that collide; a name that is not UTF-8, in path_b64, twice. Every finding comes from the catalog: with the disk unmounted, the report is the same. --path keeps a folder and what is below it, or one name, whose collision is still found in the whole pool.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a:b/x.mkv",
+          "text": "1"
+        },
+        {
+          "path": "media/Film.mkv",
+          "text": "2"
+        },
+        {
+          "path": "media/film.mkv",
+          "text": "3"
+        },
+        {
+          "path_b64": "bWVkaWEv/y5ta3Y=",
+          "text": "4"
+        },
+        {
+          "path": "media/Cafe\u0301.mkv",
+          "text": "5"
+        },
+        {
+          "path": "media/CON.mkv",
+          "text": "6"
+        },
+        {
+          "path": "media/ok/fine.mkv",
+          "text": "7"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "checked": 9,
+        "findings": [
+          {
+            "kind": "incompatible",
+            "path": "CON.mkv",
+            "fs": "ntfs",
+            "reasons": [
+              "reserved-name"
+            ]
+          },
+          {
+            "kind": "not-nfc",
+            "path": "Cafe\u0301.mkv"
+          },
+          {
+            "kind": "collision",
+            "path": "Film.mkv",
+            "with": [
+              "film.mkv"
+            ]
+          },
+          {
+            "kind": "incompatible",
+            "path": "a:b",
+            "fs": "ntfs",
+            "reasons": [
+              "forbidden-character"
+            ]
+          },
+          {
+            "kind": "collision",
+            "path": "film.mkv",
+            "with": [
+              "Film.mkv"
+            ]
+          },
+          {
+            "kind": "invalid-utf8",
+            "path_b64": "/y5ta3Y="
+          },
+          {
+            "kind": "incompatible",
+            "path_b64": "/y5ta3Y=",
+            "fs": "ntfs",
+            "reasons": [
+              "invalid-utf8"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "do": "unmount",
+      "disk": "t1"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "checked": 9,
+        "findings": [
+          {
+            "kind": "incompatible",
+            "path": "CON.mkv",
+            "fs": "ntfs",
+            "reasons": [
+              "reserved-name"
+            ]
+          },
+          {
+            "kind": "not-nfc",
+            "path": "Cafe\u0301.mkv"
+          },
+          {
+            "kind": "collision",
+            "path": "Film.mkv",
+            "with": [
+              "film.mkv"
+            ]
+          },
+          {
+            "kind": "incompatible",
+            "path": "a:b",
+            "fs": "ntfs",
+            "reasons": [
+              "forbidden-character"
+            ]
+          },
+          {
+            "kind": "collision",
+            "path": "film.mkv",
+            "with": [
+              "Film.mkv"
+            ]
+          },
+          {
+            "kind": "invalid-utf8",
+            "path_b64": "/y5ta3Y="
+          },
+          {
+            "kind": "incompatible",
+            "path_b64": "/y5ta3Y=",
+            "fs": "ntfs",
+            "reasons": [
+              "invalid-utf8"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--path",
+        "ok",
+        "--json"
+      ],
+      "stdout_json": {
+        "checked": 2,
+        "findings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--json",
+        "--path=Film.mkv"
+      ],
+      "stdout_json": {
+        "checked": 1,
+        "findings": [
+          {
+            "kind": "collision",
+            "path": "Film.mkv",
+            "with": [
+              "film.mkv"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "names",
+        "check",
+        "--path",
+        "nowhere",
+        "--json"
+      ],
+      "stdout_json": {
+        "checked": 0,
+        "findings": []
+      }
+    },
+    {
+      "do": "mount",
+      "disk": "t1"
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a:b/x.mkv",
+          "text": "1"
+        },
+        {
+          "path": "media/Film.mkv",
+          "text": "2"
+        },
+        {
+          "path": "media/film.mkv",
+          "text": "3"
+        },
+        {
+          "path_b64": "bWVkaWEv/y5ta3Y=",
+          "text": "4"
+        },
+        {
+          "path": "media/Cafe\u0301.mkv",
+          "text": "5"
+        },
+        {
+          "path": "media/CON.mkv",
+          "text": "6"
+        },
+        {
+          "path": "media/ok/fine.mkv",
+          "text": "7"
+        }
+      ]
+    }
+  ]
+}
