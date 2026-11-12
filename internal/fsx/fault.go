@@ -88,6 +88,13 @@ func (d *faultDir) RenamePlain(name string, to Dir, newName string) error {
 	return d.Dir.RenamePlain(name, to, newName)
 }
 
+func (d *faultDir) Exchange(name string, to Dir, newName string) error {
+	if err := d.fail("exchange", newName); err != nil {
+		return err
+	}
+	return d.Dir.Exchange(name, to, newName)
+}
+
 func (d *faultDir) Link(name string, to Dir, newName string) error {
 	if err := d.fail("link", newName); err != nil {
 		return err

@@ -1,0 +1,219 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.12",
+  "description": "A swap of two names on one disk, whose other copies are on NTFS: no NTFS driver exchanges two names, so each copy waits for a target the other holds, reported as path-taken, a limit, with nothing journaled.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "01D9F3A2B4C5E6F7",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"01D9F3A2B4C5E6F7\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ntfs\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/t"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/b",
+      "to": "media/a"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/t",
+      "to": "media/b"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "renamed",
+            "to": "b"
+          },
+          {
+            "path": "b",
+            "decision": "renamed",
+            "to": "a"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "b",
+            "outcome": "path-taken"
+          },
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "b",
+            "to": "a",
+            "outcome": "path-taken"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "b",
+            "outcome": "path-taken"
+          },
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "b",
+            "to": "a",
+            "outcome": "path-taken"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

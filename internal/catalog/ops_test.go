@@ -163,7 +163,7 @@ func TestAQueryByPlaceReadsOnlyThatPlace(t *testing.T) {
 		name, sql string
 		args      []any
 	}{
-		{"CopyOf", copyOfSQL, []any{"u1", []byte("a/b")}},
+		{"CopyOf", copyOfSQL, []any{"u1", []byte("a/b"), "7"}},
 		{"finishCopy", finishCopySQL, []any{"u1", []byte("a/b"), "7"}},
 		{"renameRow", renameRowSQL, []any{"u1", []byte("a/b"), "7"}},
 		{"FinishUtimens", finishUtimensSQL, []any{"u1", []byte("a/b"), "7", 1, 2}},

@@ -761,6 +761,90 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 	return moved, &seen, nil
 }
 
+// ExchangeFiles swaps the names of two copies in one step, a holding the first copy and the target of b the second
+// one: renameat2 with RENAME_EXCHANGE (specs.md §15.12). Each name must hold its copy as its row says right before;
+// then each file is synced at its new name and its folder synced, and both folders get their times back, as for a
+// rename. A driver that refuses the swap moved nothing: ErrPathTaken, as the names stay taken.
+func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, movedB *Moved, seenA, seenB *fsx.Stat, err error) {
+	if err := d.Verify(); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	placeA, placeB := d.rootPlace(a.Path), d.rootPlace(b.Path)
+	dirA, err := d.open(placeA[:len(placeA)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return nil, nil, nil, nil, classify(err)
+	}
+	defer dirA.close()
+	dirB, err := d.open(placeB[:len(placeB)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return nil, nil, nil, nil, classify(err)
+	}
+	defer dirB.close()
+	nameA, nameB := placeA[len(placeA)-1], placeB[len(placeB)-1]
+	lookA, err := holds(dirA.Dir, nameA, sameFileAs(rowA))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	lookB, err := holds(dirB.Dir, nameB, sameFileAs(rowB))
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	timeA, err := dirA.Info()
+	if err != nil {
+		return nil, nil, nil, nil, classify(err)
+	}
+	timeB, err := dirB.Info()
+	if err != nil {
+		return nil, nil, nil, nil, classify(err)
+	}
+	switch err := dirA.Exchange(nameA, dirB.Dir, nameB); {
+	case err == nil:
+	case fsx.IsAbsent(err):
+		return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrGone, err)
+	case fsx.IsFlagRefused(err):
+		return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrPathTaken, err)
+	default:
+		return nil, nil, nil, nil, classify(err)
+	}
+	if _, err := holds(dirB.Dir, nameB, byKey(a.FileKey)); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if _, err := holds(dirA.Dir, nameA, byKey(b.FileKey)); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	d.machine.Checkpoint("moved")
+	if err := syncEntry(dirB.Dir, nameB); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := syncEntry(dirA.Dir, nameA); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := dirB.Sync(); err != nil {
+		return nil, nil, nil, nil, lost(err)
+	}
+	d.machine.Checkpoint("target-synced")
+	if err := d.restoreBoth(dirA.Dir, dirB.Dir, timeA.Mtime, timeB.Mtime); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := dirA.Sync(); err != nil {
+		return nil, nil, nil, nil, lost(err)
+	}
+	d.machine.Checkpoint("source-synced")
+	if movedA, err = d.movedFrom(dirB.Dir, nameB, &lookA); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if movedB, err = d.movedFrom(dirA.Dir, nameA, &lookB); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return movedA, movedB, &lookA, &lookB, nil
+}
+
 // restoreBoth gives both folders of a move their times back. They may be one folder, and then the time
 // it had before is the one to give.
 func (d *Disk) restoreBoth(source, target fsx.Dir, sourceTime, targetTime fsx.Time) error {

@@ -127,7 +127,7 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	if err != nil {
 		return err
 	}
-	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path)
+	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
@@ -345,7 +345,7 @@ func (d *Disk) recoverRename(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if err := d.syncWay(dst); err != nil {
 		return err
 	}
-	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path)
+	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}

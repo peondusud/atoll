@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A swap of two names (specs.md §15.12, §17.2)
+
+Commit "Exchange two names that wait for each other", on `develop`.
+
+- A swap of two names on one disk was followed by the rows, and on the other disks each copy waited for a target the other held, `path-taken` at every pass. Once a round of renames moves nothing, the copies left whose targets lead round a cycle back to one of them are now exchanged two at a time, `renameat2` with `RENAME_EXCHANGE`: the first by place reaches its target, the other takes its place, and a cycle of n names ends in n - 1 exchanges. Each side is journaled as a rename before anything moves, so that a reprise finishes or undoes it as any other, and a dry run lists them as `to-rename`.
+- The reprise read the row of a copy by its place alone, and while an exchange is half recorded two rows say they sit at one place: a crash right after the exchange undid the second rename against the wrong row. It now takes the row with the operation's inode.
+- ext4, XFS and btrfs exchange two names; ntfs3, ntfs-3g and lowntfs-3g give `EINVAL` (measured on Linux 6.12 and 7.3), so a disk declared `ntfs` is not asked, and its copies wait as before.
+- Verified: scenarios for two names across a dry run and a pass, three names round, an NTFS disk, and a crash once journaled and once moved; the scenario of a page of decisions, whose swap now ends; `TestFindSwap`; `TestASwapOnEachDriver` in qemu on Linux 6.12 and 7.3, on ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g, with the inodes kept through a cold cache.
+- **Decided without the maintainer, to confirm:**
+  - An exchange is two renames in the journal, not an operation of a kind of its own, so that the reprise needs nothing new. After a crash before the exchange both are undone, with an `op-undone` event each, as each target holds the other copy.
+  - A disk is asked for an exchange by its filesystem in the configuration, not by trying: trying on NTFS would journal and undo two renames at every pass.
+
 ## An overwriting move (specs.md §15.12)
 
 Commit "Propagate an overwriting move", on `develop`.

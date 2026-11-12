@@ -152,7 +152,7 @@ func (f folders) OpenTop(mount string) (fsx.Dir, error) {
 	}
 	return fsx.Fault(top, func(call, name string) error {
 		switch {
-		case call == "rename" && d.Renameat2 != nil && !*d.Renameat2:
+		case (call == "rename" || call == "exchange") && d.Renameat2 != nil && !*d.Renameat2:
 			return unix.EINVAL
 		case (call == "rename" || call == "plainrename" || call == "link" || call == "mkdir") && slices.Contains(d.Refuses, name):
 			return unix.EINVAL

@@ -91,6 +91,9 @@ type Dir interface {
 	// RenamePlain moves a name with a plain rename, which replaces an empty folder at the target: for a
 	// folder on a driver that refuses the flag, as a folder has no link (specs.md §15.12).
 	RenamePlain(name string, to Dir, newName string) error
+	// Exchange swaps two names, of this folder and another of the same filesystem, in one step: renameat2
+	// with RENAME_EXCHANGE, which ext4, XFS and btrfs give and the NTFS drivers refuse (specs.md §15.12).
+	Exchange(name string, to Dir, newName string) error
 	// Link gives a file a second name, in a folder of the same filesystem.
 	Link(name string, to Dir, newName string) error
 	// Unlink removes the name of a file, and Rmdir an empty folder.
@@ -301,6 +304,17 @@ func (d *realDir) RenamePlain(name string, to Dir, newName string) error {
 	}
 	if err := unix.Renameat(d.fd(), name, target.fd(), newName); err != nil {
 		return fmt.Errorf("rename %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Exchange(name string, to Dir, newName string) error {
+	target, err := realOf(to)
+	if err != nil {
+		return err
+	}
+	if err := unix.Renameat2(d.fd(), name, target.fd(), newName, unix.RENAME_EXCHANGE); err != nil {
+		return fmt.Errorf("exchange %q and %q: %w", name, newName, err)
 	}
 	return nil
 }

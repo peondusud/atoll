@@ -178,10 +178,12 @@ const (
 		SELECT file_id FROM copies WHERE disk_id = ?1 AND old_lpath = ?2
 		UNION ALL
 		SELECT o.file_id FROM files g JOIN copies o ON o.file_id = g.id WHERE g.lpath = ?2 AND o.disk_id = ?1 AND o.old_lpath IS NULL)`
+	// Two rows say they sit at one place only for a moment, as when an exchange of two names is finished one rename
+	// at a time: the one with the operation's inode is the one meant.
 	copyOfSQL = `
 		SELECT f.id, f.lpath, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.file_key, c.mode, c.uid, c.gid
 		FROM copies c JOIN files f ON f.id = c.file_id
-		WHERE c.disk_id = ?1 AND ` + copyAtPlace
+		WHERE c.disk_id = ?1 AND ` + copyAtPlace + ` ORDER BY c.file_key IS ?3 DESC LIMIT 1`
 	finishCopySQL = `
 		SELECT c.file_id FROM copies c WHERE c.disk_id = ?1 AND c.file_key = ?3 AND ` + copyAtPlace
 	renameRowSQL = `
@@ -232,11 +234,12 @@ func dropFileIfEmpty(ctx context.Context, tx *sql.Tx, fileID int64) error {
 	return nil
 }
 
-// CopyOf gives what a copy's row says, by where it sits, with nothing valid in it when there is none.
-func CopyOf(ctx context.Context, db *sql.DB, disk, path string) (KnownCopy, error) {
+// CopyOf gives what a copy's row says, by where it sits and, of two there, by its inode, with nothing valid in it
+// when there is none.
+func CopyOf(ctx context.Context, db *sql.DB, disk, path, fileKey string) (KnownCopy, error) {
 	row := KnownCopy{Path: path, FilePath: path}
 	var file []byte
-	err := db.QueryRowContext(ctx, copyOfSQL, disk, []byte(path)).
+	err := db.QueryRowContext(ctx, copyOfSQL, disk, []byte(path), fileKey).
 		Scan(&row.FileID, &file, &row.Size, &row.MtimeNS, &row.CtimeNS, &row.BtimeNS, &row.FileKey, &row.Mode, &row.UID, &row.GID)
 	if err != nil && !isNoRows(err) {
 		return row, fmt.Errorf("copy: %w", err)

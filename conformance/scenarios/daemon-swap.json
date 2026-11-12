@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a715.12",
-  "description": "A swap of two names on one disk: the rows swap, and on the other disk each target is held by the other: reported as path-taken, a known limit.",
+  "description": "A swap of two names on one disk: the rows swap, and on the other disk, where each target holds the other copy, the two names are exchanged in one step, each journaled as a rename, with nothing copied again.",
   "disks": [
     {
       "id": "t1",
@@ -92,6 +92,65 @@
       "args": [
         "daemon",
         "--until-idle",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": true,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "renamed",
+            "to": "b"
+          },
+          {
+            "path": "b",
+            "decision": "renamed",
+            "to": "a"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "b",
+            "outcome": "to-rename"
+          },
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "b",
+            "to": "a",
+            "outcome": "to-rename"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
         "--json"
       ],
       "stdout_json": {
@@ -130,14 +189,14 @@
             "kind": "rename",
             "path": "a",
             "to": "b",
-            "outcome": "path-taken"
+            "outcome": "renamed"
           },
           {
             "disk": "t2",
             "kind": "rename",
             "path": "b",
             "to": "a",
-            "outcome": "path-taken"
+            "outcome": "renamed"
           }
         ],
         "guards": [],
@@ -171,7 +230,7 @@
         [
           "a",
           "t2",
-          "b"
+          null
         ],
         [
           "b",
@@ -181,7 +240,7 @@
         [
           "b",
           "t2",
-          "a"
+          null
         ]
       ]
     },
@@ -191,22 +250,63 @@
       "tree": [
         {
           "path": "media/a",
-          "text": "1"
+          "text": "2"
         },
         {
           "path": "media/b",
-          "text": "2"
+          "text": "1"
         }
       ]
     },
     {
       "do": "expect_catalog",
-      "query": "SELECT count(*) FROM ops",
+      "query": "SELECT kind, CAST(path AS TEXT), CAST(path2 AS TEXT), state FROM ops ORDER BY id",
       "rows": [
         [
-          0
+          "rename",
+          "a",
+          "b",
+          "done"
+        ],
+        [
+          "rename",
+          "b",
+          "a",
+          "done"
         ]
       ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
     }
   ]
 }

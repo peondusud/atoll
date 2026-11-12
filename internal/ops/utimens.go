@@ -155,7 +155,7 @@ func (d *Disk) recoverChown(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 // recorded must be what the disk keeps: what was set may not have been synced. It says whether that is the copy its
 // row says, with the same inode and size.
 func (d *Disk) metadataCopyNow(ctx context.Context, db *sql.DB, op *Op) (catalog.KnownCopy, fsx.Stat, bool, error) {
-	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path)
+	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
 	if err != nil {
 		return row, fsx.Stat{}, false, fmt.Errorf("catalog: %w", err)
 	}
