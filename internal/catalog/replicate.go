@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // The states of a replicate job (specs.md §14.1). queued is JobQueued.
@@ -235,19 +236,42 @@ func PartsInUse(ctx context.Context, db *sql.DB, disk string) (map[string]bool, 
 	return out, nil
 }
 
-// PartOps gives the state of each operation that names a part on a disk: tmp/ loses only the parts of
-// operations done or undone (specs.md §14.2).
-func PartOps(ctx context.Context, db *sql.DB, disk string) (map[string]string, error) {
-	rows, err := db.QueryContext(ctx, "SELECT CAST(path2 AS TEXT), state FROM ops WHERE kind = 'create' AND disk_id = ? AND path2 IS NOT NULL", disk)
+// PartStates gives, of the names a disk's tmp/ holds, those an operation create names, each with the state of those
+// operations: tmp/ loses only the parts of operations done or undone (specs.md §14.2). A part is named by the id of
+// the operation that made it, and only that one and those that resume it, later, name it: each is looked for from that
+// id on, never over the whole journal, which only grows. Read at each pass, that took 0.35 s over a million copies.
+func PartStates(ctx context.Context, db *sql.DB, disk string, names []string) (map[string]string, error) {
+	out := map[string]string{}
+	stmt, err := db.PrepareContext(ctx, partStatesQuery)
 	if err != nil {
 		return nil, fmt.Errorf("parts: %w", err)
 	}
+	defer func() { _ = stmt.Close() }()
+	for _, name := range names {
+		digits, ok := strings.CutSuffix(name, ".part")
+		id, err := strconv.ParseInt(digits, 10, 64)
+		if !ok || err != nil || id < 1 {
+			continue
+		}
+		if err := partState(ctx, stmt, id, disk, name, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+const partStatesQuery = "SELECT state FROM ops WHERE id >= ? AND kind = 'create' AND disk_id = ? AND path2 = ? ORDER BY id"
+
+func partState(ctx context.Context, stmt *sql.Stmt, id int64, disk, name string, out map[string]string) error {
+	rows, err := stmt.QueryContext(ctx, id, disk, []byte(name))
+	if err != nil {
+		return fmt.Errorf("parts: %w", err)
+	}
 	defer func() { _ = rows.Close() }()
-	out := map[string]string{}
 	for rows.Next() {
-		var name, state string
-		if err := rows.Scan(&name, &state); err != nil {
-			return nil, fmt.Errorf("parts: %w", err)
+		var state string
+		if err := rows.Scan(&state); err != nil {
+			return fmt.Errorf("parts: %w", err)
 		}
 		// A part named by several operations, one resuming another, is in use while any of them is.
 		if out[name] != "planned" {
@@ -255,9 +279,9 @@ func PartOps(ctx context.Context, db *sql.DB, disk string) (map[string]string, e
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("parts: %w", err)
+		return fmt.Errorf("parts: %w", err)
 	}
-	return out, nil
+	return nil
 }
 
 // BeginCreate journals the operation of a job, with its event, before anything is written to a disk.

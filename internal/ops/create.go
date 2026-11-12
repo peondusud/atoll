@@ -273,6 +273,27 @@ func (d *Disk) DropPart(name string) error {
 	return nil
 }
 
+// TmpNames gives the names <workdir>/tmp/ holds, none when it does not exist.
+func (d *Disk) TmpNames() ([]string, error) {
+	if err := d.Verify(); err != nil {
+		return nil, err
+	}
+	place := d.tmpPlace("-")
+	dir, err := d.open(place[:len(place)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return nil, nil
+	case err != nil:
+		return nil, classify(err)
+	}
+	defer dir.close()
+	names, err := dir.Names()
+	if err != nil {
+		return nil, classify(err)
+	}
+	return names, nil
+}
+
 // CleanTmp removes the parts of <workdir>/tmp/ that an operation done or undone names and that nothing
 // keeps: no job owns them, and no operation left planned names them. Nothing else there is touched
 // (specs.md §14.2).

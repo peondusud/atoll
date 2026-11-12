@@ -3,6 +3,7 @@ package catalog
 import (
 	"bytes"
 	"database/sql"
+	"maps"
 	"testing"
 )
 
@@ -95,7 +96,7 @@ func TestBeginCreate(t *testing.T) {
 	if chunks, err := JobChunks(t.Context(), b.sql(), job.ID); err != nil || len(chunks) != 64 {
 		t.Errorf("a resume lost the hashes: %d, %v", len(chunks), err)
 	}
-	if states, err := PartOps(t.Context(), b.sql(), "u2"); err != nil || states["1.part"] != "planned" {
+	if states, err := PartStates(t.Context(), b.sql(), "u2", []string{"1.part", "2.part", "01.part", "x.part", "1"}); err != nil || !maps.Equal(states, map[string]string{"1.part": "planned"}) {
 		t.Errorf("%v, %v", states, err)
 	}
 	// Dropped, the part goes with its hashes, and the next operation names one of its own.

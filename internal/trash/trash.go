@@ -291,7 +291,18 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 // it open, so that no disk is woken for this alone (specs.md §14.2). A disk that fails there is lost; any
 // other failure leaves the parts for the next time.
 func (s *Session) cleanTmp(ctx context.Context, id string, handle *ops.Disk) error {
-	named, err := catalog.PartOps(ctx, s.db, id)
+	// What tmp/ holds first, nearly always nothing: the journal is only read for that.
+	names, err := handle.TmpNames()
+	switch {
+	case errors.Is(err, ops.ErrDiskLost):
+		return s.lose(ctx, id, err)
+	case err != nil:
+		slog.Warn("parts stay in tmp/", "disk", id, "error", err)
+		return nil
+	case len(names) == 0:
+		return nil
+	}
+	named, err := catalog.PartStates(ctx, s.db, id, names)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}

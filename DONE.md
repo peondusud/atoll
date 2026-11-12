@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The parts of `tmp/` looked for where they are (specs.md §14.2)
+
+Commit "Look up only the parts tmp/ holds", on `develop`.
+
+- Found the same way. Each pass that opens a disk cleans its `tmp/`, and to know which parts it may remove it read every operation `create` the disk ever had into memory, though `tmp/` nearly always holds none: 0.35 s a pass over a million copies, and a map of a million names each time, against a daemon's memory of §26.
+- `tmp/` is listed first; only what it holds is looked for, each part from the id its name gives on, as only its operation and those that resume it name it: 66 ms a pass over a million copies. What is removed is unchanged.
+- Verified: the unit tests of the cleaning, a test of the lookup's plan (`EXPLAIN QUERY PLAN`), and the trash, jobs and daemon tests under the race detector; the conformance suite.
+
 ## The events log read through an index (specs.md §9, §15.6)
 
 Commit "Read the guards' events through an index", on `develop`.

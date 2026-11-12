@@ -31,6 +31,15 @@ func TestGuardReadsUseAnIndex(t *testing.T) {
 	}
 }
 
+// Looking for the operations that name a part of tmp/ goes from its id on, never over the whole journal (specs.md
+// §14.2): read at each pass, that took 0.35 s over a million copies.
+func TestPartStatesReadFromTheirID(t *testing.T) {
+	plan := planOf(t, openForOps(t).sql(), "part states", partStatesQuery)
+	if len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INTEGER PRIMARY KEY (rowid>?)") {
+		t.Errorf("%q", plan)
+	}
+}
+
 // placeholders gives a value for each parameter of a query: ?1 to ?N, or one for each ?.
 func placeholders(query string) []any {
 	n := 0
