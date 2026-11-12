@@ -31,6 +31,13 @@ The work goes to the `develop` branch, with one pull request once the big work i
   - **The choices DONE.md listed as "to confirm"** are confirmed.
   - **Catalog backups.** They are daily, in `<catalog folder>/backups/`, 7 kept. With `catalog_on_disks`, the latest also goes in each disk's `Atoll/catalog/`. A rebuild sets the old catalog aside.
 
+## Decisions for the beta (the maintainer, 2026-11-12)
+
+- **Order:** repair and quarantine of corrupt copies, then the duplicate report (R-14, R-15); the `immediate` and `scheduled` modes; Gotify and SMTP alerts, and SMART; notifications to Plex, Emby and Jellyfin; `atoll conflicts resolve`; failure domains and tags as hard constraints, with `atoll balance` and `atoll capacity`; the link guard last.
+- **Plex** reads each disk's folders today. So its libraries move to the merged view, as §21.4 says, before the first replica, and a scan notification names a folder as that view shows it.
+- **Hard links:** none in the maintainer's library for now, but the link guard must handle them, for users whose Sonarr or Radarr link a torrent client's file into `media/`.
+- **Alerts:** Gotify and SMTP, both, beside ntfy.
+
 ## Names (specs.md §30)
 
 To decide before the solver, the scanner and `atoll names check` need them:

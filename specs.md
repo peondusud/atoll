@@ -1792,11 +1792,11 @@ port     = nonzero digit, at most 5 digits                          ; 1 to 65535
 
 ## 30. Risks and open questions
 
-- How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)?
+- How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)? Answered on 2026-11-12: each disk's folders, so its libraries move to the merged view before the first replica.
 - mergerfs behavior with a failing branch before Atoll removes it (I/O errors or fallback to the next branch): to verify with a USB drop simulation.
 - Phase 1 limits: deletions through mergerfs bypass the trash unless the link guard is on; mergerfs presents the first branch's copy, not the oldest one.
 - Jellyfin and Emby: whether their scans delete items whose files are missing while a disk is absent.
-- Link guard: which tools in the user's stack count hard links (torrent clients, *arr helpers).
+- Link guard: which tools in the user's stack count hard links (torrent clients, *arr helpers). The maintainer's library has none on 2026-11-12, but the guard must handle them for users of Sonarr and Radarr.
 - Plex behavior when libraries move to the merged view (metadata and watch history kept): test on a small library first.
 - NTFS driver on Linux (ntfs3 or ntfs-3g): choose after power-loss and dirty-volume tests.
 - Cost: two or three times the raw capacity for protected files.
