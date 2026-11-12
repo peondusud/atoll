@@ -1,0 +1,257 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §13.4, §14.1, §15.6",
+  "description": "A file whose only copy is gone, and held so by the guard, has no source: no pass queues a copy that would find nothing to read, and journals nothing for it, however long the guard holds; once the copy comes back, it is replicated.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/x",
+          "text": "1"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[defaults]\nsettle = \"0s\"\n[deletes.mass_guard]\nfiles = 0\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "mkdir",
+      "disk": "t2",
+      "path": "media"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/x",
+      "to": "away-x"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [
+          {
+            "disk": "t1",
+            "kind": "deletions",
+            "count": 1
+          }
+        ],
+        "waiting": 1,
+        "next_due": "2030-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "advance",
+      "by": "1h"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [
+          {
+            "disk": "t1",
+            "kind": "deletions",
+            "count": 1
+          }
+        ],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind FROM events ORDER BY id",
+      "rows": [
+        [
+          "guard"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "away-x",
+      "to": "media/x"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "x",
+            "decision": "metadata"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "x",
+            "source": "t1",
+            "outcome": "replicated"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        },
+        {
+          "path": "media/x",
+          "text": "1"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind FROM events ORDER BY id",
+      "rows": [
+        [
+          "guard"
+        ],
+        [
+          "guard-clear"
+        ],
+        [
+          "replicate"
+        ]
+      ]
+    }
+  ]
+}

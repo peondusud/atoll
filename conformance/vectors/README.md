@@ -464,7 +464,7 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 |---|---|---|
 | `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`) |
 | `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `policy` (below) |
-| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0) |
+| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source |
 | `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`) |
 | `entries` | array of objects | `disk`, `path`, `kind`: `dir`, `symlink` or `ignored` |
 | `min_free` | array of strings | as in the configuration; `["0%"]` when left out |

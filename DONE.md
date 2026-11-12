@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A copy that is gone is no source (specs.md §13.4, §14.2)
+
+Commit "Give no job to a file whose only source is gone", on `develop`.
+
+- Found by an hour's soak of the daemon in qemu (`test/loopdev/soak_test.go`). Once its writer had tripped the mass-deletion guard, a file it added and deleted before its copy ran kept its row, held by the guard, with its copy `ok`. The plan read that copy as a source, and each pass queued its copy again, journaled an operation `create` with its `replicate` event, made a part in `tmp/` and dropped it as `changed`. The operations of a pass grew by five at each pass, to 1,131 after an hour, each with its rows in `ops` and `events`, which no one ever removes.
+- A source is a copy whose clock does not run (§13.4): one its last look found `moved`, `gone`, `uncertain` or `own` still counts toward its file's level, and is no source until its file is decided. A job queued before its source went goes with its pending copy as `changed`, and the next plan queues none.
+- A copy that starts from nothing looks at its source before anything is journaled (§14.2): one gone, or no longer what its row says, ends the run as `changed` with no operation, event or part, and waits `settle`. That also covers a source changed while the mass-modification guard holds it, which no row says.
+- Verified: a scenario, a file's only copy gone under a tripped guard, two passes an hour apart that queue and journal nothing, then the copy back and replicated; five plan vectors with copies `away`; unit tests for a job whose source went, and for a source changed or gone before the copy.
+- **Decided without the maintainer, to confirm:**
+  - A copy found `moved` is no source either, until its rename is decided, a debounce at most: a file with no other copy shows `unavailable` meanwhile.
+  - A copy that resumes from its part still journals before it reads its source, as dropping that part needs its operation.
+
 ## `atoll init` over a catalog that went missing (specs.md §9, §25)
 
 Commit "Start a new catalog's operations past the disks' ids", on `develop`.

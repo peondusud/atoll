@@ -274,6 +274,11 @@ func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string
 		return obstacleOutcome(target), nil
 	}
 	resume := job.Part != ""
+	if !resume {
+		if outcome, err := r.lookAtSource(ctx, job, src, row); err != nil || outcome != "" {
+			return outcome, err
+		}
+	}
 	op, err := catalog.BeginCreate(ctx, r.db, job, r.now)
 	if err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
@@ -305,6 +310,34 @@ func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string
 
 var errCatalog = errors.New("catalog")
 
+// lookAtSource looks at the source of a copy that starts from nothing before anything is journaled: one gone, or no
+// longer what its row says, ends the run as changed and waits settle, and one that cannot be read as io-error, with
+// nothing journaled or made, as a source a guard holds may stay so for days and must not cost an operation at each
+// try (specs.md §14.2). An empty outcome says that the copy may begin.
+func (r *replicator) lookAtSource(ctx context.Context, job *catalog.ReplicateJob, src *ops.Disk, row *catalog.KnownCopy) (string, error) {
+	f, _, err := src.OpenSource(row.Path, row)
+	switch {
+	case err == nil:
+		_ = f.Close()
+		return "", nil
+	case errors.Is(err, ops.ErrGone):
+		if err := catalog.RetryJob(ctx, r.db, job, sql.NullInt64{Int64: r.now + settleOf(r.config, job).Nanoseconds(), Valid: true}, false); err != nil {
+			return "", fmt.Errorf("catalog: %w", err)
+		}
+		return trash.OutcomeChanged, nil
+	}
+	if fsx.IsDiskLost(err) || errors.Is(err, ops.ErrDiskLost) {
+		if err := r.session.Lose(ctx, job.Src, err); err != nil {
+			return "", fmt.Errorf("%w", err)
+		}
+	}
+	slog.Warn("a source cannot be read", "disk", job.Src, "path", row.Path, "error", err)
+	if err := catalog.RetryJob(ctx, r.db, job, sql.NullInt64{}, true); err != nil {
+		return "", fmt.Errorf("catalog: %w", err)
+	}
+	return trash.OutcomeIOError, nil
+}
+
 // handles opens the target and the source, or says why a job cannot run in this run.
 func (r *replicator) handles(ctx context.Context, job *catalog.ReplicateJob) (dst, src *ops.Disk, outcome string, err error) {
 	if !r.session.Writable(job.Dst) || !r.session.Readable(job.Src) {
@@ -319,7 +352,8 @@ func (r *replicator) handles(ctx context.Context, job *catalog.ReplicateJob) (ds
 	return dst, src, "", nil
 }
 
-// sourceRow gives what the catalog says of the copy a job reads, while it is one to read from (§13.4).
+// sourceRow gives what the catalog says of the copy a job reads, while it is one to read from (§13.4): not one whose
+// clock runs, as nothing is at its name until its file is decided.
 func sourceRow(f *catalog.FileRow, disk string) (*catalog.KnownCopy, bool) {
 	if f == nil {
 		return nil, false
@@ -329,7 +363,7 @@ func sourceRow(f *catalog.FileRow, disk string) (*catalog.KnownCopy, bool) {
 		if c.Disk != disk {
 			continue
 		}
-		if (c.State != "ok" && c.State != "surplus") || !c.Size.Valid || !c.FileKey.Valid {
+		if (c.State != "ok" && c.State != "surplus") || !c.Size.Valid || !c.FileKey.Valid || c.GoneNS.Valid {
 			return nil, false
 		}
 		place := c.Place(f)
@@ -698,7 +732,7 @@ func (c *copier) drop(ctx context.Context, outcome string, retry bool) error {
 	case !retry:
 		err = catalog.EndJob(ctx, c.r.db, c.job)
 	case outcome == trash.OutcomeChanged:
-		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{Int64: c.r.now + c.settle().Nanoseconds(), Valid: true}, false)
+		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{Int64: c.r.now + settleOf(c.r.config, c.job).Nanoseconds(), Valid: true}, false)
 	default:
 		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{}, false)
 	}
@@ -708,10 +742,10 @@ func (c *copier) drop(ctx context.Context, outcome string, retry bool) error {
 	return &errDropped{outcome: outcome}
 }
 
-// settle is how long a file must stay unchanged, by its rule (specs.md §12.3).
-func (c *copier) settle() time.Duration {
-	size := c.job.Size
-	return c.r.config.Policy(c.job.Path, &size).Settle
+// settleOf is how long a job's file must stay unchanged, by its rule (specs.md §12.3).
+func settleOf(c *config.Config, job *catalog.ReplicateJob) time.Duration {
+	size := job.Size
+	return c.Policy(job.Path, &size).Settle
 }
 
 // sourceFailed says what an error reading the source leaves: a source disk that cannot be relied on is

@@ -97,6 +97,34 @@ func TestWhatWaitsIsTheEarliest(t *testing.T) {
 	}
 }
 
+// A copy queued from a copy that a look then found gone has no source: its job goes with its pending copy, with
+// nothing journaled, and no plan queues another until the file is decided, which a tripped guard can put off for
+// days (specs.md §13.4, §14.1).
+func TestACopyWhoseSourceIsGone(t *testing.T) {
+	b := replicatePool(t)
+	b.replicate("a", ReplicateOptions{})
+	if err := os.Remove(filepath.Join(b.dirs["t1"], "media", "a")); err != nil {
+		t.Fatal(err)
+	}
+	out := b.pass()
+	if !slices.Equal(out.Operations, []Operation{{Disk: "t2", Kind: KindReplicate, Path: "a", Source: "t1", Outcome: trash.OutcomeChanged}}) {
+		t.Fatalf("%+v", out.Operations)
+	}
+	for _, again := range []bool{false, true} {
+		if again {
+			if out := b.pass(); len(out.Operations) != 0 {
+				t.Errorf("then %+v", out.Operations)
+			}
+		}
+		if n := b.count("SELECT count(*) FROM ops"); n != 0 {
+			t.Errorf("%d operations journaled", n)
+		}
+		if n := b.count("SELECT count(*) FROM jobs") + b.count("SELECT count(*) FROM copies WHERE state = 'pending'"); n != 0 {
+			t.Errorf("%d jobs and pending copies left", n)
+		}
+	}
+}
+
 // A copy queued for later runs at its time, and until then counts as waiting.
 func TestACopyQueuedForLater(t *testing.T) {
 	b := replicatePool(t)

@@ -206,7 +206,13 @@ func TestReplicateFailures(t *testing.T) {
 		}, "name-refused", "undone", 0, false, OutcomeReplicated},
 		// Until a scan records what the source is now, it is not what its row says.
 		{"a source changed after the copy", at("copied", func(b *bench) { b.write("t1", "a", "changed!") }), "changed", "undone", 0, true, "changed"},
-		{"a source changed before", func(b *bench) { b.write("t1", "a", "other") }, "changed", "undone", 0, true, "changed"},
+		// A source looked at before anything is journaled: no operation, no part, and the job waits settle (§14.2).
+		{"a source changed before", func(b *bench) { b.write("t1", "a", "other") }, "changed", "", 0, true, "changed"},
+		{"a source gone before", func(b *bench) {
+			if err := os.Remove(filepath.Join(b.dirs["t1"], "media", "a")); err != nil {
+				b.t.Fatal(err)
+			}
+		}, "changed", "", 0, true, "changed"},
 		{"a disk lost when its cache is dropped", failOn("t2", "dropcache", syscall.EIO), "io-error", "planned", 1, true, OutcomeReplicated},
 		// The part is synced once made, and again once its times are restored: this is the second.
 		{"a disk lost at the part's last sync", func(b *bench) {

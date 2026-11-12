@@ -46,6 +46,7 @@ type copyVector struct {
 	CreatedBy   *string `json:"created_by"`
 	FirstSeenNS int64   `json:"first_seen_ns"`
 	OldPath     string  `json:"old_path"`
+	Away        bool    `json:"away"`
 }
 
 type policyVector struct {
@@ -133,7 +134,7 @@ func (v *planVector) input() (Input, error) {
 		for _, c := range f.Copies {
 			file.Copies = append(file.Copies, Copy{
 				Disk: c.Disk, State: CopyState(or(c.State, "ok")),
-				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS, OldPath: c.OldPath,
+				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS, OldPath: c.OldPath, Away: c.Away,
 			})
 		}
 		in.Files = append(in.Files, file)

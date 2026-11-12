@@ -657,7 +657,8 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			copies := make([]solver.Copy, 0, len(f.Copies))
 			for j := range f.Copies {
 				cp := &f.Copies[j]
-				plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS}
+				// A copy whose clock runs is no source: nothing is at its name until its file is decided (specs.md §13.4).
+				plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS, Away: cp.GoneNS.Valid}
 				if cp.OldPath != nil {
 					plan.OldPath = *cp.OldPath
 				}

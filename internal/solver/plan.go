@@ -49,6 +49,9 @@ type Copy struct {
 	CreatedBy   string
 	FirstSeenNS int64
 	OldPath     string // where it sits, when it has not followed a rename yet (specs.md §15.12)
+	// Away says that its last look did not find it at its name: its clock runs (specs.md §15.12). It counts, and is
+	// no source until its file is decided, which a tripped guard can put off for days (§13.4).
+	Away bool
 }
 
 // Placement is what a file's effective policy says about where its copies go.
@@ -451,7 +454,7 @@ func counts(c *Copy, d *planDisk) bool {
 }
 
 func isSource(c *Copy, d *planDisk) bool {
-	if c.State != CopyOK && c.State != CopySurplus {
+	if (c.State != CopyOK && c.State != CopySurplus) || c.Away {
 		return false
 	}
 	switch d.State {

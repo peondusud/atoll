@@ -8,7 +8,7 @@ A milestone is reached when its phase and every phase before it are done.
 
 | Milestone | Phase | What it brings | Progress |
 |---|---|---|---|
-| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 76 % |
+| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 92 % |
 | **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 35 % |
 | **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 30 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
@@ -40,7 +40,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **The scrub.** `atoll scrub`, and the daemon inside `integrity.window`, check each chunk of the copies due, quarantine a corrupt copy when a healthy one exists, and resume at the chunk the budget reached (§16).
 - **The disk commands.** `atoll disk add`, `show`, `remove` with `--evacuate`, `fail` and `replace`, which edit the configuration keeping every other byte, check the topology and the mount point, and drain a disk through the daemon's passes (§10, §18).
 - **Tests.** The break-glass test, and the failed-mount test (§27).
-- **Contracts and conformance.** 45 vector files and 542 black-box scenarios shared with the Rust version (§29).
+- **Contracts and conformance.** 45 vector files and 543 black-box scenarios shared with the Rust version (§29).
 - **Local CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3 (`test/ci/run.sh`).
 
 ### Remaining
