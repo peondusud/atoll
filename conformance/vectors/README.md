@@ -385,6 +385,31 @@ A case holds the text of a file, and says what loading it gives. Keys are writte
 
 A case has `error`, or `errors`, or at least one of `effective`, `not_set` and `warnings`, and loads in the last case. `path`, `filename` and `ext` are shown as written, not compiled. A rule's keys hold what the file sets, plus `action` and `ignore_case`: its pool-wide values (§24.2) apply when it gives a file its policy, which these vectors do not cover.
 
+### `config_edit.json` — the disk commands' edits of the configuration (§10, §18)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `toml` | string | the text of the file |
+| `op` | string | `add`, `remove` or `state` |
+| `disk` | object | with `add`: the `[[disk]]` to append, its keys `id`, `uuid`, `mount`, `fs`, `role`, `domain`, `tags`, `root`, `workdir` and `state`, each written in this order and left out when absent |
+| `id` | string | with `remove` and `state`: the disk |
+| `state` | string | with `state`: the new state, or `""` to take the key out |
+| `result` | string | the whole text after the edit, byte for byte |
+| `error` | boolean | `true` when the edit is refused: no such disk, disks written as an array of inline tables, or a table below a disk |
+
+### `alerts_plan.json` — what the daemon sends after a pass (§23)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `holding` | array of objects | the conditions that hold, each `key` and `count` |
+| `stored` | array of objects | the rows of the table `alerts`: `key`, `first_ns`, `sent_ns` and `count` |
+| `now_ns`, `remind_ns` | integer | the time, and how often a condition that lasts is sent again |
+| `send` | array of objects | what to send, in key order: `key`, and `why`, `onset`, `more` or `reminder` |
+| `store` | array of objects | the rows to write once those are sent, as `stored` |
+| `keep` | array of objects | the rows of the conditions that hold and are not sent now, with their counts now |
+| `drop` | array of strings | the keys of the conditions that ended, in byte order |
+| `error` | boolean | `true` for a key held twice, a negative count, or a `remind_ns` that is not positive |
+
 ### `policy.json` — the effective policy of a file (§11.3, §12.2, §24.2)
 
 A case loads a configuration, then asks for the policy of one file. The values are the ones the configuration asks for: the fallbacks of a phase not yet implemented (§12.2) are not applied.
