@@ -2,6 +2,17 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The capacity of the pool (specs.md §13.1, §13.3)
+
+Commit "Say what the pool can hold at 1, 2 and 3 copies", on `beta`.
+
+- `atoll capacity` gives, for 1, 2 and 3 copies of every file, the formula of §13.1 over the disks the solver can write to. Beside it comes what the plan reaches without moving a copy: the files that reach that many copies, and the formula over the free space the plan leaves. With `spread_mode = "strict"`, both use the failure domains. It reads the catalog alone and wakes no disk.
+- Verified: the scenarios `capacity`, `capacity-short`, `capacity-strict` and `capacity-planned`, each value worked out by hand; 7 mutants, each caught.
+- **Decided without the maintainer, to confirm:**
+  - **What counts as reaching k copies:** a file the plan does not leave `degraded`, `unavailable`, `name-incompatible` or `name-collision`. Files in `manual` mode are planned as any other.
+  - **`api/schemas/capacity.schema.json`**, a new contract: per level, `theoretical`, `reachable`, `stored` and `short`, with `spread_mode`.
+  - **The free space and states are the last scan's**, so the command wakes no disk.
+
 ## Tags, domains and strict placement (specs.md §12.4, §13.4)
 
 Commit "Place copies by the rules' tags and domains", on `beta`.

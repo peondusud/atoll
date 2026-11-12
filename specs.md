@@ -452,6 +452,7 @@ U(k) = min over j = 0 … k−1 of (S − s1 − … − sj) / (k − j)
 - Hysteresis: rebalancing starts only when the share of bytes correctly placed falls below `[balance].trigger.ratio_below`, or when the bytes to move exceed `or_more_than`.
 - Status indicator: share of files at the wanted level (`atoll status`, §15.11) and, with `balance` (phase 1b), share of bytes correctly placed.
 - Reachable capacity, for each k: the solver plans without running anything, moving no user copy, with every managed file wanted at k copies. The result is the bytes of the files that reach k copies in that plan, plus the formula of §13.1 applied to the free space that plan leaves, minus `min_free`, on each disk. So it accounts for data outside `media/` and for the trash, and it is what Atoll would really do; there is no second algorithm. It reads the whole catalog and wakes no disk.
+- `atoll capacity [--json]` gives both for k = 1, 2 and 3, from the catalog alone: the disks' capacity, free space and state the last scan recorded, and their files. A file reaches k copies in that plan unless it is left `degraded`, `unavailable`, `name-incompatible` or `name-collision`; none waits for `atoll replicate` there. Bytes are of files: a file of 1 MB at 3 copies counts 1 MB. With `[placement] spread_mode = "strict"`, both use the formula of failure domains. Output: `api/schemas/capacity.schema.json`.
 
 ### 13.4 The placement plan
 
@@ -1541,7 +1542,7 @@ atoll init [--pool-id <id> --view-mount <path> [--catalog <path>]]   create the 
 atoll disk add | list | show | remove | fail | replace
 atoll scan [--disk <id>] [--full]        quick: size and times; --full: re-hash everything
 atoll status [--path <path>]             copies, original and states
-atoll capacity
+atoll capacity [--json]                  what the pool holds at 1, 2 and 3 copies, in theory and without moving a copy (§13.3)
 atoll replicate <path> [--now | --force] [--dry-run]
 atoll rules check | explain <path> [--size <size>]
 atoll scrub [--disk <id>] [--path <path>] [--budget <duration>] [--dry-run] [--yes]
