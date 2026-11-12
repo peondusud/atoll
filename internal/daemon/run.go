@@ -74,6 +74,9 @@ type settings struct {
 	fstab        string
 	resetReasons []disks.Reason
 	channels     []alerts.Channel
+	// scrubWindow is integrity.window, maintenance.window when left out, and scrubBudget integrity.scrub_budget.
+	scrubWindow value.Window
+	scrubBudget time.Duration
 }
 
 func readSettings(c *config.Config, opt *Options) (*settings, error) {
@@ -99,6 +102,12 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 	}
 	if s.window, err = value.ParseWindow(text("maintenance.window")); err != nil {
 		return nil, fmt.Errorf("maintenance.window: %w", err)
+	}
+	if s.scrubWindow, err = value.ParseWindow(text("integrity.window")); err != nil {
+		return nil, fmt.Errorf("integrity.window: %w", err)
+	}
+	if s.scrubBudget, err = value.ParseDuration(text("integrity.scrub_budget")); err != nil {
+		return nil, fmt.Errorf("integrity.scrub_budget: %w", err)
 	}
 	if zone := text("timezone"); zone == "local" || zone == "" {
 		s.location = time.Local
@@ -136,6 +145,11 @@ type loop struct {
 	first, reloaded, gone, back bool
 	// hashPending says that files may be waiting for their hash: set by each pass, cleared once none is left.
 	hashPending bool
+	// scrubSpent is what the scrub spent in the stretch of its window that began at scrubOpened, and scrubIdle the
+	// stretch in which it found no copy left to read: copies come due again with the next one (specs.md §16).
+	scrubSpent  time.Duration
+	scrubOpened int64
+	scrubIdle   int64
 	checkDue    int64
 	passDue     *int64
 	lastEnd     *int64
@@ -206,9 +220,16 @@ func (l *loop) run(ctx context.Context) error {
 				}
 			}
 		}
+		// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
+		opened := l.set.scrubWindow.Opened(time.Unix(0, now).In(l.set.location))
+		idle := !opened.IsZero() && l.scrubIdle == opened.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
 			RipeOrigins: origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
-			HashPending: l.hashPending && l.opt.Apply}
+			HashPending: l.hashPending && l.opt.Apply,
+			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
+			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
+			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
+			ScrubSpentOpenedNS: l.scrubOpened}
 		if waiting {
 			in.GroupDueNS = &groupNext
 		}
@@ -226,6 +247,10 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if out.Hash {
 			l.hash(ctx)
+			continue
+		}
+		if out.Scrub {
+			l.scrub(ctx, out.ScrubOpenedNS)
 			continue
 		}
 		timer := time.NewTimer(time.Duration(out.WakeNS - now))
@@ -524,6 +549,50 @@ func (l *loop) hash(ctx context.Context) {
 		l.log.Warn("reading new files' hashes failed: the next pass tries again", "error", err)
 	}
 	l.hashPending = left && err == nil
+}
+
+// scrub reads the copies due for a slice of time, under the catalog's lock, within what is left of the budget of the
+// stretch of integrity.window that began at opened, and moves a corrupt copy to the trash when another is healthy:
+// starting the daemon is the consent (specs.md §15.13, §16). A corrupt copy brings a pass, which sends its alert, and
+// makes the copy moved again.
+func (l *loop) scrub(ctx context.Context, opened int64) {
+	if l.scrubOpened != opened {
+		l.scrubOpened, l.scrubSpent = opened, 0
+	}
+	slice := min(hashSlice, l.set.scrubBudget-l.scrubSpent)
+	start := l.opt.Machine.Now()
+	var out *jobs.ScrubOutcome
+	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
+		var err error
+		out, err = jobs.Scrub(ctx, db, l.opt.Config, l.opt.Machine, jobs.ScrubOptions{Budget: slice, Apply: true, Quarantine: true})
+		return nil, err
+	})
+	l.scrubSpent += time.Duration(l.opt.Machine.Now() - start)
+	if err != nil {
+		if ctx.Err() == nil {
+			l.log.Warn("the scrub failed: it goes on later", "error", err)
+			// Within the budget still, but not at once: a slice of the budget is spent.
+			l.scrubSpent += hashSlice
+		}
+		return
+	}
+	left, corrupt := false, 0
+	for i := range out.Disks {
+		d := &out.Disks[i]
+		left = left || d.Left
+		corrupt += len(d.Corrupt)
+		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Changed) > 0 {
+			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "quarantined", len(d.Quarantined),
+				"kept", len(d.Kept), "changed", len(d.Changed))
+		}
+	}
+	if !left {
+		l.scrubIdle = opened
+	}
+	if corrupt > 0 {
+		now := l.opt.Machine.Now()
+		l.passDue = &now
+	}
 }
 
 // locked runs fn on the catalog, under its lock, which it takes after the others' and lets go of last.

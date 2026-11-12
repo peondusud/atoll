@@ -85,6 +85,7 @@ func TestWindowVectors(t *testing.T) {
 		At     *string `json:"at"`
 		Inside *bool   `json:"inside"`
 		Next   *string `json:"next"`
+		Opened *string `json:"opened"`
 		Error  bool    `json:"error"`
 		Note   string  `json:"note"`
 	}
@@ -113,6 +114,17 @@ func TestWindowVectors(t *testing.T) {
 				} else if got := w.Next(at); !got.Equal(next) {
 					t.Errorf("ParseWindow(%q).Next(%s) = %s, want %s", v.Input, *v.At, got.Format(time.RFC3339Nano), *v.Next)
 				}
+			}
+			if v.Opened != nil {
+				opened, err := time.Parse(time.RFC3339Nano, *v.Opened)
+				if err != nil {
+					t.Errorf("vector %q: opened: %v", v.Input, err)
+				} else if got := w.Opened(at); !got.Equal(opened) {
+					t.Errorf("ParseWindow(%q).Opened(%s) = %s, want %s", v.Input, *v.At, got.Format(time.RFC3339Nano), *v.Opened)
+				}
+			}
+			if !*v.Inside && !w.Opened(at).IsZero() {
+				t.Errorf("ParseWindow(%q).Opened(%s): outside, yet %s", v.Input, *v.At, w.Opened(at))
 			}
 			if w.String() != v.Input {
 				t.Errorf("ParseWindow(%q).String() = %q", v.Input, w.String())

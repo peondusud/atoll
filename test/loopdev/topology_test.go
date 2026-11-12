@@ -31,8 +31,12 @@ func TestTopologyAndImmutable(t *testing.T) {
 	var mapped []string
 	for i := range 2 {
 		name := fmt.Sprintf("atoll-topology-%d-%d", os.Getpid(), i)
-		must(t, "dmsetup", "create", name, "--table", fmt.Sprintf("0 %d linear %s %d", half, loop, int64(i)*half))
-		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "dmsetup", "remove", "-f", name).Run() })
+		// No udev here: the node comes from mknodes, as newMapped does.
+		must(t, "dmsetup", "create", "--noudevsync", "--noudevrules", name, "--table", fmt.Sprintf("0 %d linear %s %d", half, loop, int64(i)*half))
+		must(t, "dmsetup", "mknodes")
+		t.Cleanup(func() {
+			_ = exec.CommandContext(context.Background(), "dmsetup", "remove", "-f", "--noudevsync", name).Run()
+		})
 		must(t, "mkfs.ext4", "-q", "/dev/mapper/"+name)
 		mapped = append(mapped, "/dev/mapper/"+name)
 	}

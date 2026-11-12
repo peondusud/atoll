@@ -67,6 +67,7 @@ A percentage is checked through its use: the share of a total, such as `min_free
 | `at` | string | an instant, in RFC 3339 with an offset; the offset gives the wall-clock time in the configured `timezone` |
 | `inside` | boolean | whether `at` falls inside the window |
 | `next` | string | the first instant inside the window at or after `at`, in `at`'s offset; left out where a case does not ask |
+| `opened` | string | for an `at` inside the window, when the stretch of it that holds `at` began: its start that day, or the day before for a window wrapping past midnight, in `at`'s offset; left out where a case does not ask. Outside, there is none |
 | `error` | boolean | `true` when `input` is rejected |
 
 ### `glob.json` — glob patterns (§29.5)
@@ -329,11 +330,17 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `window`, `timezone` | string | `maintenance.window`, and the IANA zone its wall clock is in |
 | `reloaded` | boolean | the configuration was read again since the last pass |
 | `hash_pending` | boolean | files may be waiting for their hash |
+| `scrub_pending` | boolean | copies may be due for the scrub |
+| `scrub_window` | string | `integrity.window` |
+| `scrub_budget_ns` | integer | `integrity.scrub_budget`, which must be positive when `scrub_pending` |
+| `scrub_spent_ns`, `scrub_spent_opened_ns` | integer | what the scrub spent, and when the stretch of its window it spent it in began |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
 | `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
+| `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, and no hash to read |
+| `scrub_opened_ns` | integer | with `scrub_pending`, inside `scrub_window`, when this stretch of it began; left out otherwise |
 | `wake_ns` | integer | when to look again: `now_ns` when something is due |
-| `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, or a `rescan_every_ns` that is not positive |
+| `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, a `rescan_every_ns` that is not positive, or a scrub budget that is not, with `scrub_pending` |
 
 ### `event_grouping.json` — the watcher's events grouped per path (§15.1)
 

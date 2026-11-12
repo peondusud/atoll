@@ -8,7 +8,7 @@ A milestone is reached when its phase and every phase before it are done.
 
 | Milestone | Phase | What it brings | Progress |
 |---|---|---|---|
-| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 74 % |
+| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 76 % |
 | **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 35 % |
 | **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 30 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
@@ -34,7 +34,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **mergerfs.** `atoll mergerfs-config` (§21.1).
 - **The daemon that runs for good.** fanotify, or inotify, with the events grouped per path; the catalog's lock taken per pass, with commands waiting for it; rescans and new files' hashes inside the maintenance window; the mount check every 30 s; mergerfs's branches changed at runtime; the remount after a USB reset; reload on `SIGHUP`; a systemd unit (§15.13).
 - **Alerts.** ntfy alerts after each pass, kept in the catalog so that a restart sends again only what is due, and `atoll notify test` (§23).
-- **The scrub.** `atoll scrub` checks each chunk of the copies due, quarantines a corrupt copy when a healthy one exists, and resumes at the chunk its budget reached (§16).
+- **The scrub.** `atoll scrub`, and the daemon inside `integrity.window`, check each chunk of the copies due, quarantine a corrupt copy when a healthy one exists, and resume at the chunk the budget reached (§16).
 - **The disk commands.** `atoll disk add`, `show`, `remove` with `--evacuate`, `fail` and `replace`, which edit the configuration keeping every other byte, check the topology and the mount point, and drain a disk through the daemon's passes (§10, §18).
 - **Tests.** The break-glass test, and the failed-mount test (§27).
 - **Contracts and conformance.** 39 vector files and 505 black-box scenarios shared with the Rust version (§29).
@@ -44,19 +44,18 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **The scrub in the daemon**, every `scrub_every` inside its window and budget: `atoll scrub` is done (§16).
-2. **`atoll catalog backup | verify | rebuild`**, with daily backups, 7 kept.
-3. **The owner of a file applied to its other copies.**
-4. **The local API**: a Unix socket, and HTTP with a token.
-5. **The rest of the trash**: `max_size` and its purge order, `restore --to`, the other reasons, and Atoll's empty folders.
-6. **The command line**: `--help`, the French translation, and durations written as the configuration writes them.
-7. **Smaller limits**:
+1. **`atoll catalog backup | verify | rebuild`**, with daily backups, 7 kept.
+2. **The owner of a file applied to its other copies.**
+3. **The local API**: a Unix socket, and HTTP with a token.
+4. **The rest of the trash**: `max_size` and its purge order, `restore --to`, the other reasons, and Atoll's empty folders.
+5. **The command line**: `--help`, the French translation, and durations written as the configuration writes them.
+6. **Smaller limits**:
    - an overwriting move or a swap of two names;
    - a folder renamed into the old name of one that waits;
    - operation ids after `catalog rebuild`;
    - NTFS short names;
    - a nested btrfs subvolume, walked as another mount.
-8. **The memory of a daemon that runs for days**, measured.
+7. **The memory of a daemon that runs for days**, measured.
 
 ## Beta: phase 1b, the complete Linux MVP
 

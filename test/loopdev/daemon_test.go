@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/daemon"
 	"github.com/peondusud/atoll/internal/jobs"
@@ -126,6 +128,19 @@ func unmountWhenFree(t *testing.T, at string) {
 	}
 }
 
+// loopbackUp brings up the loopback interface, which the qemu guest leaves down, for a test server on 127.0.0.1.
+func loopbackUp(t *testing.T) {
+	t.Helper()
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	mustDo(t, err)
+	defer func() { _ = unix.Close(fd) }()
+	ifr, err := unix.NewIfreq("lo")
+	mustDo(t, err)
+	mustDo(t, unix.IoctlIfreq(fd, unix.SIOCGIFFLAGS, ifr))
+	ifr.SetUint16(ifr.Uint16() | unix.IFF_UP)
+	mustDo(t, unix.IoctlIfreq(fd, unix.SIOCSIFFLAGS, ifr))
+}
+
 // ntfyTitles is a ntfy server that keeps the title of each alert it gets.
 type ntfyTitles struct {
 	mu     sync.Mutex
@@ -164,6 +179,7 @@ func TestDaemonRunsForGood(t *testing.T) {
 			// The maintenance window around now, for the new files' hashes; a file of solo/ has no copy to make,
 			// so its hash can only come from that reading.
 			window := time.Now().Add(-time.Hour).Format("15:04") + "-" + time.Now().Add(time.Hour).Format("15:04")
+			loopbackUp(t)
 			ntfy := &ntfyTitles{}
 			srv := httptest.NewServer(ntfy)
 			defer srv.Close()

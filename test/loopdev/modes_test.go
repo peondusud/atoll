@@ -24,10 +24,11 @@ func TestBranchModes(t *testing.T) {
 	pool := viewOf(t, b)
 	keep, other := filepath.Join(b.keep, "media"), filepath.Join(at, "media")
 	mustDo(t, os.WriteFile(filepath.Join(other, "only-there.mkv"), []byte("x"), 0o644))
-	// A third branch, RW, so that a create has somewhere to go.
+	// A third branch, RW, so that a create has somewhere to go: with a minfreespace of its own, as mergerfs's
+	// default of 4G leaves out a branch on the guest's memory.
 	third := filepath.Join(t.TempDir(), "third")
 	mustDo(t, os.MkdirAll(third, 0o755))
-	want := keep + "=NC:" + third + "=RW:" + other + "=RO"
+	want := keep + "=NC:" + third + "=RW,1M:" + other + "=RO"
 	mustDo(t, view.WriteBranches(pool, want))
 	got, err := view.ReadBranches(pool)
 	mustDo(t, err)

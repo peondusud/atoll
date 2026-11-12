@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A correction: the qemu runs of this night (test/qemu/run.sh)
+
+Commit "Run the scrub in the daemon", on `develop`.
+
+- **What was claimed.** The commits "Send alerts through ntfy", "Add a disk to the pool" and "Check that mergerfs takes the NC and RO branches at runtime", and their entries below, say that `TestDaemonRunsForGood` with its alerts, `TestTopologyAndImmutable` and `TestBranchModes` passed in qemu. They had not run: `run.sh` booted `bin/qemu/loopdev.test` as the CI of `cec308f` had built it, so a new test reported `PASS` with nothing run, and `TestDaemonRunsForGood` ran its old code.
+- **What a rebuilt binary found.** All four failed, each for its test or the guest, not for the code under test: the guest left its loopback interface down, so the daemon's alert, computed and sent, met "network is unreachable" (the daemon logged it, and would have tried again within 5 minutes); a RW branch with no `minfreespace` of its own fell under mergerfs's default of 4G on the guest's memory; the scrub test waited for the 10 minutes of `settle` before the copy could be made again; and without udev, a device-mapper target needs `dmsetup mknodes`. With those fixed, all four pass on Linux 6.12 and 7.3, their `=== RUN` lines read.
+- **So it does not happen again.** `run.sh` refuses a test binary older than the code beside it, and LESSONS.md says why.
+
 ## The scrub, with quarantine (specs.md §9, §16, §25)
 
 Commit "Scrub the copies, and quarantine the corrupt ones", on `develop`.
@@ -9,6 +17,7 @@ Commit "Scrub the copies, and quarantine the corrupt ones", on `develop`.
 - **`jobs.Scrub`** reads the copies due, one disk at a time: never verified first, then the oldest verified. Each chunk is checked against its hash. A copy that matches is verified. A chunk that does not is read again past the page cache, after a look that the copy's name, size and times are unchanged: a copy that changed is a modification, left for the next pass; one that still does not match is `corrupt`, as is its file, with a `corrupt` event first.
 - **Quarantine.** A corrupt copy goes to the trash, reason `quarantined`, when another copy, read whole first, is healthy; the next pass makes it again from that one. With none, every copy stays.
 - **The budget.** When it runs out in a copy, the new table `scrub_cursor` (`0005_scrub.sql`) records the copy, the next chunk, and its row's size and times; the next scrub resumes there, or from the start of a copy that changed.
+- **In the daemon.** With no hash to read, inside `integrity.window`, it scrubs by slices of 30 s under the lock, within `scrub_budget` per stretch of the window, and quarantines, as starting it is the consent; a corrupt copy brings a pass, for the alert and the copy made again. `Wake` says when, with ten more vectors in `daemon_wake.json`, and `value.Window.Opened` tells a stretch from the next, with six more in `window.json`. `TestScrubFindsRot`, in qemu on Linux 6.12 and 7.3, changes a byte of an ext4 copy on the device itself: the scrub finds it, quarantines it, and the next pass makes it again.
 - **`atoll scrub [--disk] [--path] [--budget] [--dry-run] [--yes]`**: without `--yes` it records and says what it would move, exit 3; `--dry-run` records nothing. Output `api/schemas/scrub.schema.json`. `fsx.File` gained `DropCache`, for the second read.
 - **Verified.** Unit tests rot a copy as a disk would, same size and the catalog none the wiser: quarantined, then made again by the next pass; two copies rotted, both kept and the file `corrupt`; a copy changed left for the pass; a dry scrub writes nothing; a budget run out in the middle of a 8 MiB file resumes at its second chunk and reads only the rest; `--path` by whole components. Two scenarios: copies due after `scrub_every`, `--disk`, `--path`, `--dry-run`, a changed copy never called corrupt, and the usage errors. A conformance build cannot rot a file, so corruption is judged by the unit tests only.
 - **Decided without the maintainer, to confirm:**

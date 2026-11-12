@@ -17,6 +17,12 @@ if [ ! -x "$built/loopdev.test" ] || [ ! -f "$built/repo/go.mod" ]; then
 	echo "no $built/loopdev.test or $built/repo/go.mod: run make qemu-build first" >&2
 	exit 2
 fi
+# A binary older than the code beside it tests other code, and a test it lacks reports PASS, having run nothing.
+newer=$(find "$here/../loopdev" "$here/../../internal" "$here/../../cmd" -name '*.go' -newer "$built/loopdev.test" -print -quit 2>/dev/null)
+if [ -n "$newer" ]; then
+	echo "$built/loopdev.test is older than ${newer#"$here/../../"}: run make qemu-build first" >&2
+	exit 2
+fi
 
 export DEBIAN_FRONTEND=noninteractive
 echo "installing the guest's tools and Debian's kernel"

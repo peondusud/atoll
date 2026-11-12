@@ -43,15 +43,26 @@ type WakeInput struct {
 	Location      *time.Location
 	// HashPending says that files may be waiting for their hash, which is read inside the window.
 	HashPending bool
+	// ScrubPending says that copies may be due for the scrub, which reads them inside ScrubWindow, integrity.window,
+	// ScrubBudgetNS a stretch of it (specs.md §16). ScrubSpentNS is what the stretch that began at
+	// ScrubSpentOpenedNS spent: a stretch begun at another time has a budget of its own.
+	ScrubPending       bool
+	ScrubWindow        value.Window
+	ScrubBudgetNS      int64
+	ScrubSpentNS       int64
+	ScrubSpentOpenedNS int64
 }
 
 // WakeOutput says what to do now, and when to look again. Hash says to read new files' hashes, once any check
-// and pass due are done.
+// and pass due are done, and Scrub to scrub, when there is no hash to read. ScrubOpenedNS is when the stretch of
+// the scrub's window that holds now began, 0 outside it or with no scrub pending.
 type WakeOutput struct {
-	Check   bool
-	Because []string
-	Hash    bool
-	WakeNS  int64
+	Check         bool
+	Because       []string
+	Hash          bool
+	Scrub         bool
+	ScrubOpenedNS int64
+	WakeNS        int64
 }
 
 // Wake says whether the mount check and a pass are due at a time, and when to wake when nothing is (specs.md
@@ -105,7 +116,25 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 		out.Hash = in.Window.Contains(nowLocal)
 		earliest(in.Window.Next(nowLocal).UnixNano())
 	}
-	if len(out.Because) > 0 || out.Hash {
+	if in.ScrubPending {
+		if in.ScrubBudgetNS <= 0 {
+			return WakeOutput{}, fmt.Errorf("wake: the scrub's budget must be positive, not %d", in.ScrubBudgetNS)
+		}
+		nowLocal := time.Unix(0, now).In(in.Location)
+		opened := in.ScrubWindow.Opened(nowLocal)
+		switch {
+		case opened.IsZero():
+			earliest(in.ScrubWindow.Next(nowLocal).UnixNano())
+		case in.ScrubSpentOpenedNS != opened.UnixNano() || in.ScrubSpentNS < in.ScrubBudgetNS:
+			out.ScrubOpenedNS = opened.UnixNano()
+			out.Scrub = !out.Hash
+		default:
+			// The budget of this stretch is spent: the next stretch begins a day after this one did.
+			out.ScrubOpenedNS = opened.UnixNano()
+			earliest(in.ScrubWindow.Next(opened.AddDate(0, 0, 1)).UnixNano())
+		}
+	}
+	if len(out.Because) > 0 || out.Hash || out.Scrub {
 		wake = now
 	}
 	out.WakeNS = max(wake, now)
