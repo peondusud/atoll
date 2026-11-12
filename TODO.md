@@ -2,6 +2,32 @@
 
 Open work, in a suggested order. Finished work is in [DONE.md](DONE.md), lessons in [LESSONS.md](LESSONS.md). Items marked **decision** change a contract (specs.md §29.3) or an invariant: ask the maintainer first (CLAUDE.md).
 
+## Decisions for the alpha (the maintainer, 2026-11-12)
+
+The work goes to the `develop` branch, with one pull request once the big work is done. An ambiguity these do not settle takes the safest option, and DONE.md lists it as decided without the maintainer, to confirm. New contracts follow the style of the existing ones, vectors or scenarios first, each listed for review.
+
+- **Order:** the daemon that runs for good, then ntfy alerts, `atoll names check`, the disk commands, the scrub. The alpha also takes in `atoll catalog backup | verify | rebuild`, `atoll disk fail` and `disk replace`, the owner applied to the other copies, and the local API.
+- **The daemon:**
+  - **Passes.** A pass walks every disk, as `daemon --until-idle` does: each pass confirms every writable disk anyway, and sparing the disks' sleep is phase 2b.
+  - **The lock.** The catalog's lock is taken for each pass, and a command that finds it taken waits for it, saying so, instead of exiting with 1.
+  - **`--foreground`.** `atoll daemon` without it is the same as with it.
+  - **The account.** A systemd unit runs it as a dedicated user `atoll`, with the capabilities `CAP_SYS_ADMIN`, `CAP_DAC_READ_SEARCH`, `CAP_DAC_OVERRIDE`, `CAP_CHOWN` and `CAP_FOWNER`, the group `disk`, `NoNewPrivileges`, `ProtectHome=read-only` and `PrivateTmp`. Measured: so the user writes mergerfs's runtime branches, and runs `mount` and `umount`.
+  - **After a USB reset.** With `health.remount_after_reset`, the remount goes through the fstab entry of the mount point: `umount -l`, then `mount <mount point>`. Without an entry, an alert only. A dirty NTFS volume is never forced.
+- **The disk commands:**
+  - **`disk add`.** It takes the disk's id from the mount point's last component, or `--id`; one that is not a valid identifier, or is taken, is refused.
+  - **`disk remove --evacuate`** is in the alpha.
+  - **`chattr +i`.** The flag of the covered mount point is read through a non-recursive bind mount of its parent, in a private, throwaway mount namespace.
+- **The scrub.** A corrupt copy goes to the trash when a healthy copy exists, re-verified first, and replication re-creates it. A file with one copy is marked and alerted only. A scrub resumes at the chunk where its budget stopped, through a catalog migration.
+- **Alerts.**
+  - **When.** The daemon sends them, not the commands: when a condition appears, then every 24 h while it lasts. The files of one pass go in one alert, and the state of the alerts is kept in the catalog.
+  - **ntfy.** A new key, `alerts.ntfy_token_file`, gives ntfy's token. `atoll notify test` sends a test alert.
+- **The local API.** A Unix socket, and HTTP with a token (§26), described in `api/openapi.yaml`.
+- **Settled at the same time:**
+  - **The `ntfs` driver** stays `readonly` in the alpha.
+  - **A nested btrfs subvolume** is another mount: the walk leaves it out and lists it in `other_mounts`.
+  - **The choices DONE.md listed as "to confirm"** are confirmed.
+  - **Catalog backups.** They are daily, in `<catalog folder>/backups/`, 7 kept. With `catalog_on_disks`, the latest also goes in each disk's `Atoll/catalog/`. A rebuild sets the old catalog aside.
+
 ## Names (specs.md §30)
 
 To decide before the solver, the scanner and `atoll names check` need them:
@@ -53,7 +79,7 @@ Every item here is a **decision**:
 - A folder renamed on one disk into the old name of one that waits there (`mv Dx N; mv D Dx`, while a copy below Dx on another disk has a clock running, is held by the guard, or cannot be read): what only other disks hold below Dx stays there, in the folder now named Dx (specs.md §15.12, `daemon-folder-rotation-while-waiting`). The fix holds back what lands in that old name, folders and copies moved in from elsewhere, until the one that waits is decided. It needs that wait known before the files of a pass are decided, and must not block a cycle, where each folder lands in the other's old name.
 - The owner applied to the other copies (§15.4, Limits), which the maintainer chose to leave for later when the mode came: it would take `copies.uid` and `copies.gid`, recorded as `copies.mode` is, and operations `chown` journaled with their reprise. Until then a `chown` is a metadata change that applies nothing. The grouping of events per path comes with the watcher (§15.1).
 - What modifications leave as limits (§15.4, §15.12): an overwriting move (`mv P Q`, Q there) and a swap of two names on one disk, and a copy replaced by anything but a regular file, which are only reported. `deletes.direct = "restore"` (§15.5), which the copy pipeline now allows, still propagates nothing.
-- What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), are to confirm.
+- What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), were confirmed on 2026-11-12.
 - A volume that ntfs3 left with names that disagree (§17.2) shows only as a warning in the log and exit 4 on every run on that disk: say what to do, which is a repair of the volume, in an alert once alerts exist, and in `atoll status`.
 - The rest of the trash (§17): `[trash].max_size` and its purging order, the `.chunks` folders with `repair`, `restore --to` with the copy pipeline, the link guard, the alert for a name the driver refuses, the reasons other than `surplus`, `deleted` and `renamed`, and removing Atoll's own folders below the root once they are empty (§6.1). A folder's attributes other than its mode and owner wait for the pipeline.
 - Detection-only scrub. `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`, and `repair` (phase 1b) must look for the conflict again before it clears that.
