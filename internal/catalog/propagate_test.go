@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -23,6 +24,49 @@ func (b *testDB) count(query string, args ...any) int {
 		b.t.Fatal(err)
 	}
 	return n
+}
+
+// A FileFinder reads what FileByID and the jobs do, as often as asked, with one statement each: a file with its
+// copies, its path, whether a job of it runs, and nothing for an id no file has.
+func TestFileFinder(t *testing.T) {
+	b := newPropagationDB(t)
+	b.exec("INSERT INTO copies(file_id, disk_id, file_key, nlink, size, mtime_ns, ctime_ns, gone_ns, created_by, first_seen_ns, state) VALUES (1, 'u1', '7', 1, 1, 1, 1, 9, 'user', 1, 'ok')")
+	b.exec("INSERT INTO copies(file_id, disk_id, created_by, first_seen_ns, state) VALUES (1, 'u2', 'atoll', 2, 'pending')")
+	finder, err := NewFileFinder(t.Context(), b.sql())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := finder.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	want, err := FileByID(t.Context(), b.sql(), 1)
+	if err != nil || want == nil || len(want.Copies) != 2 {
+		t.Fatalf("%+v, %v", want, err)
+	}
+	for range 3 {
+		got, err := finder.ByID(t.Context(), 1)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%+v, %v; want %+v", got, err, want)
+		}
+		if got, err := finder.ByID(t.Context(), 2); err != nil || got != nil {
+			t.Fatalf("no file: %+v, %v", got, err)
+		}
+		if path, ok, err := finder.Path(t.Context(), 1); err != nil || !ok || path != "a" {
+			t.Fatalf("%q, %v, %v", path, ok, err)
+		}
+		if path, ok, err := finder.Path(t.Context(), 2); err != nil || ok || path != "" {
+			t.Fatalf("no file: %q, %v, %v", path, ok, err)
+		}
+	}
+	for _, state := range []string{JobQueued, JobRunning} {
+		b.exec("DELETE FROM jobs")
+		b.exec("INSERT INTO jobs(kind, file_id, src_disk, dst_disk, state) VALUES ('replicate', 1, 'u1', 'u2', ?)", state)
+		if running, err := finder.Running(t.Context(), 1); err != nil || running != (state == JobRunning) {
+			t.Errorf("%s: running %v, %v", state, running, err)
+		}
+	}
 }
 
 // A deletion decided again leaves the job queued for it as it is. A job for another reason, or one no longer

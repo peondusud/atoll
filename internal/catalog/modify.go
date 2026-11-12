@@ -202,15 +202,6 @@ func setChunks(ctx context.Context, tx *sql.Tx, fileID int64, chunks []byte) err
 	return nil
 }
 
-// RunningJob says whether a job of a file is running: its operation is one a reprise could not conclude.
-func RunningJob(ctx context.Context, db *sql.DB, fileID int64) (bool, error) {
-	var running bool
-	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM jobs WHERE file_id = ? AND state = 'running')", fileID).Scan(&running); err != nil {
-		return false, fmt.Errorf("jobs: %w", err)
-	}
-	return running, nil
-}
-
 // refreshStale keeps the row of a stale copy that reached the trash, as a pending copy with its replicate job from
 // the copy that changed, and says whether it did: what the stale copy held stays held (specs.md §15.4). Without its
 // trash job, which a later decision may have dropped, nothing says where to copy from, and the row goes as for any

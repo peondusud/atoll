@@ -19,24 +19,34 @@ import (
 
 // modify decides, once the other decisions are made, what a copy edited or replaced means for its file, by path in
 // byte order, one file to a transaction (specs.md §15.4).
-func (p *pass) modify(ctx context.Context) error {
+func (p *pass) modify(ctx context.Context) (err error) {
 	ids := p.changedFiles()
 	if len(ids) == 0 {
 		return nil
 	}
 	defer func() { p.targets = nil }()
+	// Every changed file is read here, even one the guard holds, at each pass while it holds.
+	finder, err := catalog.NewFileFinder(ctx, p.db)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	defer func() {
+		if closeErr := finder.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("catalog: %w", closeErr))
+		}
+	}()
 	type named struct {
 		id   int64
 		path string
 	}
 	list := make([]named, 0, len(ids))
 	for _, id := range ids {
-		f, err := catalog.FileByID(ctx, p.db, id)
+		path, ok, err := finder.Path(ctx, id)
 		if err != nil {
 			return fmt.Errorf("catalog: %w", err)
 		}
-		if f != nil {
-			list = append(list, named{id: id, path: f.Path})
+		if ok {
+			list = append(list, named{id: id, path: path})
 		}
 	}
 	slices.SortFunc(list, func(a, b named) int { return strings.Compare(a.path, b.path) })
@@ -48,7 +58,7 @@ func (p *pass) modify(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("modify: %w", err)
 		}
-		if err := p.modifyFile(ctx, n.id, positions); err != nil {
+		if err := p.modifyFile(ctx, finder, n.id, positions); err != nil {
 			return err
 		}
 		if p.sinkErr != nil {
@@ -98,8 +108,8 @@ func isChanged(c *solver.ModCopy) bool {
 
 // modInput says what a modification needs of a file, but for the size a changed copy has now, which takes a look.
 // What is not due yet counts in waiting.
-func (p *pass) modInput(ctx context.Context, f *catalog.FileRow, positions map[string]int) (*solver.ModInput, map[string]int64, error) {
-	running, err := catalog.RunningJob(ctx, p.db, f.ID)
+func (p *pass) modInput(ctx context.Context, finder *catalog.FileFinder, f *catalog.FileRow, positions map[string]int) (*solver.ModInput, map[string]int64, error) {
+	running, err := finder.Running(ctx, f.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("catalog: %w", err)
 	}
@@ -144,8 +154,8 @@ func (p *pass) modInput(ctx context.Context, f *catalog.FileRow, positions map[s
 	return in, ctimes, nil
 }
 
-func (p *pass) modifyFile(ctx context.Context, id int64, positions map[string]int) error {
-	f, err := catalog.FileByID(ctx, p.db, id)
+func (p *pass) modifyFile(ctx context.Context, finder *catalog.FileFinder, id int64, positions map[string]int) error {
+	f, err := finder.ByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
@@ -156,7 +166,7 @@ func (p *pass) modifyFile(ctx context.Context, id int64, positions map[string]in
 	if f.State == string(solver.StateConflict) || f.State == string(solver.StateCorrupt) {
 		return nil
 	}
-	in, ctimes, err := p.modInput(ctx, f, positions)
+	in, ctimes, err := p.modInput(ctx, finder, f, positions)
 	if err != nil {
 		return err
 	}

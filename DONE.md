@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A pass while the mass-modification guard holds (specs.md §15.6, §26)
+
+Commit "Read the files a pass looks at again through prepared statements", on `develop`.
+
+- Found by the same soak. While the mass-modification guard holds a file, each pass reads it again, its row twice and whether a job of it runs, and each read prepared its query anew: 95 µs a file held, measured natively, most of a pass that held 2,000 (260 ms, against 64 ms with nothing held). Under qemu without KVM, that is what slowed the soak's passes from the start.
+- `catalog.FileFinder` prepares those three queries once a pass: 20 µs a file held, 103 ms for 2,000. What a pass decides does not change.
+- Verified: a unit test of the finder against `FileByID`; the catalog and jobs tests under the race detector; the conformance suite.
+
 ## A copy that is gone is no source (specs.md §13.4, §14.2)
 
 Commit "Give no job to a file whose only source is gone", on `develop`.

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -53,12 +54,18 @@ func FileAt(ctx context.Context, db *sql.DB, path string) (*FileRow, error) {
 
 // FileByID gives one file, with its copies, and nil when there is none.
 func FileByID(ctx context.Context, db *sql.DB, id int64) (*FileRow, error) {
-	r := NewFileReader(db)
-	rows, err := db.QueryContext(ctx, "SELECT "+fileColumns+" FROM (SELECT * FROM files WHERE id = ?) f LEFT JOIN copies c ON c.file_id = f.id ORDER BY c.disk_id", id)
+	rows, err := db.QueryContext(ctx, fileByIDQuery, id)
 	if err != nil {
 		return nil, fmt.Errorf("files: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
+	return firstFile(NewFileReader(db), rows)
+}
+
+const fileByIDQuery = "SELECT " + fileColumns + " FROM (SELECT * FROM files WHERE id = ?) f LEFT JOIN copies c ON c.file_id = f.id ORDER BY c.disk_id"
+
+// firstFile gives the file the rows hold, or nil when they hold none.
+func firstFile(r *FileReader, rows *sql.Rows) (*FileRow, error) {
 	list, err := r.readFiles(rows)
 	if err != nil {
 		return nil, err
@@ -67,6 +74,73 @@ func FileByID(ctx context.Context, db *sql.DB, id int64) (*FileRow, error) {
 		return nil, nil //nolint:nilnil // no file there is an answer
 	}
 	return &list[0], nil
+}
+
+// FileFinder reads files one at a time by id, through statements prepared once. A pass that reads thousands of them,
+// as when the mass-modification guard holds every file a tool rewrote, spent most of its time preparing the same
+// queries again: 95 µs a file held, measured, and 20 µs prepared.
+type FileFinder struct {
+	reader              *FileReader
+	byID, path, running *sql.Stmt
+}
+
+// NewFileFinder prepares a FileFinder; Close releases its statements.
+func NewFileFinder(ctx context.Context, db *sql.DB) (*FileFinder, error) {
+	f := &FileFinder{reader: NewFileReader(db)}
+	var err error
+	if f.byID, err = db.PrepareContext(ctx, fileByIDQuery); err == nil {
+		if f.path, err = db.PrepareContext(ctx, "SELECT lpath FROM files WHERE id = ?"); err == nil {
+			f.running, err = db.PrepareContext(ctx, runningJobQuery)
+		}
+	}
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("files: %w", err), f.Close())
+	}
+	return f, nil
+}
+
+// Close releases the statements.
+func (f *FileFinder) Close() error {
+	var errs []error
+	for _, s := range []*sql.Stmt{f.byID, f.path, f.running} {
+		if s != nil {
+			errs = append(errs, s.Close())
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ByID is FileByID.
+func (f *FileFinder) ByID(ctx context.Context, id int64) (*FileRow, error) {
+	rows, err := f.byID.QueryContext(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("files: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return firstFile(f.reader, rows)
+}
+
+// Path gives a file's path, and false when no file has that id.
+func (f *FileFinder) Path(ctx context.Context, id int64) (string, bool, error) {
+	var raw []byte
+	switch err := f.path.QueryRowContext(ctx, id).Scan(&raw); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("files: %w", err)
+	}
+	return string(raw), true, nil
+}
+
+const runningJobQuery = "SELECT EXISTS(SELECT 1 FROM jobs WHERE file_id = ? AND state = 'running')"
+
+// Running says whether a job of a file is running: its operation is one a reprise could not conclude.
+func (f *FileFinder) Running(ctx context.Context, fileID int64) (bool, error) {
+	var running bool
+	if err := f.running.QueryRowContext(ctx, fileID).Scan(&running); err != nil {
+		return false, fmt.Errorf("jobs: %w", err)
+	}
+	return running, nil
 }
 
 // Waiting counts the copies whose clock has not run out, and says when the first does.
