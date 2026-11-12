@@ -154,7 +154,9 @@ type loop struct {
 	backupOpened int64
 	checkDue     int64
 	passDue      *int64
-	lastEnd      *int64
+	// closed holds what ripe groups said was closed after a write, until a pass takes it (specs.md §14.1).
+	closed  jobs.Closed
+	lastEnd *int64
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -180,7 +182,7 @@ func Run(ctx context.Context, opt Options) error {
 		return fmt.Errorf("%w: %w", ErrStartup, err)
 	}
 	l := &loop{
-		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true,
+		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true, closed: jobs.Closed{},
 		watcher: watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
 	}
 	defer l.watcher.Close()
@@ -214,6 +216,9 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		now := l.opt.Machine.Now()
 		ripe, _, groupNext, waiting := l.grouping.Ripe(now)
+		for _, path := range ClosedPaths(ripe) {
+			l.closed[path] = true
+		}
 		var origins []string
 		for _, g := range ripe {
 			for _, o := range g.Origins {
@@ -416,7 +421,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	sink := &passSink{}
 	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
-		outcome, err := jobs.RunTo(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink)
+		outcome, err := jobs.RunClosed(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
 		if err != nil {
 			return nil, err
 		}
@@ -450,6 +455,8 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		l.log.Error("the pass failed", "error", err)
 		return
 	}
+	// What the watcher saw closed served this pass.
+	l.closed = jobs.Closed{}
 	l.passDue = nil
 	l.hashPending = true
 	if outcome.NextDue.Valid {
@@ -732,4 +739,18 @@ func (l *loop) branches(ctx context.Context, db *sql.DB) {
 		return
 	}
 	l.log.Info("mergerfs's branches changed", "from", current, "to", want)
+}
+
+// ClosedPaths gives the paths of the ripe groups that say a file was closed after a write by someone other than
+// Atoll, in the order of the groups: Atoll's own copies close files too, and a folder is no file (specs.md §14.1).
+func ClosedPaths(ripe []watch.Group) []string {
+	var out []string
+	for i := range ripe {
+		g := &ripe[i]
+		if g.Folder || !slices.Contains(g.Kinds, watch.KindWritten) || !slices.ContainsFunc(g.Origins, func(o string) bool { return o != watch.OriginAtoll }) {
+			continue
+		}
+		out = append(out, g.Path)
+	}
+	return out
 }

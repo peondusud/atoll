@@ -148,6 +148,8 @@ type pass struct {
 	// the files whose copy waits for settle, and the changed copies not yet due, and when the first of them is due
 	copiesWaiting int64
 	copiesDue     sql.NullInt64
+	// closed is what the watcher saw closed and quiet since: a file in immediate mode there waits for no settle.
+	closed Closed
 	// settled says that the copies worked out each file, and that nothing ran since
 	settled bool
 	out     *Outcome
@@ -170,11 +172,21 @@ func Run(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, app
 	return RunTo(ctx, db, c, m, apply, nil)
 }
 
+// Closed holds the logical paths the watcher saw closed after a write by someone other than Atoll, then left alone
+// for deletes.debounce: a file in immediate mode at one of them is copied without waiting for settle (specs.md §12.3,
+// §14.1).
+type Closed map[string]bool
+
 // RunTo does all the work that is due, once (specs.md §15.12), and tells a sink as it goes. Without
 // apply it writes nothing to a disk, and answers as if every difference it sees were due.
 func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink) (*Outcome, error) {
+	return RunClosed(ctx, db, c, m, apply, sink, nil)
+}
+
+// RunClosed is RunTo for the daemon that runs for good, which tells it what its watcher saw closed.
+func RunClosed(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) (*Outcome, error) {
 	p := &pass{
-		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink,
+		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink, closed: closed,
 		rows: map[string]int64{}, walked: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
 		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
 		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},

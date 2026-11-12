@@ -2,6 +2,16 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The immediate mode (specs.md §12.3, §14.1)
+
+Commit "Copy a file in immediate mode once it is closed", on `develop`.
+
+- With it, the beta's replication modes are complete. The daemon that runs for good hands each pass the paths its watcher saw closed after a write, by anyone but Atoll, then left alone for `deletes.debounce`. A file in `immediate` mode at one of them is copied at once, without waiting for its `settle`. A file no such group told of, as one a walk finds, and every file of `daemon --until-idle`, which watches nothing, waits for its `settle`, as in `deferred`. No mode warns of a later phase any more.
+- Verified: `TestImmediateCopiesOnceClosed`; `TestClosedPaths`; the scenario `daemon-immediate-without-watcher.json`; `TestImmediateCopiesOnClose` in qemu on Linux 6.12 and 7.3, where a file written through mergerfs is copied in under 3 s with a `settle` of an hour, while the file in `deferred` mode beside it waits; four mutants, each caught.
+- **Decided without the maintainer, to confirm:**
+  - What the watcher saw closed serves the next pass only: a copy that pass could not queue waits for its `settle` then.
+  - A close by Atoll's own process never counts; one by mergerfs does, as that is how a user writes in phase 1.
+
 ## Alerts by mail (specs.md §23)
 
 Commit "Send alerts by mail", on `develop`.

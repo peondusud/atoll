@@ -90,12 +90,17 @@ func (p *pass) copies(ctx context.Context) error {
 
 // settledCopies keeps the copies of the files whose settle has passed since they were first seen, and counts
 // the files that still wait for it (specs.md §14.1): with no watcher, that is all that tells a file still
-// being written. The copies of one file come together.
+// being written. A file in immediate mode the watcher saw closed, and quiet since, waits for nothing. The copies of
+// one file come together.
 func (p *pass) settledCopies(jobs []watch.PlannedJob) []watch.PlannedJob {
 	last := int64(-1)
 	return slices.DeleteFunc(jobs, func(j watch.PlannedJob) bool {
 		size := j.Size
-		due := j.FirstSeenNS + p.config.Policy(j.Path, &size).Settle.Nanoseconds()
+		policy := p.config.Policy(j.Path, &size)
+		if policy.Mode == "immediate" && p.closed[j.Path] {
+			return false
+		}
+		due := j.FirstSeenNS + policy.Settle.Nanoseconds()
 		if p.now >= due {
 			return false
 		}

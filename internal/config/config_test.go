@@ -321,9 +321,6 @@ func TestLaterPhaseWarnings(t *testing.T) {
 		"notify.plex.url",
 		"placement.colocate", // set by the energy preset, unlike new_files, which the file sets
 		"read.classes",
-		"rule[2].mode",
-		"rule[3].mode",
-		"rule[4].mode",
 		"rule[5].cache_min_age",
 		"rule[5].spread_mode",
 		"rule[6].cache_min_age",
@@ -344,8 +341,6 @@ func TestFallbackWarnings(t *testing.T) {
 	c, err := Parse([]byte(`pool_id = "p"
 [view]
 mount = "/srv/pool"
-[defaults]
-mode = "immediate"
 [placement]
 new_files = "ordered"
 [integrity]
@@ -360,7 +355,7 @@ enabled = false
 	for _, w := range c.Warnings {
 		got[w.Key] = w.Message
 	}
-	if len(got) != 2 || !strings.Contains(got["defaults.mode"], "works as deferred") || !strings.Contains(got["placement.new_files"], "works as most-free") {
+	if len(got) != 1 || !strings.Contains(got["placement.new_files"], "works as most-free") {
 		t.Errorf("warnings: %v", c.Warnings)
 	}
 }

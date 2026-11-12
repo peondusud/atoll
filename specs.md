@@ -369,7 +369,7 @@ A preset sets only the keys listed here; anything set explicitly wins. `replicas
 | `energy` | replicas = 1, new_files = ordered, colocate = season, mode = scheduled, cache.enabled = true when a disk has `role = "cache"` |
 | `capacity` | replicas = 0, new_files = most-free |
 
-Until a strategy is implemented (see §28), it falls back to `most-free`, and the mode `immediate` falls back to `deferred`, with a warning when the configuration loads (§24.4).
+Until a strategy is implemented (see §28), it falls back to `most-free`, with a warning when the configuration loads (§24.4).
 
 ### 12.3 Replication modes
 
@@ -517,7 +517,7 @@ Rules:
 - A job runs as one operation `kind = create` (§14.2) at a time on its target disk. One that ends with `replicated` goes, its pending copy having become `ok`. After `io-error`, `changed` or `no-room` it stays `queued`, `attempts` one more, and after `changed` `not_before_ns` is `settle` from now (§14). After `conflict`, `path-taken` or `name-refused` it goes with its pending copy, and the next plan decides again: the next walk of that disk finds what took the path, and that disk then holds a copy of the file.
 - A file in `conflict` (§15.7) is never queued, as nothing says which version to copy.
 - A stale copy that reaches the trash becomes a pending copy, and its `replicate` job reads the copy that changed, whatever the mode and `settle` (§15.4). A modification drops every queued job of its file, as its source may be stale; a job that starts from a copy no longer a source (§13.4) goes with its pending copy, as `changed`, and the next plan decides again.
-- The daemon queues, in each pass and after the work of propagation, the copies the plan wants of every file not in `manual` mode once `settle` has passed since the file was first seen (`files.first_seen_ns`): `immediate` falls back to `deferred` until it exists (§12.2). With no watcher, that is all that tells a file still being written; a source that still changes is found by the copy, which ends `changed` and waits `settle` again. It then runs, one at a time, every queued job whose `not_before_ns` has passed, highest `priority` first, then in the order the plan queued them. The copy of a file in `scheduled` mode runs only inside `[replication].window`, in the time zone of `timezone`: outside it, the job waits in the queue, counts in `waiting`, and `next_due` says when the window opens, which wakes the daemon then (§15.13). `atoll replicate --now` runs it whatever the time.
+- The daemon queues, in each pass and after the work of propagation, the copies the plan wants of every file not in `manual` mode once `settle` has passed since the file was first seen (`files.first_seen_ns`). A file in `immediate` mode waits for nothing once the daemon that runs for good saw it closed after a write by someone other than Atoll: a group of its watcher at that path, holding `written`, ripened, as nothing happened there for `deletes.debounce` (§15.1). That is `closed and stable` (§12.3). A file no such group told of, as one a walk finds, or any file of `atoll daemon --until-idle`, which watches nothing, waits for `settle`, as in `deferred`. With no watcher, that is all that tells a file still being written; a source that still changes is found by the copy, which ends `changed` and waits `settle` again. It then runs, one at a time, every queued job whose `not_before_ns` has passed, highest `priority` first, then in the order the plan queued them. The copy of a file in `scheduled` mode runs only inside `[replication].window`, in the time zone of `timezone`: outside it, the job waits in the queue, counts in `waiting`, and `next_due` says when the window opens, which wakes the daemon then (§15.13). `atoll replicate --now` runs it whatever the time.
 - A job whose operation the reprise could not conclude stays `running`, and does not run: what is at its target may be its own copy, and nothing is decided of it until that operation is (§17.2). Its line says `io-error`.
 - A `replicate` job that ends with no copy of its file left takes the file with it: nothing is left to copy from.
 - The outcomes of a job: `replicated`; `queued`, to run when it is due, by a run that only queues; `to-replicate`, in a dry run; `changed`, the source no longer what it was when the copy started, or not what the file's hash says; `conflict`, something took the target path since the look, which the next walk reports (§14); `path-taken`, a parent of the target that is not a folder; `name-refused`, a name the driver refuses (§15.8); `no-room`, `ENOSPC` while copying; `disk-unavailable`, its source or target not confirmed in this run; `io-error`, anything else.
@@ -1502,7 +1502,6 @@ Phase 1a warns about these settings, and each phase removes its own lines. The k
 
 | Setting | Value that gets a warning | Phase | Until then |
 |---|---|---|---|
-| `defaults.mode`, a rule's `mode` | `immediate` | 1b | works as `deferred` |
 | `placement.spread_mode`, `placement.tags_mode`, and a rule's | `strict` | 1b | no effect |
 | `placement.overflow`, a rule's `overflow` | `deny` | 1b | no effect |
 | a rule's `tags`, `domains` | any | 1b | no effect |
