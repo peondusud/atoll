@@ -29,6 +29,7 @@ type passBench struct {
 	t       *testing.T
 	db      *sql.DB
 	config  *config.Config
+	catalog string
 	keep    string
 	at      string
 	machine disks.Machine
@@ -41,8 +42,17 @@ func newPassBench(t *testing.T, v *volume, at string) *passBench {
 	return newPassBenchWith(t, v, at, "")
 }
 
+// benchGuards is what the bench sets of the guards: a debounce of a second, and their counts alone to trip them.
+const benchGuards = "[deletes]\ndebounce = \"1s\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n"
+
 // newPassBenchWith adds more to the bench's configuration, as whole tables.
 func newPassBenchWith(t *testing.T, v *volume, at, more string) *passBench {
+	t.Helper()
+	return newPassBenchGuarded(t, v, at, benchGuards, more)
+}
+
+// newPassBenchGuarded is newPassBenchWith with guards of its own in place of benchGuards.
+func newPassBenchGuarded(t *testing.T, v *volume, at, guards, more string) *passBench {
 	t.Helper()
 	kept := newVolume(t, names.Ext4)
 	keep := mountPoint(t)
@@ -57,7 +67,7 @@ func newPassBenchWith(t *testing.T, v *volume, at, more string) *passBench {
 	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", file, filepath.Join(dir, "pool")) +
 		fmt.Sprintf("[[disk]]\nid = \"k\"\nuuid = %q\nmount = %q\nfs = %q\n", kept.uuid, keep, kept.fs) +
 		fmt.Sprintf("[[disk]]\nid = \"v\"\nuuid = %q\nmount = %q\nfs = %q\n", v.uuid, at, v.fs) +
-		"[deletes]\ndebounce = \"1s\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n" + more
+		guards + more
 	c, err := config.Parse([]byte(text))
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +84,7 @@ func newPassBenchWith(t *testing.T, v *volume, at, more string) *passBench {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &passBench{t: t, db: db, config: c, keep: keep, at: at, machine: machine}
+	return &passBench{t: t, db: db, config: c, catalog: file, keep: keep, at: at, machine: machine}
 }
 
 func (b *passBench) scan(full bool) {

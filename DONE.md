@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The daemon's soak (specs.md §26)
+
+Commit "Soak the daemon that runs for good", on `develop`.
+
+- `TestDaemonSoak` (`test/loopdev/soak_test.go`), run in qemu with `SOAK=<duration>` (`test/qemu/README.md`): the daemon that runs for good on two ext4 disks of 2,000 files each, while a writer of its own process edits a file, renames another or puts it back, adds a file and deletes the one it added five seconds before, every second. Every tenth of the run it logs the heap in use after a collection, the resident memory and its peak, the goroutines, the open files, the passes and the catalog's size.
+- It fails when the heap grows past the second tenth's by more than a tenth and 8 MiB, the files or goroutines by more than 16, when the daemon makes fewer passes than the run has minutes, when a guard holds a pass, or when the last tenth runs fewer than half the passes of the second.
+- What its first runs found is in the four entries above: a copy tried again at every pass, the files a guard holds read with queries prepared anew, and two reads of the whole journal at every pass. Its guards are now out of the writer's way, a minute's window and counts it never reaches, so that it measures a daemon that decides.
+- A four-minute run on Linux 6.12: 155 passes, each deciding 3 or 4 files and running 4 to 7 operations, none held; the heap in use 2.8 to 4.1 MiB, the resident memory about 30 MiB and at most 44.2 MiB, 8 to 10 goroutines, 21 or 22 open files.
+
 ## The parts of `tmp/` looked for where they are (specs.md §14.2)
 
 Commit "Look up only the parts tmp/ holds", on `develop`.
