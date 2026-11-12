@@ -54,15 +54,18 @@ type WakeInput struct {
 	// BackupPending says that the stretch of Window that holds now, or the next one, has no catalog backup yet
 	// (specs.md §9).
 	BackupPending bool
+	// SmartDueNS is when the disks' SMART is next to be read (specs.md §23): nil when it is never.
+	SmartDueNS *int64
 }
 
-// WakeOutput says what to do now, and when to look again. Hash says to read new files' hashes, once any check
-// and pass due are done; Backup to back the catalog up, when there is no hash to read; and Scrub to scrub, when
-// there is neither. ScrubOpenedNS is when the stretch of the scrub's window that holds now began, 0 outside it or
-// with no scrub pending.
+// WakeOutput says what to do now, and when to look again. Smart says to read the disks' SMART, once any check and
+// pass due are done; Hash to read new files' hashes, after that; Backup to back the catalog up, when there is no hash
+// to read; and Scrub to scrub, when there is neither. ScrubOpenedNS is when the stretch of the scrub's window that
+// holds now began, 0 outside it or with no scrub pending.
 type WakeOutput struct {
 	Check         bool
 	Because       []string
+	Smart         bool
 	Hash          bool
 	Backup        bool
 	Scrub         bool
@@ -116,6 +119,13 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 		}
 		earliest(in.Window.Next(time.Unix(0, max(at, now)).In(in.Location)).UnixNano())
 	}
+	if in.SmartDueNS != nil {
+		if *in.SmartDueNS <= now {
+			out.Smart = true
+		} else {
+			earliest(*in.SmartDueNS)
+		}
+	}
 	if in.HashPending {
 		nowLocal := time.Unix(0, now).In(in.Location)
 		out.Hash = in.Window.Contains(nowLocal)
@@ -147,7 +157,7 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 			earliest(in.ScrubWindow.Next(opened.AddDate(0, 0, 1)).UnixNano())
 		}
 	}
-	if len(out.Because) > 0 || out.Hash || out.Backup || out.Scrub {
+	if len(out.Because) > 0 || out.Smart || out.Hash || out.Backup || out.Scrub {
 		wake = now
 	}
 	out.WakeNS = max(wake, now)

@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## SMART (specs.md §23)
+
+Commit "Alert on a disk that SMART says is failing", on `beta`.
+
+- The daemon that runs for good reads SMART once an hour with `smartctl -j -n standby`, which leaves a sleeping disk asleep, on each whole disk below each mount, again with `-d sat` behind a USB bridge it does not know. It keeps the reading of a disk awake in `disks.smart_json`. Two conditions come from it: `smart-failing:<id>` and `smart-sectors:<id>`. A reading that tells of more trouble than the one before brings a pass, so that the alert goes at once rather than at the next pass.
+- Verified: the 13 vectors of `conformance/vectors/smart.json`; 4 new `daemon_wake.json` vectors; `TestReadSmart` (one device, a USB bridge, two devices, asleep, no `smartctl`), `TestReadSmartRecords`, `TestReadSmartShadowAndSilent`, `TestSetSmart`, and the SMART cases of `TestHoldings`, `TestGather` and `TestDescribe`; 17 mutants, each caught. Not verified on a real disk: no disk in qemu answers SMART.
+- **Decided without the maintainer, to confirm:**
+  - **Two conditions** rather than one "degrading SMART". A failed health check is count 1 at priority 4. Bad sectors count reallocated, pending and uncorrectable sectors together, so the alert comes again when the count grows. Their priority is 4 when some are pending or uncorrectable, which cannot be read now, and 3 for reallocated ones alone.
+  - **A disk with a few reallocated sectors that never grow is reminded every 24 h**, as any condition that lasts. A baseline that alerts only on growth would need a key or a command to accept the count.
+  - **Thresholds.** The temperature is recorded, with no alert, as no key sets a threshold. Once an hour, fixed, with no key.
+  - **What `disks.smart_json` holds**, a contract of the catalog (§29.3): `read_ns`, `failing`, `reallocated`, `pending`, `uncorrectable` and `temperature`.
+  - **Which disks.** A failed disk is not read and raises nothing. A missing one keeps its last reading, and its alerts.
+  - **Without `smartctl`**, one warning, and no reading until the configuration is read again.
+  - **`deploy/atoll.service` gives the daemon `CAP_SYS_RAWIO`**, which `smartctl` needs for ATA pass-through, beside the `disk` group it already had.
+  - **No reading sets the state `standby`**, which §4 says SMART gives: a reading an hour old says nothing of now (TODO.md).
+
 ## The immediate mode (specs.md §12.3, §14.1)
 
 Commit "Copy a file in immediate mode once it is closed", on `develop`.

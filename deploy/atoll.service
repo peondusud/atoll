@@ -18,9 +18,10 @@ Group=atoll
 # Reading a device's head to confirm a disk (specs.md §10).
 SupplementaryGroups=disk
 # fanotify marks, the remount after a USB reset and mergerfs's runtime branches need CAP_SYS_ADMIN; reading
-# every file, and making copies with their mode and owner, the others.
-AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+# every file, and making copies with their mode and owner, the others. smartctl, which the daemon runs once an hour,
+# reads SMART through ATA pass-through, which takes CAP_SYS_RAWIO (specs.md §23).
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_RAWIO
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_RAWIO
 NoNewPrivileges=yes
 ProtectHome=read-only
 PrivateTmp=yes

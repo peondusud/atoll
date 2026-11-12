@@ -157,6 +157,8 @@ type loop struct {
 	// closed holds what ripe groups said was closed after a write, until a pass takes it (specs.md §14.1).
 	closed  jobs.Closed
 	lastEnd *int64
+	// smartDue is when the disks' SMART is next read: nil when it is not (specs.md §23).
+	smartDue *int64
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -183,7 +185,8 @@ func Run(ctx context.Context, opt Options) error {
 	}
 	l := &loop{
 		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true, closed: jobs.Closed{},
-		watcher: watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
+		watcher:  watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
+		smartDue: smartFirst(opt.Machine),
 	}
 	defer l.watcher.Close()
 	l.notify("READY=1")
@@ -240,7 +243,7 @@ func (l *loop) run(ctx context.Context) error {
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
-			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp}
+			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue}
 		if waiting {
 			in.GroupDueNS = &groupNext
 		}
@@ -254,6 +257,10 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if len(out.Because) > 0 {
 			l.pass(ctx, out.Because)
+			continue
+		}
+		if out.Smart {
+			l.readSmart(ctx)
 			continue
 		}
 		if out.Hash {
@@ -309,6 +316,9 @@ func (l *loop) reload() {
 	}
 	l.reloaded = true
 	l.checkDue = l.opt.Machine.Now()
+	if l.smartDue == nil {
+		l.smartDue = smartFirst(l.opt.Machine)
+	}
 	l.log.Info("the configuration was read again", "disks", len(c.Disks))
 }
 

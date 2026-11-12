@@ -246,6 +246,14 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `action` | string | `finish`, `keep`, `untouched` or `foreign` |
 | `error` | boolean | `true` for a chunk saved that was not found bad, what was saved of a chunk never saved, or a word it does not know |
 
+### `smart.json` — what a reading of SMART says of a device (§23)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `output` | object | what `smartctl -j -n standby` printed |
+| `reading` | object | `asleep`, the disk left asleep, nothing read; `needs_sat`, the answer asks for a device type, as behind a USB bridge; `failing`, its health check failed or an NVMe disk raised a critical warning; `reallocated`, `pending` and `uncorrectable`, ATA attributes 5, 197 and 198, or an NVMe disk's media errors; `temperature`, in degrees Celsius, 0 when none is given |
+| `error` | boolean | `true` for an answer with no exit status, or that holds no reading while the disk is neither asleep nor asking for a device type |
+
 ### `op_recovery.json` — what a reprise does with an operation (§17.2)
 
 | Field | Type | Meaning |
@@ -376,8 +384,10 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `scrub_budget_ns` | integer | `integrity.scrub_budget`, which must be positive when `scrub_pending` |
 | `scrub_spent_ns`, `scrub_spent_opened_ns` | integer | what the scrub spent, and when the stretch of its window it spent it in began |
 | `backup_pending` | boolean | the stretch of the window that holds now, or the next one, has no catalog backup yet |
+| `smart_due_ns` | integer | when the disks' SMART is next to be read; left out when it never is |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
 | `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
 | `backup` | boolean | `true` when the catalog is to be backed up now: `backup_pending`, inside the window, and no hash to read |
 | `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, no hash to read and no backup due |

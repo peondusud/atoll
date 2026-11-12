@@ -3,8 +3,11 @@
 package disks
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path"
 	"time"
 
@@ -89,6 +92,19 @@ func (machine) PhysicalDisks(fs names.Filesystem, entry *MountEntry, uuid string
 
 func (machine) MountPointImmutable(mount string) (bool, error) {
 	return fsx.MountPointImmutable(mount) //nolint:wrapcheck // likewise
+}
+
+// Smartctl runs smartctl from the PATH (specs.md §23). Its exit status is in its output too, so only a failure to
+// run it is an error: exec.ErrNotFound when it is not installed.
+func (machine) Smartctl(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "smartctl", args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	var exit *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exit) {
+		return nil, fmt.Errorf("smartctl: %w", err)
+	}
+	return out.Bytes(), nil
 }
 
 func (machine) Now() int64 {
