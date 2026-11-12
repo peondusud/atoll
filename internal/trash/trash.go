@@ -309,13 +309,15 @@ func (s *Session) cleanTmp(ctx context.Context, id string, handle *ops.Disk) err
 	return nil
 }
 
+// readable and writable take a draining disk in: its copies are the sources that evacuate it, and it stays in step
+// with the others until it leaves (specs.md §18). The plan never makes a copy on it.
 func readable(state solver.DiskState) bool {
-	return state == solver.DiskOnline || state == solver.DiskStandby || state == solver.DiskReadOnly
+	return state == solver.DiskOnline || state == solver.DiskStandby || state == solver.DiskReadOnly || state == solver.DiskDraining
 }
 
 func (s *Session) writable(id string) bool {
 	sl := s.slots[id]
-	return sl != nil && (sl.state == solver.DiskOnline || sl.state == solver.DiskStandby)
+	return sl != nil && (sl.state == solver.DiskOnline || sl.state == solver.DiskStandby || sl.state == solver.DiskDraining)
 }
 
 // lose records that a disk cannot be relied on any more, and what ran on it is over.

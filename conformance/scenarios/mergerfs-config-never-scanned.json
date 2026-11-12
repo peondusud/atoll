@@ -48,11 +48,13 @@
           {
             "disk": "t1",
             "path": "${SANDBOX}/disks/t1/media",
+            "mode": "RW",
             "minfreespace_bytes": 1073741824
           },
           {
             "disk": "x1",
             "path": "${SANDBOX}/disks/x1/media",
+            "mode": "RW",
             "minfreespace_bytes": 1073741824
           }
         ],

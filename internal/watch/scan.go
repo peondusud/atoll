@@ -89,7 +89,8 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 	out := &Outcome{Disks: []Report{}}
 	for i := range c.Disks {
 		d := &c.Disks[i]
-		if opts.Disk != "" && d.ID != opts.Disk {
+		// A failed disk is never read again, so it is not walked and has no report (specs.md §18).
+		if opts.Disk != "" && d.ID != opts.Disk || d.State == config.DiskFailed {
 			continue
 		}
 		// Confirmed as a pass's look is, and every time, as a scan records what it found (specs.md §10, §15.10).
@@ -142,7 +143,9 @@ func sortPaths(r *Report) {
 }
 
 // diskRows says what to record of each disk. One that passed its check and cannot say how full it is
-// counts as failed, in the verdict too, and keeps what the last check measured (specs.md §15.10).
+// counts as failed, in the verdict too, and keeps what the last check measured (specs.md §15.10). A disk the
+// configuration marks failed is failed, whatever its check says, and nothing is measured on it; one it marks
+// draining is draining, unless its check finds it missing (specs.md §9, §18).
 func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now int64) []catalog.Disk {
 	rows := make([]catalog.Disk, 0, len(c.Disks))
 	for i := range c.Disks {
@@ -150,6 +153,11 @@ func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now i
 		row := catalog.Disk{
 			ID: d.ID, UUID: d.UUID, FS: string(d.FS), Mount: d.Mount, Root: d.Root, Workdir: d.Workdir, Role: d.Role,
 			Position: i, Domain: d.Domain, Tags: d.Tags, State: string(verdicts[i].State),
+		}
+		if d.State == config.DiskFailed {
+			row.State = config.DiskFailed
+			rows = append(rows, row)
+			continue
 		}
 		if verdicts[i].State != disks.Missing {
 			capacity, free, err := m.Space(d.Mount)
@@ -160,6 +168,9 @@ func diskRows(c *config.Config, verdicts []disks.Verdict, m disks.Machine, now i
 				row.Seen, row.Capacity, row.Free, row.LastSeenNS = true, capacity, free, now
 				row.TimePrecisionNS = verdicts[i].TimePrecisionNS
 			}
+		}
+		if d.State == config.DiskDraining && row.State != string(disks.Missing) {
+			row.State = config.DiskDraining
 		}
 		rows = append(rows, row)
 	}
@@ -833,7 +844,7 @@ func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine,
 	for i := range c.Disks {
 		d := &c.Disks[i]
 		order[d.ID] = i
-		if verdicts[i].State == disks.Missing {
+		if verdicts[i].State == disks.Missing || d.State == config.DiskFailed {
 			continue
 		}
 		reader := &diskReader{report: &Report{ID: d.ID, Verdict: verdicts[i], Walked: true}, skip: map[string]bool{}, notReached: map[string]bool{}}

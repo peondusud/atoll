@@ -125,3 +125,18 @@ func TestMergerfsRuntime(t *testing.T) {
 		t.Errorf("no mergerfs: %v", err)
 	}
 }
+
+// A draining disk keeps its place with NC; a failed disk comes after all the others with RO, at runtime as in the
+// printed line (specs.md §18, §21.1).
+func TestMergerfsModes(t *testing.T) {
+	m, err := configure(t, `["1GiB"]`, disk("a", "/mnt/a", "state = \"failed\"\n")+disk("b", "/mnt/b", "state = \"draining\"\n")+disk("c", "/mnt/c", ""), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Runtime(func(string) bool { return true }); got != "/mnt/b/media=NC,1G:/mnt/c/media=RW,1G:/mnt/a/media=RO,1G" {
+		t.Errorf("%s", got)
+	}
+	if got := m.Fstab(); !strings.HasPrefix(got, "/mnt/b/media=NC,1G:/mnt/c/media=RW,1G:/mnt/a/media=RO,1G /srv/pool mergerfs ") {
+		t.Errorf("%s", got)
+	}
+}

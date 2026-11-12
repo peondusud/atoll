@@ -19,7 +19,17 @@ type Branch struct {
 	// MinFree is the branch's own minfreespace in bytes, nil when it has none: its disk's capacity is
 	// not known, and min_free holds only percentages.
 	MinFree *int64
+	// Mode is RW; NC for a draining disk, whose files stay but which takes no new one; RO for a failed disk,
+	// which keeps showing what only it holds and is never written (specs.md §21.1).
+	Mode string
 }
+
+// The modes of a branch.
+const (
+	ModeRW = "RW"
+	ModeNC = "NC"
+	ModeRO = "RO"
+)
 
 // Mergerfs is the configuration of the merged view in phase 1, and the break-glass one (specs.md §21.1).
 type Mergerfs struct {
@@ -49,12 +59,27 @@ var mergerfsOptions = []string{
 func NewMergerfs(c *config.Config, minFree value.MinFree, capacities map[string]int64) (*Mergerfs, error) {
 	mount, _ := c.Effective()["view.mount"].(string)
 	m := &Mergerfs{Mount: mount, Options: append([]string(nil), mergerfsOptions...)}
-	for i := range c.Disks {
-		d := &c.Disks[i]
+	// A failed disk comes after the others, so that category.search=ff reads a copy it holds only when no other
+	// disk holds one.
+	var order []*config.Disk
+	for _, failed := range []bool{false, true} {
+		for i := range c.Disks {
+			if (c.Disks[i].State == config.DiskFailed) == failed {
+				order = append(order, &c.Disks[i])
+			}
+		}
+	}
+	for _, d := range order {
 		if d.Role != "data" {
 			continue // cache disks wait for phase 2b
 		}
-		b := Branch{Disk: d.ID, Path: path.Join(d.Mount, d.Root)}
+		b := Branch{Disk: d.ID, Path: path.Join(d.Mount, d.Root), Mode: ModeRW}
+		switch d.State {
+		case config.DiskDraining:
+			b.Mode = ModeNC
+		case config.DiskFailed:
+			b.Mode = ModeRO
+		}
 		// mergerfs ends a branch at ':' and an option at ','; '=' is no trouble, as the mode always follows.
 		if i := strings.IndexAny(b.Path, ":,"); i >= 0 {
 			return nil, fmt.Errorf("disk %q: its branch %q holds %q, which mergerfs reads as a separator", d.ID, b.Path, b.Path[i:i+1])
@@ -80,7 +105,7 @@ func NewMergerfs(c *config.Config, minFree value.MinFree, capacities map[string]
 func (m *Mergerfs) Fstab() string {
 	branches := make([]string, len(m.Branches))
 	for i, b := range m.Branches {
-		branches[i] = b.Path + "=RW"
+		branches[i] = b.Path + "=" + b.Mode
 		if b.MinFree != nil {
 			branches[i] += "," + mergerfsSize(*b.MinFree)
 		}

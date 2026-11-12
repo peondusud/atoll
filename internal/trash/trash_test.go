@@ -3027,9 +3027,10 @@ func TestReadOnlyDisks(t *testing.T) {
 	}
 }
 
-// A disk failed or draining is not opened: nothing wakes it, and nothing looks at what it holds.
+// A disk failed, retired or missing is not opened: nothing wakes it, and nothing looks at what it holds. A disk
+// draining is, as its copies are the sources that evacuate it, and it stays in step until it leaves (specs.md §18).
 func TestADiskThatCannotBeReadIsLeftAlone(t *testing.T) {
-	for _, state := range []solver.DiskState{solver.DiskFailed, solver.DiskDraining, solver.DiskRetired, solver.DiskMissing} {
+	for _, state := range []solver.DiskState{solver.DiskFailed, solver.DiskRetired, solver.DiskMissing} {
 		t.Run(string(state), func(t *testing.T) {
 			b := newBench(t)
 			// What counts is what this session reads past the cache, not the scan that set the bench up.
@@ -3059,6 +3060,18 @@ func TestADiskThatCannotBeReadIsLeftAlone(t *testing.T) {
 		s.slots["t3"].state = solver.DiskReadOnly
 		if handle, err := s.open(t.Context(), "t3"); err != nil || handle == nil {
 			t.Errorf("%v, %v", handle, err)
+		}
+	})
+	t.Run("draining is read and written", func(t *testing.T) {
+		b := newBench(t)
+		s, err := Open(t.Context(), b.db, b.config, b, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		s.slots["t3"].state = solver.DiskDraining
+		if handle, err := s.open(t.Context(), "t3"); err != nil || handle == nil || !s.Readable("t3") || !s.Writable("t3") {
+			t.Errorf("%v, %v, readable %v, writable %v", handle, err, s.Readable("t3"), s.Writable("t3"))
 		}
 	})
 }

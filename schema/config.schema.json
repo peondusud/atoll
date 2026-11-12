@@ -422,6 +422,10 @@
         "workdir": {
           "description": "Left out: layout.workdir.",
           "$ref": "#/$defs/folder_name"
+        },
+        "state": {
+          "description": "Set by atoll disk remove --evacuate (draining) and atoll disk fail (failed). Left out: the disk is in service (specs.md §18).",
+          "enum": ["draining", "failed"]
         }
       }
     },

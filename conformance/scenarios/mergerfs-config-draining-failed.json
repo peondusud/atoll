@@ -1,0 +1,95 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a718, \u00a721.1",
+  "description": "A disk draining takes no new file, so its branch is NC; a disk failed is never written and comes after the others, so that category.search=ff reads its copy only when no other disk holds one, and its branch is RO, so that what only it holds stays in the view. Every other branch stays in configuration order.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[placement]\nmin_free = [\"1MiB\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\nstate = \"failed\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\nstate = \"draining\"\n[[disk]]\nid = \"t3\"\nuuid = \"9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--json"
+      ],
+      "stdout_json": {
+        "mount": "${SANDBOX}/pool",
+        "branches": [
+          {
+            "disk": "t2",
+            "path": "${SANDBOX}/disks/t2/media",
+            "mode": "NC",
+            "minfreespace_bytes": 1048576
+          },
+          {
+            "disk": "t3",
+            "path": "${SANDBOX}/disks/t3/media",
+            "mode": "RW",
+            "minfreespace_bytes": 1048576
+          },
+          {
+            "disk": "t1",
+            "path": "${SANDBOX}/disks/t1/media",
+            "mode": "RO",
+            "minfreespace_bytes": 1048576
+          }
+        ],
+        "options": [
+          "category.search=ff",
+          "category.action=epall",
+          "category.create=mfs",
+          "moveonenospc=false",
+          "rename-exdev=passthrough",
+          "link-exdev=passthrough",
+          "cache.attr=1",
+          "cache.entry=1",
+          "cache.negative_entry=0"
+        ],
+        "largest_file_bytes": null,
+        "fstab": "${SANDBOX}/disks/t2/media=NC,1M:${SANDBOX}/disks/t3/media=RW,1M:${SANDBOX}/disks/t1/media=RO,1M ${SANDBOX}/pool mergerfs category.search=ff,category.action=epall,category.create=mfs,moveonenospc=false,rename-exdev=passthrough,link-exdev=passthrough,cache.attr=1,cache.entry=1,cache.negative_entry=0 0 0"
+      }
+    }
+  ]
+}

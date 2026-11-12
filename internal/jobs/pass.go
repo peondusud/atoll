@@ -258,6 +258,10 @@ func (p *pass) look(ctx context.Context) error {
 	}
 	for i := range p.config.Disks {
 		d := &p.config.Disks[i]
+		if d.State == config.DiskFailed {
+			// Never read again: no walk and no line, as it is neither missing nor skipped (specs.md §18).
+			continue
+		}
 		// Before the walk: what the look adds says nothing of how many it had (specs.md §15.6).
 		if p.rows[d.ID], err = catalog.CopyCount(ctx, p.db, d.ID); err != nil {
 			return fmt.Errorf("catalog: %w", err)

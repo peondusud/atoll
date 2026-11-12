@@ -24,7 +24,7 @@ func (m *Mergerfs) Runtime(present func(disk string) bool) string {
 		if !present(b.Disk) {
 			continue
 		}
-		part := b.Path + "=RW"
+		part := b.Path + "=" + b.Mode
 		if b.MinFree != nil {
 			part += "," + mergerfsSize(*b.MinFree)
 		}

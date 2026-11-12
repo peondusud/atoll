@@ -306,6 +306,8 @@ func (l *loop) check(ctx context.Context) {
 			}
 		}
 		switch {
+		case d.State == config.DiskFailed:
+			// Nothing reads or writes it: going and coming back calls for no pass.
 		case st.state != disks.Missing && v.State == disks.Missing:
 			l.gone = true
 			st.walked, st.reset = false, slices.Contains(l.set.resetReasons, v.Reason)
@@ -319,7 +321,7 @@ func (l *loop) check(ctx context.Context) {
 			l.log.Info("a disk changed state", "disk", d.ID, "from", st.state, "to", v.State, "reason", v.Reason)
 		}
 		st.state = v.State
-		if st.state == disks.Missing && st.reset {
+		if st.state == disks.Missing && st.reset && d.State != config.DiskFailed {
 			l.remount(ctx, d)
 		}
 	}
@@ -350,7 +352,7 @@ func (l *loop) remount(ctx context.Context, d *config.Disk) {
 
 func (l *loop) watch(ctx context.Context, id string) {
 	st, d := l.disks[id], l.set.disksByID[id]
-	if st == nil || d == nil || st.watched {
+	if st == nil || d == nil || st.watched || d.State == config.DiskFailed {
 		return
 	}
 	how, err := l.watcher.Watch(ctx, d)
@@ -570,8 +572,9 @@ func (l *loop) branches(ctx context.Context, db *sql.DB) {
 		return
 	}
 	want := m.Runtime(func(disk string) bool {
-		st := l.disks[disk]
-		return st != nil && st.state != disks.Missing && st.walked
+		st, d := l.disks[disk], l.set.disksByID[disk]
+		// A failed disk is read-only and never walked: present is enough.
+		return st != nil && st.state != disks.Missing && (st.walked || d != nil && d.State == config.DiskFailed)
 	})
 	if want == "" || want == current {
 		return

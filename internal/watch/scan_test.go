@@ -1408,3 +1408,32 @@ func TestAScanConfirmsWhatItWalks(t *testing.T) {
 		t.Errorf("then %+v", r)
 	}
 }
+
+// A disk the configuration marks failed is recorded failed and never walked, with no report; one it marks draining
+// is walked as any other and recorded draining (specs.md §9, §18).
+func TestScanTakesTheConfiguredState(t *testing.T) {
+	b := newBench(t, "t1", "t2", "t3")
+	b.config.Disks[0].State = config.DiskFailed
+	b.config.Disks[1].State = config.DiskDraining
+	for _, id := range []string{"t1", "t2", "t3"} {
+		b.write(id, "a.mkv", "x")
+	}
+	out := b.scan(Options{})
+	var walked []string
+	for i := range out.Disks {
+		if out.Disks[i].Walked {
+			walked = append(walked, out.Disks[i].ID)
+		}
+	}
+	if len(out.Disks) != 2 || !slices.Equal(walked, []string{"t2", "t3"}) || out.Partial() {
+		t.Errorf("reports %+v", out.Disks)
+	}
+	if n := b.count("SELECT count(*) FROM copies WHERE disk_id = 't1'"); n != 0 {
+		t.Errorf("%d copies recorded on the failed disk", n)
+	}
+	for id, want := range map[string]string{"t1": "failed", "t2": "draining", "t3": "online"} {
+		if n := b.count("SELECT count(*) FROM disks WHERE id = ? AND state = ?", id, want); n != 1 {
+			t.Errorf("%s is not %s", id, want)
+		}
+	}
+}
