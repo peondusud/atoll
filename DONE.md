@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll catalog rebuild` (specs.md §9, §25)
+
+Commit "Rebuild the catalog from the disks", on `develop`.
+
+- A new catalog is made beside the old one, its operations started past the highest id the disks' `trash/` and `tmp/` name, then filled by a full scan, which reads every copy whole; copies with different hashes at one path are a conflict. The old catalog, its log moved into it or set aside with it, trades names with the new one in one step (`RENAME_EXCHANGE`), and is kept as `<catalog>.old-<UTC time>`. It works when the old catalog cannot be opened.
+- Without `--yes` it says what it would do (exit 3); `--dry-run` likewise with 0.
+- Verified: unit tests of the swap, the log set aside and the operation ids; a scenario: a conflict found again, ids past the trash and `tmp/`, the disks' folders left as they are, and `verify` finding the new catalog in step.
+- **Decided without the maintainer, to confirm:**
+  - The old catalog is set aside beside the new one, never removed, under that name.
+  - The disks' trash entries are not listed in the new catalog: they stay on the disks, and `trash list` does not show them. Listing them again needs their reasons, which only the old catalog knew.
+  - A disk whose trash and `tmp/` cannot be read is a warning: a new operation may then meet an old one there once, which costs it an `io-error`.
+
 ## `atoll catalog verify` against the disks (specs.md §9, §25)
 
 Commit "Compare the disks with the catalog in catalog verify", on `develop`.

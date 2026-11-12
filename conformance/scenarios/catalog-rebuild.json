@@ -1,0 +1,284 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a725",
+  "description": "catalog rebuild makes a new catalog from what the disks hold, every copy read whole, and sets the old one aside, never removing it; without --yes it says so and exits with 3, and with --dry-run with 0. Copies with different hashes at one path are a conflict, whatever else they share. The new catalog's operations start past the highest id the disks' trash and tmp/ name, and what those folders hold is left as it is.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "media/c.mkv",
+          "text": "one"
+        },
+        {
+          "path": "Atoll/tmp/9.part",
+          "text": "half"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "media/c.mkv",
+          "text": "two"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/old.mkv",
+          "text": "gone"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "catalog": "${SANDBOX}/catalog.db",
+        "set_aside": null,
+        "ops_after": 0,
+        "disks": [],
+        "conflicts": [],
+        "done": false
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "catalog": "${SANDBOX}/catalog.db",
+        "set_aside": null,
+        "ops_after": 0,
+        "disks": [],
+        "conflicts": [],
+        "done": false
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--dry-run",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "catalog": "${SANDBOX}/catalog.db",
+        "set_aside": "${SANDBOX}/catalog.db.old-20260101T000000Z",
+        "ops_after": 9,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 7,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 2,
+            "known": 0,
+            "hashed": 2,
+            "changed": [],
+            "moved": [],
+            "absent": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 7,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 2,
+            "known": 0,
+            "hashed": 2,
+            "changed": [],
+            "moved": [],
+            "absent": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": [
+          {
+            "path": "c.mkv"
+          }
+        ],
+        "done": true
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT seq FROM sqlite_sequence WHERE name = 'ops'",
+      "rows": [
+        [
+          9
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a.mkv",
+          "ok"
+        ],
+        [
+          "c.mkv",
+          "conflict"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "verify",
+        "--json"
+      ],
+      "stdout_json": {
+        "problems": [],
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 7,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 2,
+            "hashed": 0,
+            "changed": [],
+            "moved": [],
+            "absent": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 2,
+            "bytes": 7,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 0,
+            "known": 2,
+            "hashed": 0,
+            "changed": [],
+            "moved": [],
+            "absent": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "media/c.mkv",
+          "text": "one"
+        },
+        {
+          "path": "Atoll/tmp/9.part",
+          "text": "half"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "media/c.mkv",
+          "text": "two"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/old.mkv",
+          "text": "gone"
+        }
+      ]
+    }
+  ]
+}

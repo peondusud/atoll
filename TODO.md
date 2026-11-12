@@ -61,8 +61,8 @@ Every item here is a **decision**:
   - `--help`, the French translation of the CLI, and human output that writes durations as the configuration does: `atoll rules explain` prints `settle_ns = 600000000000`;
   - the fallbacks of §12.2 for the modes, when jobs act on them: `rules.Policy` holds what the configuration asks for, and `atoll scan` already gives the plan only what has an effect;
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
-- The catalog: `catalog rebuild`, which sets the old catalog aside. `catalog backup`, the daemon's daily backup and `catalog verify` are done.
-- `catalog rebuild` must start `ops.id` past the ids in each disk's trash and in each `tmp/`, as must `atoll init` over a catalog that went missing, so that a new operation's folder or `<op id>.part` does not meet an old one (§14.2, §17): both restart `sqlite_sequence`. Until then such a meeting costs one `io-error`, and the next run takes another id.
+- After `catalog rebuild`, the disks' trash entries are not in the new catalog: list them again from `trash/<date>/<op id>/`, with a reason to choose, and their expiry from the date.
+- `atoll init` over a catalog that went missing must start `ops.id` past the ids in each disk's trash and `tmp/`, as `catalog rebuild` now does, so that a new operation's folder or `<op id>.part` does not meet an old one (§14.2, §17). Until then such a meeting costs one `io-error`, and the next run takes another id.
 - Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. The daemon that runs for good, with its watcher and its grouping, is still to measure over hours of changes.
 - What the mount check of §10 leaves to do for disks:
   - `atoll disk show`, which could show `time_precision_ns`, and reading `Atoll/disk.toml` at each mount check;

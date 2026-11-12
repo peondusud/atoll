@@ -45,7 +45,7 @@
       "do": "atoll",
       "args": [
         "catalog",
-        "rebuild"
+        "restore"
       ],
       "exit": 2
     },

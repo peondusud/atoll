@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
@@ -130,4 +132,61 @@ func (d *Disk) PutCatalog(src io.Reader) error {
 		return classify(fmt.Errorf("sync: %w", err))
 	}
 	return nil
+}
+
+// HighestOpID gives the highest operation id the disk's work folder names: a folder of its trash,
+// trash/<date>/<op id>/, or a copy in progress, tmp/<op id>.part; 0 when there is none. A new catalog starts its
+// operations past it, so that a new one never meets an old one's folder or part (specs.md §9, §17).
+func (d *Disk) HighestOpID() (int64, error) {
+	highest := int64(0)
+	trash, err := d.open(components(d.config.Workdir, layout.TrashFolder))
+	switch {
+	case fsx.IsAbsent(err):
+	case err != nil:
+		return 0, err
+	default:
+		days, err := trash.Names()
+		if err != nil {
+			trash.close()
+			return 0, classify(fmt.Errorf("list the trash: %w", err))
+		}
+		for _, day := range days {
+			below, err := trash.OpenDir(day)
+			if err != nil {
+				continue
+			}
+			ids, err := below.Names()
+			_ = below.Close()
+			if err != nil {
+				trash.close()
+				return 0, classify(fmt.Errorf("list the trash: %w", err))
+			}
+			for _, id := range ids {
+				if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > highest {
+					highest = n
+				}
+			}
+		}
+		trash.close()
+	}
+	tmp, err := d.open(components(d.config.Workdir, layout.TmpFolder))
+	switch {
+	case fsx.IsAbsent(err):
+		return highest, nil
+	case err != nil:
+		return 0, err
+	}
+	defer tmp.close()
+	parts, err := tmp.Names()
+	if err != nil {
+		return 0, classify(fmt.Errorf("list tmp: %w", err))
+	}
+	for _, name := range parts {
+		if id, ok := strings.CutSuffix(name, ".part"); ok {
+			if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > highest {
+				highest = n
+			}
+		}
+	}
+	return highest, nil
 }
