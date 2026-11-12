@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll trash restore --to` (specs.md §14.2, §17.2, §17.4)
+
+Commit "Restore an entry of the trash to another disk", on `develop`.
+
+- `--to <disk>` puts each entry on that disk: moved back when it is the entry's own, copied there otherwise through the copy pipeline, from the trash it is in, which keeps it. One operation `create` on the target, journaled with a `restore` event whose `source` is the entry's disk: the part made in `tmp/`, the file of the trash read once with each chunk hashed, looked at again, its times, mode and owner given, synced, read again without its cache against every chunk and the entry's whole-file hash, the missing parents made like the same folders of the trash, then the part takes the path without replacing anything. The copy is recorded as a restored copy, the user's.
+- The reprise of a `create` with no job and a `restore` event records the copy as a restored one, never as a replica of what the path holds; it also removes a part made before its inode could be recorded, whose name, of the operation's id, is the operation's alone.
+- `api/schemas/trash-restore.schema.json`: `to` on each entry with `--to`, for review.
+- Verified: three scenarios, the copy with the entry left in its trash, the move back to its own disk, a disk the configuration does not list, a path taken, a dry run, and kill -9 once copied and once moved; unit tests with EIO on the trash's read, a file of the trash replaced, a part whose sync fails, a target that cannot be written to.
+- **Decided without the maintainer, to confirm:**
+  - The entry stays in its trash once copied, to expire as any other: a copy never takes away what it copies from.
+  - An entry on a `readonly` or `draining` disk may be copied from, as its trash can be read; the target must be `online` or `standby`.
+  - The copy is unverified, as a restored copy is, though it was read back.
+
 ## `--help`, and the CLI in French (specs.md §25)
 
 Commit "Give the CLI its help and its French", on `develop`.

@@ -40,7 +40,7 @@ func commandHelps() []commandHelp {
 			"read the copies due and check each chunk against its hash"},
 		{"trash", []string{
 			"atoll trash list [--json]",
-			"atoll trash restore <path> [--dry-run] [--yes] [--json]",
+			"atoll trash restore <path> [--to <disk>] [--dry-run] [--yes] [--json]",
 			"atoll trash purge [--older-than <duration>] [--dry-run] [--yes] [--json]",
 		}, "list the trash, put files back from it, or delete what has reached its time"},
 		{"names", []string{"atoll names check [--path <path>] [--json]"},

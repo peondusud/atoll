@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -292,6 +293,7 @@ type restoreEntry struct {
 	Path    string `json:"path,omitempty"`
 	PathB64 string `json:"path_b64,omitempty"`
 	Disk    string `json:"disk"`
+	To      string `json:"to,omitempty"`
 	Op      int64  `json:"op"`
 	Outcome string `json:"outcome"`
 }
@@ -299,6 +301,8 @@ type restoreEntry struct {
 type restoreArgs struct {
 	writeFlags
 	under string
+	// to is the disk --to names, empty without it (specs.md §17.4).
+	to string
 }
 
 func parseRestore(args []string) (restoreArgs, error) {
@@ -311,10 +315,26 @@ func parseRestore(args []string) (restoreArgs, error) {
 			break
 		}
 		known, err := out.take(a)
+		to, isTo := strings.CutPrefix(a, "--to=")
 		switch {
 		case err != nil:
 			return out, err
 		case known:
+		case a == "--to" || isTo:
+			if out.to != "" {
+				return out, errors.New(T("--to comes twice"))
+			}
+			if a == "--to" {
+				if i+1 == len(args) {
+					return out, errors.New(T("--to needs a disk id"))
+				}
+				i++
+				to = args[i]
+			}
+			if to == "" {
+				return out, errors.New(T("--to needs a disk id"))
+			}
+			out.to = to
 		case strings.HasPrefix(a, "-"):
 			return out, fmt.Errorf(T("unknown argument %q"), a)
 		default:
@@ -340,16 +360,29 @@ func trashRestore(configPath string, args []string, stdout, stderr io.Writer) in
 	if err != nil {
 		return failure(stderr, err)
 	}
+	if parsed.to != "" && !slices.ContainsFunc(c.Disks, func(d config.Disk) bool { return d.ID == parsed.to }) {
+		return usage(stderr, fmt.Sprintf(T("trash restore: --to: the configuration has no disk %q"), parsed.to))
+	}
 	code := exitOK
 	err = session(c, stdout, stderr, parsed.yes, func(s *trash.Session, out *bufio.Writer) error {
 		list := newJSONList(out, "entries")
-		summary, err := s.Restore(context.Background(), parsed.under, func(item *trash.EntryItem) error {
+		each := func(item *trash.EntryItem) error {
 			if !parsed.asJSON {
+				if parsed.to != "" {
+					return writeText(out, fmt.Sprintf(T("%s (%s, to %s): %s\n"), shownPath(item.Path), item.Disk, parsed.to, item.Outcome))
+				}
 				return writeText(out, fmt.Sprintf("%s (%s): %s\n", shownPath(item.Path), item.Disk, item.Outcome))
 			}
 			path, b64 := encodePath(item.Path)
-			return list.item(restoreEntry{Path: path, PathB64: b64, Disk: item.Disk, Op: item.OpID, Outcome: item.Outcome})
-		})
+			return list.item(restoreEntry{Path: path, PathB64: b64, Disk: item.Disk, To: parsed.to, Op: item.OpID, Outcome: item.Outcome})
+		}
+		var summary *trash.Summary
+		var err error
+		if parsed.to != "" {
+			summary, err = s.RestoreTo(context.Background(), parsed.under, parsed.to, each)
+		} else {
+			summary, err = s.Restore(context.Background(), parsed.under, each)
+		}
 		if err != nil {
 			return fmt.Errorf("%w", err)
 		}

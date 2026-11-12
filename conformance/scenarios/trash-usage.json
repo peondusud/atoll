@@ -89,8 +89,29 @@
         "trash",
         "restore",
         "a",
+        "--to"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--to="
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
         "--to",
-        "t1"
+        "t1",
+        "--to=t2"
       ],
       "exit": 2
     },

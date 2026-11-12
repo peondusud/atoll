@@ -655,6 +655,11 @@ type EntryItem struct {
 // before a restore of its path that a reprise finished in this run is left alone: that restore was what
 // this asks for.
 func (s *Session) Restore(ctx context.Context, under string, each func(*EntryItem) error) (*Summary, error) {
+	return s.restore(ctx, under, s.restoreEntry, each)
+}
+
+// restore gives one function each newest entry at or below under, as Restore says.
+func (s *Session) restore(ctx context.Context, under string, one func(context.Context, *catalog.TrashEntry) (string, error), each func(*EntryItem) error) (*Summary, error) {
 	entries, err := catalog.TrashEntries(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
@@ -666,7 +671,7 @@ func (s *Session) Restore(ctx context.Context, under string, each func(*EntryIte
 		if !atOrBelow(e.Path, under) || (i+1 < len(entries) && entries[i+1].Path == e.Path) || e.OpID < s.reprised[e.Path] {
 			continue
 		}
-		outcome, err := s.restoreEntry(ctx, e)
+		outcome, err := one(ctx, e)
 		if err != nil {
 			return nil, err
 		}

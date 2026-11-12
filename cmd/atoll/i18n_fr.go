@@ -182,6 +182,10 @@ var frenchMessages = map[string]string{
 	"would be added to %s\n":              "serait ajouté à %s\n",
 	"would set %s aside, and make a new catalog from what the disks hold, reading every copy whole: --yes to do it\n": "mettrait %s de côté, et ferait un nouveau catalogue à partir de ce que contiennent les disques, en lisant chaque copie en entier : --yes pour le faire\n",
 	"writing the output: %w": "écriture de la sortie : %w",
+	"--to comes twice":       "--to est donné deux fois",
+	"--to needs a disk id":   "--to demande un identifiant de disque",
+	"trash restore: --to: the configuration has no disk %q": "trash restore : --to : la configuration n'a pas de disque %q",
+	"%s (%s, to %s): %s\n": "%s (%s, vers %s) : %s\n",
 
 	// Help (specs.md §25).
 	"Atoll adds file-level redundancy to the disks of a media library, without moving a file.": "Atoll ajoute une redondance par fichier aux disques d'une médiathèque, sans déplacer un seul fichier.",
