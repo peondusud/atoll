@@ -1,7 +1,9 @@
 package fsx
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -22,4 +24,20 @@ func Readlink(path string) (string, error) {
 		return "", fmt.Errorf("readlink: %w", err)
 	}
 	return target, nil
+}
+
+// ReadAt reads n bytes of a file or a block device from off, such as a few sectors of a device that holds no mounted
+// filesystem; fewer when it ends first. An error wraps fs.ErrNotExist when there is nothing at path.
+func ReadAt(path string, off int64, n int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	buf := make([]byte, n)
+	got, err := f.ReadAt(buf, off)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	return buf[:got], nil
 }

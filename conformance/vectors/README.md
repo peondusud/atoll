@@ -551,6 +551,15 @@ The text of `/proc/self/mountinfo`, one line per mount: `id parent major:minor r
 | `variant` | string | `casefold` or `ascii-ci`, when the superblock says so; left out otherwise |
 | `error` | boolean | `true` when the head holds no such filesystem, or `fs` is unknown |
 
+### `ntfs_dirty.json` — an NTFS volume marked dirty (§22, §23)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `length` | integer | the size of the device: that many bytes, all zero but for `bytes` |
+| `bytes` | array of objects | what the device holds: `at`, an offset, and `hex`, the bytes |
+| `dirty` | boolean | whether the flag `VOLUME_IS_DIRTY` (0x0001) of `$VOLUME_INFORMATION` is set, in the fourth record of the MFT (`$Volume`): at the MFT's cluster, from the boot sector, plus three records. Bytes per sector at 0x0B; sectors per cluster at 0x0D, `2^(256 - n)` above 0x80; the MFT's cluster at 0x30; at 0x40, clusters per record, or `2^-n` bytes when negative. The record's update sequence is applied first |
+| `error` | boolean | `true` for a device that is no NTFS, a geometry that is not powers of two, a record that is not `FILE`, torn (a block whose end is not the update number) or whose update sequence does not fit it, or with no resident `$VOLUME_INFORMATION` |
+
 ### `time_precision.json` — how finely a filesystem holds a time (§9, §10)
 
 | Field | Type | Meaning |

@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## An NTFS volume marked dirty (specs.md §22, §23)
+
+Commit "Alert on an NTFS volume marked dirty", on `beta`.
+
+- When an NTFS disk is missing, the daemon reads its volume once, as soon as its device is plugged in, through the name `/dev/disk/by-uuid/` gives its serial. It reads the boot sector and `$Volume`, the fourth record of the MFT, update sequence applied, for the flag `VOLUME_IS_DIRTY`.
+- A volume found dirty raises `ntfs-dirty:<id>`, saying to repair it with `chkdsk /f` on Windows, and is never remounted after a USB reset, as Linux mounts it only by force.
+- Verified: the 14 vectors of `conformance/vectors/ntfs_dirty.json`, on images built from the on-disk layout (several cluster, sector and record sizes, a torn record, no volume information); `TestProbeNTFSDirty`, `TestProbeDirty` and the alert's cases in `TestHoldings` and `TestDescribe`; `TestNTFSDirtyOnARealVolume` in qemu on Linux 6.12 and 7.3, on a volume `mkntfs` made. It reads clean once made, and still clean while ntfs3 has it mounted for writing, as ntfs3 does not mark it. Marked dirty as Windows marks it, it reads dirty and ntfs3 refuses to mount it. Once `ntfsfix -d` clears it, it reads clean and mounts again. A first run of that test expected ntfs3 to mark the volume while mounted: it does not, so the spec says what was measured. 14 mutants, each caught.
+- **Decided without the maintainer, to confirm:**
+  - **Read once per absence**, once the device is there, so an unplugged disk is never woken.
+  - **Found through udev's `/dev/disk/by-uuid/`.** Without udev, as in a container, a dirty volume is not seen (TODO.md).
+  - **Priority 4**, beside the disk's own `disk-missing`.
+  - **Only while missing.** A volume mounted dirty, as ntfs-3g allows, raises nothing: it is in service.
+
 ## The daemon's balancing (specs.md §13.3, §15.13)
 
 Commit "Balance from the daemon, as balance.schedule says", on `beta`.

@@ -56,6 +56,7 @@ func TestHoldings(t *testing.T) {
 		Used:      91,
 		Capacity:  100,
 		TrashFull: []TrashFull{{ID: "t3", Used: 6, Capacity: 100}},
+		Dirty:     []string{"t7"},
 		Smart: []SmartLine{
 			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2}}},
 			{ID: "t5", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Temperature: 50}}},
@@ -67,7 +68,7 @@ func TestHoldings(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s=%d", h.Key, h.Count))
 	}
 	want := []string{"disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
-		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "pool-full=1", "smart-failing:t4=1", "smart-sectors:t4=10",
+		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "ntfs-dirty:t7=1", "pool-full=1", "smart-failing:t4=1", "smart-sectors:t4=10",
 		"smart-sectors:t6=3", "trash-full:t3=1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)
@@ -289,6 +290,7 @@ func TestDescribe(t *testing.T) {
 		{"smart-sectors:t4", 3, "Atoll: disk t4 has 3 bad sectors", 3, []string{"the disk t4 moved 3 sectors, waits to move 0 and could not read 0. A count",
 			"atoll disk remove t4 --evacuate --dry-run"}},
 		{"smart-sectors:t4", 1, "Atoll: disk t4 has 1 bad sector", 3, nil},
+		{"ntfs-dirty:t6", 1, "Atoll: the NTFS volume of disk t6 is marked dirty", 4, []string{"The disk t6 is missing", "chkdsk /f on Windows"}},
 	} {
 		m, err := Describe(t.Context(), db, f, Holding{Key: tc.key, Count: tc.count})
 		if err != nil {

@@ -94,6 +94,11 @@ func (machine) MountPointImmutable(mount string) (bool, error) {
 	return fsx.MountPointImmutable(mount) //nolint:wrapcheck // likewise
 }
 
+// ReadDevice reads a few bytes of a device that holds no mounted filesystem (specs.md §22).
+func (machine) ReadDevice(path string, off int64, n int) ([]byte, error) {
+	return fsx.ReadAt(path, off, n) //nolint:wrapcheck // fsx says what it read
+}
+
 // Smartctl runs smartctl from the PATH (specs.md §23). Its exit status is in its output too, so only a failure to
 // run it is an error: exec.ErrNotFound when it is not installed.
 func (machine) Smartctl(ctx context.Context, args ...string) ([]byte, error) {

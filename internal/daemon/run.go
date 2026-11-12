@@ -157,6 +157,9 @@ type diskState struct {
 	watched bool
 	// reset says that it went missing for a reason a USB reset gives, so each check tries the remount.
 	reset bool
+	// probed says that the NTFS volume of a missing disk was read once since it went missing, and dirty that it was
+	// marked dirty then (specs.md §22).
+	probed, dirty bool
 }
 
 type loop struct {
@@ -423,10 +426,17 @@ func (l *loop) check(ctx context.Context) {
 			l.log.Info("a disk changed state", "disk", d.ID, "from", st.state, "to", v.State, "reason", v.Reason)
 		}
 		st.state = v.State
-		if st.state == disks.Missing && st.reset && d.State != config.DiskFailed {
+		l.probeDirty(d, st)
+		if remountWanted(d, st) {
 			l.remount(ctx, d)
 		}
 	}
+}
+
+// remountWanted says whether to try the remount of a disk: missing for a reason a USB reset gives, not failed, and
+// not with a volume marked dirty, which Linux mounts only by force (specs.md §10, §22).
+func remountWanted(d *config.Disk, st *diskState) bool {
+	return st.state == disks.Missing && st.reset && d.State != config.DiskFailed && !st.dirty
 }
 
 // remount tries umount -l then mount of a disk a USB reset took, through its fstab entry (specs.md §15.13).
@@ -581,6 +591,7 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 	now := l.opt.Machine.Now()
 	facts, err := alerts.Gather(ctx, db, l.opt.Config, now, outcome, refused)
 	if err == nil {
+		facts.Dirty = l.dirtyDisks()
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {

@@ -32,6 +32,7 @@ const (
 	KeyTrashFull    = "trash-full:"
 	KeySmartFailing = "smart-failing:"
 	KeySmartSectors = "smart-sectors:"
+	KeyNTFSDirty    = "ntfs-dirty:"
 )
 
 // FirstN is how many paths an alert names, at most.
@@ -86,6 +87,8 @@ type Facts struct {
 	// Smart holds the last reading of SMART of each disk that has one, neither failed nor retired, in the catalog's
 	// order of the disks.
 	Smart []SmartLine
+	// Dirty holds the missing disks whose NTFS volume the daemon found marked dirty (specs.md §22).
+	Dirty []string
 }
 
 // SmartLine is a disk's last reading of SMART.
@@ -190,6 +193,9 @@ func Holdings(f *Facts) []Holding {
 	for _, d := range f.TrashFull {
 		counts[KeyTrashFull+d.ID] = 1
 	}
+	for _, id := range f.Dirty {
+		counts[KeyNTFSDirty+id] = 1
+	}
 	for i := range f.Smart {
 		s := &f.Smart[i]
 		if s.Failing {
@@ -260,6 +266,12 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Body = fmt.Sprintf("The trash of disk %s holds %d bytes, more than trash.max_size (%s) of its %d bytes, once purged: "+
 			"what is left there, deleted or renamed files, waits for its retention. atoll trash list shows it; "+
 			"atoll trash purge --older-than <duration> --yes purges it sooner.", id, d.Used, f.MaxSize, d.Capacity)
+	case strings.HasPrefix(h.Key, KeyNTFSDirty):
+		id := strings.TrimPrefix(h.Key, KeyNTFSDirty)
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s is marked dirty", id)
+		m.Body = fmt.Sprintf("The disk %s is missing: its NTFS volume is marked dirty, as an unclean unplugging leaves it, and Linux "+
+			"mounts it only by force, which Atoll never does. Repair it with chkdsk /f on Windows, then plug it back.", id)
 	case strings.HasPrefix(h.Key, KeySmartFailing):
 		id := strings.TrimPrefix(h.Key, KeySmartFailing)
 		m.Priority = priorityHigh
