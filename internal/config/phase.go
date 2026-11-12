@@ -30,16 +30,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			if v != "none" {
 				phase = "2b"
 			}
-		case "placement.spread_mode", "rule.spread_mode", "placement.tags_mode", "rule.tags_mode":
-			if v == "strict" {
-				phase = "1b"
-			}
-		case "placement.overflow", "rule.overflow":
-			if v == "deny" {
-				phase = "1b"
-			}
-		case "rule.tags", "rule.domains":
-			phase = "1b"
 		case "trash.link_guard":
 			if v == true {
 				phase = "1b"

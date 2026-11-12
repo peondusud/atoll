@@ -19,11 +19,6 @@
             "key": "balance.schedule",
             "later_phase": true,
             "message": "${ANY}"
-          },
-          {
-            "key": "placement.spread_mode",
-            "later_phase": true,
-            "message": "${ANY}"
           }
         ]
       }

@@ -653,10 +653,13 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			if err != nil {
 				return nil, fmt.Errorf("%q: %w", f.Path, err)
 			}
-			placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread}
+			// A rule that now ignores a file leaves it what it was, with the pool's placement (specs.md §15.10).
+			placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread,
+				spreadMode: c.Pool.SpreadMode, tagsMode: c.Pool.TagsMode, overflow: c.Pool.Overflow}
 			size := update.Size
 			if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
-				placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread}
+				placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread, spreadMode: policy.SpreadMode,
+					tagsMode: policy.TagsMode, overflow: policy.Overflow, tags: joinNames(policy.Tags), domains: joinNames(policy.Domains)}
 			}
 			copies := make([]solver.Copy, 0, len(f.Copies))
 			for j := range f.Copies {
@@ -710,21 +713,33 @@ func settleFile(c *config.Config, f *catalog.FileRow, position map[string]int, s
 	return update, nil
 }
 
+// placementKey is what a file's effective policy says of where its copies go (specs.md §12.4), as a map key: its
+// tags and domains joined by a NUL, which no name holds.
 type placementKey struct {
-	replicas, priority int
-	spread             string
+	replicas, priority                     int
+	spread, spreadMode, tagsMode, overflow string
+	tags, domains                          string
 }
 
-// placementFor gives the plan what it may act on. Until phase 1b, what specs.md §24.4 says has no
-// effect is not given to it: no tags or domains, and no strict mode or denied overflow. Delete a
-// line here when its phase lands.
+func joinNames(list []string) string {
+	return strings.Join(list, "\x00")
+}
+
+func splitNames(joined string) []string {
+	if joined == "" {
+		return nil
+	}
+	return strings.Split(joined, "\x00")
+}
+
+// placementFor gives the plan the placement of a policy, made once for all the files that share it.
 func placementFor(known map[placementKey]*solver.Placement, key placementKey) *solver.Placement {
 	if p, ok := known[key]; ok {
 		return p
 	}
 	p := &solver.Placement{
-		Replicas: key.replicas, Priority: key.priority, Spread: key.spread,
-		TagsMode: "prefer", SpreadMode: "prefer", Overflow: "allow",
+		Replicas: key.replicas, Priority: key.priority, Spread: key.spread, SpreadMode: key.spreadMode, TagsMode: key.tagsMode, Overflow: key.overflow,
+		Tags: splitNames(key.tags), Domains: splitNames(key.domains),
 	}
 	known[key] = p
 	return p

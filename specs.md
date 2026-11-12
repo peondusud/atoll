@@ -1521,9 +1521,6 @@ Phase 1a warns about these settings, and each phase removes its own lines. The k
 
 | Setting | Value that gets a warning | Phase | Until then |
 |---|---|---|---|
-| `placement.spread_mode`, `placement.tags_mode`, and a rule's | `strict` | 1b | no effect |
-| `placement.overflow`, a rule's `overflow` | `deny` | 1b | no effect |
-| a rule's `tags`, `domains` | any | 1b | no effect |
 | `trash.link_guard` | `true` | 1b | no effect |
 | `balance.schedule` | anything but `never` | 1b | no effect |
 | `read.policy` | anything but `oldest` | 2a | no effect |

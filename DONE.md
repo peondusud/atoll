@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Tags, domains and strict placement (specs.md §12.4, §13.4)
+
+Commit "Place copies by the rules' tags and domains", on `beta`.
+
+- The plan already knew a rule's tags and domains, `tags_mode` and `spread_mode` in strict mode, and `overflow = "deny"`. The scan now gives them to it, rather than `prefer` and `allow` with no list, and these settings no longer warn of a later phase. A copy goes only to a listed disk when the rule says so, and a file that must cover another failure domain waits for it rather than doubling up on its own. Either way the file is `degraded` when that cannot be met, or with `overflow = "allow"` its copy goes to another disk.
+- Verified: the scenarios `placement-tags-strict`, `placement-tags-full` and `placement-spread-strict`, which each fail without the change; `scan-later-phase` became `scan-strict-unmet`, whose file is now `degraded`; the warning scenarios updated; 5 mutants, each caught.
+- **Decided without the maintainer, to confirm:**
+  - Copies already placed stay where they are when a rule's lists change: only new copies follow them, until `atoll balance` moves the others (§13.3).
+
 ## Conflicts list and resolve (specs.md §15.7)
 
 Commit "List the files in conflict, and keep one version of one", on `beta`.

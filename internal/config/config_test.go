@@ -322,9 +322,7 @@ func TestLaterPhaseWarnings(t *testing.T) {
 		"placement.colocate", // set by the energy preset, unlike new_files, which the file sets
 		"read.classes",
 		"rule[5].cache_min_age",
-		"rule[5].spread_mode",
 		"rule[6].cache_min_age",
-		"rule[6].spread_mode",
 		"rule[7].colocate",
 	}
 	if !slices.Equal(got, want) {

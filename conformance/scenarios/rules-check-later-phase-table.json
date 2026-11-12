@@ -56,21 +56,6 @@
             "message": "${ANY}"
           },
           {
-            "key": "placement.overflow",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "placement.spread_mode",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "placement.tags_mode",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "read.classes",
             "later_phase": true,
             "message": "${ANY}"
@@ -92,31 +77,6 @@
           },
           {
             "key": "rule[0].colocate",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].domains",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].overflow",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].spread_mode",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].tags",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].tags_mode",
             "later_phase": true,
             "message": "${ANY}"
           },
