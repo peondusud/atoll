@@ -1,0 +1,173 @@
+{
+ "format_version": 1,
+ "spec": "specs.md \u00a715.7",
+ "description": "A version on a disk away stays, and so does the conflict: exit 4. Run again once the disk is back, the resolution ends.",
+ "disks": [
+  {
+   "id": "t1",
+   "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t2",
+   "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "text": "xx",
+     "mtime_ns": 1700000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t3",
+   "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "text": "xx",
+     "mtime_ns": 1700000000000000000
+    }
+   ]
+  }
+ ],
+ "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+ "steps": [
+  {
+   "do": "atoll",
+   "args": [
+    "init"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "scan",
+    "--full"
+   ]
+  },
+  {
+   "do": "unmount",
+   "disk": "t3"
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t1",
+    "--yes",
+    "--json"
+   ],
+   "exit": 4,
+   "stdout_json": {
+    "path": "a",
+    "keep": "t1",
+    "applied": true,
+    "resolved": false,
+    "bytes": 2,
+    "copies": [
+     {
+      "disk": "t1",
+      "size": 1024,
+      "mtime_ns": 1600000000000000000,
+      "outcome": "kept"
+     },
+     {
+      "disk": "t2",
+      "size": 2,
+      "mtime_ns": 1700000000000000000,
+      "outcome": "trashed"
+     },
+     {
+      "disk": "t3",
+      "size": 2,
+      "mtime_ns": 1700000000000000000,
+      "outcome": "disk-unavailable"
+     }
+    ]
+   }
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT state FROM files",
+   "rows": [
+    [
+     "conflict"
+    ]
+   ]
+  },
+  {
+   "do": "mount",
+   "disk": "t3"
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t1",
+    "--yes",
+    "--json"
+   ],
+   "stdout_json": {
+    "path": "a",
+    "keep": "t1",
+    "applied": true,
+    "resolved": true,
+    "bytes": 2,
+    "copies": [
+     {
+      "disk": "t1",
+      "size": 1024,
+      "mtime_ns": 1600000000000000000,
+      "outcome": "kept"
+     },
+     {
+      "disk": "t3",
+      "size": 2,
+      "mtime_ns": 1700000000000000000,
+      "outcome": "trashed"
+     }
+    ]
+   }
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT state, size FROM files",
+   "rows": [
+    [
+     "pending",
+     1024
+    ]
+   ]
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t1",
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,260 @@
+{
+ "format_version": 1,
+ "spec": "specs.md \u00a715.7, \u00a725",
+ "description": "atoll conflicts resolve refuses a path the catalog does not have, a file not in conflict, and a disk with no copy of it or that the configuration does not list, with 1, and its own misuse with 2; nothing moves.",
+ "disks": [
+  {
+   "id": "t1",
+   "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    },
+    {
+     "path": "media/b",
+     "text": "same",
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t2",
+   "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "text": "xx",
+     "mtime_ns": 1700000000000000000
+    },
+    {
+     "path": "media/b",
+     "text": "same",
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t3",
+   "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  }
+ ],
+ "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+ "steps": [
+  {
+   "do": "atoll",
+   "args": [
+    "init"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "scan",
+    "--full"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "b",
+    "--keep",
+    "t1",
+    "--yes",
+    "--json"
+   ],
+   "exit": 1
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "nothing",
+    "--keep",
+    "t1",
+    "--yes",
+    "--json"
+   ],
+   "exit": 1
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t3",
+    "--yes",
+    "--json"
+   ],
+   "exit": 1
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t9",
+    "--yes",
+    "--json"
+   ],
+   "exit": 1
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--yes"
+   ],
+   "exit": 2
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "--keep",
+    "t1",
+    "--yes"
+   ],
+   "exit": 2
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t1",
+    "--dry-run",
+    "--yes"
+   ],
+   "exit": 2
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "b",
+    "--keep",
+    "t1"
+   ],
+   "exit": 2
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t1",
+    "--keep",
+    "t2"
+   ],
+   "exit": 2
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep"
+   ],
+   "exit": 2
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "../t1"
+   ],
+   "exit": 2
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "/a",
+    "--keep",
+    "t1"
+   ],
+   "exit": 2
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t1",
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    },
+    {
+     "path": "media/b",
+     "text": "same",
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t2",
+   "tree": [
+    {
+     "path": "media/a",
+     "text": "xx",
+     "mtime_ns": 1700000000000000000
+    },
+    {
+     "path": "media/b",
+     "text": "same",
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+   "rows": [
+    [
+     "a",
+     "conflict"
+    ],
+    [
+     "b",
+     "ok"
+    ]
+   ]
+  }
+ ]
+}

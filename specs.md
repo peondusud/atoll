@@ -667,6 +667,12 @@ Then, the first that applies:
 - Same logical path with different content on two disks, at adoption, after concurrent changes or after `catalog rebuild` (§9): `conflict` state, every version kept.
 - Atoll's own view keeps presenting the copy it presented before; for a conflict found when adding a disk, the copy already in the pool. With mergerfs, the first branch's copy is shown.
 - Resolution: `atoll conflicts resolve <path> --keep <disk>`, with confirmation; the other versions go to the trash.
+  - `atoll conflicts list [--json]` gives each file in conflict, by path in byte order, with its copies by disk position: the size and modification time each disk holds, as the catalog last recorded them. It reads the catalog only. Output: `api/schemas/conflicts-list.schema.json`.
+  - `atoll conflicts resolve <path> --keep <disk> [--dry-run] [--yes] [--json]` keeps the copy on `<disk>` and sends every other copy to the trash, as `overwritten`. Without `--yes`, it says what it would do and exits with 3.
+  - A walk leaves the copies of a file in conflict as it found them, so the command looks at each copy again. The copy kept is what its disk holds now. Each other copy goes as its disk holds it, its row first brought to that. A copy no longer on its disk loses its row.
+  - A `conflict-resolve` event comes before anything moves. Once no other copy is left, the file takes the kept copy's size and modification time. Its hash, its chunk hashes and the kept copy's verification go, to be read again, and so do its queued jobs. The file is `pending`, and the next pass makes its replicas from the kept copy.
+  - A kept copy that is gone, or on a disk that cannot be reached, moves nothing. Another copy on a disk that cannot be reached stays, and so does the conflict, with exit 4, until a run that reaches it.
+  - It exits with 1, with nothing on standard output, when the catalog has no file at the path, the file is not in conflict or has no copy on `<disk>`, or the configuration has no such disk. Output: `api/schemas/conflicts-resolve.schema.json`.
 - Paths with the same `lpath_key` (§15.8), which differ only by NFC/NFD form, by case as NTFS and Samba compare it, or by both, are reported as `name-collision`: the merged view shows both, and Windows or macOS clients may treat them as one name. Folders count too: `Films/a.mkv` and `films/b.mkv` are reported, because `Films` and `films` have the same key. Nothing is changed automatically.
 - Atoll never writes a colliding name to an NTFS disk. This is a hard constraint of the solver (§12.4), checked on NTFS targets only: ext4, XFS and btrfs hold both names, and the variants that would not are refused (§10). Atoll checks it itself, as a pure function of the names, and never relies on the driver:
   - a path collides with a name on the target when, at some component, their prefixes up to that component have the same `lpath_key` and different bytes. So `film.mkv` collides with `Film.mkv`, `films/b.mkv` with the folder `Films`, and `films/a.mkv` with a file named `Films`;
@@ -1545,12 +1551,12 @@ atoll scrub [--disk <id>] [--path <path>] [--budget <duration>] [--dry-run] [--y
 atoll repair <path> [--disk <id>] [--mode chunk|file] [--dry-run] [--yes]
 atoll dupes [--path <path>] [--min-size <size>]   read-only: the files that hold the same content (§16)
 atoll trash list | restore <path> [--to <disk>] [--dry-run] [--yes] | purge [--older-than <duration>] [--dry-run] [--yes]
-atoll conflicts list | resolve <path> --keep <disk>
+atoll conflicts list | resolve <path> --keep <disk> [--dry-run] [--yes]   (§15.7)
 atoll names check [--path <path>]        read-only: names not in NFC, not valid UTF-8, incompatible with a filesystem, or colliding, and paths past a length limit (§15.9)
 atoll guard list | confirm --disk <id> [--kind deletions|modifications] | reject --disk <id> [--kind deletions|modifications]
 atoll prune [--dry-run] [--yes]          surplus copies to the trash (§17.3)
 atoll balance [--dry-run] [--move-originals]
-atoll notify test [--json]               a test alert through each channel set (§23)
+atoll notify test [--json]               a test alert through each channel set, and a request to each media server (§21.5, §23)
 atoll catalog backup | verify | rebuild  verify: SQLite integrity check, then catalog vs disks (read-only)
 atoll mergerfs-config                    (phase 1 and break glass)
 atoll mount <point>                      (phase 2a on Linux, phase 4 on Windows)

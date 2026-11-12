@@ -2,6 +2,21 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Conflicts list and resolve (specs.md §15.7)
+
+Commit "List the files in conflict, and keep one version of one", on `beta`.
+
+- `atoll conflicts list` gives each file in conflict with what each disk holds of it.
+- `atoll conflicts resolve <path> --keep <disk>` keeps that disk's copy and sends the others to the trash, `--dry-run` and `--yes` as for every command that moves things. The file then takes the kept copy's size and time, its hash is read again, and the next pass makes its replicas from it.
+- A walk leaves the copies of a file in conflict as it found them: a scan never records an edit to one. So the command looks at each copy again rather than trusting its row; otherwise the version a user just edited, the one most likely to be kept, could never be.
+- Verified: the scenarios `conflicts-list`, `conflicts-resolve`, `conflicts-resolve-refused`, `conflicts-resolve-disk-away`, `conflicts-resolve-as-it-is`, `conflicts-resolve-gone-only` and `conflicts-resolve-kept-gone`; `TestConflictRows`, `TestConflictsResolveUnknownDisk`; 20 mutants, each caught.
+- **Decided without the maintainer, to confirm:**
+  - **Reason `overwritten`** for the versions that go, as the trash table's reasons are a contract (§29.3) and none other fits: a version another replaced.
+  - **Every other copy goes**, even one that holds the same bytes as the kept copy: telling them apart would mean reading both whole, and the next pass makes the replica again.
+  - **A copy changed since the last walk** goes as it is now; the kept copy is kept as it is now. A copy no longer on its disk loses its row. Only a disk that cannot be reached keeps the file in conflict.
+  - **The new contracts:** the two commands and their exit codes; `api/schemas/conflicts-list.schema.json` and `conflicts-resolve.schema.json`; the event `conflict-resolve`, with the kept disk and the path, written before anything moves.
+  - **Queued jobs of the file go** once it is resolved, as they were planned from another version.
+
 ## Notifications to Plex, Emby and Jellyfin (specs.md §21.5)
 
 Commit "Tell Plex, Jellyfin and Emby of the folders that changed", on `beta`.

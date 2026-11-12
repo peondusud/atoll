@@ -123,3 +123,13 @@ func TestNotifyTestMediaServers(t *testing.T) {
 		t.Errorf("refused: %q, %v", stdout.String(), err)
 	}
 }
+
+// conflicts resolve refuses a disk the configuration does not have, and says so, before it opens the catalog.
+func TestConflictsResolveUnknownDisk(t *testing.T) {
+	config := notifyConfig(t, "")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--config", config, "conflicts", "resolve", "a", "--keep", "t9", "--yes"}, &stdout, &stderr); code != exitError ||
+		stdout.Len() != 0 || !strings.Contains(stderr.String(), `"t9"`) {
+		t.Errorf("exit %d, %q, %q", code, stdout.String(), stderr.String())
+	}
+}

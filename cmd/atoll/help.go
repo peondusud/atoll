@@ -56,6 +56,10 @@ func commandHelps() []commandHelp {
 		}, "show the mass-deletion and mass-modification guards, or answer one that tripped"},
 		{"prune", []string{"atoll prune [--dry-run] [--yes] [--json]"},
 			"move surplus copies to the trash"},
+		{"conflicts", []string{
+			"atoll conflicts list [--json]",
+			"atoll conflicts resolve <path> --keep <disk> [--dry-run] [--yes] [--json]",
+		}, "list the files in conflict, or keep one copy of a file and send the others to the trash"},
 		{"daemon", []string{"atoll daemon [--foreground] [--dry-run]", "atoll daemon --until-idle [--dry-run] [--json]"},
 			"run for good, or do all the work that is due once and stop"},
 		{"mergerfs-config", []string{"atoll mergerfs-config [--json]"},
