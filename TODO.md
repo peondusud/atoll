@@ -67,7 +67,7 @@ Every item here is a **decision**:
   - the fallbacks of §12.2 for the modes, when jobs act on them: `rules.Policy` holds what the configuration asks for, and `atoll scan` already gives the plan only what has an effect;
   - `disk add` and `disk remove` editing the file: every other byte kept, the result re-read before it replaces the file.
 - After `catalog rebuild`, the disks' trash entries are not in the new catalog: list them again from `trash/<date>/<op id>/`, with a reason to choose, and their expiry from the date.
-- Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. The daemon that runs for good, with its watcher and its grouping, is still to measure over hours of changes.
+- Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. The daemon that runs for good, with its watcher and its grouping, held four hours of a change every second on 4,000 files, its heap in use between 2.8 and 6.8 MiB with no growth (§26). Over days, and on 200,000 files, it is still to measure: `SOAK=72h SOAK_FILES=200000`.
 - What the mount check of §10 leaves to do for disks:
   - `atoll disk show`, which could show `time_precision_ns`, and reading `Atoll/disk.toml` at each mount check;
   - the topology check of R-06 at each start, not only at `disk add`, with the catalog's `disks.device`.

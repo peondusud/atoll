@@ -89,6 +89,7 @@ Commit "Soak the daemon that runs for good", on `develop`.
 - It fails when the heap grows past the second tenth's by more than a tenth and 8 MiB, the files or goroutines by more than 16, when the daemon makes fewer passes than the run has minutes, when a guard holds a pass, or when the last tenth runs fewer than half the passes of the second.
 - What its first runs found is in the four entries above: a copy tried again at every pass, the files a guard holds read with queries prepared anew, and two reads of the whole journal at every pass. Its guards are now out of the writer's way, a minute's window and counts it never reaches, so that it measures a daemon that decides.
 - A four-minute run on Linux 6.12: 155 passes, each deciding 3 or 4 files and running 4 to 7 operations, none held; the heap in use 2.8 to 4.1 MiB, the resident memory about 30 MiB and at most 44.2 MiB, 8 to 10 goroutines, 21 or 22 open files.
+- A four-hour run on Linux 6.12, on 2026-11-12, after the fixes the second soak called for: 8,341 passes, 780 to 888 a tenth of the run, none held; the heap in use 2.8 to 6.8 MiB from the second tenth on, the resident memory 31.6 to 41.3 MiB and at most 51.0 MiB, 8 or 9 goroutines, 21 to 30 open files; the catalog grew to 22.1 MiB, its events log with it. Nothing grew but the catalog, and the passes kept their pace: it passed.
 
 ## The parts of `tmp/` looked for where they are (specs.md §14.2)
 

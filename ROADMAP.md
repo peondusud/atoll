@@ -8,7 +8,7 @@ A milestone is reached when its phase and every phase before it are done.
 
 | Milestone | Phase | What it brings | Progress |
 |---|---|---|---|
-| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 92 % |
+| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 96 % |
 | **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 35 % |
 | **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 30 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
@@ -47,7 +47,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **The memory of a daemon that runs for days**, measured.
+1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). Days, and 200,000 files, remain.
 
 ## Beta: phase 1b, the complete Linux MVP
 
