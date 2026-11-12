@@ -24,7 +24,7 @@ One JSON file per function. Every file has this envelope:
 - Every case may carry a `note`: a short explanation for reviewers, never read by the tests.
 - Unknown fields are errors, so a typo cannot silently disable a check. Keys are lowercase ASCII and match a field exactly, and no key appears twice in one object: Go's decoder would otherwise match `Name` or `NAME` to `name`, and keep the last of two equal keys, where Rust's fails.
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
-- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
+- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`, `first`, `gone`, `back`, `check`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
 - Integers are exact JSON integers within the signed 64-bit range, without a fraction, an exponent or `-0`; they are never written as strings or floats.
 - Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding), written exactly as the standard encoder writes it: no line break, no other spelling. A case has exactly one of the two.
 - A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
@@ -66,6 +66,7 @@ A percentage is checked through its use: the share of a total, such as `min_free
 | `input` | string | the window as written in the configuration |
 | `at` | string | an instant, in RFC 3339 with an offset; the offset gives the wall-clock time in the configured `timezone` |
 | `inside` | boolean | whether `at` falls inside the window |
+| `next` | string | the first instant inside the window at or after `at`, in `at`'s offset; left out where a case does not ask |
 | `error` | boolean | `true` when `input` is rejected |
 
 ### `glob.json` — glob patterns (§29.5)
@@ -312,6 +313,24 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `reserved` | integer, or `null` | what stays free: the smallest of the values; with a capacity of `null`, the smallest size, or `null` with percentages only |
 | `usable` | integer | what the solver may fill: `capacity` minus `reserved`, or 0; left out with a capacity of `null` |
 | `error` | boolean | `true` when a value is refused, the list is empty, or `capacity` is negative |
+
+### `daemon_wake.json` — when the daemon checks, passes and sleeps (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `now_ns` | integer | the time asked about |
+| `check_due_ns` | integer | when the mount check is next due |
+| `first`, `gone`, `back` | boolean | no pass since the daemon started; a disk went `missing`; a disk came back |
+| `pass_due_ns` | integer | the last pass's `next_due`; left out when none |
+| `group_due_ns` | integer | when a waiting group of the watcher ripens; left out when none |
+| `ripe_origins` | array of strings | who made the groups ripe now; left out when none is |
+| `last_pass_end_ns` | integer | when the last pass ended; left out before the first |
+| `rescan_every_ns` | integer | `maintenance.rescan_every` |
+| `window`, `timezone` | string | `maintenance.window`, and the IANA zone its wall clock is in |
+| `check` | boolean | `true` when the mount check is due |
+| `because` | array of strings | why a pass is due, in the order `start`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `wake_ns` | integer | when to look again: `now_ns` when something is due |
+| `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, or a `rescan_every_ns` that is not positive |
 
 ### `event_grouping.json` — the watcher's events grouped per path (§15.1)
 

@@ -1,6 +1,7 @@
 package fsx
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -669,6 +671,36 @@ func LockFile(path string) (release func(), err error) {
 		return nil, fmt.Errorf("lock %q: %w", path, err)
 	}
 	return func() { _ = file.Close() }, nil
+}
+
+// lockRetry is how often WaitLockFile tries again: often enough that a command starts as soon as a pass ends,
+// rarely enough to cost nothing while it waits.
+const lockRetry = 200 * time.Millisecond
+
+// WaitLockFile takes the lock of LockFile, waiting while another process holds it (specs.md §25): waiting is
+// called once, then the lock is tried again until it is free or ctx is done. Trying again, rather than
+// blocking in the kernel, lets a cancel end the wait.
+func WaitLockFile(ctx context.Context, path string, waiting func()) (release func(), err error) {
+	release, err = LockFile(path)
+	if !errors.Is(err, ErrBusy) {
+		return release, err
+	}
+	if waiting != nil {
+		waiting()
+	}
+	tick := time.NewTicker(lockRetry)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("lock %q: %w", path, ctx.Err())
+		case <-tick.C:
+		}
+		release, err = LockFile(path)
+		if !errors.Is(err, ErrBusy) {
+			return release, err
+		}
+	}
 }
 
 // Space is what statfs says about a disk: all of it, and what a program may fill.

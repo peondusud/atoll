@@ -12,7 +12,6 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
-	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -140,7 +139,7 @@ func runScan(configPath string, args []string, stdout, stderr io.Writer) int {
 	if parsed.opts.Disk != "" && !hasDisk(c, parsed.opts.Disk) {
 		return failure(stderr, fmt.Errorf("scan: no disk %q in the configuration", parsed.opts.Disk))
 	}
-	outcome, err := scan(c, parsed.opts)
+	outcome, err := scan(c, parsed.opts, stderr)
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -168,7 +167,7 @@ func hasDisk(c *config.Config, id string) bool {
 	return false
 }
 
-func scan(c *config.Config, opts watch.Options) (outcome *watch.Outcome, err error) {
+func scan(c *config.Config, opts watch.Options, stderr io.Writer) (outcome *watch.Outcome, err error) {
 	ctx := context.Background()
 	machine, err := disks.NewMachine()
 	if err != nil {
@@ -185,7 +184,7 @@ func scan(c *config.Config, opts watch.Options) (outcome *watch.Outcome, err err
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	if release, err = fsx.LockFile(catalogPath(c)); err != nil {
+	if release, err = lockCatalog(ctx, c, stderr); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	outcome, err = watch.Scan(ctx, db, c, machine, opts)

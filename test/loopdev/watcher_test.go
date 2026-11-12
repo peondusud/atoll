@@ -89,6 +89,9 @@ func TestWatcherOnEachDriver(t *testing.T) {
 						t.Errorf("an event from outside the root: %+v", e)
 					}
 				}
+				// A disk being watched can still be unmounted: the watcher holds nothing open on it.
+				must(t, "umount", pool)
+				must(t, "umount", at)
 			})
 		}
 	}

@@ -66,6 +66,24 @@ func (w Window) Contains(t time.Time) bool {
 	}
 }
 
+// Next gives the first instant inside the window at or after t, in t's location: t itself when it is inside,
+// otherwise the window's start that day, or the next day if that start has gone by. A start that a
+// spring-forward night skips is the first instant after it, as time.Date normalizes it. The zero window has
+// none, and gives t.
+func (w Window) Next(t time.Time) time.Time {
+	if w.start == w.end || w.Contains(t) {
+		return t
+	}
+	y, m, d := t.Date()
+	for day := 0; day < 3; day++ {
+		start := time.Date(y, m, d+day, w.start/60, w.start%60, 0, 0, t.Location())
+		if !start.Before(t) && w.Contains(start) {
+			return start
+		}
+	}
+	return t
+}
+
 // String returns the window as hh:mm-hh:mm.
 func (w Window) String() string {
 	return fmt.Sprintf("%02d:%02d-%02d:%02d", w.start/60, w.start%60, w.end/60, w.end%60)

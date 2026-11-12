@@ -267,11 +267,11 @@ func openSource(ctx context.Context, root string, inotifyOnly bool) (source, str
 }
 
 // filesystemSource is one fanotify mark on the filesystem that holds the root, which reports every name with
-// its folder's handle.
+// its folder's handle. It holds no descriptor of the disk between two events: one would keep the disk from
+// being unmounted.
 type filesystemSource struct {
-	group   int
-	mountFD int
-	root    string
+	group int
+	root  string
 }
 
 func openFilesystem(root string) (*filesystemSource, error) {
@@ -283,18 +283,13 @@ func openFilesystem(root string) (*filesystemSource, error) {
 		_ = unix.Close(group)
 		return nil, fmt.Errorf("fanotify mark %s: %w", root, err)
 	}
-	mountFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		_ = unix.Close(group)
-		return nil, fmt.Errorf("open %s: %w", root, err)
-	}
-	return &filesystemSource{group: group, mountFD: mountFD, root: path.Clean(root)}, nil
+	return &filesystemSource{group: group, root: path.Clean(root)}, nil
 }
 
 func (s *filesystemSource) fd() int { return s.group }
 
 func (s *filesystemSource) close() error {
-	return errors.Join(unix.Close(s.group), unix.Close(s.mountFD))
+	return unix.Close(s.group)
 }
 
 func (s *filesystemSource) drain(buf []byte) ([]change, []int32, error) {
@@ -316,9 +311,16 @@ func (s *filesystemSource) drain(buf []byte) ([]change, []int32, error) {
 	}
 }
 
-// resolve finds where a handle leads now, through the folder's handle.
+// resolve finds where a handle leads now, through the folder's handle, opening the root for that alone. A root
+// that is now another filesystem's opens no handle of this one.
 func (s *filesystemSource) resolve(info *fanInfo) (string, place) {
-	fd, err := unix.OpenByHandleAt(s.mountFD, unix.NewFileHandle(info.handleType, info.handle), unix.O_PATH|unix.O_CLOEXEC)
+	// Not O_PATH: open_by_handle_at refuses one as the descriptor of the filesystem.
+	mountFD, err := unix.Open(s.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return "", unknown
+	}
+	fd, err := unix.OpenByHandleAt(mountFD, unix.NewFileHandle(info.handleType, info.handle), unix.O_PATH|unix.O_CLOEXEC)
+	_ = unix.Close(mountFD)
 	if err != nil {
 		return "", unknown
 	}

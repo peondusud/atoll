@@ -1,6 +1,7 @@
 package view
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -98,5 +99,29 @@ func TestMergerfsRefuses(t *testing.T) {
 		if m, err := configure(t, `["1GiB"]`, disks, nil); err == nil {
 			t.Errorf("%s: got %s", name, m.Fstab())
 		}
+	}
+}
+
+// At runtime, the branches of the disks that are there, in configuration order, not escaped.
+func TestMergerfsRuntime(t *testing.T) {
+	m, err := configure(t, `["50%", "1GiB"]`, disk("a", "/mnt/my disks/a", "")+disk("b", "/mnt/b", "")+disk("c", "/mnt/c", ""), map[string]int64{"c": 3 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := func(string) bool { return true }
+	if got := m.Runtime(all); got != "/mnt/my disks/a/media=RW,1G:/mnt/b/media=RW,1G:/mnt/c/media=RW,1536K" {
+		t.Errorf("%s", got)
+	}
+	if got := m.Runtime(func(d string) bool { return d != "b" }); got != "/mnt/my disks/a/media=RW,1G:/mnt/c/media=RW,1536K" {
+		t.Errorf("without b: %s", got)
+	}
+	if got := m.Runtime(func(string) bool { return false }); got != "" {
+		t.Errorf("none: %s", got)
+	}
+	if err := WriteBranches("/nowhere", ""); err == nil {
+		t.Error("wrote no branch")
+	}
+	if _, err := ReadBranches(t.TempDir()); !errors.Is(err, ErrNoMergerfs) {
+		t.Errorf("no mergerfs: %v", err)
 	}
 }

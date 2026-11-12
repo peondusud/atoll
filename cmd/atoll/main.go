@@ -2,11 +2,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"runtime/debug"
 	"strings"
+
+	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/fsx"
 )
 
 // The exit codes of specs.md §29.3.
@@ -90,6 +94,14 @@ func setFlag(flag *bool, name string) error {
 	}
 	*flag = true
 	return nil
+}
+
+// lockCatalog takes the catalog's lock, waiting while another command or the daemon's pass holds it, and says
+// so once on standard error (specs.md §25).
+func lockCatalog(ctx context.Context, c *config.Config, stderr io.Writer) (func(), error) {
+	return fsx.WaitLockFile(ctx, catalogPath(c), func() {
+		report(stderr, "waiting for the catalog: another command, or a pass of the daemon, holds it")
+	})
 }
 
 func usage(stderr io.Writer, message string) int {

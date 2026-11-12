@@ -1,0 +1,35 @@
+# The daemon that runs for good (specs.md §15.13), as a dedicated user with only the capabilities it needs.
+# Install: useradd --system --no-create-home --shell /usr/sbin/nologin atoll
+#          cp atoll.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now atoll
+[Unit]
+Description=Atoll: file-level redundancy for a media library
+Documentation=https://github.com/peondusud/atoll/blob/main/specs.md
+# The disks are mounted first; the network is for the alerts.
+After=local-fs.target remote-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/atoll daemon
+User=atoll
+Group=atoll
+# Reading a device's head to confirm a disk (specs.md §10).
+SupplementaryGroups=disk
+# fanotify marks, the remount after a USB reset and mergerfs's runtime branches need CAP_SYS_ADMIN; reading
+# every file, and making copies with their mode and owner, the others.
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+NoNewPrivileges=yes
+ProtectHome=read-only
+PrivateTmp=yes
+# The catalog in /var/lib/atoll, the configuration in /etc/atoll, the local API's socket in /run/atoll.
+StateDirectory=atoll
+ConfigurationDirectory=atoll
+RuntimeDirectory=atoll
+# A pass under way stops at its next step; what an operation left is the reprise's at the next start.
+TimeoutStopSec=2min
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

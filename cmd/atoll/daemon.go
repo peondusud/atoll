@@ -9,13 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/daemon"
 	"github.com/peondusud/atoll/internal/disks"
-	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/value"
@@ -68,7 +71,7 @@ type daemonRest struct {
 }
 
 func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
-	var asJSON, dryRun, untilIdle bool
+	var asJSON, dryRun, untilIdle, foreground bool
 	for _, a := range args {
 		var flag *bool
 		switch a {
@@ -78,6 +81,8 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 			flag = &dryRun
 		case "--until-idle":
 			flag = &untilIdle
+		case "--foreground":
+			flag = &foreground
 		default:
 			return usage(stderr, fmt.Sprintf("daemon: unknown argument %q", a))
 		}
@@ -85,19 +90,22 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 			return usage(stderr, "daemon: "+err.Error())
 		}
 	}
-	if !untilIdle {
-		return usage(stderr, "daemon: only --until-idle runs for now")
+	if !untilIdle && asJSON {
+		return usage(stderr, "daemon: --json goes with --until-idle")
 	}
 	c, err := load(configPath)
 	if err != nil {
 		return failure(stderr, err)
+	}
+	if !untilIdle {
+		return runForGood(c, !dryRun, stderr)
 	}
 	buffered := bufio.NewWriter(stdout)
 	var sink daemonSink = &textDaemon{w: buffered}
 	if asJSON {
 		sink = &jsonDaemon{w: buffered, dryRun: dryRun}
 	}
-	outcome, err := runPass(c, !dryRun, sink)
+	outcome, err := runPass(c, !dryRun, sink, stderr)
 	if err == nil {
 		err = sink.end(outcome)
 	}
@@ -119,7 +127,23 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func runPass(c *config.Config, apply bool, sink jobs.Sink) (outcome *jobs.Outcome, err error) {
+// runForGood runs the daemon until SIGTERM or SIGINT (specs.md §15.13). Atoll never detaches itself:
+// --foreground changes nothing.
+func runForGood(c *config.Config, apply bool, stderr io.Writer) int {
+	machine, err := disks.NewMachine()
+	if err != nil {
+		return failure(stderr, err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	log := slog.New(slog.NewTextHandler(stderr, nil))
+	if err := daemon.Run(ctx, daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log}); err != nil {
+		return failure(stderr, err)
+	}
+	return exitOK
+}
+
+func runPass(c *config.Config, apply bool, sink jobs.Sink, stderr io.Writer) (outcome *jobs.Outcome, err error) {
 	ctx := context.Background()
 	machine, err := disks.NewMachine()
 	if err != nil {
@@ -136,7 +160,7 @@ func runPass(c *config.Config, apply bool, sink jobs.Sink) (outcome *jobs.Outcom
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	if release, err = fsx.LockFile(catalogPath(c)); err != nil {
+	if release, err = lockCatalog(ctx, c, stderr); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	outcome, err = jobs.RunTo(ctx, db, c, machine, apply, sink)
@@ -579,7 +603,7 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 	if !hasDisk(c, disk) {
 		return failure(stderr, fmt.Errorf("guard: no disk %q in the configuration", disk))
 	}
-	upTo, err := actOnGuard(c, what, kind, disk)
+	upTo, err := actOnGuard(c, what, kind, disk, stderr)
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -601,7 +625,7 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 	return exitOK
 }
 
-func actOnGuard(c *config.Config, what, kind, id string) (upTo sql.NullInt64, err error) {
+func actOnGuard(c *config.Config, what, kind, id string, stderr io.Writer) (upTo sql.NullInt64, err error) {
 	ctx := context.Background()
 	now, err := nowOf()
 	if err != nil {
@@ -618,7 +642,7 @@ func actOnGuard(c *config.Config, what, kind, id string) (upTo sql.NullInt64, er
 		return upTo, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	if release, err = fsx.LockFile(catalogPath(c)); err != nil {
+	if release, err = lockCatalog(ctx, c, stderr); err != nil {
 		return upTo, fmt.Errorf("%w", err)
 	}
 	if kind == jobs.GuardModifications {

@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a725, \u00a715.12",
-  "description": "Usage errors come before the configuration is read: this one does not load. The daemon takes no --yes, and without --until-idle there is no loop to run yet.",
+  "spec": "specs.md \u00a725, \u00a715.12, \u00a715.13",
+  "description": "Usage errors come before the configuration is read: this one does not load, so a daemon that would run for good exits with 1 at once, its loop never started. The daemon takes no --yes, --foreground changes nothing, and --json goes with --until-idle.",
   "config": "pool_id = \n",
   "steps": [
     {
@@ -9,7 +9,7 @@
       "args": [
         "daemon"
       ],
-      "exit": 2
+      "exit": 1
     },
     {
       "do": "atoll",
@@ -33,12 +33,38 @@
         "daemon",
         "--dry-run"
       ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--json"
+      ],
       "exit": 2
     },
     {
       "do": "atoll",
       "args": [
         "daemon",
+        "--foreground"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--foreground",
+        "--foreground"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--foreground",
         "--json"
       ],
       "exit": 2

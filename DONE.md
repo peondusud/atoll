@@ -2,6 +2,26 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The daemon that runs for good (specs.md §15.13, §25)
+
+Commits "Record the maintainer's decisions for the alpha" and "Run the daemon for good", on `develop`.
+
+- **What it does.** `atoll daemon`, with or without `--foreground`, runs until `SIGTERM` or `SIGINT`, then exits with 0; it exits with 1 when its configuration or catalog cannot be used. It tells systemd it is ready, and that it is stopping. It checks every disk's mount every 30 s, and watches every disk that is not `missing`.
+- **When it runs a pass.** At start; when a disk goes or comes back; when a group of the watcher ripens that someone other than Atoll made; when the last pass's `next_due` comes; and every `rescan_every`, inside `maintenance.window`. When that is, a pure function (`daemon.Wake`) works out, with 24 vectors in `daemon_wake.json`. Rescans needed the first time inside a window at or after an instant: `value.Window.Next`, with six vectors more in `window.json`.
+- **Each pass.** It takes the catalog's lock, waiting while a command holds it, opens the catalog, runs the pass, puts mergerfs's runtime branches right, closes the catalog, then lets go of the lock.
+- **The branches.** They are those of `mergerfs-config`, without a disk `missing` or not walked since it came back, written whole and only when they differ.
+- **A USB reset.** A disk that went `missing` for `device-gone`, `device-unreadable` or `io-error` is remounted through its fstab entry, `umount -l` then `mount`, at each check until it is back.
+- **A failing device.** A device that fails still answers the mount check from the cache. The loop therefore takes a disk's state from each pass's outcome too.
+- **Commands wait.** A command that finds the catalog's lock taken waits for it (`fsx.WaitLockFile`), saying so once, instead of exiting with 1 (§25). Every command that writes does: `scan`, `prune`, `replicate`, `trash restore` and `purge`, `daemon --until-idle`, and `guard confirm` and `reject`.
+- **The service.** `deploy/atoll.service` runs it as the dedicated user `atoll`, with the capabilities the maintainer chose, and `deploy/README.md` says why each is there.
+- **Found while testing it.**
+  - **Unmounting a watched disk.** The watcher's descriptor on the root of a disk watched by a filesystem mark made `umount` say "target is busy": no disk could be unmounted while Atoll watched it. The watcher now opens the root only to resolve a handle, and `TestWatcherOnEachDriver` unmounts a watched disk on every driver.
+  - **`O_PATH`.** It will not do for that descriptor: `open_by_handle_at` refuses it.
+- **Verified.**
+  - `TestRunStartsAndStops`, `TestRunNeedsItsCatalog` and `TestSdNotify` run under the race detector, as does the test of the lock: a command that waits, then runs.
+  - In `test/loopdev`, on Linux 6.12 and 7.3, `TestDaemonRunsForGood` covers XFS and ntfs-3g, watched by a filesystem mark and folder by folder. It checks a pass at start, a pass for a user's file and its copy on the other disk, a pass when a disk is unmounted with its branch out of mergerfs, a pass when it is back with its branch back at its place, and a stop. `TestDaemonRemountsAfterAReset` takes a device away from under its mount, and brings it back under another name: the daemon remounts it through fstab and walks it, and its branch comes back.
+  - The scenarios `daemon-usage` and `daemon-needs-init` now hold the daemon that runs for good: it exits with 1 at once without a usable configuration or catalog, and `--json` goes only with `--until-idle`.
+
 ## The watcher (specs.md §15.1)
 
 Commit "Watch each disk and group its events per path", on `watcher`.
