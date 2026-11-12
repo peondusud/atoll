@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A nested btrfs subvolume is another mount (specs.md §15.10)
+
+Commit "Leave a nested btrfs subvolume out of the walk", on `develop`, as the maintainer chose on 2026-11-12.
+
+- The walk lists a folder on another device under the same mount, as a nested btrfs subvolume is, in `other_mounts`, and records nothing below it, as for another mount: its inode numbers are its own, so `file_key` would not tell its files apart, and nothing could move from it to the trash, as `rename` gives `EXDEV` there.
+- `TestNestedSubvolume`, in qemu on Linux 6.12 and 7.3: a subvolume below the root is listed, and only the file beside it is recorded.
+
 ## `atoll catalog backup` and `verify` (specs.md §9, §25)
 
 Commit "Back the catalog up, and check it", on `develop`.

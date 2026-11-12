@@ -53,8 +53,7 @@ The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "
    - an overwriting move or a swap of two names;
    - a folder renamed into the old name of one that waits;
    - operation ids after `catalog rebuild`;
-   - NTFS short names;
-   - a nested btrfs subvolume, walked as another mount.
+   - NTFS short names.
 7. **The memory of a daemon that runs for days**, measured.
 
 ## Beta: phase 1b, the complete Linux MVP

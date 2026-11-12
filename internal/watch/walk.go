@@ -66,13 +66,15 @@ func Walk(ctx context.Context, root fsx.Dir) (*Walked, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
 	}
 	w := &Walked{}
-	if err := walkFolder(ctx, root, "", top.MountID, w); err != nil {
+	if err := walkFolder(ctx, root, "", &top, w); err != nil {
 		return nil, err
 	}
 	return w, nil
 }
 
-func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, mountID uint64, w *Walked) error {
+// walkFolder walks a folder of the root top. A folder of another mount, or of another device under the same mount,
+// as a nested btrfs subvolume is, is listed and not walked (specs.md §15.10).
+func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, top *fsx.Stat, w *Walked) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("walk: %w", err)
 	}
@@ -107,11 +109,11 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, mountID uint64,
 				return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
 			}
 			w.Entries = append(w.Entries, found)
-			if st.MountID != mountID {
+			if st.MountID != top.MountID || st.Dev != top.Dev {
 				w.OtherMounts = append(w.OtherMounts, path)
 				continue
 			}
-			if err := walkBelow(ctx, dir, name, path, mountID, w); err != nil {
+			if err := walkBelow(ctx, dir, name, path, top, w); err != nil {
 				return err
 			}
 		case fsx.KindSymlink:
@@ -131,7 +133,7 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, mountID uint64,
 	return nil
 }
 
-func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, mountID uint64, w *Walked) error {
+func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, top *fsx.Stat, w *Walked) error {
 	below, err := dir.OpenDir(name)
 	switch {
 	case fsx.IsUnreadableName(err):
@@ -142,7 +144,7 @@ func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, mountID uint
 	case err != nil:
 		return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
 	}
-	walkErr := walkFolder(ctx, below, path+"/", mountID, w)
+	walkErr := walkFolder(ctx, below, path+"/", top, w)
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = below.Close()
 	return walkErr
