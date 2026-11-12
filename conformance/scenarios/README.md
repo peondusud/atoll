@@ -109,7 +109,8 @@ After each `atoll` step, on each disk (`specs.md` §6):
 | `folder-made` | once a restore has made a folder below the root, before it is synced or recorded |
 | `linked` | between `link` and the `fsync` that follows it, so only on a disk with `renameat2` at `false` |
 | `moved` | once the name has moved, a file's or a folder's, or the file of a purge is gone, before any later `fsync` of what holds it. With `renameat2` at `false`, `unlink` has run too, so the source's name is gone, which is not yet synced, and the target folder was synced once already, between `link` and `unlink` |
-| `times-set` | once a `utimens` has set the time on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
+| `chunk-saved`, `chunks-saved`, `chunk-written` | in a chunk repair (`specs.md` §16.1): once a bad chunk is saved in the trash, its folder synced; once the folder of the chunks is synced, before the copy is looked at again; and once a chunk is written in place and synced, before it is read back |
+| `times-set` | once a `utimens`, or a chunk repair, has set the time on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `mode-set` | once a `chmod` has set the mode on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `owner-set` | once a `chown` has set the owner on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `rmdir-journaled`, `rmdir-removed`, `rmdir-synced` | once the removal of a folder Atoll made is committed `planned`; once the folder is gone, before its parent's time is restored and the parent synced; and after that sync, before the operation is committed `done` (`specs.md` §17.5) |

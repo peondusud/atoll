@@ -11,6 +11,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -93,6 +94,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverChmod(ctx, db, op, nowNS)
 	case catalog.OpChown:
 		return d.recoverChown(ctx, db, op, nowNS)
+	case catalog.OpRepair:
+		return d.recoverRepair(ctx, db, op, nowNS)
 	default:
 		return fmt.Errorf("reprise: operation %d: no reprise for %q", op.ID, op.Kind)
 	}
@@ -558,6 +561,17 @@ func (d *Disk) syncFolder(path []string) error {
 }
 
 func (d *Disk) recoverUnlink(ctx context.Context, db *sql.DB, op *Op, nowNS int64) error {
+	if layout.IsChunks(op.Path2) {
+		// Atoll's own chunks, which nobody else writes: the purge goes on, and ends.
+		if err := d.PurgeChunks(op); err != nil {
+			return err
+		}
+		if err := catalog.FinishPurge(ctx, db, op, nil); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+		d.CleanTrash(op.Path2)
+		return nil
+	}
 	path := d.trashPlace(op.Path2)
 	source, _, err := d.seen(path, op)
 	if err != nil {

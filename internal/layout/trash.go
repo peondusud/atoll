@@ -3,6 +3,7 @@ package layout
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/peondusud/atoll/internal/names"
@@ -26,4 +27,33 @@ func TrashPath(startedNS, opID int64, logical string) (string, error) {
 		return "", fmt.Errorf("trash path: %w", err)
 	}
 	return time.Unix(0, startedNS).UTC().Format("2006-01-02") + "/" + strconv.FormatInt(opID, 10) + "/" + logical, nil
+}
+
+// ChunksPath gives where the chunks a repair overwrites go inside the trash: the operation's folder with the suffix
+// .chunks, then the logical path, whose last component is a folder of chunks (specs.md §17). The suffix sits on the
+// operation's folder, so that a name of 255 bytes still fits. Its errors are TrashPath's.
+func ChunksPath(startedNS, opID int64, logical string) (string, error) {
+	if opID <= 0 {
+		return "", fmt.Errorf("chunks path: operation %d", opID)
+	}
+	if _, err := names.CheckPath(logical, names.Ext4); err != nil {
+		return "", fmt.Errorf("chunks path: %w", err)
+	}
+	return time.Unix(0, startedNS).UTC().Format("2006-01-02") + "/" + strconv.FormatInt(opID, 10) + ".chunks/" + logical, nil
+}
+
+// IsChunks says whether a location of the trash holds the chunks a repair overwrote: its operation's folder has the
+// suffix .chunks (specs.md §17). Such an entry is never restored.
+func IsChunks(trashPath string) bool {
+	parts := strings.SplitN(trashPath, "/", 3)
+	return len(parts) == 3 && strings.HasSuffix(parts[1], ".chunks")
+}
+
+// ChunkName gives the name of a chunk in its folder: its index in decimal, from 0, with at least 8 digits
+// (specs.md §17). A negative index is an error.
+func ChunkName(index int64) (string, error) {
+	if index < 0 {
+		return "", fmt.Errorf("chunk name: index %d", index)
+	}
+	return fmt.Sprintf("%08d", index), nil
 }

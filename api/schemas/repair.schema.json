@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/repair.schema.json",
+  "title": "atoll repair --json",
+  "description": "What became of each corrupt copy of the files at a path, by path in byte order, then by disk position (specs.md §16.1, §25).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "applied",
+    "copies"
+  ],
+  "properties": {
+    "applied": {
+      "description": "Whether it repaired: true with --yes.",
+      "type": "boolean"
+    },
+    "copies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/copy"
+      }
+    }
+  },
+  "$defs": {
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "mode",
+        "chunks",
+        "outcome"
+      ],
+      "properties": {
+        "disk": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 1
+        },
+        "mode": {
+          "description": "How it is repaired: chunk, or file. A copy with more than one link is always repaired by chunk.",
+          "enum": [
+            "chunk",
+            "file"
+          ]
+        },
+        "chunks": {
+          "description": "The bad chunks found, 0 when the copy was not read whole.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "outcome": {
+          "description": "repaired; to-repair without --yes; verified, a copy that reads right after all; no-healthy-copy; changed; name-refused; no-room; disk-unavailable; io-error.",
+          "enum": [
+            "repaired",
+            "to-repair",
+            "verified",
+            "no-healthy-copy",
+            "changed",
+            "name-refused",
+            "no-room",
+            "disk-unavailable",
+            "io-error"
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ]
+    }
+  }
+}

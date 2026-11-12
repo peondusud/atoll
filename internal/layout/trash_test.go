@@ -11,6 +11,9 @@ import (
 type trashPathVector struct {
 	StartedNS    *int64  `json:"started_ns"`
 	OpID         *int64  `json:"op_id"`
+	Chunks       bool    `json:"chunks"`
+	Index        *int64  `json:"index"`
+	ChunkName    *string `json:"chunk_name"`
 	Path         *string `json:"path"`
 	PathB64      *string `json:"path_b64"`
 	TrashPath    *string `json:"trash_path"`
@@ -52,6 +55,19 @@ func TestTrashPathIsInUTC(t *testing.T) {
 
 func TestTrashPathVectors(t *testing.T) {
 	for i, v := range vectors.Load[trashPathVector](t, "trash_path.json") {
+		if v.Index != nil {
+			if v.Path != nil || v.PathB64 != nil || v.StartedNS != nil || v.OpID != nil || v.Chunks || (v.ChunkName == nil) == !v.Error {
+				t.Fatalf("vector %d: a chunk's name wants index, and exactly one of chunk_name and error", i)
+			}
+			got, err := ChunkName(*v.Index)
+			switch {
+			case v.Error && err == nil:
+				t.Errorf("vector %d (%s): %q, want an error", i, v.Note, got)
+			case !v.Error && (err != nil || got != *v.ChunkName):
+				t.Errorf("vector %d (%s): %q, %v, want %q", i, v.Note, got, err, *v.ChunkName)
+			}
+			continue
+		}
 		path, ok := oneOf(t, v.Path, v.PathB64)
 		if !ok || v.StartedNS == nil || v.OpID == nil {
 			t.Fatalf("vector %d: want started_ns, op_id and a path", i)
@@ -60,7 +76,11 @@ func TestTrashPathVectors(t *testing.T) {
 		if v.Error == hasWant {
 			t.Fatalf("vector %d: want exactly one of trash_path and error", i)
 		}
-		got, err := TrashPath(*v.StartedNS, *v.OpID, path)
+		where := TrashPath
+		if v.Chunks {
+			where = ChunksPath
+		}
+		got, err := where(*v.StartedNS, *v.OpID, path)
 		if v.Error {
 			if err == nil {
 				t.Errorf("vector %d (%s): %q, want an error", i, v.Note, got)

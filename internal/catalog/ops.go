@@ -55,9 +55,11 @@ type eventData struct {
 	Reason  string `json:"reason,omitempty"`
 	Source  string `json:"source,omitempty"`
 	MtimeNS *int64 `json:"mtime_ns,omitempty"`
-	Mode    *int64 `json:"mode,omitempty"`
-	UID     *int64 `json:"uid,omitempty"`
-	GID     *int64 `json:"gid,omitempty"`
+	// Chunks holds the indexes of the bad chunks of a repair (specs.md §16.1).
+	Chunks []int64 `json:"chunks,omitempty"`
+	Mode   *int64  `json:"mode,omitempty"`
+	UID    *int64  `json:"uid,omitempty"`
+	GID    *int64  `json:"gid,omitempty"`
 }
 
 // writeEvent writes an event, in the transaction of the operation it speaks of, so before it runs.

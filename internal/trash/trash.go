@@ -15,6 +15,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/rules"
@@ -35,8 +36,12 @@ const (
 	OutcomeNameRefused   = "name-refused"
 	OutcomeNameCollision = "name-collision"
 	OutcomeIOError       = "io-error"
-	OutcomeChanged       = string(solver.PruneChanged)
-	outcomeUnavailable   = string(solver.PruneDiskUnavailable)
+	// OutcomeNotACopy says that an entry holds the chunks a repair overwrote, which are never restored (specs.md §17).
+	OutcomeNotACopy    = "not-a-copy"
+	OutcomeChanged     = string(solver.PruneChanged)
+	outcomeUnavailable = string(solver.PruneDiskUnavailable)
+	// OutcomeDiskUnavailable says that a disk was not confirmed in this run.
+	OutcomeDiskUnavailable = outcomeUnavailable
 )
 
 const reasonSurplus = "surplus"
@@ -577,7 +582,7 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 	}
 	// A stale copy holds a version that came before the file's hash, and a corrupt one holds none.
 	hash := f.Hash
-	if reason == catalog.ReasonOverwritten || reason == catalog.ReasonQuarantined {
+	if reason == catalog.ReasonOverwritten || reason == catalog.ReasonQuarantined || reason == catalog.ReasonRepaired {
 		hash = nil
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
@@ -717,6 +722,10 @@ func atOrBelow(path, under string) bool {
 }
 
 func (s *Session) restoreEntry(ctx context.Context, e *catalog.TrashEntry) (string, error) {
+	// What a repair overwrote is the bytes a corrupt copy had: to look at, never to put back (specs.md §17).
+	if layout.IsChunks(e.TrashPath) {
+		return OutcomeNotACopy, nil
+	}
 	if !s.writable(e.Disk) {
 		return outcomeUnavailable, nil
 	}
@@ -958,6 +967,26 @@ func PurgeDue(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64) (b
 	return len(choice.Purge) > 0, nil
 }
 
+// purgeChunks ends a purge of the chunks a repair left in the trash: Atoll's own files, removed with their folder
+// (specs.md §17).
+func (s *Session) purgeChunks(ctx context.Context, handle *ops.Disk, op *ops.Op) (string, error) {
+	if err := handle.PurgeChunks(op); err != nil {
+		slog.Warn("an entry stays in the trash", "disk", op.Disk, "op", op.ID, "error", err)
+		if errors.Is(err, ops.ErrDiskLost) {
+			return OutcomeIOError, s.lose(ctx, op.Disk, err)
+		}
+		if err := catalog.Undo(ctx, s.db, op, false, s.now); err != nil {
+			return "", fmt.Errorf("catalog: %w", err)
+		}
+		return OutcomeIOError, nil
+	}
+	if err := catalog.FinishPurge(ctx, s.db, op, nil); err != nil {
+		return "", fmt.Errorf("catalog: %w", err)
+	}
+	handle.CleanTrash(op.Path2)
+	return OutcomePurged, nil
+}
+
 func (s *Session) purgeEntry(ctx context.Context, e *catalog.TrashEntry) (string, error) {
 	if !s.writable(e.Disk) {
 		return outcomeUnavailable, nil
@@ -977,6 +1006,9 @@ func (s *Session) purgeEntry(ctx context.Context, e *catalog.TrashEntry) (string
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	s.machine.Checkpoint("journaled")
+	if layout.IsChunks(e.TrashPath) {
+		return s.purgeChunks(ctx, handle, op)
+	}
 	purged, err := handle.PurgeEntry(op)
 	if err != nil {
 		slog.Warn("an entry stays in the trash", "disk", e.Disk, "op", op.ID, "error", err)

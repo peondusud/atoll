@@ -50,7 +50,8 @@ func diskOf(out *ScrubOutcome, id string) *ScrubDisk {
 // A copy that rotted, read again past the cache, is corrupt: with a healthy copy elsewhere it goes to the trash,
 // and the next pass makes it again from the healthy one (specs.md §16).
 func TestScrubQuarantines(t *testing.T) {
-	b := newBench(t, "t1", "t2")
+	// Without auto_repair, a corrupt copy goes to the trash (specs.md §16).
+	b := newBenchWith(t, "[integrity]\nauto_repair = false\n", "t1", "t2")
 	b.write("t1", "a.mkv", "a film")
 	b.write("t2", "a.mkv", "a film")
 	b.write("t1", "b.mkv", "fine")
@@ -128,7 +129,8 @@ func TestScrubKeepsTheLastCopy(t *testing.T) {
 // A copy changed since its row is a modification, for the next pass, and is never called corrupt; without Apply
 // nothing is written, and without Quarantine a corrupt copy is only said to be one to move (specs.md §16).
 func TestScrubLeavesWhatChanged(t *testing.T) {
-	b := newBench(t, "t1", "t2")
+	// Without auto_repair, a corrupt copy goes to the trash (specs.md §16).
+	b := newBenchWith(t, "[integrity]\nauto_repair = false\n", "t1", "t2")
 	b.write("t1", "a.mkv", "a film")
 	b.write("t2", "a.mkv", "a film")
 	b.write("t1", "b.mkv", "b")

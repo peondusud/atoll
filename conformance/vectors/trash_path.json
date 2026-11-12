@@ -137,6 +137,63 @@
       "path": "../a",
       "error": true,
       "note": "it must not leave the operation's folder"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 4813,
+      "chunks": true,
+      "path": "Films/Avatar (2009)/Avatar.mkv",
+      "trash_path": "2026-01-01/4813.chunks/Films/Avatar (2009)/Avatar.mkv",
+      "note": "the chunks a repair overwrote, the example of specs.md \u00a76"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 7,
+      "chunks": true,
+      "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.mkv",
+      "trash_path": "2026-01-01/7.chunks/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.mkv",
+      "note": "a name of 255 bytes fits: the suffix is on the operation's folder"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 0,
+      "chunks": true,
+      "path": "a",
+      "error": true,
+      "note": "the chunks of no operation"
+    },
+    {
+      "started_ns": 1767225600000000000,
+      "op_id": 3,
+      "chunks": true,
+      "path": "a/../b",
+      "error": true,
+      "note": "the chunks must not leave their folder either"
+    },
+    {
+      "index": 0,
+      "chunk_name": "00000000",
+      "note": "the first chunk"
+    },
+    {
+      "index": 12,
+      "chunk_name": "00000012",
+      "note": "the example of specs.md \u00a717"
+    },
+    {
+      "index": 99999999,
+      "chunk_name": "99999999",
+      "note": "the last with 8 digits"
+    },
+    {
+      "index": 100000000,
+      "chunk_name": "100000000",
+      "note": "at least 8 digits, more when it takes more"
+    },
+    {
+      "index": -1,
+      "error": true,
+      "note": "no chunk before the first"
     }
   ]
 }

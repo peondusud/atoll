@@ -9,7 +9,7 @@ A milestone is reached when its phase and every phase before it are done.
 | Milestone | Phase | What it brings | Progress |
 |---|---|---|---|
 | **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 92 % |
-| **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 35 % |
+| **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 42 % |
 | **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 30 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
 | — | 3 — Rust rewrite | the same contracts and conformance suite, switched to without migrating data | |
@@ -52,7 +52,7 @@ The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "
 ## Beta: phase 1b, the complete Linux MVP
 
 - **Modes.** The `immediate` and `scheduled` replication modes; the watcher brings what `immediate` needs.
-- **Repair.** Repair and quarantine of corrupt copies, and duplicates (§16).
+- **Repair.** Repair and quarantine of corrupt copies, and duplicates (§16). The repair is done, by chunk or whole (§16.1): the duplicate report comes next.
 - **Placement.** Failure domains and tags as hard constraints, and `atoll balance` and `capacity`. The capacity formula and the strict domains are done in the solver.
 - **Monitoring and notifications.** SMART, Gotify and SMTP alerts, and notifications to Plex, Emby and Jellyfin.
 - **Conflicts.** `atoll conflicts resolve`.

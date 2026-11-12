@@ -38,6 +38,8 @@ func commandHelps() []commandHelp {
 			"check the configuration, or say which rule a path takes and what it gives"},
 		{"scrub", []string{"atoll scrub [--disk <id>] [--path <path>] [--budget <duration>] [--dry-run] [--yes] [--json]"},
 			"read the copies due and check each chunk against its hash"},
+		{"repair", []string{"atoll repair <path> [--disk <id>] [--mode chunk|file] [--dry-run] [--yes] [--json]"},
+			"repair the corrupt copies of the files at or below a path from healthy ones"},
 		{"trash", []string{
 			"atoll trash list [--json]",
 			"atoll trash restore <path> [--to <disk>] [--dry-run] [--yes] [--json]",

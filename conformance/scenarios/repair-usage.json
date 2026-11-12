@@ -1,0 +1,123 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a716.1, \u00a725",
+  "description": "repair takes one path, --disk and --mode with a value, chunk or file, and --dry-run, --yes and --json, each once; --dry-run never goes with --yes. A usage error comes before the configuration is read, here a configuration with no catalog. A disk the configuration does not have is refused with 1.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "repair"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a",
+        "b"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "/abs"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a",
+        "--mode"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a",
+        "--mode",
+        "fast"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a",
+        "--mode=chunk",
+        "--mode=file"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a",
+        "--disk",
+        "T1"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a",
+        "--dry-run",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a",
+        "--disk",
+        "t9"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a"
+      ],
+      "exit": 1
+    }
+  ]
+}

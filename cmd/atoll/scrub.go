@@ -25,6 +25,7 @@ type scrubDiskOutput struct {
 	CopiesRead  int64      `json:"copies_read"`
 	BytesRead   int64      `json:"bytes_read"`
 	Corrupt     []pathItem `json:"corrupt"`
+	Repaired    []pathItem `json:"repaired"`
 	Quarantined []pathItem `json:"quarantined"`
 	Kept        []pathItem `json:"kept"`
 	Changed     []pathItem `json:"changed"`
@@ -80,8 +81,9 @@ func runScrub(configPath string, args []string, stdout, stderr io.Writer) int {
 	for i := range out.Disks {
 		d := &out.Disks[i]
 		result.Disks = append(result.Disks, scrubDiskOutput{ID: d.ID, Scrubbed: d.Scrubbed, CopiesRead: d.Read, BytesRead: d.Bytes,
-			Corrupt: pathItems(d.Corrupt), Quarantined: pathItems(d.Quarantined), Kept: pathItems(d.Kept), Changed: pathItems(d.Changed), Left: d.Left})
-		quarantine = quarantine || len(d.Quarantined) > 0
+			Corrupt: pathItems(d.Corrupt), Repaired: pathItems(d.Repaired), Quarantined: pathItems(d.Quarantined), Kept: pathItems(d.Kept),
+			Changed: pathItems(d.Changed), Left: d.Left})
+		quarantine = quarantine || len(d.Quarantined) > 0 || len(d.Repaired) > 0
 		kept = kept || len(d.Kept) > 0
 	}
 	if parsed.asJSON {
@@ -199,6 +201,13 @@ func scrubText(out *scrubOutput, yes bool) string {
 		}{{"corrupt", d.Corrupt}, {"kept, no healthy copy elsewhere", d.Kept}, {"changed, for the next pass", d.Changed}} {
 			for _, p := range list.paths {
 				fmt.Fprintf(&b, "  %s: %s\n", list.what, pathText(p))
+			}
+		}
+		for _, p := range d.Repaired {
+			if yes {
+				fmt.Fprintf(&b, T("  repaired: %s\n"), pathText(p))
+			} else {
+				fmt.Fprintf(&b, T("  to repair with --yes: %s\n"), pathText(p))
 			}
 		}
 		for _, p := range d.Quarantined {

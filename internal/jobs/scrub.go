@@ -17,7 +17,6 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/ops"
-	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
 )
@@ -35,7 +34,8 @@ type ScrubOptions struct {
 	Budget time.Duration
 	// Apply records what it finds. Without it, it reads, and writes nothing.
 	Apply bool
-	// Quarantine moves a corrupt copy to the trash when another copy, read again first, is healthy.
+	// Quarantine repairs a corrupt copy from another copy, read again first and healthy, with integrity.auto_repair,
+	// or moves it to the trash (specs.md §16, §16.1).
 	Quarantine bool
 }
 
@@ -49,6 +49,9 @@ type ScrubDisk struct {
 	Bytes int64
 	// Corrupt are the copies whose content no longer matches, read again past the cache, size and times unchanged.
 	Corrupt []string
+	// Repaired are those of them another copy is healthy for, with integrity.auto_repair: repaired, or to be with
+	// Quarantine.
+	Repaired []string
 	// Quarantined are those of them another copy is healthy for: moved to the trash, or to be with Quarantine.
 	Quarantined []string
 	// Kept are those of them with no healthy copy elsewhere, left where they are, or that could not be moved.
@@ -67,10 +70,15 @@ type ScrubOutcome struct {
 }
 
 type scrubber struct {
-	db       *sql.DB
-	machine  disks.Machine
-	session  *trash.Session
-	opts     ScrubOptions
+	db      *sql.DB
+	machine disks.Machine
+	session *trash.Session
+	opts    ScrubOptions
+	// repair says integrity.auto_repair, and mode integrity.repair_mode (specs.md §16.1).
+	repair bool
+	mode   string
+	// remake holds the files a copy of which was repaired whole: replication makes it again once the scrub is over.
+	remake   []string
 	now      int64
 	due      int64 // a copy verified at or before it is due
 	deadline int64
@@ -105,6 +113,8 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 	now := m.Now()
 	s := &scrubber{db: db, machine: m, session: session, opts: opts, now: now, due: now - every.Nanoseconds(),
 		deadline: now + opts.Budget.Nanoseconds(), buf: make([]byte, integrity.ChunkSize)}
+	s.repair, _ = effective["integrity.auto_repair"].(bool)
+	s.mode, _ = effective["integrity.repair_mode"].(string)
 	out := &ScrubOutcome{Disks: []ScrubDisk{}}
 	spent := false
 	for i := range c.Disks {
@@ -133,6 +143,13 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 		out.Partial = out.Partial || session.Lost()
 		if err := session.Settle(ctx); err != nil {
 			return nil, fmt.Errorf("%w", err)
+		}
+	}
+	session.Close()
+	// A copy repaired whole is made again at once; one that cannot be is made by the next pass (specs.md §16.1).
+	for _, path := range s.remake {
+		if _, err := Replicate(ctx, db, c, m, ReplicateOptions{Path: path, Now: true}, func(*ReplicateItem) error { return nil }); err != nil {
+			slog.Warn("a copy repaired whole is not made again yet", "path", path, "error", err)
 		}
 	}
 	return out, nil
@@ -292,8 +309,9 @@ func (s *scrubber) readChunk(f fsx.File, size, i int64, want []byte) (bool, erro
 	return bytes.Equal(sum[:], want), nil
 }
 
-// corrupt records a corrupt copy, and sends it to the trash when another copy is healthy (specs.md §16): the file is
-// then degraded, and replication makes the copy again. With none, it stays, and alerts say so.
+// corrupt records a corrupt copy, and when another copy is healthy repairs it from that one, with auto_repair, or
+// sends it to the trash (specs.md §16, §16.1): the file is then degraded, and replication makes the copy again. With
+// none, it stays, and alerts say so.
 func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
 	sd.Corrupt = append(sd.Corrupt, cp.Path)
 	slog.Warn("a corrupt copy", "disk", d.ID, "path", cp.Path)
@@ -306,22 +324,32 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 	if err != nil || f == nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
-	healthy, err := s.healthyCopy(ctx, f, d.ID, cp.Chunks)
+	healthy, err := findHealthy(ctx, s.session, f, d.ID, cp.Chunks)
 	if err != nil {
 		return err
 	}
-	if !healthy {
+	if healthy == nil {
 		sd.Kept = append(sd.Kept, cp.Path)
 		return nil
 	}
 	if !s.opts.Apply || !s.opts.Quarantine {
-		sd.Quarantined = append(sd.Quarantined, cp.Path)
+		if s.repair {
+			sd.Repaired = append(sd.Repaired, cp.Path)
+		} else {
+			sd.Quarantined = append(sd.Quarantined, cp.Path)
+		}
 		return nil
 	}
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		if c.Disk != d.ID {
 			continue
+		}
+		if s.repair {
+			repaired, err := s.repairOrNot(ctx, f, c, healthy, cp, sd)
+			if err != nil || repaired {
+				return err
+			}
 		}
 		outcome, err := s.session.Send(ctx, f, c, catalog.ReasonQuarantined)
 		if err != nil {
@@ -337,42 +365,29 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 	return nil
 }
 
-// healthyCopy says whether another copy of the file, ok on a disk that can be read, holds what its hashes say,
-// read whole now: a copy is quarantined only when one does (specs.md §16).
-func (s *scrubber) healthyCopy(ctx context.Context, f *catalog.FileRow, notOn string, want []byte) (bool, error) {
-	n := chunks(f.Size)
-	for i := range f.Copies {
-		c := &f.Copies[i]
-		if c.Disk == notOn || c.State != string(solver.CopyOK) || !s.session.Readable(c.Disk) {
-			continue
-		}
-		handle, err := s.session.Handle(ctx, c.Disk)
-		if err != nil {
-			return false, fmt.Errorf("%w", err)
-		}
-		if handle == nil {
-			continue
-		}
-		place := c.Place(f)
-		file, st, err := handle.OpenSource(place, &catalog.KnownCopy{Path: place, FileID: f.ID, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey})
-		if err != nil {
-			slog.Warn("a copy cannot be read to check it", "disk", c.Disk, "path", place, "error", err)
-			continue
-		}
-		good := true
-		for i := int64(0); i < n && good; i++ {
-			match, err := s.readChunk(file, f.Size, i, want[i*integrity.HashSize:(i+1)*integrity.HashSize])
-			good = err == nil && match
-		}
-		_ = file.Close()
-		if !good {
-			continue
-		}
-		if still, err := handle.SourceStill(place, &st); err == nil && still {
-			return true, nil
-		}
+// repairOrNot repairs a corrupt copy from a healthy one (specs.md §16.1), and says whether that settled it: repaired,
+// or left where it is. A repair that found no room leaves it to quarantine, as a move to the trash takes no room but
+// its folders'.
+func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, healthy *trash.Healthy, cp *catalog.ScrubCopy, sd *ScrubDisk) (bool, error) {
+	mode := modeFor(c, s.mode)
+	outcome, _, err := repairCopy(ctx, s.db, s.session, f, c, healthy, cp.Chunks, mode, true, true, s.now)
+	if err != nil {
+		return true, err
 	}
-	return false, nil
+	switch outcome {
+	case trash.OutcomeRepaired:
+		sd.Repaired = append(sd.Repaired, cp.Path)
+		if mode == RepairFile {
+			s.remake = append(s.remake, f.Path)
+		}
+		return true, nil
+	case trash.OutcomeNoRoom:
+		return false, nil
+	default:
+		slog.Warn("a corrupt copy stays where it is", "disk", c.Disk, "path", cp.Path, "outcome", outcome)
+		sd.Kept = append(sd.Kept, cp.Path)
+		return true, nil
+	}
 }
 
 // lost says that a disk failed while read: the scrub of it stops there.

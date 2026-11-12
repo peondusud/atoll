@@ -1,0 +1,32 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §16.1",
+  "description": "What the reprise of a chunk repair does with the copy, from what each chunk holds and whether its change time is still its row's.",
+  "cases": [
+    {"note": "no chunk found bad, and all hold their hash", "chunks": [{"bad": false, "saved": false, "holds": "good"}], "ctime_same": true, "action": "finish"},
+    {"note": "the one bad chunk written", "chunks": [{"bad": true, "saved": true, "holds": "good"}], "ctime_same": false, "action": "finish"},
+    {"note": "written within a clock tick: the change time did not move", "chunks": [{"bad": true, "saved": true, "holds": "good"}], "ctime_same": true, "action": "finish"},
+    {"note": "saved, and no write began", "chunks": [{"bad": true, "saved": true, "holds": "saved"}], "ctime_same": true, "action": "untouched"},
+    {"note": "saved, no write began, and the change time moved: someone else's", "chunks": [{"bad": true, "saved": true, "holds": "saved"}], "ctime_same": false, "action": "foreign"},
+    {"note": "the one bad chunk torn by the crash", "chunks": [{"bad": true, "saved": true, "holds": "other"}], "ctime_same": false, "action": "keep"},
+    {"note": "torn within a clock tick", "chunks": [{"bad": true, "saved": true, "holds": "other"}], "ctime_same": true, "action": "keep"},
+    {"note": "every bad chunk written", "chunks": [{"bad": true, "saved": true, "holds": "good"}, {"bad": false, "saved": false, "holds": "good"}, {"bad": true, "saved": true, "holds": "good"}], "ctime_same": false, "action": "finish"},
+    {"note": "written, then torn, then saved", "chunks": [{"bad": true, "saved": true, "holds": "good"}, {"bad": true, "saved": true, "holds": "other"}, {"bad": true, "saved": true, "holds": "saved"}], "ctime_same": false, "action": "keep"},
+    {"note": "written, then saved", "chunks": [{"bad": true, "saved": true, "holds": "good"}, {"bad": true, "saved": true, "holds": "good"}, {"bad": true, "saved": true, "holds": "saved"}], "ctime_same": false, "action": "keep"},
+    {"note": "written, a good chunk the repair left alone, then torn, then saved", "chunks": [{"bad": true, "saved": true, "holds": "good"}, {"bad": false, "saved": false, "holds": "good"}, {"bad": true, "saved": true, "holds": "other"}, {"bad": false, "saved": false, "holds": "good"}, {"bad": true, "saved": true, "holds": "saved"}], "ctime_same": false, "action": "keep"},
+    {"note": "a chunk the repair did not find bad no longer holds its hash", "chunks": [{"bad": true, "saved": true, "holds": "good"}, {"bad": false, "saved": false, "holds": "other"}], "ctime_same": false, "action": "foreign"},
+    {"note": "a chunk the repair did not find bad, with nothing written", "chunks": [{"bad": true, "saved": true, "holds": "saved"}, {"bad": false, "saved": false, "holds": "other"}], "ctime_same": true, "action": "foreign"},
+    {"note": "two torn chunks: the repair writes one at a time", "chunks": [{"bad": true, "saved": true, "holds": "other"}, {"bad": true, "saved": true, "holds": "other"}], "ctime_same": false, "action": "foreign"},
+    {"note": "a chunk written after one left as saved: the repair writes in order", "chunks": [{"bad": true, "saved": true, "holds": "saved"}, {"bad": true, "saved": true, "holds": "good"}], "ctime_same": false, "action": "foreign"},
+    {"note": "a chunk written after one torn", "chunks": [{"bad": true, "saved": true, "holds": "other"}, {"bad": true, "saved": true, "holds": "good"}], "ctime_same": false, "action": "foreign"},
+    {"note": "saving was stopped: no write began", "chunks": [{"bad": true, "saved": true, "holds": "saved"}, {"bad": true, "saved": false, "holds": "other"}], "ctime_same": true, "action": "untouched"},
+    {"note": "saving was stopped, none saved yet", "chunks": [{"bad": true, "saved": false, "holds": "other"}], "ctime_same": true, "action": "untouched"},
+    {"note": "saving was stopped, and the change time moved", "chunks": [{"bad": true, "saved": true, "holds": "saved"}, {"bad": true, "saved": false, "holds": "other"}], "ctime_same": false, "action": "foreign"},
+    {"note": "saving was stopped, and a bad chunk holds its hash: no write of the repair's put it there", "chunks": [{"bad": true, "saved": true, "holds": "good"}, {"bad": true, "saved": false, "holds": "other"}], "ctime_same": true, "action": "foreign"},
+    {"note": "saving was stopped, and a bad chunk not saved holds its hash", "chunks": [{"bad": true, "saved": true, "holds": "saved"}, {"bad": true, "saved": false, "holds": "good"}], "ctime_same": true, "action": "foreign"},
+    {"note": "no chunk at all: an empty copy", "chunks": [], "ctime_same": true, "action": "finish"},
+    {"note": "what was saved of a chunk never saved", "chunks": [{"bad": true, "saved": false, "holds": "saved"}], "ctime_same": true, "error": true},
+    {"note": "a chunk saved that was not found bad", "chunks": [{"bad": false, "saved": true, "holds": "good"}], "ctime_same": true, "error": true},
+    {"note": "a word the reprise does not know", "chunks": [{"bad": true, "saved": true, "holds": "torn"}], "ctime_same": true, "error": true}
+  ]
+}

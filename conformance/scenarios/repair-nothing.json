@@ -1,0 +1,128 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a716.1, \u00a725",
+  "description": "With no corrupt copy at the path, repair has nothing to say and exits with 0, with --yes, without it, or with --dry-run, and journals nothing.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/Films/b.mkv",
+          "text": "bb"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/Films/b.mkv",
+          "text": "bb"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "Films",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": false,
+        "copies": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "Films",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": false,
+        "copies": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "Films",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "copies": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "repair",
+        "a.mkv",
+        "--disk",
+        "t2",
+        "--mode",
+        "file",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "copies": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM trash",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

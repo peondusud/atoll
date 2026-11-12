@@ -593,7 +593,7 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		left = left || d.Left
 		corrupt += len(d.Corrupt)
 		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Changed) > 0 {
-			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "quarantined", len(d.Quarantined),
+			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "repaired", len(d.Repaired), "quarantined", len(d.Quarantined),
 				"kept", len(d.Kept), "changed", len(d.Changed))
 		}
 	}

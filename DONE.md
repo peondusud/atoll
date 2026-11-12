@@ -2,6 +2,25 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The repair of a corrupt copy (specs.md §16.1)
+
+Commit "Repair a corrupt copy from a healthy one", on `develop`.
+
+- The beta's first piece (R-14), as the maintainer ordered it on 2026-11-12. With `integrity.auto_repair`, `true` by default, the scrub repairs a corrupt copy it finds from a healthy one, which it only reads; `atoll repair <path>` repairs those already found, with `--disk`, `--dry-run` and `--yes`; `repair_mode`, or `--mode`, says how.
+- By chunk, the default: one operation `repair`. Every bad chunk reaches the trash first, at `Atoll/trash/<date>/<op>.chunks/<path>/<index>`, then each is written in place from the healthy copy, checked against its hash before and read back past the page cache after, then the time is set back. The copy keeps its inode and its creation time. A copy with more than one link is always repaired so.
+- Whole, with `file`: the corrupt copy goes to the trash, `repaired`, and replication makes it again once the run is over.
+- A repair that stops leaves the copy `corrupt`: an edit found right before the first write, a healthy copy that no longer reads as its hashes say, no room, a crash. Its reprise reads the copy whole, and `integrity.RepairReprise`, a pure function with 25 vectors, decides: finish; set the time back and record the change time; write nothing; or leave someone else's change alone.
+- An entry of chunks is listed, never restored (`not-a-copy`), and purged whole.
+- Without `auto_repair`, the scrub quarantines as before, and also when a repair found no room, as a move to the trash takes only folders.
+- Verified: 14 unit tests. They cover a repair in place, by the scrub and by the command; an edit never overwritten; a crash at each of 6 points, and its reprise; no room; a whole file; a copy that reads right after all; no healthy copy; the trash entry; a hard-linked copy; a healthy copy that changes; and a disk that reads it wrong. Also the reprise's vectors and a property over every combination of four chunks; 13 mutants, each caught by a test; the scenarios `repair-usage.json` and `repair-nothing.json`; and `TestRepairOnEachDriver` in qemu on Linux 6.12 and 7.3, rot written on the device below ext4, XFS, ntfs3, ntfs-3g and lowntfs-3g, with a name of 255 bytes: each repaired in place, inode and time kept.
+- **Decided without the maintainer, to confirm:**
+  - A repair that stops ends its operation `done` when a chunk reached the trash and `undone` when none did. Its event `repair-stopped` says why.
+  - In an entry of chunks, the folder named like the file is its owner's alone, mode 0700, and each chunk takes the copy's mode and owner.
+  - A copy found corrupt that reads right after all, read whole by `atoll repair`, is recorded `ok` and verified: the outcome `verified`.
+  - `file` reports `repaired` once the corrupt copy is in the trash; replication then makes it again.
+  - New contracts: the operation `repair` and the events `repair`, `repaired` and `repair-stopped`; `atoll repair` and `api/schemas/repair.schema.json`; `repaired` in `scrub.schema.json`; `not-a-copy` in `trash-restore.schema.json`; `repair_reprise.json` and the chunk cases of `trash_path.json`; the crash points `chunk-saved`, `chunks-saved` and `chunk-written`.
+  - btrfs is not in the test on real disks: it answers a read of a block that rotted with `EIO`.
+
 ## A file once its corrupt copy is gone (specs.md §16)
 
 Commit "End a file's corrupt state with its corrupt copy", on `develop`.

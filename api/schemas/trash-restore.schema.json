@@ -73,6 +73,7 @@
             "changed",
             "disk-unavailable",
             "name-refused",
+            "not-a-copy",
             "io-error"
           ]
         }

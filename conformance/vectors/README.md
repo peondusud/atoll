@@ -206,9 +206,12 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 |---|---|---|
 | `started_ns` | integer | when the operation started |
 | `op_id` | integer | its id |
+| `chunks` | boolean | optional: `true` for where the chunks a repair overwrites go, `<op-id>.chunks` |
 | `path`, `path_b64` | string | the logical path |
 | `trash_path`, `trash_path_b64` | string | the location inside `<workdir>/trash/` |
-| `error` | boolean | `true` when the id is not positive or the path is not well-formed |
+| `index` | integer | in place of the fields above: a chunk's index, whose name `chunk_name` gives |
+| `chunk_name` | string | the name of that chunk in its folder |
+| `error` | boolean | `true` when the id is not positive, the path is not well-formed, or the index is negative |
 
 ### `prune.json` — what `atoll prune` does with each surplus copy (§17.3)
 
@@ -233,6 +236,15 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `purge` | array of objects | what goes, by operation: `op` and `why`, one of `expired`, `older-than` and `max-size` |
 | `full` | array of strings | the disks whose trash still holds more than `max_size` of their capacity once those are gone, by id in byte order |
 | `error` | boolean | `true` when a reason is unknown, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
+
+### `repair_reprise.json` — what the reprise of a chunk repair does (§16.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `chunks` | array of objects | each chunk of the copy, by index: `bad`, whether the repair found it bad; `saved`, whether its bytes reached the trash; `holds`, what it holds now: `good`, what its hash says, `saved`, what was saved of it, or `other` |
+| `ctime_same` | boolean | whether the copy's change time is still its row's |
+| `action` | string | `finish`, `keep`, `untouched` or `foreign` |
+| `error` | boolean | `true` for a chunk saved that was not found bad, what was saved of a chunk never saved, or a word it does not know |
 
 ### `op_recovery.json` — what a reprise does with an operation (§17.2)
 
