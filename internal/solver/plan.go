@@ -66,13 +66,15 @@ type Placement struct {
 	Overflow   string
 }
 
-// File is one managed file of the pool. Hold says it waits for atoll replicate. The
-// files of one rule can share a Placement, which the plan does not change.
+// File is one managed file of the pool. Hold says it waits for atoll replicate, and Leaving that its deletion is
+// decided and waits for a trash job: it gets no job and keeps no pending copy, as a copy made now would end its
+// deletion (specs.md §13.4). The files of one rule can share a Placement, which the plan does not change.
 type File struct {
 	Path      string
 	Size      int64
 	Placement *Placement
 	Hold      bool
+	Leaving   bool
 	Copies    []Copy
 }
 
@@ -407,7 +409,8 @@ func (p *planner) addCopies(f *planFile) error {
 		}
 		f.holding = append(f.holding, d)
 		addParents(d, f.Path)
-		if counts(c, d) {
+		// A file leaving keeps no pending copy: the copy made would end its deletion (specs.md §13.4).
+		if counts(c, d) && (!f.Leaving || c.State != CopyPending) {
 			counted = append(counted, countedCopy{c, d})
 		} else {
 			f.lost = true
@@ -654,7 +657,7 @@ func (f *planFile) place(d *planDisk) {
 
 // refresh gives the stale copies of a file their jobs, by position.
 func (p *planner) refresh(f *planFile, jobs []Job) ([]Job, error) {
-	if f.source == nil {
+	if f.source == nil || f.Leaving {
 		return jobs, nil
 	}
 	var stale []*planDisk
@@ -680,7 +683,7 @@ func (p *planner) refresh(f *planFile, jobs []Job) ([]Job, error) {
 
 // create gives a file the replicas it still needs, one disk at a time.
 func (p *planner) create(f *planFile, jobs []Job) ([]Job, error) {
-	if f.Hold || f.source == nil {
+	if f.Hold || f.Leaving || f.source == nil {
 		return jobs, nil
 	}
 	for f.missing() > 0 {

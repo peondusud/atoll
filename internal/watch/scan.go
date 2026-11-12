@@ -643,6 +643,10 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 		if len(page) == 0 {
 			return remembered, nil
 		}
+		leaving, err := catalog.Leaving(ctx, db, page[0].Path, page[len(page)-1].Path)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
 		for i := range page {
 			f := &page[i]
 			update, err := settleFile(c, f, position, state)
@@ -666,7 +670,7 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			}
 			hold := update.Mode == "manual" && (released == nil || !released(f.Path))
 			input.Files = append(input.Files, solver.File{
-				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Copies: copies,
+				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Leaving: leaving[f.ID], Copies: copies,
 			})
 			entry := settled{id: f.ID, state: f.State, firstSeen: f.FirstSeenNS}
 			if fileChanged(f, &update) {

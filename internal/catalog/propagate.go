@@ -1250,6 +1250,33 @@ func TrashJobState(ctx context.Context, db *sql.DB, fileID int64, disk string) (
 	return state, nil
 }
 
+// leavingQuery gives the files of a stretch of paths that have a trash job queued for a deletion. It walks the paths
+// and looks up each file's jobs: a join, without statistics, walked every job instead.
+const leavingQuery = `SELECT f.id FROM files f WHERE f.lpath BETWEEN ? AND ? AND EXISTS(
+	SELECT 1 FROM jobs j WHERE j.file_id = f.id AND j.kind = 'trash' AND j.state = 'queued' AND j.reason = 'deleted')`
+
+// Leaving gives the ids of the files from first to last by path whose deletion is decided and waits for a trash job:
+// a copy made of one now would end its deletion (specs.md §13.4). A plan asks a page of files at a time.
+func Leaving(ctx context.Context, db *sql.DB, first, last string) (map[int64]bool, error) {
+	rows, err := db.QueryContext(ctx, leavingQuery, []byte(first), []byte(last))
+	if err != nil {
+		return nil, fmt.Errorf("leaving: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	ids := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("leaving: %w", err)
+		}
+		ids[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("leaving: %w", err)
+	}
+	return ids, nil
+}
+
 // QueuedTrash says whether a copy has a trash job queued for that reason: a decision leaves it as it is.
 func QueuedTrash(ctx context.Context, db *sql.DB, fileID int64, disk, reason string) (bool, error) {
 	var queued bool

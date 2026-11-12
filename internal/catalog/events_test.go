@@ -40,6 +40,20 @@ func TestPartStatesReadFromTheirID(t *testing.T) {
 	}
 }
 
+// The files a plan reads as leaving are looked for over its page of paths, and their jobs by file, never over the
+// whole catalog or every job: a plan reads every file at each pass (specs.md §13.4).
+func TestLeavingReadsItsPage(t *testing.T) {
+	plan := planOf(t, openForOps(t).sql(), "leaving", leavingQuery)
+	var files, jobs bool
+	for _, step := range plan {
+		files = files || strings.HasPrefix(step, "SEARCH f USING") && strings.HasSuffix(step, "INDEX sqlite_autoindex_files_1 (lpath>? AND lpath<?)")
+		jobs = jobs || strings.HasPrefix(step, "SEARCH j ") && strings.HasSuffix(step, "USING INDEX jobs_by_file (file_id=?)")
+	}
+	if len(plan) != 2 || !files || !jobs {
+		t.Errorf("%q", plan)
+	}
+}
+
 // placeholders gives a value for each parameter of a query: ?1 to ?N, or one for each ?.
 func placeholders(query string) []any {
 	n := 0

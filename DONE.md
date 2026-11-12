@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A file whose deletion waits (specs.md §13.4)
+
+Commit "Copy nothing of a file whose deletion waits", on `develop`.
+
+- Found while writing the scenario of a full disk: a file deleted on one disk, whose other copy could not go to the trash yet, was copied back to the disk the user deleted it from once its `settle` passed, and that copy, having no queued job, then ended the deletion (§15.12). The user's deletion was undone, on every disk. Any wait did it: a full disk, a disk `readonly`, a guard that holds the job, an `io-error`.
+- The plan now takes a file with a trash job queued for a deletion as leaving: it gets no job, neither a copy nor a refresh, and its pending copies are canceled. It shows `degraded` while it waits, as it holds fewer copies than its level.
+- A plan reads which files are leaving a page of paths at a time, each file's jobs through their index (`TestLeavingReadsItsPage`): a join walked every job.
+- Verified: five plan vectors, with `leaving`, a new field of `plan.json`; the property test, which never sees a job for a leaving file nor a pending copy kept for one; the scenario `daemon-trash-full.json`, where nothing comes back to the disk the files were deleted from ten minutes on; four mutants, each caught.
+- **Decided without the maintainer, to confirm:**
+  - A file leaving shows `degraded`, the state its copies give it, rather than a state of its own.
+  - Only a deletion makes a file leaving: a trash job for another reason leaves the plan as it was.
+
 ## A full disk's trash (specs.md §17.1)
 
 Commit "Send nothing more to the trash of a full disk", on `develop`.

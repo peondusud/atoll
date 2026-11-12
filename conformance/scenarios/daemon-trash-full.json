@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a717.1",
-  "description": "A disk with no room for a move to its trash takes no more in that run: of three copies to send there, one is tried and undone, the others wait in the queue untried, and all three go once room comes back.",
+  "spec": "specs.md \u00a713.4, \u00a717.1",
+  "description": "A disk with no room for a move to its trash takes no more in that run: of three copies to send there, one is tried and undone, the others wait in the queue untried. Nothing is copied back to the disk the files were deleted from while their deletion waits, and all three go once room comes back.",
   "clock": "2030-01-01T00:00:00Z",
   "disks": [
     {
@@ -168,8 +168,8 @@
           }
         ],
         "guards": [],
-        "waiting": 3,
-        "next_due": "2030-01-01T00:10:00.000000000Z"
+        "waiting": 0,
+        "next_due": null
       }
     },
     {
@@ -227,19 +227,101 @@
           "t2",
           "ok",
           "a",
-          "pending"
+          "degraded"
         ],
         [
           "t2",
           "ok",
           "b",
-          "pending"
+          "degraded"
         ],
         [
           "t2",
           "ok",
           "c",
-          "pending"
+          "degraded"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "full": [
+        "t2"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "a",
+            "reason": "deleted",
+            "outcome": "io-error"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, c.state, CAST(f.lpath AS TEXT), f.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "t2",
+          "ok",
+          "a",
+          "degraded"
+        ],
+        [
+          "t2",
+          "ok",
+          "b",
+          "degraded"
+        ],
+        [
+          "t2",
+          "ok",
+          "c",
+          "degraded"
         ]
       ]
     },
@@ -320,15 +402,15 @@
           "kind": "dir"
         },
         {
-          "path": "Atoll/trash/2030-01-01/2/a",
+          "path": "Atoll/trash/2030-01-01/3/a",
           "text": "a"
         },
         {
-          "path": "Atoll/trash/2030-01-01/3/b",
+          "path": "Atoll/trash/2030-01-01/4/b",
           "text": "b"
         },
         {
-          "path": "Atoll/trash/2030-01-01/4/c",
+          "path": "Atoll/trash/2030-01-01/5/c",
           "text": "c"
         }
       ]
@@ -337,6 +419,11 @@
       "do": "expect_catalog",
       "query": "SELECT disk_id, kind, state FROM ops ORDER BY id",
       "rows": [
+        [
+          "t2",
+          "trash",
+          "undone"
+        ],
         [
           "t2",
           "trash",
