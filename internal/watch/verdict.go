@@ -302,6 +302,15 @@ func (c *compared) resolve(ctx context.Context, db *sql.DB, d *config.Disk, w *W
 			gone[o.k.fileKey] = true
 		}
 	}
+	// A row whose name holds the file another row's copy moved to, its own file nowhere, lost that file to an
+	// overwriting move, as `mv a b` over b loses b's: it is gone, so that its file is decided as a deletion, and the
+	// file that moved takes the name once it is free (specs.md §15.12). Any other file at its name replaced it.
+	for _, o := range c.open {
+		if o.verdict == solver.VerdictReplaced && o.at != nil && o.at.claims > 0 {
+			o.verdict = solver.VerdictGone
+			gone[o.k.fileKey] = true
+		}
+	}
 	own, err := c.ownFiles(d, look, gone)
 	if err != nil {
 		return err

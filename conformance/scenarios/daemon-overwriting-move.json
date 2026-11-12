@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a715.12",
-  "description": "An overwriting move on one disk is a known limit: it is reported, and nothing moves, whatever the passes.",
+  "spec": "specs.md \u00a715.10, \u00a715.12",
+  "description": "An overwriting move on one disk: the copy it overwrote is gone, as its file is nowhere, so that file is decided as a deletion and its other copy goes to the trash; once its row has gone, the file that moved takes its name, and its other copy is renamed there, with nothing copied again.",
   "disks": [
     {
       "id": "t1",
@@ -47,7 +47,8 @@
     {
       "do": "atoll",
       "args": [
-        "scan"
+        "scan",
+        "--full"
       ]
     },
     {
@@ -69,6 +70,56 @@
         "daemon",
         "--until-idle",
         "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 2,
+        "next_due": "2026-01-01T00:01:30.000000000Z"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.gone_kind FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "a",
+          "t1",
+          "moved"
+        ],
+        [
+          "a",
+          "t2",
+          null
+        ],
+        [
+          "b",
+          "t1",
+          "gone"
+        ],
+        [
+          "b",
+          "t2",
+          null
+        ]
       ]
     },
     {
@@ -105,17 +156,25 @@
             "path": "a",
             "decision": "path-taken",
             "to": "b"
+          },
+          {
+            "path": "b",
+            "decision": "deleted"
           }
         ],
-        "operations": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "b",
+            "reason": "deleted",
+            "outcome": "trashed"
+          }
+        ],
         "guards": [],
         "waiting": 0,
         "next_due": null
       }
-    },
-    {
-      "do": "advance",
-      "by": "30s"
     },
     {
       "do": "atoll",
@@ -145,23 +204,32 @@
         "decisions": [
           {
             "path": "a",
-            "decision": "path-taken",
+            "decision": "renamed",
             "to": "b"
           }
         ],
-        "operations": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "a",
+            "to": "b",
+            "outcome": "renamed"
+          }
+        ],
         "guards": [],
         "waiting": 0,
         "next_due": null
       }
     },
     {
-      "do": "expect_catalog",
-      "query": "SELECT count(*) FROM ops",
-      "rows": [
-        [
-          0
-        ]
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/b",
+          "text": "1"
+        }
       ]
     },
     {
@@ -169,38 +237,51 @@
       "disk": "t2",
       "tree": [
         {
-          "path": "media/a",
+          "path": "media/b",
           "text": "1"
         },
         {
-          "path": "media/b",
+          "path": "Atoll/trash/2026-01-01/1/b",
           "text": "2"
         }
       ]
     },
     {
       "do": "expect_catalog",
-      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, CAST(c.old_lpath AS TEXT) FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, CAST(c.old_lpath AS TEXT), c.gone_ns FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
       "rows": [
         [
-          "a",
-          "t1",
-          null
-        ],
-        [
-          "a",
-          "t2",
-          null
-        ],
-        [
           "b",
           "t1",
+          null,
           null
         ],
         [
           "b",
           "t2",
+          null,
           null
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, json_extract(data, '$.disk'), json_extract(data, '$.path') FROM events ORDER BY id",
+      "rows": [
+        [
+          "copy-gone",
+          "t1",
+          "b"
+        ],
+        [
+          "trash",
+          "t2",
+          "b"
+        ],
+        [
+          "rename",
+          "t2",
+          "a"
         ]
       ]
     },
@@ -212,6 +293,38 @@
           0
         ]
       ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
     }
   ]
 }

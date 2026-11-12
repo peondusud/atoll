@@ -2,6 +2,16 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## An overwriting move (specs.md §15.12)
+
+Commit "Propagate an overwriting move", on `develop`.
+
+- `mv a b` over `b` on one disk was a limit: `a` was reported `path-taken` at every pass, and the other disks kept the old `a` and `b` for good. The copy of `b` the move overwrote is now `gone`, as its file is nowhere: the walk tells it from a replacement, as the name holds the target of another row's copy `moved` there. So `b` is decided as any deletion, after its debounce, its other copies going to the trash as `deleted`, under the guard as any other; once its row has gone, `a` takes the name, its other copies renamed there with nothing copied again, a pass later at the earliest.
+- Verified: four scenarios, with copies read (the deletion, then the rename), with copies no scan read (`b` kept, and `a` waits), over a file with no other copy (`gone`, then the rename), and under a tripped guard (both wait for `guard confirm`); a unit test of the walk, which fails without the change. The code that set such a copy aside from the modifications went with it.
+- **Decided without the maintainer, to confirm:**
+  - An overwriting move is a deletion of what it overwrote, not a modification of it: its other copies go to the trash as `deleted`, kept for their whole retention, and count for the deletion guard.
+  - Where the other copies of `b` are no peers, two user copies no scan has read, `b` is kept and `a` waits for its name. `b`, then below its level, is copied again to the disk of the move at each pass once `settle` has gone by, which the look before the copy refuses as `conflict`, with nothing written.
+
 ## The daemon's soak (specs.md §26)
 
 Commit "Soak the daemon that runs for good", on `develop`.

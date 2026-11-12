@@ -138,8 +138,6 @@ type pass struct {
 	stuck map[string]map[int64]bool
 	// the folders found renamed that copies came with, as the rows said before any decision of this pass
 	realMoves map[folderKey]bool
-	// by disk, the names a copy of another file was found moved to, while modifications are decided
-	targets map[string]map[string]bool
 	// by disk, the names of the operations left planned, which only a reprise can tell of
 	planned map[string][]string
 	// the operations utimens of the modifications, until every decision is out

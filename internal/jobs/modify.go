@@ -24,7 +24,6 @@ func (p *pass) modify(ctx context.Context) (err error) {
 	if len(ids) == 0 {
 		return nil
 	}
-	defer func() { p.targets = nil }()
 	// Every changed file is read here, even one the guard holds, at each pass while it holds.
 	finder, err := catalog.NewFileFinder(ctx, p.db)
 	if err != nil {
@@ -83,25 +82,6 @@ func (p *pass) changedFiles() []int64 {
 	return slices.Compact(ids)
 }
 
-// isMovedTarget says whether a copy of another file was found moved to a name on a disk: a copy replaced by that
-// file is an overwriting move, no modification (specs.md §15.4, §15.12).
-func (p *pass) isMovedTarget(disk, place string) bool {
-	if p.targets == nil {
-		p.targets = map[string]map[string]bool{}
-	}
-	set, ok := p.targets[disk]
-	if !ok {
-		set = map[string]bool{}
-		for i := range p.seen[disk] {
-			if s := &p.seen[disk][i]; s.Verdict == solver.VerdictMoved {
-				set[s.Target] = true
-			}
-		}
-		p.targets[disk] = set
-	}
-	return set[place]
-}
-
 func isChanged(c *solver.ModCopy) bool {
 	return c.Verdict == solver.VerdictEdited || (c.Verdict == solver.VerdictReplaced && !c.Other)
 }
@@ -137,8 +117,9 @@ func (p *pass) modInput(ctx context.Context, finder *catalog.FileFinder, f *cata
 		if p.isMovedOutOfReach(c, s.Verdict) {
 			mc.Verdict = solver.VerdictUncertain
 		}
+		// A copy an overwriting move took the name of is gone, not replaced, from the walk on (specs.md §15.12).
 		if s.Verdict == solver.VerdictReplaced {
-			mc.Other = !s.Regular || p.isMovedTarget(c.Disk, c.Place(f))
+			mc.Other = !s.Regular
 		}
 		if isChanged(&mc) {
 			ctimes[c.Disk] = s.CtimeNS

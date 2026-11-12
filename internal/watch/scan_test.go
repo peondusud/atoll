@@ -1076,6 +1076,24 @@ func TestWhatMakesACopyChanged(t *testing.T) {
 	}
 }
 
+// An overwriting move, `mv a b` over b, loses the file of b: its copy is gone, as that file is nowhere, not replaced,
+// and the copy of a moved to b (specs.md §15.12). Another file at its name, as above, replaced it.
+func TestAnOverwritingMoveLosesTheFileOfItsTarget(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "x")
+	b.write("t1", "b", "y")
+	b.scan(Options{})
+	pastTick()
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Rename(filepath.Join(media, "a"), filepath.Join(media, "b")); err != nil {
+		t.Fatal(err)
+	}
+	r := b.scan(Options{}).Disks[0]
+	if !slices.Equal(r.Absent, []string{"b"}) || len(r.Changed) != 0 || !slices.Equal(r.Moved, []MovedCopy{{Path: "a", To: "b"}}) {
+		t.Errorf("%+v", r)
+	}
+}
+
 func (b *bench) text(query string, args ...any) string {
 	b.t.Helper()
 	var s sql.NullString
