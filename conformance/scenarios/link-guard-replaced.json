@@ -1,0 +1,237 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717, \u00a715.4",
+  "description": "Replaced through mergerfs, by an atomic save: the new file takes the name on one disk and the others lose it. The pass keeps the file, makes the new version the current one and copies it back; the old version each link kept goes to its disk's trash, overwritten, and each link follows the new file.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n[trash]\nlink_guard = true\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/a.tmp",
+      "text": "the second version"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a.tmp",
+      "to": "media/a"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/a"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "the second version"
+        },
+        {
+          "path": "Atoll/links/1",
+          "text": "the second version"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/4/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "the second version"
+        },
+        {
+          "path": "Atoll/links/1",
+          "text": "the second version"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/6/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, CAST(lpath AS TEXT), CAST(trash_path AS TEXT), size, reason FROM trash ORDER BY op_id",
+      "rows": [
+        [
+          "t1",
+          "a",
+          "2030-01-01/4/a",
+          1024,
+          "overwritten"
+        ],
+        [
+          "t2",
+          "a",
+          "2030-01-01/6/a",
+          1024,
+          "overwritten"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, disk_id, kind, link, state FROM ops WHERE id > 2 ORDER BY id",
+      "rows": [
+        [
+          3,
+          "t2",
+          "create",
+          null,
+          "done"
+        ],
+        [
+          4,
+          "t1",
+          "trash",
+          1,
+          "done"
+        ],
+        [
+          5,
+          "t1",
+          "link",
+          1,
+          "done"
+        ],
+        [
+          6,
+          "t2",
+          "trash",
+          1,
+          "done"
+        ],
+        [
+          7,
+          "t2",
+          "link",
+          1,
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops",
+      "rows": [
+        [
+          7
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, nlink FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          1
+        ],
+        [
+          "t2",
+          1
+        ]
+      ]
+    }
+  ]
+}

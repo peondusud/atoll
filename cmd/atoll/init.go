@@ -177,20 +177,20 @@ func startPastTheDisks(c *config.Config, stderr io.Writer) (err error) {
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
-	var after int64
+	var after, filesAfter int64
 	for i := range c.Disks {
 		d := &c.Disks[i]
 		if d.State == config.DiskFailed {
 			continue
 		}
-		highest, err := highestOpID(m, d)
+		highest, files, err := highestOpID(m, d)
 		if err != nil {
 			report(stderr, fmt.Sprintf(T("warning: disk %s: the operations its trash and tmp/ name are not known (%v): a new one may meet an old one there, which costs it one io-error"), d.ID, err))
 			continue
 		}
-		after = max(after, highest)
+		after, filesAfter = max(after, highest), max(filesAfter, files)
 	}
-	if after == 0 {
+	if after == 0 && filesAfter == 0 {
 		return nil
 	}
 	ctx := context.Background()
@@ -200,6 +200,9 @@ func startPastTheDisks(c *config.Config, stderr io.Writer) (err error) {
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
 	if err := catalog.StartOpsAfter(ctx, db, after); err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	if err := catalog.StartFilesAfter(ctx, db, filesAfter); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	return nil

@@ -2,6 +2,32 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The link guard (specs.md §17)
+
+Commit "Keep what a deletion through mergerfs removes, with the link guard", on `beta`.
+
+- With `trash.link_guard = true`, each pass gives each copy a hard link at `Atoll/links/<file id>`, in a folder of mode 0700, an operation `kind = link`, journaled a thousand at a time. A link moves its file's change time: the rows of its names take it, so that no copy reads as changed.
+- Once everything else of a pass ran, a pure function decides each link: it stays; it goes, `kind = unlink`, when its data is another copy found there or an entry of the trash; it goes to the trash from the link, `kind = trash` with the new column `ops.link`, when its data lost every name Atoll knows in the root, `overwritten` while its file has a copy on that disk and `deleted` otherwise, at its file's path or at the path of the last `copy-gone` event, which now holds `file`; it stays, with a warning, when nothing names it or Atoll did not make it.
+- No count of a file's names includes the guard's link: the walk and the looks of the operations take it out of `nlink`.
+- A purge removes the links of an entry first. Turned off, the guard removes its links at the next pass, sending to the trash first what they alone hold, and the folder. A new catalog, from `atoll init` or a rebuild, starts its file ids past the highest the links name.
+- Verified:
+  - the 26 vectors of `conformance/vectors/link_guard.json`;
+  - 17 scenarios: a deletion through mergerfs and its restore, a deletion on one disk, an atomic save, a rename and the link counts it records, the guard off, a purge before the next pass, a rebuild, what the guard cannot name, a dry run, and kill -9 at `linked`, `unlinked`, `trash-folders` and `moved`, and between the two names of a move on a disk with no `RENAME_NOREPLACE`;
+  - unit tests with EIO, EPERM and ENOSPC on each call, a link that is the last name of its data, and a trash with no room;
+  - 31 mutants of the new code, all caught but one that changes nothing: a trash from a link that looks for a copy row to remove, which none can match;
+  - `TestTheLinkGuardThroughMergerfs` in qemu on Linux 6.12 and 7.3, on ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g: a rename then a deletion through a real mergerfs, the data in each disk's trash, and a restore through the view, all of it through a cold cache.
+- **Decided without the maintainer, to confirm:**
+  - **Invariant 11, as written.** A copy whose data only its link holds was removed by someone else: a deletion like any other, propagated, whose data goes to the trash from the link. Looking in `links/` as in `trash/` and `tmp/`, for an operation of Atoll's, would have kept every deletion through mergerfs from propagating.
+  - **The contracts:**
+    - the column `ops.link` (migration 0008), the file id whose link an operation is about;
+    - the field `file` of `copy-gone`;
+    - `link` on the `trash` event of the guard.
+  - **The reason** follows the copy's row: `overwritten` while the file has a copy on that disk, `deleted` once its row went. An atomic save through mergerfs gives `overwritten` on every disk, as the pass copies the new version back in the same pass.
+  - **The folder is private (0700).** A link reaches its file whatever the folders above it in the root forbid.
+  - **A link nothing names stays**, with a warning in the log, rather than going to the trash at a path made up for it.
+  - **The guard runs in a pass only**, at its end. A command that sends a copy to the trash leaves its link to the next pass, and a purge before it removes the link first.
+  - **No new field in `catalog rebuild --json`** for the file ids it starts past.
+
 ## An NTFS volume marked dirty (specs.md §22, §23)
 
 Commit "Alert on an NTFS volume marked dirty", on `beta`.

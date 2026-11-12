@@ -14,18 +14,29 @@ import (
 // StartOpsAfter makes the next operation's id come after id, at the least: a rebuilt catalog's operations must not
 // meet the folders and parts the old ones left on the disks (specs.md §9, §17).
 func StartOpsAfter(ctx context.Context, db *sql.DB, id int64) error {
+	return startAfter(ctx, db, "ops", id)
+}
+
+// StartFilesAfter makes the next file's id come after id, at the least: a link of the guard an old catalog left on a
+// disk must not name a new file (specs.md §9, §17).
+func StartFilesAfter(ctx context.Context, db *sql.DB, id int64) error {
+	return startAfter(ctx, db, "files", id)
+}
+
+// startAfter moves the counter of a table's ids past id, never back.
+func startAfter(ctx context.Context, db *sql.DB, table string, id int64) error {
 	return inTransaction(ctx, db, func(tx *sql.Tx) error {
 		var seq sql.NullInt64
-		err := tx.QueryRowContext(ctx, "SELECT seq FROM sqlite_sequence WHERE name = 'ops'").Scan(&seq)
+		err := tx.QueryRowContext(ctx, "SELECT seq FROM sqlite_sequence WHERE name = ?", table).Scan(&seq)
 		switch {
 		case isNoRows(err):
-			_, err = tx.ExecContext(ctx, "INSERT INTO sqlite_sequence(name, seq) VALUES ('ops', ?)", id)
+			_, err = tx.ExecContext(ctx, "INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)", table, id)
 		case err != nil:
 		case seq.Int64 < id:
-			_, err = tx.ExecContext(ctx, "UPDATE sqlite_sequence SET seq = ? WHERE name = 'ops'", id)
+			_, err = tx.ExecContext(ctx, "UPDATE sqlite_sequence SET seq = ? WHERE name = ?", id, table)
 		}
 		if err != nil {
-			return fmt.Errorf("operations: %w", err)
+			return fmt.Errorf("%s: %w", table, err)
 		}
 		return nil
 	})

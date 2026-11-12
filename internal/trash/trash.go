@@ -1001,6 +1001,14 @@ func (s *Session) purgeEntry(ctx context.Context, e *catalog.TrashEntry) (string
 	if handle == nil || !s.writable(e.Disk) {
 		return outcomeUnavailable, nil
 	}
+	if !layout.IsChunks(e.TrashPath) {
+		if err := s.dropLinksOf(ctx, handle, e); err != nil {
+			return "", err
+		}
+		if !s.writable(e.Disk) {
+			return OutcomeIOError, nil
+		}
+	}
 	op, err := catalog.BeginFromTrash(ctx, s.db, catalog.OpUnlink, e, s.now)
 	if err != nil {
 		return "", fmt.Errorf("catalog: %w", err)

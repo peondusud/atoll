@@ -50,6 +50,9 @@ type Disk struct {
 	ino     uint64
 	// precision is how finely the disk holds a time (specs.md §9), 0 when unknown, which compares exactly.
 	precision int64
+	// own holds, by inode, the files whose link of the guard leads to it, nil until the links folder is read
+	// (specs.md §17).
+	own map[uint64][]int64
 }
 
 // Open opens the top of a disk, which holds a time to precisionNS. The caller confirms it afterwards, then calls
@@ -347,6 +350,7 @@ func (d *Disk) stat(path []string) (fsx.Stat, bool, error) {
 	case err != nil:
 		return fsx.Stat{}, false, classify(err)
 	}
+	d.withoutOwn(&st)
 	return st, true, nil
 }
 
@@ -653,6 +657,7 @@ func (d *Disk) movedFrom(dir fsx.Dir, name string, seen *fsx.Stat) (*Moved, erro
 	if err != nil {
 		return nil, classify(err)
 	}
+	d.withoutOwn(&st)
 	return &Moved{Stat: st, PriorNS: timeOf(seen.Ctime)}, nil
 }
 
@@ -1096,6 +1101,7 @@ func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
 		return Purged{}, lost(err)
 	}
 	d.machine.Checkpoint("source-synced")
+	d.withoutOwn(&st)
 	return Purged{Nlink: st.Nlink, PriorNS: timeOf(st.Ctime)}, nil
 }
 

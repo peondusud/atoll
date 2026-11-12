@@ -239,6 +239,18 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `full` | array of strings | the disks whose trash still holds more than `max_size` of their capacity once those are gone, by id in byte order |
 | `error` | boolean | `true` when a reason is unknown, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
 
+### `link_guard.json` — what the link guard does with a disk's links (§17)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `on` | boolean | `trash.link_guard` |
+| `links` | array of objects | the entries of `<workdir>/links/`, in any order: `name`, `file` for a regular file, and `inode`, what it leads to |
+| `copies` | array of objects | the copies of the disk: `file`, its file's id; `inode`, empty for a copy not on the disk yet; `place`, where it sits; `there`, that the last look found it there |
+| `trash` | array of strings | the inodes of what the disk's trash holds |
+| `files` | array of objects | `file` and `path` of each file the catalog still has |
+| `copy_gone` | array of objects | `file` and `path` that the last `copy-gone` event of the disk gives a file |
+| `steps` | array of objects | what to do, the links by `name` in byte order, then the copies by `file`. `do` is `keep`, `unlink`, `unnamed` or `stray`, with `name`; `trash`, with `name`, `path` and `reason`, `deleted` or `overwritten`; or `make`, with `file`, `inode` and `path`. A name is a file id as Atoll writes it, decimal, positive and with no leading zero, or `stray` |
+
 ### `repair_reprise.json` — what the reprise of a chunk repair does (§16.1)
 
 | Field | Type | Meaning |

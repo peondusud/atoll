@@ -827,6 +827,11 @@ func removeIfThere(path string) error {
 // SumSizes adds up the size of every regular file below a folder. It serves a conformance build,
 // whose folders have no capacity of their own.
 func SumSizes(root Dir) (int64, error) {
+	return sumSizes(root, map[uint64]bool{})
+}
+
+// sumSizes counts each file once, by inode, however many names it has: a filesystem holds a hard link's data once.
+func sumSizes(root Dir, seen map[uint64]bool) (int64, error) {
 	names, err := root.Names()
 	if err != nil {
 		return 0, err
@@ -839,13 +844,16 @@ func SumSizes(root Dir) (int64, error) {
 		}
 		switch st.Kind {
 		case KindFile:
-			total += st.Size
+			if !seen[st.Ino] {
+				seen[st.Ino] = true
+				total += st.Size
+			}
 		case KindDir:
 			below, err := root.OpenDir(name)
 			if err != nil {
 				return 0, err
 			}
-			sum, err := SumSizes(below)
+			sum, err := sumSizes(below, seen)
 			if err := errors.Join(err, below.Close()); err != nil {
 				return 0, err
 			}

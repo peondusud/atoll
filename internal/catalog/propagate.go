@@ -162,7 +162,10 @@ type eventRow struct {
 	PathB64     string `json:"path_b64,omitempty"`
 	GoneNS      *int64 `json:"gone_ns,omitempty"`
 	NothingLeft bool   `json:"nothing_left,omitempty"`
-	UpTo        *int64 `json:"up_to,omitempty"`
+	// File is the id of the file a copy-gone speaks of: the link guard names a link by it, and finds there the path of
+	// a file whose row went with its last copy (specs.md §17).
+	File int64  `json:"file,omitempty"`
+	UpTo *int64 `json:"up_to,omitempty"`
 	// Answered says that a confirm of the mass-modification guard answered a modified: it counts for nothing.
 	Answered bool `json:"answered,omitempty"`
 }
@@ -325,7 +328,7 @@ func applyFile(ctx context.Context, tx *sql.Tx, nowNS int64, c *FileChange) erro
 
 func applyRow(ctx context.Context, tx *sql.Tx, nowNS int64, c *FileChange, r *RowChange) error {
 	if r.CountGone {
-		data := eventRow{Disk: r.Disk, GoneNS: &r.GoneNS, NothingLeft: r.NothingLeft}
+		data := eventRow{Disk: r.Disk, GoneNS: &r.GoneNS, NothingLeft: r.NothingLeft, File: c.ID}
 		data.setPath(c.Path)
 		if err := insertEvent(ctx, tx, nowNS, "info", EventCopyGone, &data); err != nil {
 			return err

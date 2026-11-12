@@ -1,0 +1,276 @@
+package trash
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+
+	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/solver"
+)
+
+// linkBatch is how many operations on links one transaction journals, and one sync of the folder makes durable: the
+// first pass with the guard on makes one for each copy of the disk.
+const linkBatch = 1000
+
+// LinkItem is a link of the guard sent to the trash: its data lost every name Atoll knows in the root.
+type LinkItem struct {
+	Disk    string
+	Path    string
+	Reason  string
+	Outcome string
+}
+
+// Guard keeps the link guard of a disk in step with its copies, once a pass has looked at the disk (specs.md §17).
+// With the guard on, each copy on the disk gets a link at <workdir>/links/<file id>; a link whose data lost every
+// name Atoll knows in the root goes to the trash, at its file's path; a link whose data has another name Atoll knows,
+// a copy or an entry of the trash, goes. With the guard off, every link goes the same way, a link to its file's
+// copy included, and the folder with them. Nothing is done without apply, or on a disk that cannot be written to.
+// report is told of each link sent to the trash.
+func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*LinkItem) error) error {
+	if !s.apply || !s.writable(id) {
+		return nil
+	}
+	handle, err := s.open(ctx, id)
+	if err != nil || handle == nil || !s.writable(id) {
+		return err
+	}
+	entries, err := handle.Links()
+	if err != nil {
+		return s.guardFailed(ctx, id, err)
+	}
+	if !on && len(entries) == 0 {
+		handle.RemoveLinksFolder()
+		return nil
+	}
+	in, stats, err := s.linksInput(ctx, id, on, entries)
+	if err != nil {
+		return err
+	}
+	plan := solver.PlanLinks(in)
+	var unlinks, makes []catalog.LinkStart
+	for i := range plan {
+		step := &plan[i]
+		switch step.Do {
+		case solver.LinkKeep:
+		case solver.LinkUnlink:
+			unlinks = append(unlinks, catalog.LinkStart{FileID: step.FileID, Path: step.Path, FileKey: step.Inode})
+		case solver.LinkTrash:
+			drop, err := s.sendLink(ctx, handle, step, stats[step.Name], report)
+			if err != nil {
+				return err
+			}
+			if drop != nil {
+				unlinks = append(unlinks, *drop)
+			} else if s.lostDisk(id) {
+				return nil
+			}
+		case solver.LinkUnnamed:
+			slog.Warn("a link of the guard holds data that nothing names: it stays, for the user to look at", "disk", id, "link", step.Name)
+		case solver.LinkStray:
+			slog.Warn("the links folder holds something Atoll did not make: it stays", "disk", id, "name", step.Name)
+		case solver.LinkMake:
+			makes = append(makes, catalog.LinkStart{FileID: step.FileID, Path: step.Path, FileKey: step.Inode})
+		}
+	}
+	if _, err := s.linkOps(ctx, handle, catalog.OpUnlink, unlinks); err != nil || s.lostDisk(id) {
+		return err
+	}
+	if _, err := s.linkOps(ctx, handle, catalog.OpLink, makes); err != nil || s.lostDisk(id) {
+		return err
+	}
+	if !on {
+		// Empty once every link went, the folder goes too; one that still holds something stays.
+		handle.RemoveLinksFolder()
+	}
+	return nil
+}
+
+// linksInput reads what deciding a disk's links needs, and what each link's look found, by name.
+func (s *Session) linksInput(ctx context.Context, id string, on bool, entries []ops.LinkEntry) (*solver.LinksInput, map[string]fsx.Stat, error) {
+	in := &solver.LinksInput{On: on, Links: make([]solver.LinkEntry, 0, len(entries))}
+	stats := make(map[string]fsx.Stat, len(entries))
+	copies, err := catalog.LinkCopies(ctx, s.db, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	in.Copies = make([]solver.LinkCopy, len(copies))
+	inodeOf := make(map[int64]string, len(copies))
+	for i := range copies {
+		c := &copies[i]
+		in.Copies[i] = solver.LinkCopy{FileID: c.FileID, Inode: c.FileKey, Place: c.Place, There: c.There}
+		inodeOf[c.FileID] = c.FileKey
+	}
+	// Only a link that does not lead to its file's copy can need a path, and at a pass nearly every link does.
+	var ids []int64
+	for i := range entries {
+		e := &entries[i]
+		key := strconv.FormatUint(e.Stat.Ino, 10)
+		in.Links = append(in.Links, solver.LinkEntry{Name: e.Name, File: e.Stat.Kind == fsx.KindFile, Inode: key})
+		stats[e.Name] = e.Stat
+		if fileID, ok := layout.LinkID(e.Name); ok && inodeOf[fileID] != key {
+			ids = append(ids, fileID)
+		}
+	}
+	if in.Trash, err = catalog.TrashKeys(ctx, s.db, id); err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	if in.Files, err = catalog.FilePaths(ctx, s.db, ids); err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	var unknown []int64
+	for _, fileID := range ids {
+		if _, ok := in.Files[fileID]; !ok {
+			unknown = append(unknown, fileID)
+		}
+	}
+	if in.Gone, err = catalog.GonePaths(ctx, s.db, id, unknown); err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	return in, stats, nil
+}
+
+// sendLink sends a link to the trash, as a copy goes there (specs.md §17.1). Its data may still have its name in the
+// root, as a file a rule now ignores leaves it: then the link only goes, and drop says so.
+func (s *Session) sendLink(ctx context.Context, handle *ops.Disk, step *solver.LinkStep, st fsx.Stat, report func(*LinkItem) error) (*catalog.LinkStart, error) {
+	switch seen, there, err := handle.StatRoot(step.Path); {
+	case err != nil:
+		return nil, s.guardFailed(ctx, handle.ID, err)
+	case there && seen.Kind == fsx.KindFile && strconv.FormatUint(seen.Ino, 10) == step.Inode:
+		return &catalog.LinkStart{FileID: step.FileID, Path: step.Path, FileKey: step.Inode}, nil
+	}
+	if s.full[handle.ID] {
+		// No room for another folder in that trash: it waits for the next pass, as any move to it does.
+		return nil, nil
+	}
+	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
+		Disk: handle.ID, Path: step.Path, FileKey: step.Inode, Size: sql.NullInt64{Int64: st.Size, Valid: true}, Reason: step.Reason,
+		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention), Link: step.FileID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	s.machine.Checkpoint("journaled")
+	outcome := OutcomeTrashed
+	moved, moveErr := handle.LinkToTrash(op)
+	if moveErr == nil {
+		if err := catalog.FinishTrash(ctx, s.db, op, nil, moved.Links()); err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+	} else {
+		if fsx.IsNoRoom(moveErr) {
+			s.full[handle.ID] = true
+		}
+		if outcome, err = s.afterFailedMove(ctx, handle, op, moveErr); err != nil {
+			return nil, err
+		}
+	}
+	if report != nil {
+		if err := report(&LinkItem{Disk: handle.ID, Path: step.Path, Reason: step.Reason, Outcome: outcome}); err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+	}
+	return nil, nil
+}
+
+// linkOps journals and runs operations of the guard on links, a batch at a time, and says how many went through. A
+// link that is no longer what the plan saw stays, undone, for the next pass to look at again.
+func (s *Session) linkOps(ctx context.Context, handle *ops.Disk, kind string, list []catalog.LinkStart) (int, error) {
+	if len(list) == 0 {
+		return 0, nil
+	}
+	links, err := handle.OpenLinks(kind == catalog.OpLink)
+	if err != nil {
+		return 0, s.guardFailed(ctx, handle.ID, err)
+	}
+	if links == nil {
+		return 0, nil
+	}
+	defer links.Close()
+	through := 0
+	for start := 0; start < len(list); start += linkBatch {
+		batch := list[start:min(start+linkBatch, len(list))]
+		begun, err := catalog.BeginLinks(ctx, s.db, handle.ID, kind, batch, s.now)
+		if err != nil {
+			return through, fmt.Errorf("catalog: %w", err)
+		}
+		s.machine.Checkpoint("journaled")
+		var done []catalog.LinkEnd
+		var undone []int64
+		for i := range begun {
+			op := &begun[i]
+			var left *catalog.Links
+			if kind == catalog.OpLink {
+				left, err = handle.MakeLink(op, links)
+			} else {
+				left, err = s.dropLink(ctx, handle, op, links)
+			}
+			switch {
+			case err == nil:
+				done = append(done, catalog.LinkEnd{ID: op.ID, Links: left})
+			case errors.Is(err, ops.ErrDiskLost):
+				// What this batch did stays planned, for the reprise to tell.
+				return through, s.lose(ctx, handle.ID, err)
+			default:
+				slog.Warn("a link of the guard stays as it is", "disk", handle.ID, "kind", kind, "file", op.Link, "error", err)
+				undone = append(undone, op.ID)
+			}
+		}
+		if err := links.Sync(); err != nil {
+			return through, s.lose(ctx, handle.ID, err)
+		}
+		if err := catalog.EndLinks(ctx, s.db, handle.ID, done, undone); err != nil {
+			return through, fmt.Errorf("catalog: %w", err)
+		}
+		through += len(done)
+	}
+	return through, nil
+}
+
+// dropLink removes a link, and says what the names its data keeps must record: the removal moved its change time.
+func (s *Session) dropLink(ctx context.Context, handle *ops.Disk, op *catalog.Op, links *ops.LinksFolder) (*catalog.Links, error) {
+	prior, err := handle.DropLink(op, links)
+	if err != nil {
+		return nil, err
+	}
+	left, err := handle.LinksLeft(ctx, s.db, op.FileKey, prior)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	return left, nil
+}
+
+// dropLinksOf removes the links of the guard that lead to an entry about to be purged: Atoll sent that data to the
+// trash itself, and a link left behind would keep it once purged, and send it back to the trash at the next pass.
+func (s *Session) dropLinksOf(ctx context.Context, handle *ops.Disk, e *catalog.TrashEntry) error {
+	ids, err := handle.OwnLinksOf(e.TrashPath, e.FileKey)
+	if err != nil {
+		return s.guardFailed(ctx, e.Disk, err)
+	}
+	list := make([]catalog.LinkStart, len(ids))
+	for i, fileID := range ids {
+		list[i] = catalog.LinkStart{FileID: fileID, Path: e.Path, FileKey: e.FileKey}
+	}
+	_, err = s.linkOps(ctx, handle, catalog.OpUnlink, list)
+	return err
+}
+
+// guardFailed loses a disk that failed, and lets anything else wait for the next pass: a link is a second name.
+func (s *Session) guardFailed(ctx context.Context, id string, err error) error {
+	if errors.Is(err, ops.ErrDiskLost) {
+		return s.lose(ctx, id, err)
+	}
+	slog.Warn("the links of the guard wait for the next pass", "disk", id, "error", err)
+	return nil
+}
+
+// lostDisk says that a disk can no longer be written to in this session.
+func (s *Session) lostDisk(id string) bool {
+	return !s.writable(id)
+}

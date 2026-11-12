@@ -76,11 +76,6 @@
             "message": "${ANY}"
           },
           {
-            "key": "trash.link_guard",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "ups.enabled",
             "later_phase": true,
             "message": "${ANY}"

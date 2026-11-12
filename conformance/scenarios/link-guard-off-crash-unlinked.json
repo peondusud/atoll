@@ -1,0 +1,154 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717, \u00a717.2",
+  "description": "Stopped once a link is removed, the guard turned off, before the operation is done: the reprise finds it gone and finishes it, and the next pass removes the rest.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n[trash]\nlink_guard = true\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n[trash]\nlink_guard = false\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "crash_at": "unlinked",
+      "exit": 137
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/links",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, kind, link, state FROM ops WHERE id > 2 ORDER BY id",
+      "rows": [
+        [
+          "t1",
+          "unlink",
+          1,
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, kind, link, state FROM ops WHERE id > 2 ORDER BY id",
+      "rows": [
+        [
+          "t1",
+          "unlink",
+          1,
+          "done"
+        ],
+        [
+          "t2",
+          "unlink",
+          1,
+          "done"
+        ]
+      ]
+    }
+  ]
+}

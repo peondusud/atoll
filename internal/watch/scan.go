@@ -7,7 +7,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/integrity"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/rules"
 	"github.com/peondusud/atoll/internal/solver"
@@ -287,7 +290,52 @@ func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, er
 	walked, err := Walk(ctx, root)
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = root.Close()
-	return walked, err
+	if err != nil {
+		return walked, err
+	}
+	if err := withoutOwnLinks(m, d, walked); err != nil {
+		return nil, err
+	}
+	return walked, nil
+}
+
+// withoutOwnLinks takes the link guard's links out of the count of names of each file a walk found: they are Atoll's,
+// in <workdir>/links/, and no count of a file's names includes them (specs.md §17). Only a file with two names or more
+// can have one, so a walk that found none spares the folder.
+func withoutOwnLinks(m disks.Machine, d *config.Disk, w *Walked) error {
+	if !slices.ContainsFunc(w.Files, func(f FoundFile) bool { return f.Nlink >= 2 }) {
+		return nil
+	}
+	dir, err := m.OpenRoot(d.Mount, path.Join(d.Workdir, layout.LinksFolder))
+	switch {
+	case fsx.IsAbsent(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
+	defer func() { _ = dir.Close() }()
+	names, err := dir.Names()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
+	own := make(map[string]int64, len(names))
+	for _, name := range names {
+		st, err := dir.Stat(name)
+		switch {
+		case fsx.IsAbsent(err):
+			continue
+		case err != nil:
+			return fmt.Errorf("%w: %w", ErrInterrupted, err)
+		case st.Kind == fsx.KindFile:
+			own[strconv.FormatUint(st.Ino, 10)]++
+		}
+	}
+	for i := range w.Files {
+		if f := &w.Files[i]; own[f.FileKey] > 0 {
+			f.Nlink -= min(own[f.FileKey], f.Nlink-1)
+		}
+	}
+	return nil
 }
 
 // compareWalk says what a walk means against what the catalog knows, and fills the report. Both

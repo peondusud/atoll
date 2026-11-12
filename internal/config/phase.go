@@ -30,10 +30,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			if v != "none" {
 				phase = "2b"
 			}
-		case "trash.link_guard":
-			if v == true {
-				phase = "1b"
-			}
 		case "balance.equalize":
 			if v != "off" {
 				phase = "2b"

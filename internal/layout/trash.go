@@ -15,6 +15,28 @@ const TrashFolder = "trash"
 // TmpFolder holds copies in progress, below the work folder of a disk (specs.md §6).
 const TmpFolder = "tmp"
 
+// LinksFolder holds the link guard's links, below the work folder of a disk: one per copy, named by its file's id
+// (specs.md §6, §17).
+const LinksFolder = "links"
+
+// LinkName gives the name of a file's link in LinksFolder: its id in decimal. An id that is not positive is an error.
+func LinkName(fileID int64) (string, error) {
+	if fileID <= 0 {
+		return "", fmt.Errorf("link name: file %d", fileID)
+	}
+	return strconv.FormatInt(fileID, 10), nil
+}
+
+// LinkID reads a name of LinksFolder: the id it names, and whether it is one, written as LinkName writes it. Anything
+// else there is not Atoll's.
+func LinkID(name string) (int64, bool) {
+	id, err := strconv.ParseInt(name, 10, 64)
+	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != name {
+		return 0, false
+	}
+	return id, true
+}
+
 // TrashPath gives the location of a copy inside the trash: the UTC date of the operation, its id,
 // then the logical path, byte for byte (specs.md §17). An error means that the id is not positive,
 // or that the path is not well-formed, which could lead out of the operation's folder.

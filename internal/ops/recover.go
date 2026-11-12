@@ -79,7 +79,12 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 	case catalog.OpRestore:
 		return d.recoverRestore(ctx, db, op, nowNS, out)
 	case catalog.OpUnlink:
+		if op.Link != 0 {
+			return d.recoverDropLink(ctx, db, op)
+		}
 		return d.recoverUnlink(ctx, db, op, nowNS)
+	case catalog.OpLink:
+		return d.recoverMakeLink(ctx, db, op)
 	case catalog.OpMkdir:
 		return d.recoverMkdir(ctx, db, op, nowNS)
 	case catalog.OpRmdir:
@@ -118,6 +123,10 @@ func (d *Disk) seen(path []string, op *Op) (Seen, fsx.Stat, error) {
 
 func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64, retention time.Duration, out *Recovered) error {
 	src, dst := d.rootPlace(op.Path), d.trashPlace(op.Path2)
+	if op.Link != 0 {
+		// The link guard's link went there, not the copy at the path (specs.md §17).
+		src = d.linkPlace(op.Link)
+	}
 	// First, as these can be long, and nothing long may come between the looks and what they decide.
 	if err := d.syncWay(dst); err != nil {
 		return err
@@ -130,12 +139,13 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	if err != nil {
 		return err
 	}
-	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
-	if err != nil {
-		return fmt.Errorf("catalog: %w", err)
-	}
 	changed := false
-	if source == SeenSame && target == SeenSame {
+	// A link has no row to be edited from: whatever its data holds now is what goes.
+	if source == SeenSame && target == SeenSame && op.Link == 0 {
+		row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
+		if err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
 		if changed, err = editedInPlace(&row, &sourceStat); err != nil {
 			return err
 		}

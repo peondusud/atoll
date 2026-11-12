@@ -150,6 +150,8 @@ type pass struct {
 	copiesDue     sql.NullInt64
 	// closed is what the watcher saw closed and quiet since: a file in immediate mode there waits for no settle.
 	closed Closed
+	// linkGuardOn is trash.link_guard (specs.md §17).
+	linkGuardOn bool
 	// settled says that the copies worked out each file, and that nothing ran since
 	settled bool
 	out     *Outcome
@@ -260,6 +262,7 @@ func (p *pass) readSettings() error {
 		return fmt.Errorf("modifies.mass_guard.percent: %w", err)
 	}
 	p.modFiles, _ = effective["modifies.mass_guard.files"].(int64)
+	p.linkGuardOn, _ = effective["trash.link_guard"].(bool)
 	return nil
 }
 
@@ -318,7 +321,8 @@ func plannedOn(list []catalog.Op, disk string) []string {
 	var paths []string
 	for i := range list {
 		op := &list[i]
-		if op.Disk != disk {
+		// What the link guard does leaves the root as it is.
+		if op.Disk != disk || op.Link != 0 {
 			continue
 		}
 		switch op.Kind {
@@ -1276,6 +1280,9 @@ func (p *pass) finish(ctx context.Context) error {
 	if err := p.session.RemoveEmptied(ctx); err != nil {
 		return fmt.Errorf("%w", err)
 	}
+	if err := p.linkGuard(ctx); err != nil {
+		return err
+	}
 	if !p.settled {
 		if err := p.session.Settle(ctx); err != nil {
 			return fmt.Errorf("%w", err)
@@ -1288,6 +1295,26 @@ func (p *pass) finish(ctx context.Context) error {
 	// The copies that wait for settle count too, so that a timer knows when to run the next pass (§15.12).
 	p.out.Waiting, p.out.NextDue = count+p.copiesWaiting, earliest(next, p.copiesDue)
 	p.out.Partial = p.out.Partial || p.session.Lost()
+	return nil
+}
+
+// linkGuard keeps the links of the guard of each disk the pass walked in step with its copies, once everything else of
+// the pass has run, and reports each link it sends to the trash as an operation (specs.md §17). With the guard off, it
+// removes what a guard on left.
+func (p *pass) linkGuard(ctx context.Context) error {
+	for i := range p.config.Disks {
+		id := p.config.Disks[i].ID
+		if !p.walked[id] {
+			continue
+		}
+		err := p.session.Guard(ctx, id, p.linkGuardOn, func(item *trash.LinkItem) error {
+			p.operated(Operation{Disk: item.Disk, Kind: catalog.OpTrash, Path: item.Path, Reason: item.Reason, Outcome: item.Outcome})
+			return p.sinkErr
+		})
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+	}
 	return nil
 }
 
