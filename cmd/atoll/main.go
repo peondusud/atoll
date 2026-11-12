@@ -82,6 +82,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGuard(configPath, args[1:], stdout, stderr)
 	case "mergerfs-config":
 		return runMergerfsConfig(configPath, args[1:], stdout, stderr)
+	case "notify":
+		return runNotify(configPath, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}

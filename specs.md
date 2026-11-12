@@ -228,6 +228,7 @@ The catalog schema is `schema/migrations/`: plain SQL, with a comment on why eac
 | `trash` | what each disk's trash holds |
 | `jobs`, `job_chunks` | the queue, and the chunk hashes a copy in progress has read (§14) |
 | `events` | what happened, written before any destructive action |
+| `alerts` | each alert standing: the condition's key, when it began, when it was last sent, and the count it was sent with (§23) |
 
 - **Pragmas**, set on every connection, never in a migration: `journal_mode = WAL`, `synchronous = FULL` (a committed `ops` row survives a power cut), `foreign_keys = ON`. Atoll checks that they took effect when it opens the catalog: a filesystem that cannot do WAL fails there, not later.
 - **Migrations**: `schema/migrations/NNNN_name.sql`, numbered from 1 with no gap. `PRAGMA user_version` holds the version. Each file runs in its own transaction with its `user_version`, so a failure leaves the catalog at the version before it. A catalog of a higher version than the binary is refused: going back to an older Atoll takes `catalog rebuild`. A file holds no pragma and no transaction statement.
@@ -897,10 +898,11 @@ Finishing, immediately or in a reprise, is one transaction: the operation `done`
 - **After a USB reset.** When it went `missing` for `device-gone`, `device-unreadable` or `io-error`, which a USB reset gives, `health.remount_after_reset` is on, and `/etc/fstab` has an entry for its mount point, each check while it stays `missing` runs `umount -l <mount point>`, then `mount <mount point>`, so that the remount takes the administrator's options. With no such entry, nothing is tried. A dirty NTFS volume is never forced: the mount fails, and the disk stays `missing`.
 - **A disk found again.** A pass reconciles it first. Only once a pass has walked it does its watch start again and its branch come back to mergerfs (§18).
 - **Runtime branches** (§21.1). After each pass, when `<view.mount>/.mergerfs` exists, the daemon reads `user.mergerfs.branches`. When the branches should differ, it writes the whole list there: the branches of `atoll mergerfs-config`, without the disks that are `missing` or not yet walked since they came back, in configuration order. A list written whole puts a branch back at its place (measured). It writes nothing when nothing would change, or with no mergerfs at `view.mount`.
+- **Alerts** (§23). After each pass, under the catalog's lock, the daemon works out the conditions that hold and the alerts due, then lets go of the lock to send them, and takes it again to record those that went.
 - **Stopping.** `SIGTERM` or `SIGINT` ends the wait, or the pass under way at its next step, as a long loop can be cancelled. What an operation left is the reprise's at the next start (§17.2). It then exits with 0. It tells the service manager `STOPPING=1` first.
 - **Reloading.** It reads the configuration again on `SIGHUP`, and only then (`systemctl reload atoll`); `disk add` and `disk remove` send it themselves. A configuration that does not load is left aside with a line of its log, and the one it had stays. One that loads takes effect at once: the disks it no longer lists are no longer watched, a mount check follows, then a pass for `reload`.
 - **`--dry-run`**, shadow mode (§29.2), runs the same loop with passes in `--dry-run`: no runtime branch is changed, and no remount is tried.
-- **What it says.** Each pass, each state a disk changes to, each remount and each change of branches is a line of its log on standard error, which the service manager keeps.
+- **What it says.** Each pass, each state a disk changes to, each remount, each change of branches and each alert sent or not is a line of its log on standard error, which the service manager keeps.
 
 ## 16. Integrity
 
@@ -1154,6 +1156,19 @@ For each `surplus` copy, by position, the first that applies:
   - trash full before deleted or renamed files reach their retention;
   - files waiting in `manual` mode for too long;
   - pool more than 90 % full.
+- **Who sends them.** The daemon that runs for good, after each pass (§15.13); a command says what it found on standard error and through its exit code, and sends nothing.
+- **Conditions.** After each pass, the daemon works out which of these hold, each with a key and a count:
+  - `disk-missing:<id>` and `disk-readonly:<id>`: a disk the pass found so, count 1;
+  - `files-<state>`, for each of `corrupt`, `conflict`, `unavailable`, `name-incompatible` and `name-collision`: the files in that state, counted;
+  - `guard-deletions:<id>` and `guard-modifications:<id>`: a guard tripped on that disk (§15.6), count 1;
+  - `manual-waiting`: the files in `manual` mode left `unprotected` longer than `defaults.manual_alert_after` since first seen, counted;
+  - `pool-full`: the data disks that hold their files now, `online`, in `standby`, `readonly` or `draining`, together more than 90 % full, count 1;
+  - `name-refused`: the operations of the pass that a driver refused (§15.8, §17), counted.
+
+  SMART and a volume marked dirty come with phase 1b, and a trash full with `trash.max_size`.
+- **When.** A condition that begins is sent at once, as one alert: a pass's files in one state are one alert, which names the first ten by path in byte order, as many of them as fit in 4,000 bytes of text, and says how many more there are. One that holds is sent again when its count grows, and every 24 h while it lasts, saying since when. One that ends is forgotten, with no message. The table `alerts` keeps what was sent, so a restart sends again only what is due. An alert that cannot be sent is kept unsent, and the daemon passes again within 5 minutes to try it again. A channel that cannot be reached is not tried again for the other alerts of that pass, each of which would wait as long; one whose server answered with a refusal is. Sending happens outside the catalog's lock. With no channel set, the daemon works out no alert and leaves the table as it is, so that a channel set later hears of what holds then; a daemon in shadow mode (`--dry-run`) logs the alerts due, and sends and records none.
+- **ntfy.** An HTTP `POST` of the alert's text to `alerts.ntfy`, with its title in `Title`, its priority in `Priority` (4 for a disk `missing`, a guard tripped, `corrupt` or `unavailable` files; 3 for the others) and the tag `warning`. With `alerts.ntfy_token_file`, the token that file holds goes in `Authorization: Bearer`, so that the token stays out of the configuration. A request has 10 s.
+- `atoll notify test` sends a test alert through each channel that is set, and says for each whether it went: a channel went when its server answered 2xx. It reads the configuration only, and needs no catalog. It exits with 0 when each did, with 4 when one did not, with 1, and nothing on standard output, when none is set or the configuration cannot be used, and with 2 on a usage error. Output: `api/schemas/notify-test.schema.json`.
 - Prometheus metrics on `/metrics` (phase 2b).
 
 ## 24. Configuration
@@ -1300,9 +1315,10 @@ url          = ""
 api_key_file = ""
 
 [alerts]
-ntfy   = "https://ntfy.sh/my-secret-topic"
-gotify = ""
-smtp   = ""
+ntfy            = "https://ntfy.sh/my-secret-topic"
+ntfy_token_file = ""                    # a Bearer token, for a ntfy server that asks one
+gotify          = ""
+smtp            = ""
 
 # Rules: the first matching rule wins; conditions are combined with AND.
 [[rule]]
@@ -1459,7 +1475,7 @@ atoll names check [--path <path>]        read-only: names not in NFC, not valid 
 atoll guard list | confirm --disk <id> [--kind deletions|modifications] | reject --disk <id> [--kind deletions|modifications]
 atoll prune [--dry-run] [--yes]          surplus copies to the trash (§17.3)
 atoll balance [--dry-run] [--move-originals]
-atoll notify test
+atoll notify test [--json]               a test alert through each channel set (§23)
 atoll catalog backup | verify | rebuild  verify: SQLite integrity check, then catalog vs disks (read-only)
 atoll mergerfs-config                    (phase 1 and break glass)
 atoll mount <point>                      (phase 2a on Linux, phase 4 on Windows)
@@ -1474,7 +1490,7 @@ atoll daemon [--foreground] [--until-idle] [--dry-run]
 - `atoll scan` follows §15.10, and `--disk <id>` limits the walk to one disk, without changing what is checked. It exits with 0 when every disk asked for was walked, and hashed with `--full`; with 4 when one was skipped or failed; with 1, and nothing on standard output, when the configuration or the catalog cannot be used, or `<id>` is no disk of the configuration; and with 2 on a usage error.
 - `atoll status` follows §15.11. It opens the catalog and looks at no disk.
 - `atoll mergerfs-config` follows §21.1. It opens the catalog and looks at no disk. It exits with 0 once the line is printed; with 4 when a branch has no `minfreespace` of its own, the line printed all the same; with 1, and nothing on standard output, when the configuration or the catalog cannot be used, there is no data disk, or a branch path is one mergerfs cannot take; and with 2 on a usage error.
-- `atoll scan`, `atoll prune`, `atoll replicate`, `atoll trash restore`, `atoll trash purge`, `atoll daemon --until-idle`, `atoll guard confirm` and `atoll guard reject` hold an exclusive `flock` on the catalog file for their whole run, `--dry-run` included, so that a reprise never takes another command's operation for a crash, and a scan never records a move half done. A second one, or one that meets a pass of the daemon that runs for good, which takes the lock for each pass and lets go of it between them, waits for it: it says so once on standard error, tries again every 200 ms, and then runs as it would have, its output and exit code unchanged. The lock creates no file, and the kernel lets go of it when the process ends, however it ends. `atoll status`, `atoll trash list`, `atoll guard list`, `atoll disk list` and `atoll mergerfs-config` take none.
+- `atoll scan`, `atoll prune`, `atoll replicate`, `atoll trash restore`, `atoll trash purge`, `atoll daemon --until-idle`, `atoll guard confirm` and `atoll guard reject` hold an exclusive `flock` on the catalog file for their whole run, `--dry-run` included, so that a reprise never takes another command's operation for a crash, and a scan never records a move half done. A second one, or one that meets a pass of the daemon that runs for good, which takes the lock for each pass and lets go of it between them, waits for it: it says so once on standard error, tries again every 200 ms, and then runs as it would have, its output and exit code unchanged. The lock creates no file, and the kernel lets go of it when the process ends, however it ends. `atoll status`, `atoll trash list`, `atoll guard list`, `atoll disk list`, `atoll mergerfs-config` and `atoll notify test` take none.
 - `atoll prune`, `atoll trash restore` and `atoll trash purge` follow §17.3 and §17.4. They exit with 0 when everything asked for was done, or with `--dry-run` once they have answered; with 3 when they lacked `--yes` and there was something to do; with 4 when something stayed or a disk could not be relied on; with 1 when the configuration or the catalog cannot be used; and with 2 on a usage error. `atoll trash list` exits with 0, 1 or 2 likewise.
 - `atoll replicate` follows §14.3.
 - `atoll daemon --until-idle` follows §15.12, `atoll daemon` without it §15.13, and `atoll guard` §15.6. `atoll daemon` exits with 0 once stopped by `SIGTERM` or `SIGINT`, and with 1 when it cannot start, as when the configuration or the catalog cannot be used; `--foreground` changes nothing, and `--json` goes only with `--until-idle`. `atoll guard` exits with 0 once it has answered or done its work, also when there was nothing to confirm or reject; with 1 when the configuration or the catalog cannot be used, or `<id>` is no disk of the configuration; and with 2 on a usage error. Output: `api/schemas/guard-list.schema.json` and `guard-answer.schema.json`.

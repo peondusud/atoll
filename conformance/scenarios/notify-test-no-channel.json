@@ -1,0 +1,39 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a723, \u00a725",
+  "description": "With no channel set, notify test has nothing to send: it exits with 1 and prints nothing on standard output, with --json too. It needs no catalog.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "notify",
+        "test"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "notify",
+        "test",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": []
+    }
+  ]
+}

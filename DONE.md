@@ -2,6 +2,31 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## ntfy alerts (specs.md §23, §15.13, §25)
+
+Commit "Send alerts through ntfy", on `develop`.
+
+- **What holds.** After each pass, under the catalog's lock, the daemon works out which conditions hold, each with a key and a count: a disk `missing` or `readonly`, the files in each of `unavailable`, `corrupt`, `conflict`, `name-incompatible` and `name-collision`, a guard tripped on a disk, the files in `manual` mode left unprotected past `defaults.manual_alert_after`, the pool more than 90 % full, and the names a driver refused in the pass. One read of `files` counts them all; the paths an alert names are read only for the alerts that go.
+- **When.** `alerts.PlanAlerts`, pure, with 14 vectors in `alerts_plan.json`, says what to send: a condition that begins, one whose count grew, and every 24 h one that lasts; one that ended is forgotten. The new table `alerts` (`0004_alerts.sql`) keeps what was sent, so a restart sends again only what is due.
+- **Sending.** The daemon lets go of the lock to send, then takes it again to record what went. ntfy gets an HTTP `POST`, with the title, the priority and the tag `warning`, and the token of `alerts.ntfy_token_file`, a new key, read at each send.
+- **`atoll notify test`** sends a test alert through each channel set: exit 0 when each went, 4 when one did not, 1 with none set, 2 on a usage error (`api/schemas/notify-test.schema.json`, three scenarios).
+- **The pass's memory.** The daemon now counts a pass's decisions and operations through a sink instead of keeping each one, so a pass over a whole pool no longer holds them all.
+- **Decided without the maintainer, to confirm:**
+  - With no channel set, the daemon works out no alert and leaves the table as it is, so that a channel set later hears of what holds then.
+  - A daemon in shadow mode (`--dry-run`) logs the alerts due, and sends and records none.
+  - An alert that could not go brings a pass within 5 minutes, instead of waiting for whatever pass comes next, which could be hours away. A channel that cannot be reached is not tried again for the other alerts of that pass, each of which would wait its 10 s; one whose server answered with a refusal is, as the refusal may be that message's own.
+  - The text of an alert stays within 4,000 bytes, as ntfy takes a longer one only as an attachment: the paths stop at the first that would not fit, and the alert says how many more there are. A path that is not UTF-8, or holds a control character, is shown in base64.
+  - A guard tripped counts 1, so it is sent once when it trips, and not again each time it holds more.
+  - `pool-full` counts the data disks `online`, in `standby`, `readonly` or `draining`, not those `failed` or `retired`.
+  - The token file must hold the token on one line; anything else is a send that fails. A send's error never names the URL, whose topic is the secret on a public ntfy server.
+  - The alerts are written in English; their French comes with the CLI's translation.
+- **Verified.**
+  - Unit tests for the catalog's queries, the conditions and what they read, the texts, ntfy against a test server, and what is recorded after a send.
+  - `TestRunSendsAlerts` runs the daemon on a disk not mounted: the alert goes, a refused one goes again at the next pass, and one already sent does not. `TestFailedAlertBringsAPass`, `TestDryRunSendsNoAlert` and `TestPassSink` cover the retry, shadow mode and the names refused.
+  - In `test/loopdev`, three times on Linux 6.12 and on 7.3, `TestDaemonRunsForGood` now has a ntfy server: no alert while every disk is there, one when a disk is unmounted, and the table empty once it is back.
+  - Judged by mutations: the 37 of the alerts' code are caught, once a count of one was tested and `Gather`, shadow mode and the sink had tests of their own.
+- **Found while testing it.** `TestDaemonRunsForGood` could unmount a disk while the daemon read a new file's hash on it, after a pass: `umount` then says the target is busy, as it would to a user. Once on Linux 6.12 it did. The test now waits for the disk to be free, for 30 s at most.
+
 ## The daemon that runs for good (specs.md §15.13, §25)
 
 Commits "Record the maintainer's decisions for the alpha" and "Run the daemon for good", on `develop`.

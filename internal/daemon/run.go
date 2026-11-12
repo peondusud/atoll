@@ -10,11 +10,13 @@ import (
 	"slices"
 	"time"
 
+	"github.com/peondusud/atoll/internal/alerts"
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/view"
 	"github.com/peondusud/atoll/internal/watch"
@@ -27,6 +29,10 @@ const checkEvery = 30 * time.Second
 // retryAfter is how long a pass that failed waits before the next, so that a catalog that cannot be used is not
 // asked again and again.
 const retryAfter = time.Minute
+
+// alertRetry is when a pass comes again after an alert could not be sent, so that it is tried again soon
+// (specs.md §23).
+const alertRetry = 5 * time.Minute
 
 // hashSlice is how long the daemon reads new files' hashes under the catalog's lock at a time, so that a command
 // never waits long for it, and events and checks come in between.
@@ -67,6 +73,7 @@ type settings struct {
 	checkEvery   time.Duration
 	fstab        string
 	resetReasons []disks.Reason
+	channels     []alerts.Channel
 }
 
 func readSettings(c *config.Config, opt *Options) (*settings, error) {
@@ -104,6 +111,7 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 	for i := range c.Disks {
 		s.disksByID[c.Disks[i].ID] = &c.Disks[i]
 	}
+	s.channels = alerts.Channels(c)
 	return s, nil
 }
 
@@ -366,8 +374,12 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	start := l.opt.Machine.Now()
 	l.first, l.reloaded, l.gone, l.back = false, false, false, false
 	l.log.Info("a pass begins", "because", because)
+	// The sink counts what the pass did instead of keeping each line: a pass over a whole pool would not fit in the
+	// memory of specs.md §26.
+	sink := &passSink{}
+	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
-		outcome, err := jobs.RunTo(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, nil)
+		outcome, err := jobs.RunTo(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink)
 		if err != nil {
 			return nil, err
 		}
@@ -386,6 +398,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 			}
 		}
 		l.branches(ctx, db)
+		due = l.prepareAlerts(ctx, db, outcome, &sink.refused)
 		return outcome, nil
 	})
 	end := l.opt.Machine.Now()
@@ -410,10 +423,90 @@ func (l *loop) pass(ctx context.Context, because []string) {
 			l.watch(ctx, id)
 		}
 	}
-	l.log.Info("a pass ended", "because", because, "seconds", float64(end-start)/1e9, "decisions", len(outcome.Decisions),
-		"operations", len(outcome.Operations), "waiting", outcome.Waiting, "partial", outcome.Partial, "held", outcome.Held)
+	l.log.Info("a pass ended", "because", because, "seconds", float64(end-start)/1e9, "decisions", sink.decisions,
+		"operations", sink.operations, "waiting", outcome.Waiting, "partial", outcome.Partial, "held", outcome.Held)
+	l.sendAlerts(ctx, due)
 	if l.opt.OnPass != nil {
 		l.opt.OnPass(because, outcome)
+	}
+}
+
+// passSink counts what a pass decided and did, and keeps the names a driver refused.
+type passSink struct {
+	decisions, operations int64
+	refused               alerts.Refused
+}
+
+func (s *passSink) Disks([]jobs.DiskLine) error { return nil }
+
+func (s *passSink) Decision(*jobs.Decision) error {
+	s.decisions++
+	return nil
+}
+
+func (s *passSink) Operation(op *jobs.Operation) error {
+	s.operations++
+	if op.Outcome == trash.OutcomeNameRefused {
+		// A rename was refused its new name, a copy its own.
+		name := op.Path
+		if op.To != "" {
+			name = op.To
+		}
+		s.refused.Add(name)
+	}
+	return nil
+}
+
+// prepareAlerts works out, under the catalog's lock, the alerts a pass leaves to send (specs.md §23). With no
+// channel set, the table alerts stays as it is, so that a channel set later hears of what holds then.
+func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outcome, refused *alerts.Refused) *alerts.Due {
+	if len(l.set.channels) == 0 {
+		return nil
+	}
+	now := l.opt.Machine.Now()
+	facts, err := alerts.Gather(ctx, db, l.opt.Config, now, outcome, refused)
+	if err == nil {
+		var due *alerts.Due
+		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
+			if l.opt.Apply {
+				return due
+			}
+			for _, m := range due.Messages {
+				l.log.Info("an alert is due; a dry run sends none", "key", m.Key, "title", m.Title)
+			}
+			return nil
+		}
+	}
+	if ctx.Err() == nil {
+		l.log.Warn("the alerts could not be worked out: the next pass tries again", "error", err)
+	}
+	return nil
+}
+
+// sendAlerts sends what a pass left to send, outside the catalog's lock, then records what went under it. An
+// alert that did not go brings a pass sooner, which tries it again.
+func (l *loop) sendAlerts(ctx context.Context, due *alerts.Due) {
+	if due == nil || len(due.Messages) == 0 {
+		return
+	}
+	sent := alerts.SendAll(ctx, l.set.channels, due.Messages, func(m *alerts.Message, c alerts.Channel, err error) {
+		if ctx.Err() == nil {
+			l.log.Warn("an alert could not be sent: a pass tries again", "key", m.Key, "channel", c.Name(), "error", err)
+		}
+	})
+	for _, key := range sent {
+		l.log.Info("an alert was sent", "key", key)
+	}
+	if len(sent) > 0 {
+		if _, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) { return nil, alerts.Record(ctx, db, due, sent) }); err != nil && ctx.Err() == nil {
+			l.log.Warn("the alerts sent could not be recorded: they may be sent again", "error", err)
+		}
+	}
+	if len(sent) < len(due.Messages) {
+		retry := l.opt.Machine.Now() + alertRetry.Nanoseconds()
+		if l.passDue == nil || *l.passDue > retry {
+			l.passDue = &retry
+		}
 	}
 }
 

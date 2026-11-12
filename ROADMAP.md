@@ -8,7 +8,7 @@ A milestone is reached when its phase and every phase before it are done.
 
 | Milestone | Phase | What it brings | Progress |
 |---|---|---|---|
-| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 55 % |
+| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 62 % |
 | **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 35 % |
 | **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 30 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
@@ -32,38 +32,30 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **Mass guards.** The guards against mass deletions and mass modifications, with `atoll guard` (§15.6).
 - **Trash.** `atoll prune`, `trash list`, `restore` and `purge` (§17).
 - **mergerfs.** `atoll mergerfs-config` (§21.1).
+- **The daemon that runs for good.** fanotify, or inotify, with the events grouped per path; the catalog's lock taken per pass, with commands waiting for it; rescans and new files' hashes inside the maintenance window; the mount check every 30 s; mergerfs's branches changed at runtime; the remount after a USB reset; reload on `SIGHUP`; a systemd unit (§15.13).
+- **Alerts.** ntfy alerts after each pass, kept in the catalog so that a restart sends again only what is due, and `atoll notify test` (§23).
 - **Tests.** The break-glass test, and the failed-mount test (§27).
 - **Contracts and conformance.** 39 vector files and 505 black-box scenarios shared with the Rust version (§29).
 - **Local CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3 (`test/ci/run.sh`).
 
 ### Remaining
 
-1. **The daemon that runs for good**, built on the watcher measured in `docs/research/watcher.md`:
-   - fanotify, and the grouping of events per path;
-   - the loop, which looks only at the disks that changed;
-   - the catalog's lock taken per pass, with commands waiting for it;
-   - rescans at startup, after an overflow and on schedule, and hashing inside the maintenance window;
-   - the mount check every 30 s, which wakes no disk;
-   - mergerfs's branches changed at runtime;
-   - the remount after a USB reset;
-   - a systemd unit;
-   - the memory of a daemon that runs for days.
-2. **`atoll disk add` and `disk remove`**, which edit the configuration while keeping every other byte. Also the refusal of the variants that change name rules, and the topology check.
-3. **The scrub**, detection only (§16).
-4. **ntfy alerts**: a guard tripped, a disk `missing` or `readonly`, a `manual` file left unprotected.
-5. **The rest of the trash**: `max_size` and its purge order, `restore --to`, the other reasons, and Atoll's empty folders.
-6. **The command line**: `--help`, the French translation, durations written as the configuration writes them, and `atoll names check`.
-7. **Smaller limits**:
+The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
+
+1. **The disk commands**: `atoll disk add`, `show`, `remove` with `--evacuate`, `fail` and `replace`. They edit the configuration while keeping every other byte, refuse the variants that change name rules, and check the topology and `chattr +i`.
+2. **The scrub** (§16): a corrupt copy goes to the trash when a healthy one exists, and replication makes it again; a scrub resumes at the chunk where its budget stopped.
+3. **`atoll catalog backup | verify | rebuild`**, with daily backups, 7 kept.
+4. **The owner of a file applied to its other copies.**
+5. **The local API**: a Unix socket, and HTTP with a token.
+6. **The rest of the trash**: `max_size` and its purge order, `restore --to`, the other reasons, and Atoll's empty folders.
+7. **The command line**: `--help`, the French translation, durations written as the configuration writes them, and `atoll names check`.
+8. **Smaller limits**:
    - an overwriting move or a swap of two names;
    - a folder renamed into the old name of one that waits;
    - operation ids after `catalog rebuild`;
    - NTFS short names;
-   - the owner of a file applied to its other copies.
-8. **The maintainer's decisions**:
-   - the `ntfs` driver of Linux 7.1 and later (`docs/research/ntfs-driver.md`);
-   - the local API and the `--json` schemas as a contract;
-   - nested btrfs subvolumes;
-   - the choices of pull request #3, to confirm.
+   - a nested btrfs subvolume, walked as another mount.
+9. **The memory of a daemon that runs for days**, measured.
 
 ## Beta: phase 1b, the complete Linux MVP
 

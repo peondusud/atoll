@@ -5,6 +5,8 @@ package loopdev
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,9 +111,43 @@ func branchesOf(t *testing.T, pool string) []string {
 	return paths
 }
 
+// unmountWhenFree unmounts a disk the daemon may be reading: after a pass it reads new files' hashes inside the
+// maintenance window, and a file it holds open makes umount say the target is busy, as it would to a user.
+func unmountWhenFree(t *testing.T, at string) {
+	t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		err := attempt(t, "umount", at)
+		if err == nil {
+			return
+		}
+		if !strings.Contains(err.Error(), "busy") || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+	}
+}
+
+// ntfyTitles is a ntfy server that keeps the title of each alert it gets.
+type ntfyTitles struct {
+	mu     sync.Mutex
+	titles []string
+}
+
+func (n *ntfyTitles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.titles = append(n.titles, r.Header.Get("Title"))
+}
+
+func (n *ntfyTitles) got() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.titles)
+}
+
 // TestDaemonRunsForGood: the daemon passes when it starts, when a user's file appears, which it then copies, when
-// a disk goes and when it comes back; the runtime branches of mergerfs follow the disk; and it stops when asked
-// (specs.md §15.13, §18, §21.1). On a driver watched by a filesystem mark, and on one watched folder by folder.
+// a disk goes and when it comes back; the runtime branches of mergerfs follow the disk; the disk gone is an alert,
+// once, forgotten when it is back; and it stops when asked (specs.md §15.13, §18, §21.1, §23). On a driver watched
+// by a filesystem mark, and on one watched folder by folder.
 func TestDaemonRunsForGood(t *testing.T) {
 	needRoot(t)
 	needMergerfs(t)
@@ -128,7 +164,11 @@ func TestDaemonRunsForGood(t *testing.T) {
 			// The maintenance window around now, for the new files' hashes; a file of solo/ has no copy to make,
 			// so its hash can only come from that reading.
 			window := time.Now().Add(-time.Hour).Format("15:04") + "-" + time.Now().Add(time.Hour).Format("15:04")
-			b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n[maintenance]\nwindow = \""+window+"\"\n[[rule]]\nlabel = \"solo\"\npath = \"solo/**\"\nreplicas = 0\n")
+			ntfy := &ntfyTitles{}
+			srv := httptest.NewServer(ntfy)
+			defer srv.Close()
+			b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n[maintenance]\nwindow = \""+window+"\"\n[alerts]\nntfy = \""+srv.URL+"/atoll\"\n"+
+				"[[rule]]\nlabel = \"solo\"\npath = \"solo/**\"\nreplicas = 0\n")
 			pool := viewOf(t, b)
 			keep, other := filepath.Join(b.keep, "media"), filepath.Join(at, "media")
 			passes, stop := runDaemon(t, b, filepath.Join(t.TempDir(), "fstab"))
@@ -151,10 +191,16 @@ func TestDaemonRunsForGood(t *testing.T) {
 			})
 
 			// The disk goes: a pass, and its branch out of mergerfs; back: a pass, and its branch back at its place.
-			must(t, "umount", at)
+			if got := ntfy.got(); len(got) != 0 {
+				t.Errorf("alerts with every disk there: %q", got)
+			}
+			unmountWhenFree(t, at)
 			waitPass(t, passes, daemon.BecauseGone)
 			if got := branchesOf(t, pool); !slices.Equal(got, []string{keep}) {
 				t.Errorf("branches without the disk: %v", got)
+			}
+			if got := ntfy.got(); !slices.Equal(got, []string{"Atoll: disk v is missing"}) {
+				t.Errorf("alerts with the disk gone: %q", got)
 			}
 			mountVolume(t, v, tc.driver, at, options...)
 			waitPass(t, passes, daemon.BecauseBack)
@@ -170,6 +216,12 @@ func TestDaemonRunsForGood(t *testing.T) {
 			mustDo(t, db.QueryRowContext(t.Context(), "SELECT group_concat(id || ' ' || state, ', ') FROM (SELECT id, state FROM disks ORDER BY position)").Scan(&states))
 			if states != "k online, v online" {
 				t.Errorf("disks: %s", states)
+			}
+			if rows, err := catalog.ReadAlerts(t.Context(), db); err != nil || len(rows) != 0 {
+				t.Errorf("alerts left with the disk back: %+v, %v", rows, err)
+			}
+			if got := ntfy.got(); len(got) != 1 {
+				t.Errorf("alerts in all: %q", got)
 			}
 			var hashed string
 			mustDo(t, db.QueryRowContext(t.Context(), "SELECT (f.blake3 IS NOT NULL) || ' ' || (c.verified_ns IS NOT NULL) FROM files f JOIN copies c ON c.file_id = f.id WHERE CAST(f.lpath AS TEXT) = 'solo/x.mkv'").Scan(&hashed))

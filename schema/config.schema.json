@@ -302,6 +302,11 @@
       "additionalProperties": false,
       "properties": {
         "ntfy": { "$ref": "#/$defs/http_url", "default": "" },
+        "ntfy_token_file": {
+          "description": "A file that holds the Bearer token of a ntfy server that asks one (specs.md §23).",
+          "$ref": "#/$defs/optional_path",
+          "default": ""
+        },
         "gotify": { "$ref": "#/$defs/http_url", "default": "" },
         "smtp": {
           "type": "string",
