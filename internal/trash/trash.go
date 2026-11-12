@@ -551,9 +551,9 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 	if handle == nil {
 		return outcomeUnavailable, nil
 	}
-	// A stale copy holds a version that came before the file's hash.
+	// A stale copy holds a version that came before the file's hash, and a corrupt one holds none.
 	hash := f.Hash
-	if reason == catalog.ReasonOverwritten {
+	if reason == catalog.ReasonOverwritten || reason == catalog.ReasonQuarantined {
 		hash = nil
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{

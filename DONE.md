@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The scrub, with quarantine (specs.md §9, §16, §25)
+
+Commit "Scrub the copies, and quarantine the corrupt ones", on `develop`.
+
+- **`jobs.Scrub`** reads the copies due, one disk at a time: never verified first, then the oldest verified. Each chunk is checked against its hash. A copy that matches is verified. A chunk that does not is read again past the page cache, after a look that the copy's name, size and times are unchanged: a copy that changed is a modification, left for the next pass; one that still does not match is `corrupt`, as is its file, with a `corrupt` event first.
+- **Quarantine.** A corrupt copy goes to the trash, reason `quarantined`, when another copy, read whole first, is healthy; the next pass makes it again from that one. With none, every copy stays.
+- **The budget.** When it runs out in a copy, the new table `scrub_cursor` (`0005_scrub.sql`) records the copy, the next chunk, and its row's size and times; the next scrub resumes there, or from the start of a copy that changed.
+- **`atoll scrub [--disk] [--path] [--budget] [--dry-run] [--yes]`**: without `--yes` it records and says what it would move, exit 3; `--dry-run` records nothing. Output `api/schemas/scrub.schema.json`. `fsx.File` gained `DropCache`, for the second read.
+- **Verified.** Unit tests rot a copy as a disk would, same size and the catalog none the wiser: quarantined, then made again by the next pass; two copies rotted, both kept and the file `corrupt`; a copy changed left for the pass; a dry scrub writes nothing; a budget run out in the middle of a 8 MiB file resumes at its second chunk and reads only the rest; `--path` by whole components. Two scenarios: copies due after `scrub_every`, `--disk`, `--path`, `--dry-run`, a changed copy never called corrupt, and the usage errors. A conformance build cannot rot a file, so corruption is judged by the unit tests only.
+- **Decided without the maintainer, to confirm:**
+  - The CLI quarantines only with `--yes`, as it moves copies; without, it records the corruption and exits with 3. The daemon, which takes no `--yes`, will quarantine.
+  - A chunk that reads right the second time, past the cache, is a bad read, not corruption: a line of the log.
+  - The budget counts from the start of the scrub, across disks; the disks after the one where it ran out are listed, not scrubbed.
+  - A quarantined copy's trash entry has no hash, as it holds none of the file's versions.
+  - A copy of a file whose chunk hashes are not recorded yet is not the scrub's: reading its hashes is.
+
 ## The disk commands, part 2: `remove`, `fail`, `replace`, `show` (specs.md §18, §25)
 
 Commit "Drain, fail, replace and show a disk", on `develop`.

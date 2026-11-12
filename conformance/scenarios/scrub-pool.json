@@ -1,0 +1,252 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a716, \u00a725",
+  "description": "A copy is due once it has gone integrity.scrub_every without being verified: a scrub reads each due copy whole, checks each chunk, and verifies it. A copy changed since its row is a modification, left for the next pass, and is never called corrupt. --disk and --path keep part of the pool; --dry-run reads and records nothing.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/Films/b.mkv",
+          "text": "bb"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/Films/b.mkv",
+          "text": "bb"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scrub",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "disks": [
+          {
+            "id": "t1",
+            "scrubbed": true,
+            "copies_read": 0,
+            "bytes_read": 0,
+            "corrupt": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "left": false
+          },
+          {
+            "id": "t2",
+            "scrubbed": true,
+            "copies_read": 0,
+            "bytes_read": 0,
+            "corrupt": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "left": false
+          }
+        ]
+      }
+    },
+    {
+      "do": "advance",
+      "by": "31d"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scrub",
+        "--dry-run",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": false,
+        "disks": [
+          {
+            "id": "t1",
+            "scrubbed": true,
+            "copies_read": 2,
+            "bytes_read": 8,
+            "corrupt": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "left": false
+          },
+          {
+            "id": "t2",
+            "scrubbed": true,
+            "copies_read": 2,
+            "bytes_read": 8,
+            "corrupt": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "left": false
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scrub",
+        "--json",
+        "--disk",
+        "t2",
+        "--path",
+        "Films"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "disks": [
+          {
+            "id": "t2",
+            "scrubbed": true,
+            "copies_read": 1,
+            "bytes_read": 2,
+            "corrupt": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "left": false
+          }
+        ]
+      }
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/a.mkv",
+      "text": "a FILM"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scrub",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "disks": [
+          {
+            "id": "t1",
+            "scrubbed": true,
+            "copies_read": 1,
+            "bytes_read": 2,
+            "corrupt": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [
+              {
+                "path": "a.mkv"
+              }
+            ],
+            "left": false
+          },
+          {
+            "id": "t2",
+            "scrubbed": true,
+            "copies_read": 1,
+            "bytes_read": 6,
+            "corrupt": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "left": false
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, CAST(f.lpath AS TEXT), c.state, c.verified_ns IS NOT NULL FROM copies c JOIN files f ON f.id = c.file_id ORDER BY 1, 2",
+      "rows": [
+        [
+          "t1",
+          "Films/b.mkv",
+          "ok",
+          1
+        ],
+        [
+          "t1",
+          "a.mkv",
+          "ok",
+          1
+        ],
+        [
+          "t2",
+          "Films/b.mkv",
+          "ok",
+          1
+        ],
+        [
+          "t2",
+          "a.mkv",
+          "ok",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM events WHERE kind = 'corrupt'",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a FILM"
+        },
+        {
+          "path": "media/Films/b.mkv",
+          "text": "bb"
+        }
+      ]
+    }
+  ]
+}

@@ -86,6 +86,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runNotify(configPath, args[1:], stdout, stderr)
 	case "names":
 		return runNames(configPath, args[1:], stdout, stderr)
+	case "scrub":
+		return runScrub(configPath, args[1:], stdout, stderr)
 	default:
 		return usage(stderr, fmt.Sprintf("unknown command %q", args[0]))
 	}

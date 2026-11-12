@@ -124,6 +124,9 @@ type File interface {
 	SetTimes(atime, mtime Time) error
 	SetMode(mode uint32) error
 	Sync() error
+	// DropCache asks the kernel to forget the file's clean pages, so that the next read comes from the disk: the
+	// scrub's second read of a chunk that did not match (specs.md §16).
+	DropCache() error
 	Close() error
 }
 
@@ -450,6 +453,13 @@ func (f *realFile) SetMode(mode uint32) error {
 func (f *realFile) Sync() error {
 	if err := unix.Fsync(int(f.file.Fd())); err != nil {
 		return fmt.Errorf("fsync %q: %w", f.file.Name(), err)
+	}
+	return nil
+}
+
+func (f *realFile) DropCache() error {
+	if err := unix.Fadvise(int(f.file.Fd()), 0, 0, unix.FADV_DONTNEED); err != nil {
+		return fmt.Errorf("fadvise %q: %w", f.file.Name(), err)
 	}
 	return nil
 }
