@@ -765,7 +765,10 @@ func applyResults(files []solver.File, remembered []settled, results []solver.Re
 	for i := range files {
 		f, r := &files[i], &remembered[i]
 		var applying []solver.State
-		if r.state == string(solver.StateConflict) || r.state == string(solver.StateCorrupt) {
+		// Corrupt holds while a copy is: once that copy went to the trash, the file takes the state its copies give
+		// it, and a conflict they still hold is found again by the next pass, from their rows (specs.md §16).
+		corrupt := r.state == string(solver.StateCorrupt) && slices.ContainsFunc(f.Copies, func(c solver.Copy) bool { return c.State == solver.CopyCorrupt })
+		if r.state == string(solver.StateConflict) || corrupt {
 			applying = append(applying, solver.State(r.state))
 		}
 		if next < len(results) && results[next].Path == f.Path {

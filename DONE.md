@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A file once its corrupt copy is gone (specs.md §16)
+
+Commit "End a file's corrupt state with its corrupt copy", on `develop`.
+
+- Found while designing the repair: a file the scrub found a corrupt copy of stayed `corrupt` for good, even once that copy was in the trash and made again from the healthy one. Only the file's state remembers `corrupt`, and every plan kept it, as it keeps a conflict. So `atoll status` said `corrupt` of a file whose copies were all in sync, an alert said so every 24 hours, and a deletion of it never propagated, as no trash job of a corrupt file stands (§15.12).
+- A file is now `corrupt` while a copy of it is: once none is, it takes the state its copies give it. A conflict its copies still hold is found again by the next pass, from their rows, as a conflict's changed copies never take a new look.
+- Verified: `TestScrubQuarantines` follows the file to `pending` once its copy went, then to `ok` once it is made again, and fails without the change; `TestScrubKeepsTheLastCopy` keeps it `corrupt` after a pass while its copies are. Two tests of `watch` had made a file `corrupt` with no corrupt copy, which nothing does: they now set it up as the scrub leaves it, and still find it `corrupt` through an outage and beside a copy that differs.
+
 ## A file whose deletion waits (specs.md §13.4)
 
 Commit "Copy nothing of a file whose deletion waits", on `develop`.

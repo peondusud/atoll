@@ -186,7 +186,8 @@ func TestCorruptOutlivesAnOutage(t *testing.T) {
 	b := newBench(t, "t1")
 	b.write("t1", "a", "x")
 	b.scan(Options{})
-	if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'"); err != nil {
+	// As the scrub leaves a file it found a corrupt copy of (specs.md §16).
+	if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'; UPDATE copies SET state = 'corrupt'"); err != nil {
 		t.Fatal(err)
 	}
 	b.wrap = failing("names", "", syscall.EIO)
@@ -221,7 +222,7 @@ func TestCorruptStaysWhenCopiesDiffer(t *testing.T) {
 			b := newBench(t, "t1", "t2")
 			b.write("t1", "a", "x")
 			b.scan(Options{})
-			if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'"); err != nil {
+			if _, err := b.db.ExecContext(t.Context(), "UPDATE files SET state = 'corrupt'; UPDATE copies SET state = 'corrupt'"); err != nil {
 				t.Fatal(err)
 			}
 			b.write("t2", "a", tc.text)
