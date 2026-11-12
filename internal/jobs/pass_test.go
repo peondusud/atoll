@@ -36,8 +36,10 @@ type bench struct {
 	at       map[string]func()
 	// precision is how finely a disk holds a time, by id, as its head would say; 0 says nothing.
 	precision map[string]int64
-	points    []string
-	now       int64
+	// tops dresses the top of a disk, by mount, as a driver answers for it: shortNames, for one.
+	tops   map[string]func(fsx.Dir) fsx.Dir
+	points []string
+	now    int64
 	// base is the configuration's text up to the tables a test adds after the disks.
 	base string
 }
@@ -112,12 +114,16 @@ func (b *bench) OpenTop(mount string) (fsx.Dir, error) {
 	if err != nil {
 		return nil, err //nolint:wrapcheck // a test double
 	}
-	return fsx.Fault(top, func(call, name string) error {
+	dir := fsx.Fault(top, func(call, name string) error {
 		if fail := b.fail[mount]; fail != nil {
 			return fail(call, name)
 		}
 		return nil
-	}), nil
+	})
+	if dress := b.tops[mount]; dress != nil {
+		return dress(dir), nil
+	}
+	return dir, nil
 }
 
 func newBench(t *testing.T, ids ...string) *bench {
@@ -132,7 +138,7 @@ func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 	var text strings.Builder
 	fmt.Fprintf(&text, "pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(top, "catalog.db"), filepath.Join(top, "pool"))
 	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, walkFail: map[string]func(string, string) error{}, unread: map[string]bool{}, ro: map[string]bool{},
-		gone: map[string]bool{}, at: map[string]func(){}, precision: map[string]int64{}, now: 1767225600000000000}
+		gone: map[string]bool{}, at: map[string]func(){}, precision: map[string]int64{}, tops: map[string]func(fsx.Dir) fsx.Dir{}, now: 1767225600000000000}
 	for i, id := range ids {
 		dir := filepath.Join(top, id)
 		if err := os.MkdirAll(filepath.Join(dir, "media"), 0o755); err != nil {

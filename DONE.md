@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## NTFS short names (specs.md §15.8)
+
+Commit "Refuse the short name of another entry on NTFS", on `develop`.
+
+- Windows gives a long name a short one, `FILMNA~1.MKV` for `Film Name.mkv`, which no Linux driver lists and each finds at a look. A copy or a rename to such a name on an NTFS disk was looked at with `stat` alone: through the short name of a folder, a copy landed in the folder it names, and its row then read as moved, which would have renamed the user's file on the other disks; at the short name of a file, a conflict at every pass on ntfs3, and on ntfs-3g a new name Windows would read as the same.
+- On a disk the configuration says is `ntfs`, the looks before a copy, a rename and the folders they make refuse a name of the short form (`names.ShortForm`, 21 vectors in `short_form.json`) that its folder does not list, when a look at it or at it in capitals finds an entry: `name-refused`, before anything is written. A folder renamed there goes one copy at a time, each refused.
+- Measured in qemu on Linux 6.12 and 7.3, with real short names set by ntfs-3g: ntfs3, ntfs-3g and lowntfs-3g refuse both a copy through the folder's short name and one at the file's in small letters. The first run of that test showed the copy in small letters made on ntfs-3g and lowntfs-3g, against the research's table, which led to the look in capitals; the research says so.
+- Verified: `TestAShortNameIsNoWayIn`, with ntfs3's and ntfs-3g's answers; `TestShortNamesOnEachNTFSDriver`; six mutants, each failing one of them.
+- **Decided without the maintainer, to confirm:**
+  - Only names of the form Windows gives are looked for, as reading a folder at each look costs: a short name a tool set otherwise is not.
+  - A copy refused so is queued again at each pass and refused again, with nothing written; no table remembers it.
+  - A restore through such a name is a look that fails, `io-error`, with nothing written.
+
 ## A folder renamed into the old name of one that waits (specs.md §15.12)
 
 Commit "Hold back what lands in the old name of a folder that waits", on `develop`.

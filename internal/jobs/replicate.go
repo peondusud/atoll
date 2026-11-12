@@ -711,8 +711,11 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 // obstacleOutcome says what a copy ends with when its target is not free: something at the path itself is
 // a conflict, which the next walk reports, and a parent that is not a folder takes the path.
 func obstacleOutcome(target string) string {
-	if target == ops.TargetTaken {
+	switch target {
+	case ops.TargetTaken:
 		return OutcomeConflict
+	case ops.TargetRefused:
+		return trash.OutcomeNameRefused
 	}
 	return trash.OutcomePathTaken
 }

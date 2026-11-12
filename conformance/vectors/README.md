@@ -154,6 +154,13 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `with` | array of strings | the exact names on the target that the path collides with at that component, in byte order; an empty array means no collision |
 | `error` | boolean | `true` when `path` or a name on the target is not a well-formed logical path |
 
+### `short_form.json` — the form of a short name on NTFS (§15.8)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | one component |
+| `short` | boolean | whether it has the form Windows gives the short name of a longer one, which a look on an NTFS disk must not take for a name of its own |
+
 ### `branch_path.json` — the path limit of a mergerfs branch (§15.8)
 
 | Field | Type | Meaning |

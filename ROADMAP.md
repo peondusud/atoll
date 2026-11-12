@@ -47,9 +47,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **Smaller limits**:
-   - NTFS short names.
-2. **The memory of a daemon that runs for days**, measured.
+1. **The memory of a daemon that runs for days**, measured.
 
 ## Beta: phase 1b, the complete Linux MVP
 

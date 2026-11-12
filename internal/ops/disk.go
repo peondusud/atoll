@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -348,6 +350,34 @@ func (d *Disk) stat(path []string) (fsx.Stat, bool, error) {
 	return st, true, nil
 }
 
+// isAlias says, on NTFS, whether a name is the short name of another entry of a folder: one the folder does not list,
+// for which a look finds an entry, at that name or in capitals. No driver lists a short name; each finds the entry it
+// names in capitals, ntfs3 in any case, and ntfs3 refuses to create it, while ntfs-3g makes a name in small letters
+// beside it, one Windows would read as the same (docs/research/ntfs-driver.md). So no existence there is decided by a
+// look alone, and the looks before a copy or a rename refuse such a name, before anything is written. Only a name of
+// the short form is looked for, as reading the folder costs (specs.md §15.8).
+func (d *Disk) isAlias(dir fsx.Dir, name string) (bool, error) {
+	if d.config.FS != names.NTFS || !names.ShortForm(name) {
+		return false, nil
+	}
+	listed, err := dir.Names()
+	if err != nil {
+		return false, classify(err)
+	}
+	if slices.Contains(listed, name) {
+		return false, nil
+	}
+	for _, n := range []string{name, strings.ToUpper(name)} {
+		switch _, err := dir.Stat(n); {
+		case err == nil:
+			return true, nil
+		case !fsx.IsAbsent(err):
+			return false, classify(err)
+		}
+	}
+	return false, nil
+}
+
 // StatRoot looks at a logical path on this disk.
 func (d *Disk) StatRoot(logical string) (fsx.Stat, bool, error) {
 	return d.stat(d.rootPlace(logical))
@@ -363,6 +393,11 @@ func (d *Disk) LookAt(logical string) (taken bool, missing []string, err error) 
 	}
 	defer dir.close()
 	for i, name := range parts {
+		if alias, err := d.isAlias(dir.Dir, name); err != nil {
+			return false, nil, err
+		} else if alias {
+			return false, nil, fmt.Errorf("%w: %q is the short name of another entry", ErrNameRefused, name)
+		}
 		st, err := dir.Stat(name)
 		switch {
 		case fsx.IsAbsent(err):
@@ -897,7 +932,7 @@ func (d *Disk) RenameFolder(op *Op) error {
 	if err != nil {
 		return classify(err)
 	}
-	if err := moveFolderNoReplace(source.Dir, name, target.Dir, newName); err != nil {
+	if err := d.moveFolderNoReplace(source.Dir, name, target.Dir, newName); err != nil {
 		return err
 	}
 	if _, err := holdsFolder(target.Dir, newName, op.FileKey); err != nil {
@@ -934,7 +969,7 @@ func holdsFolder(dir fsx.Dir, name, fileKey string) (fsx.Stat, error) {
 	return st, nil
 }
 
-func moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string) error {
+func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string) error {
 	err := source.Rename(name, target, newName)
 	switch {
 	case err == nil:

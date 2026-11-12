@@ -210,6 +210,7 @@ const (
 	TargetFree     = ""
 	TargetTaken    = "taken"    // something is at the path itself: a conflict once copied
 	TargetNoFolder = "nofolder" // a parent of the path is not a folder
+	TargetRefused  = "refused"  // a name on the way is the short name of another entry, which no driver creates
 )
 
 // LookAtTarget says what stands at a logical path where a copy will land, and which of its parent folders
@@ -222,6 +223,13 @@ func (d *Disk) LookAtTarget(logical string) (string, []string, error) {
 	}
 	defer dir.close()
 	for i, name := range parts {
+		// On NTFS, what answers for a name is no proof that it is there, nor what does not that it may be made: the
+		// short name of another entry is refused before anything is copied (specs.md §15.8).
+		if alias, err := d.isAlias(dir.Dir, name); err != nil {
+			return TargetFree, nil, err
+		} else if alias {
+			return TargetRefused, nil, nil
+		}
 		st, err := dir.Stat(name)
 		switch {
 		case fsx.IsAbsent(err):

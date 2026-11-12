@@ -272,10 +272,13 @@ func (p *pass) folderReady(ctx context.Context, d *config.Disk, handle *ops.Disk
 		return false, from, nil
 	}
 	taken, _, err := handle.LookAt(job.To)
-	if err != nil {
+	switch {
+	case errors.Is(err, ops.ErrNameRefused):
+		// A short name of another entry on the way: the copies follow one by one, and each is refused.
+		return false, from, nil //nolint:nilerr // a name refused is this job's answer
+	case err != nil:
 		return false, from, fmt.Errorf("%w: %w", errLook, err)
-	}
-	if taken {
+	case taken:
 		return false, from, nil
 	}
 	fit, err := p.fitsBelow(ctx, d, job)
@@ -782,9 +785,12 @@ func (p *pass) lookBefore(ctx context.Context, d *config.Disk, handle *ops.Disk,
 	case !sourceSame:
 		return trash.OutcomeChanged, false, nil
 	}
-	// Something at the target, or a parent of it that is no folder.
+	// Something at the target, or a parent of it that is no folder, or the short name of another entry on the way.
 	taken, _, err := handle.LookAt(r.Target)
-	if err != nil {
+	switch {
+	case errors.Is(err, ops.ErrNameRefused):
+		return trash.OutcomeNameRefused, false, nil
+	case err != nil:
 		return "", false, fmt.Errorf("%w: %w", errLook, err)
 	}
 	if taken {
