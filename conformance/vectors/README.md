@@ -205,6 +205,19 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `outcomes` | array of objects | for each `surplus` copy, by position: `disk` and `outcome` |
 | `error` | boolean | `true` when a state or a creator is unknown, or a disk or position appears twice |
 
+### `trash_purge.json` — what a purge of the trash reaches, and why (§17, §17.4)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `now_ns` | integer | the time of the purge |
+| `older_than_ns` | integer or null | `--older-than`, in nanoseconds; null for the retention and `max_size` |
+| `max_size` | string | `trash.max_size`, a percentage (§29.5) |
+| `disks` | array of objects | `id`, and `capacity` as the catalog last recorded it, null when none was |
+| `entries` | array of objects | the trash, in any order: `disk`, `op`, `reason`, `size` (null when unknown), `deleted_ns`, `expires_ns`, and `held` for an entry that reached the trash in this run's reprise |
+| `purge` | array of objects | what goes, by operation: `op` and `why`, one of `expired`, `older-than` and `max-size` |
+| `full` | array of strings | the disks whose trash still holds more than `max_size` of their capacity once those are gone, by id in byte order |
+| `error` | boolean | `true` when a reason is unknown, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
+
 ### `op_recovery.json` — what a reprise does with an operation (§17.2)
 
 | Field | Type | Meaning |

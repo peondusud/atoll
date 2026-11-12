@@ -1,0 +1,356 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717, \u00a717.4",
+  "description": "On a disk whose trash holds more than trash.max_size of its capacity, a purge removes surplus copies first, then overwritten ones, the oldest first, until it holds no more; a deleted copy waits for its time, and the disk is named full until then. With --older-than nothing goes for room.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d",
+          "size": 6000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/o",
+          "size": 1000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/s1",
+          "size": 2000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/s2",
+          "size": 2000,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/s1",
+          "size": 2000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/s2",
+          "size": 2000,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/d",
+          "size": 6000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/o",
+          "size": 1000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/s1",
+          "size": 2000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/s2",
+          "size": 2000,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n[trash]\nmax_size = \"0.5%\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n",
+  "clock": "2030-01-01T00:00:00Z",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/d"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/o",
+      "text": "new"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "60s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, op_id, reason, size FROM trash ORDER BY op_id",
+      "rows": [
+        [
+          "o",
+          "t3",
+          1,
+          "overwritten",
+          1000
+        ],
+        [
+          "d",
+          "t3",
+          3,
+          "deleted",
+          6000
+        ],
+        [
+          "s1",
+          "t3",
+          4,
+          "surplus",
+          2000
+        ],
+        [
+          "s2",
+          "t3",
+          5,
+          "surplus",
+          2000
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "600s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "o",
+            "disk": "t3",
+            "op": 1,
+            "size": 1000,
+            "why": "max-size",
+            "outcome": "to-purge"
+          },
+          {
+            "path": "s1",
+            "disk": "t3",
+            "op": 4,
+            "size": 2000,
+            "why": "max-size",
+            "outcome": "to-purge"
+          },
+          {
+            "path": "s2",
+            "disk": "t3",
+            "op": 5,
+            "size": 2000,
+            "why": "max-size",
+            "outcome": "to-purge"
+          }
+        ],
+        "applied": false,
+        "bytes": 5000,
+        "full": [
+          "t3"
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--older-than",
+        "1h",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [],
+        "applied": true,
+        "bytes": 0,
+        "full": [
+          "t3"
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "o",
+            "disk": "t3",
+            "op": 1,
+            "size": 1000,
+            "why": "max-size",
+            "outcome": "purged"
+          },
+          {
+            "path": "s1",
+            "disk": "t3",
+            "op": 4,
+            "size": 2000,
+            "why": "max-size",
+            "outcome": "purged"
+          },
+          {
+            "path": "s2",
+            "disk": "t3",
+            "op": 5,
+            "size": 2000,
+            "why": "max-size",
+            "outcome": "purged"
+          }
+        ],
+        "applied": true,
+        "bytes": 5000,
+        "full": [
+          "t3"
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/o",
+          "text": "new"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/3/d",
+          "size": 6000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [],
+        "applied": true,
+        "bytes": 0,
+        "full": [
+          "t3"
+        ]
+      }
+    },
+    {
+      "do": "advance",
+      "by": "2592000s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "d",
+            "disk": "t3",
+            "op": 3,
+            "size": 6000,
+            "why": "expired",
+            "outcome": "purged"
+          }
+        ],
+        "applied": true,
+        "bytes": 6000,
+        "full": []
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/o",
+          "text": "new"
+        },
+        {
+          "path": "Atoll/trash",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    }
+  ]
+}

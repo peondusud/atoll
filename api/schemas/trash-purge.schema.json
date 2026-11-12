@@ -2,13 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/peondusud/atoll/api/schemas/trash-purge.schema.json",
   "title": "atoll trash purge --json",
-  "description": "Each entry it reaches, by path in byte order, then by operation (specs.md §17.4).",
+  "description": "Each entry it reaches, by path in byte order, then by operation, with why it goes (specs.md §17, §17.4), and the disks whose trash still holds more than trash.max_size of their capacity.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "applied",
     "bytes",
-    "entries"
+    "entries",
+    "full"
   ],
   "properties": {
     "applied": {
@@ -25,6 +26,14 @@
       "items": {
         "$ref": "#/$defs/entry"
       }
+    },
+    "full": {
+      "type": "array",
+      "description": "The disks whose trash still holds more than trash.max_size of their capacity once the entries purged, or for a run that may not write those to-purge, are gone, by id in byte order: what is left there waits for its time.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     }
   },
   "$defs": {
@@ -35,6 +44,7 @@
         "disk",
         "op",
         "size",
+        "why",
         "outcome"
       ],
       "oneOf": [
@@ -75,6 +85,14 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "why": {
+          "description": "expired: it reached expires_ns; max-size: it goes for room on a disk whose trash holds more than trash.max_size; older-than: it was trashed at least --older-than ago.",
+          "enum": [
+            "expired",
+            "max-size",
+            "older-than"
           ]
         },
         "outcome": {

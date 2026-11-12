@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -551,6 +552,35 @@ func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]
 		return nil, fmt.Errorf("trash: %w", err)
 	}
 	return list, nil
+}
+
+// TrashUsed gives, for each disk whose trash holds entries, the sum of their sizes, an entry of unknown size counting
+// for nothing, and a sum past the largest integer staying there (specs.md §17).
+func TrashUsed(ctx context.Context, db *sql.DB) (map[string]int64, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT t.disk_id, t.size FROM trash t JOIN ops o ON o.id = t.op_id
+		WHERE o.state = 'done' AND t.size > 0`)
+	if err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	used := map[string]int64{}
+	for rows.Next() {
+		var disk string
+		var size int64
+		if err := rows.Scan(&disk, &size); err != nil {
+			return nil, fmt.Errorf("trash: %w", err)
+		}
+		if size > math.MaxInt64-used[disk] {
+			used[disk] = math.MaxInt64
+		} else {
+			used[disk] += size
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	return used, nil
 }
 
 // TrashEntries gives every entry EachTrashEntry would.

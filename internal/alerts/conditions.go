@@ -15,6 +15,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/value"
 )
 
@@ -27,6 +28,7 @@ const (
 	KeyManual       = "manual-waiting"
 	KeyPoolFull     = "pool-full"
 	KeyNameRefused  = "name-refused"
+	KeyTrashFull    = "trash-full:"
 )
 
 // FirstN is how many paths an alert names, at most.
@@ -73,6 +75,17 @@ type Facts struct {
 	SeenByNS int64
 	// ManualAfter is defaults.manual_alert_after, as the configuration writes it.
 	ManualAfter string
+	// TrashFull holds the disks that hold their files now whose trash holds more than trash.max_size of their capacity,
+	// in the catalog's order of the disks.
+	TrashFull []TrashFull
+	// MaxSize is trash.max_size, as the configuration writes it.
+	MaxSize string
+}
+
+// TrashFull is a disk whose trash holds more than trash.max_size of its capacity: Used bytes of Capacity.
+type TrashFull struct {
+	ID             string
+	Used, Capacity int64
 }
 
 // Gather reads, under the catalog's lock, what the conditions after a pass come from: the pass's outcome, the names
@@ -84,6 +97,11 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 		return nil, fmt.Errorf("defaults.manual_alert_after: %w", err)
 	}
 	f := &Facts{Disks: o.Disks, Guards: o.Guards, Refused: *refused, SeenByNS: nowNS - wait.Nanoseconds(), ManualAfter: after}
+	f.MaxSize, _ = c.Effective()["trash.max_size"].(string)
+	maxSize, err := value.ParsePercent(f.MaxSize)
+	if err != nil {
+		return nil, fmt.Errorf("trash.max_size: %w", err)
+	}
 	if f.Files, err = catalog.CountFileAlerts(ctx, db, f.SeenByNS); err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
@@ -91,9 +109,19 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
+	used, err := catalog.TrashUsed(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
 	for i := range list {
 		d := &list[i]
-		if d.Role != "data" || !d.HasCapacity || !slices.Contains([]string{"online", "standby", "readonly", "draining"}, d.State) {
+		if !slices.Contains([]string{"online", "standby", "readonly", "draining"}, d.State) {
+			continue
+		}
+		if solver.TrashOver(maxSize, used[d.ID], &solver.TrashDisk{ID: d.ID, Capacity: d.Capacity, HasCapacity: d.HasCapacity}) {
+			f.TrashFull = append(f.TrashFull, TrashFull{ID: d.ID, Used: used[d.ID], Capacity: d.Capacity})
+		}
+		if d.Role != "data" || !d.HasCapacity {
 			continue
 		}
 		f.Capacity += d.Capacity
@@ -132,6 +160,9 @@ func Holdings(f *Facts) []Holding {
 	}
 	if f.Refused.Count > 0 {
 		counts[KeyNameRefused] = f.Refused.Count
+	}
+	for _, d := range f.TrashFull {
+		counts[KeyTrashFull+d.ID] = 1
 	}
 	out := make([]Holding, 0, len(counts))
 	for key, n := range counts {
@@ -182,6 +213,18 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Title = fmt.Sprintf("Atoll: %d %s in manual mode left unprotected", h.Count, files(h.Count))
 		m.Body = list(fmt.Sprintf("These files have had no copy for more than %s; atoll replicate makes their copies.", f.ManualAfter),
 			paths, h.Count)
+	case strings.HasPrefix(h.Key, KeyTrashFull):
+		id := strings.TrimPrefix(h.Key, KeyTrashFull)
+		var d TrashFull
+		for _, full := range f.TrashFull {
+			if full.ID == id {
+				d = full
+			}
+		}
+		m.Title = fmt.Sprintf("Atoll: the trash of disk %s is full", id)
+		m.Body = fmt.Sprintf("The trash of disk %s holds %d bytes, more than trash.max_size (%s) of its %d bytes, once purged: "+
+			"what is left there, deleted or renamed files, waits for its retention. atoll trash list shows it; "+
+			"atoll trash purge --older-than <duration> --yes purges it sooner.", id, d.Used, f.MaxSize, d.Capacity)
 	case h.Key == KeyPoolFull:
 		m.Title = fmt.Sprintf("Atoll: the pool is %d %% full", f.Used*100/f.Capacity)
 		m.Body = fmt.Sprintf("The data disks hold %d of their %d bytes. New copies may find no room.", f.Used, f.Capacity)

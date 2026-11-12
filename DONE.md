@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `trash.max_size`, and the daemon's purge (specs.md §15.13, §17, §17.4, §23)
+
+Commit "Purge the trash for room, and from the daemon", on `develop`.
+
+- What a purge reaches is a pure function, `solver.ChoosePurge`, with 29 vectors in `conformance/vectors/trash_purge.json`: what has reached its time; then, on each disk whose trash holds more than `trash.max_size` of its capacity, surplus and rebalance, then overwritten, repaired and quarantined, the oldest first, until it holds no more. Deleted and renamed entries go only at their time.
+- `atoll trash purge` says why each entry goes (`expired`, `max-size`, `older-than`) and which disks' trash stays full (`full`). New fields of `api/schemas/trash-purge.schema.json`, for review; the 17 scenarios that read that output take them.
+- The daemon purges after each pass, under the same lock, as `trash purge --yes` does, and works out the alerts after it: `trash-full:<id>` for a disk whose trash is still full.
+- Verified: the vectors; a scenario where a disk's trash past 0.5 % loses its surplus copies, then an overwritten one, keeps a deleted one until its time, and stays `full` until then, and where `--older-than` purges nothing for room; unit tests of the alert and of the daemon's purge, with and without `--dry-run`.
+- **Decided without the maintainer, to confirm:**
+  - A trash is counted as the sizes of its entries in the catalog, not by the disk's free space; an entry of unknown size counts for nothing and never goes for room; a hard-linked one counts with its size.
+  - The capacity is the one the catalog last recorded; a disk with none recorded is never purged for room, nor full.
+  - "Reached" is read as "more than": at the limit exactly, nothing goes.
+  - `--older-than` purges nothing for room, as the user chose what goes.
+  - The daemon purges after every pass, not once a day, and only reads the catalog when nothing is due; `--dry-run` purges nothing.
+  - `trash-full` covers the disks that hold their files now, whatever their role, with priority 3, and is sent again every 24 h while it holds.
+
 ## `atoll catalog rebuild` (specs.md §9, §25)
 
 Commit "Rebuild the catalog from the disks", on `develop`.

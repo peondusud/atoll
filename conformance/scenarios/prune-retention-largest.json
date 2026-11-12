@@ -120,7 +120,8 @@
       "stdout_json": {
         "applied": true,
         "bytes": 0,
-        "entries": []
+        "entries": [],
+        "full": []
       }
     },
     {

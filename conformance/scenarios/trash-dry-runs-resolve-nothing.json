@@ -94,7 +94,8 @@
       "stdout_json": {
         "applied": false,
         "bytes": 0,
-        "entries": []
+        "entries": [],
+        "full": []
       }
     },
     {

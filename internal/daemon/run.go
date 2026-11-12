@@ -435,6 +435,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 			}
 		}
 		l.branches(ctx, db)
+		l.purge(ctx, db)
 		due = l.prepareAlerts(ctx, db, outcome, &sink.refused)
 		return outcome, nil
 	})
@@ -628,6 +629,49 @@ func (l *loop) backup(ctx context.Context, opened int64) {
 			l.log.Warn("the catalog backup did not reach a disk", "disk", d.ID, "error", d.Err)
 		}
 	}
+}
+
+// purge purges the trash after a pass, under the same lock, as atoll trash purge --yes does: what has reached its
+// time, then what goes for room (specs.md §15.13, §17). It reads the catalog first, and checks no disk when nothing is
+// due. A dry run purges nothing.
+func (l *loop) purge(ctx context.Context, db *sql.DB) {
+	if !l.opt.Apply {
+		return
+	}
+	due, err := trash.PurgeDue(ctx, db, l.opt.Config, l.opt.Machine.Now())
+	if err != nil || !due {
+		if err != nil && ctx.Err() == nil {
+			l.log.Warn("the trash could not be read: the next pass tries again", "error", err)
+		}
+		return
+	}
+	s, err := trash.Open(ctx, db, l.opt.Config, l.opt.Machine, true)
+	if err != nil {
+		if ctx.Err() == nil {
+			l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
+		}
+		return
+	}
+	defer s.Close()
+	var purged, stayed int
+	summary, err := s.Purge(ctx, nil, func(e *trash.EntryItem) error {
+		if e.Outcome == trash.OutcomePurged {
+			purged++
+		} else {
+			stayed++
+		}
+		return nil
+	})
+	if err == nil {
+		err = s.Finish(ctx)
+	}
+	if err != nil {
+		if ctx.Err() == nil {
+			l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
+		}
+		return
+	}
+	l.log.Info("the trash was purged", "entries", purged, "bytes", summary.Bytes, "stayed", stayed, "full", summary.Full)
 }
 
 // locked runs fn on the catalog, under its lock, which it takes after the others' and lets go of last.

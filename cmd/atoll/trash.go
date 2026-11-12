@@ -126,8 +126,9 @@ type pruneCopy struct {
 
 // writeSummary is the rest of the output of a command that moves or deletes.
 type writeSummary struct {
-	Applied bool   `json:"applied"`
-	Bytes   *int64 `json:"bytes,omitempty"`
+	Applied bool      `json:"applied"`
+	Bytes   *int64    `json:"bytes,omitempty"`
+	Full    *[]string `json:"full,omitempty"`
 }
 
 func runPrune(configPath string, args []string, stdout, stderr io.Writer) int {
@@ -176,7 +177,16 @@ func endWrite(out io.Writer, list *jsonList, asJSON bool, summary *trash.Summary
 		if withBytes {
 			rest.Bytes = &summary.Bytes
 		}
+		if summary.Full != nil {
+			rest.Full = &summary.Full
+		}
 		return list.end(rest)
+	}
+	for _, id := range summary.Full {
+		line := fmt.Sprintf("the trash of %s still holds more than trash.max_size: what is left there waits for its time\n", id)
+		if err := writeText(out, line); err != nil {
+			return err
+		}
 	}
 	switch {
 	case !summary.Applied && summary.ToDo > 0 && withBytes:
@@ -359,6 +369,7 @@ type purgeEntry struct {
 	Disk    string `json:"disk"`
 	Op      int64  `json:"op"`
 	Size    *int64 `json:"size"`
+	Why     string `json:"why"`
 	Outcome string `json:"outcome"`
 }
 
@@ -415,10 +426,10 @@ func trashPurge(configPath string, args []string, stdout, stderr io.Writer) int 
 		list := newJSONList(out, "entries")
 		summary, err := s.Purge(context.Background(), parsed.olderThan, func(item *trash.EntryItem) error {
 			if !parsed.asJSON {
-				return writeText(out, fmt.Sprintf("%s (%s): %s\n", shownPath(item.Path), item.Disk, item.Outcome))
+				return writeText(out, fmt.Sprintf("%s (%s): %s, %s\n", shownPath(item.Path), item.Disk, item.Outcome, item.Why))
 			}
 			path, b64 := encodePath(item.Path)
-			return list.item(purgeEntry{Path: path, PathB64: b64, Disk: item.Disk, Op: item.OpID, Size: nullInt(item.Size), Outcome: item.Outcome})
+			return list.item(purgeEntry{Path: path, PathB64: b64, Disk: item.Disk, Op: item.OpID, Size: nullInt(item.Size), Why: item.Why, Outcome: item.Outcome})
 		})
 		if err != nil {
 			return fmt.Errorf("%w", err)

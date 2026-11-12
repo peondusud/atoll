@@ -109,9 +109,11 @@
             "disk": "t3",
             "op": 1,
             "size": 1024,
+            "why": "older-than",
             "outcome": "to-purge"
           }
-        ]
+        ],
+        "full": []
       }
     },
     {
@@ -134,9 +136,11 @@
             "disk": "t3",
             "op": 1,
             "size": 1024,
+            "why": "older-than",
             "outcome": "changed"
           }
-        ]
+        ],
+        "full": []
       }
     },
     {

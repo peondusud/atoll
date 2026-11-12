@@ -51,17 +51,18 @@ func TestHoldings(t *testing.T) {
 			{Disk: "t3", Kind: jobs.GuardDeletions, Count: 40}, {Disk: "t3", Kind: jobs.GuardModifications, Count: 7},
 			{Disk: "t3", Kind: jobs.GuardDeletions, Count: 41},
 		},
-		Refused:  Refused{Count: 2, First: []string{"a", "b"}},
-		Files:    &catalog.FileAlerts{ByState: map[string]int64{"corrupt": 3, "conflict": 0, "name-collision": 1}, Manual: 1},
-		Used:     91,
-		Capacity: 100,
+		Refused:   Refused{Count: 2, First: []string{"a", "b"}},
+		Files:     &catalog.FileAlerts{ByState: map[string]int64{"corrupt": 3, "conflict": 0, "name-collision": 1}, Manual: 1},
+		Used:      91,
+		Capacity:  100,
+		TrashFull: []TrashFull{{ID: "t3", Used: 6, Capacity: 100}},
 	}
 	var got []string
 	for _, h := range Holdings(f) {
 		got = append(got, fmt.Sprintf("%s=%d", h.Key, h.Count))
 	}
 	want := []string{"disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
-		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "pool-full=1"}
+		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "pool-full=1", "trash-full:t3=1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)
 	}
@@ -97,12 +98,70 @@ func TestGather(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.Used != 290 || f.Capacity != 400 || f.SeenByNS != hour || f.ManualAfter != "1h" || f.Files.ByState["corrupt"] != 2 || f.Files.Manual != 1 ||
-		f.Refused.Count != 3 || len(f.Disks) != 1 || len(f.Guards) != 1 {
+		f.Refused.Count != 3 || len(f.Disks) != 1 || len(f.Guards) != 1 || f.MaxSize != "5%" || len(f.TrashFull) != 0 {
 		t.Errorf("%+v, files %+v", f, f.Files)
 	}
 	// Seen an hour ago at most: not waiting yet.
 	if f, _ := Gather(t.Context(), db, c, hour-1, outcome, &Refused{}); f.Files.Manual != 0 {
 		t.Errorf("waiting too soon: %+v", f.Files)
+	}
+}
+
+// A trash is full past trash.max_size of its disk's capacity, counted on the entries whose operation is done, on the
+// disks that hold their files now, whatever their role; a disk whose capacity no check read never is (specs.md §17, §23).
+func TestGatherTrashFull(t *testing.T) {
+	db := newCatalog(t, nil)
+	disk := func(id string, position int, role, state string, capacity int64) catalog.Disk {
+		return catalog.Disk{ID: id, UUID: "u-" + id, FS: "ext4", Mount: "/mnt/" + id, Root: "media", Workdir: "Atoll", Role: role,
+			Position: position, State: state, Seen: capacity > 0, Capacity: capacity, Free: 0}
+	}
+	list := []catalog.Disk{
+		disk("a", 0, "data", "online", 100), disk("b", 1, "data", "readonly", 100), disk("c", 2, "cache", "standby", 100),
+		disk("d", 3, "data", "missing", 100), disk("e", 4, "data", "online", 0), disk("f", 5, "data", "draining", 1000),
+	}
+	if err := catalog.SyncDisks(t.Context(), db, list); err != nil {
+		t.Fatal(err)
+	}
+	entry := func(disk, state string, size any) {
+		t.Helper()
+		res, err := db.ExecContext(t.Context(), "INSERT INTO ops(disk_id, kind, path, path2, started_ns, state) VALUES (?, 'trash', x'61', x'62', 0, ?)", disk, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, _ := res.LastInsertId()
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, reason, deleted_ns, expires_ns)
+			VALUES (x'61', ?, x'62', ?, ?, 'deleted', 0, 0)`, disk, op, size); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entry("a", "done", 4)
+	entry("a", "done", 2) // a: 6 of 100, past 5 %
+	entry("a", "planned", 90)
+	entry("b", "done", 5) // b: at 5 %, not past it
+	entry("c", "done", 7) // c: a cache disk's trash counts too
+	entry("d", "done", 50)
+	entry("e", "done", 50)
+	entry("f", "done", nil)
+	entry("f", "done", 51) // f: 51 of 1000, past 5 %
+	c, err := config.Parse([]byte("pool_id = \"p\"\ncatalog = \"/srv/catalog.db\"\n[view]\nmount = \"/srv/pool\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Gather(t.Context(), db, c, 0, &jobs.Outcome{}, &Refused{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []TrashFull{{ID: "a", Used: 6, Capacity: 100}, {ID: "c", Used: 7, Capacity: 100}, {ID: "f", Used: 51, Capacity: 1000}}
+	if !slices.Equal(f.TrashFull, want) || f.MaxSize != "5%" {
+		t.Errorf("%+v, %q", f.TrashFull, f.MaxSize)
+	}
+	m, err := Describe(t.Context(), db, f, Holding{Key: KeyTrashFull + "f", Count: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Title != "Atoll: the trash of disk f is full" || !strings.Contains(m.Body, "holds 51 bytes, more than trash.max_size (5%) of its 1000 bytes") ||
+		m.Priority != priorityDefault {
+		t.Errorf("%+v", m)
 	}
 }
 

@@ -372,6 +372,9 @@ type Summary struct {
 	// DiskLost says that a disk could not be relied on, or an operation stayed planned, in this run,
 	// whatever else is listed.
 	DiskLost bool
+	// Full lists, for a purge, the disks whose trash still holds more than trash.max_size of their capacity, by id
+	// in byte order.
+	Full []string
 }
 
 // PruneItem is the outcome of one surplus copy.
@@ -635,6 +638,8 @@ func failedOutcome(op *ops.Op, moveErr error) string {
 type EntryItem struct {
 	catalog.TrashEntry
 	Outcome string
+	// Why says why a purge reaches it: expired, older-than or max-size.
+	Why string
 }
 
 // Restore puts back, for each path at or below under, its newest entry (specs.md §17.4). An entry from
@@ -804,24 +809,39 @@ func (s *Session) makeFolder(ctx context.Context, handle *ops.Disk, e *catalog.T
 	}
 }
 
-// Purge deletes what has reached its time, or with olderThan what was trashed at least that long
-// ago (specs.md §17.4).
+// Purge deletes what has reached its time, then what goes for room on each disk whose trash holds more than
+// trash.max_size of its capacity; with olderThan, only what was trashed at least that long ago (specs.md §17,
+// §17.4). The summary's Full lists the disks whose trash still holds more once what was purged, or would be, is
+// gone.
 func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func(*EntryItem) error) (*Summary, error) {
 	entries, err := catalog.TrashEntries(ctx, s.db)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
+	in, err := PurgeInput(ctx, s.db, s.config, s.now, entries)
+	if err != nil {
+		return nil, err
+	}
+	if olderThan != nil {
+		age := olderThan.Nanoseconds()
+		in.OlderThanNS = &age
+	}
+	for i := range in.Entries {
+		in.Entries[i].Held = s.repriseTrashed[in.Entries[i].OpID]
+	}
+	choice, err := solver.ChoosePurge(in)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	why := make(map[int64]solver.PurgeWhy, len(choice.Purge))
+	for _, c := range choice.Purge {
+		why[c.OpID] = c.Why
+	}
+	used := solver.TrashUsed(in.Entries)
 	summary := &Summary{Applied: s.apply}
 	for i := range entries {
 		e := &entries[i]
-		if s.repriseTrashed[e.OpID] {
-			continue
-		}
-		due := e.ExpiresNS <= s.now
-		if olderThan != nil {
-			due = e.DeletedNS <= s.now-olderThan.Nanoseconds()
-		}
-		if !due {
+		if why[e.OpID] == "" {
 			continue
 		}
 		outcome, err := s.purgeEntry(ctx, e)
@@ -831,18 +851,75 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 		switch outcome {
 		case OutcomeToPurge:
 			summary.ToDo++
-			summary.Bytes += e.Size.Int64
 		case OutcomePurged:
-			summary.Bytes += e.Size.Int64
 		default:
 			summary.Stayed++
 		}
-		if err := each(&EntryItem{TrashEntry: *e, Outcome: outcome}); err != nil {
+		if outcome == OutcomeToPurge || outcome == OutcomePurged {
+			summary.Bytes += e.Size.Int64
+			used[e.Disk] -= max(e.Size.Int64, 0)
+		}
+		if err := each(&EntryItem{TrashEntry: *e, Outcome: outcome, Why: string(why[e.OpID])}); err != nil {
 			return nil, fmt.Errorf("%w", err)
 		}
 	}
+	summary.Full = solver.FullTrashes(in.MaxSize, in.Disks, used)
 	summary.DiskLost = s.lost
 	return summary, nil
+}
+
+// PurgeInput reads what the choice of what a purge reaches needs, besides the age and the entries a reprise held:
+// trash.max_size, each disk's capacity as the catalog last recorded it, and the entries.
+func PurgeInput(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, entries []catalog.TrashEntry) (*solver.PurgeInput, error) {
+	text, _ := c.Effective()["trash.max_size"].(string)
+	maxSize, err := value.ParsePercent(text)
+	if err != nil {
+		return nil, fmt.Errorf("trash.max_size: %w", err)
+	}
+	rows, err := catalog.Disks(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	in := &solver.PurgeInput{NowNS: nowNS, MaxSize: maxSize, Disks: make([]solver.TrashDisk, 0, len(rows)), Entries: make([]solver.TrashEntry, 0, len(entries))}
+	listed := make(map[string]bool, len(rows))
+	for i := range rows {
+		d := &rows[i]
+		in.Disks = append(in.Disks, solver.TrashDisk{ID: d.ID, Capacity: d.Capacity, HasCapacity: d.HasCapacity})
+		listed[d.ID] = true
+	}
+	for i := range entries {
+		e := &entries[i]
+		// The catalog keeps every disk it knew, retired ones too; one it lost says nothing of its capacity.
+		if !listed[e.Disk] {
+			in.Disks = append(in.Disks, solver.TrashDisk{ID: e.Disk})
+			listed[e.Disk] = true
+		}
+		in.Entries = append(in.Entries, solver.TrashEntry{
+			Disk: e.Disk, OpID: e.OpID, Reason: e.Reason, Size: e.Size.Int64, HasSize: e.Size.Valid, DeletedNS: e.DeletedNS, ExpiresNS: e.ExpiresNS,
+		})
+	}
+	return in, nil
+}
+
+// PurgeDue says whether a purge would reach anything now, reading the catalog only: the daemon looks before it checks
+// a disk (specs.md §15.13).
+func PurgeDue(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64) (bool, error) {
+	entries, err := catalog.TrashEntries(ctx, db)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if len(entries) == 0 {
+		return false, nil
+	}
+	in, err := PurgeInput(ctx, db, c, nowNS, entries)
+	if err != nil {
+		return false, err
+	}
+	choice, err := solver.ChoosePurge(in)
+	if err != nil {
+		return false, fmt.Errorf("%w", err)
+	}
+	return len(choice.Purge) > 0, nil
 }
 
 func (s *Session) purgeEntry(ctx context.Context, e *catalog.TrashEntry) (string, error) {
