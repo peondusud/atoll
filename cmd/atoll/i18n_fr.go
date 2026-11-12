@@ -130,7 +130,7 @@ var frenchMessages = map[string]string{
 	"no rule matches\n":                                                                         "aucune règle ne correspond\n",
 	"nothing is mounted at %s":                                                                  "rien n'est monté en %s",
 	"nothing written\n":                                                                         "rien n'a été écrit\n",
-	"notify test: no channel is set: alerts.ntfy is empty":                                      "notify test : aucun canal n'est configuré : alerts.ntfy est vide",
+	"notify test: no channel is set: alerts.ntfy and alerts.gotify are empty":                   "notify test : aucun canal n'est défini : alerts.ntfy et alerts.gotify sont vides",
 	"notify test: unknown argument %q":                                                          "notify test : argument inconnu %q",
 	"notify: unknown command %q":                                                                "notify : commande inconnue %q",
 	"notify: want test":                                                                         "notify : test attendu",

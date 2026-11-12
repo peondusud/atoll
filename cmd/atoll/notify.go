@@ -45,7 +45,7 @@ func runNotify(configPath string, args []string, stdout, stderr io.Writer) int {
 	}
 	channels := alerts.Channels(c)
 	if len(channels) == 0 {
-		return failure(stderr, errors.New(T("notify test: no channel is set: alerts.ntfy is empty")))
+		return failure(stderr, errors.New(T("notify test: no channel is set: alerts.ntfy and alerts.gotify are empty")))
 	}
 	m := &alerts.Message{
 		Key: "test", Title: "Atoll: a test alert", Priority: 3,

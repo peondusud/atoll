@@ -1225,6 +1225,7 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
   SMART and a volume marked dirty come with phase 1b.
 - **When.** A condition that begins is sent at once, as one alert: a pass's files in one state are one alert, which names the first ten by path in byte order, as many of them as fit in 4,000 bytes of text, and says how many more there are. One that holds is sent again when its count grows, and every 24 h while it lasts, saying since when. One that ends is forgotten, with no message. The table `alerts` keeps what was sent, so a restart sends again only what is due. An alert that cannot be sent is kept unsent, and the daemon passes again within 5 minutes to try it again. A channel that cannot be reached is not tried again for the other alerts of that pass, each of which would wait as long; one whose server answered with a refusal is. Sending happens outside the catalog's lock. With no channel set, the daemon works out no alert and leaves the table as it is, so that a channel set later hears of what holds then; a daemon in shadow mode (`--dry-run`) logs the alerts due, and sends and records none.
 - **ntfy.** An HTTP `POST` of the alert's text to `alerts.ntfy`, with its title in `Title`, its priority in `Priority` (4 for a disk `missing`, a guard tripped, `corrupt` or `unavailable` files; 3 for the others) and the tag `warning`. With `alerts.ntfy_token_file`, the token that file holds goes in `Authorization: Bearer`, so that the token stays out of the configuration. A request has 10 s.
+- **Gotify.** An HTTP `POST` to `<alerts.gotify>/message` of a JSON object, `title`, `message` and `priority`: 8 where ntfy's priority is 4, which Gotify's clients sound, and 5 otherwise. The application token that `alerts.gotify_token_file` holds goes in `X-Gotify-Key`, read at each send; Gotify takes no message without one, so a channel with no token file never goes, and says why. A request has 10 s.
 - `atoll notify test` sends a test alert through each channel that is set, and says for each whether it went: a channel went when its server answered 2xx. It reads the configuration only, and needs no catalog. It exits with 0 when each did, with 4 when one did not, with 1, and nothing on standard output, when none is set or the configuration cannot be used, and with 2 on a usage error. Output: `api/schemas/notify-test.schema.json`.
 - Prometheus metrics on `/metrics` (phase 2b).
 
@@ -1374,7 +1375,8 @@ api_key_file = ""
 [alerts]
 ntfy            = "https://ntfy.sh/my-secret-topic"
 ntfy_token_file = ""                    # a Bearer token, for a ntfy server that asks one
-gotify          = ""
+gotify          = ""                    # "https://gotify.example", the server
+gotify_token_file = ""                  # the application token Gotify asks for
 smtp            = ""
 
 [api]                                   # the local API of the daemon (§25.1)
@@ -1504,7 +1506,7 @@ Phase 1a warns about these settings, and each phase removes its own lines. The k
 | a rule's `tags`, `domains` | any | 1b | no effect |
 | `trash.link_guard` | `true` | 1b | no effect |
 | `balance.schedule` | anything but `never` | 1b | no effect |
-| `notify.plex.url`, `notify.jellyfin.url`, `notify.emby.url`, `alerts.gotify`, `alerts.smtp` | anything but `""` | 1b | no effect |
+| `notify.plex.url`, `notify.jellyfin.url`, `notify.emby.url`, `alerts.smtp` | anything but `""` | 1b | no effect |
 | `read.policy` | anything but `oldest` | 2a | no effect |
 | `read.classes` | any | 2a | no effect |
 | `placement.new_files` | anything but `most-free` | 2b | works as `most-free` |

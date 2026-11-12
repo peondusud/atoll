@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Alerts through Gotify (specs.md §23)
+
+Commit "Send alerts through Gotify", on `develop`.
+
+- The first of the beta's two new channels, beside ntfy, as the maintainer asked. An alert is an HTTP `POST` to `<alerts.gotify>/message` of a JSON object, `title`, `message` and `priority`: 8 where ntfy's priority is 4, which Gotify's clients sound, and 5 otherwise. The application token is read at each send from the file `alerts.gotify_token_file` names, and goes in `X-Gotify-Key`, so that it stays out of the configuration.
+- `atoll notify test` covers it, and `alerts.gotify` no longer warns that it does nothing.
+- Verified: `TestGotifySends` and `TestGotifyFails` against a fake server; two vectors of `config.json`; the scenario `notify-test-gotify-unreachable.json`.
+- **Decided without the maintainer, to confirm:**
+  - A new configuration key, `alerts.gotify_token_file`, as ntfy has `alerts.ntfy_token_file`; `alerts.gotify` is the server's address, with no path.
+  - Gotify's priorities 8 and 5.
+  - A channel with no token file never goes, and says why, rather than refusing the configuration.
+
 ## The scheduled mode (specs.md §12.3, §14.1)
 
 Commit "Run scheduled copies inside replication.window", on `develop`.

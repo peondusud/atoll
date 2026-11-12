@@ -135,7 +135,8 @@ api_key_file = ""
 [alerts]
 ntfy            = "https://ntfy.sh/my-secret-topic"
 ntfy_token_file = ""                    # a Bearer token, for a ntfy server that asks one
-gotify          = ""
+gotify          = ""                    # "https://gotify.example", the server
+gotify_token_file = ""                  # the application token Gotify asks for
 smtp            = ""
 
 [api]                                   # the local API of the daemon (§25.1)

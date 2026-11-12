@@ -84,7 +84,7 @@ Every item here is a **decision**:
 - The scrub: `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`; once no copy is corrupt, the next pass finds the conflict again from the rows of its copies (§16).
 - The repair (§16.1): `TestRepairOnEachDriver` leaves out btrfs, which answers a read of a block that rotted with `EIO`, which Atoll takes for a disk that fails (§10): what a scrub of btrfs should make of a checksum error is to decide with the beta's SMART work.
 - The settings of the openmediavault mergerfs plugin from `atoll mergerfs-config` (§21.1), which the maintainer left for later: the fstab line and `--json` are done.
-- What the alerts leave (§23): Gotify and SMTP, SMART and a volume marked dirty, with phase 1b. The counts read the whole of `files` after each pass, with no index: to measure on 200,000 files, before an index on the states that alert.
+- What the alerts leave (§23): SMTP, SMART and a volume marked dirty, with phase 1b; Gotify is done. The counts read the whole of `files` after each pass, with no index: to measure on 200,000 files, before an index on the states that alert.
 - The operation journal (`ops`) covers the trash, the renames of propagation, files and folders, and the copies (`create`) so far (§14.2, §17.1, §17.2). Each new kind of operation needs its own reprise, with kill -9 at each step and fault injection.
 - The break-glass test runs in `test/loopdev` (`TestBreakGlass`), so in the CI's qemu job, on two disks and every driver. What it leaves: a pool of more disks, a disk away when Atoll goes, and, once Atoll's own view comes (phase 2a), comparing that view with plain mergerfs.
 
