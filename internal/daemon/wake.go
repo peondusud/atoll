@@ -58,18 +58,21 @@ type WakeInput struct {
 	SmartDueNS *int64
 	// NotifyDueNS is when a media server may next be told of a folder (specs.md §21.5): nil when none is waiting.
 	NotifyDueNS *int64
+	// BalanceDueNS is when the daemon next balances (specs.md §13.3): nil when it never does.
+	BalanceDueNS *int64
 }
 
 // WakeOutput says what to do now, and when to look again. Notify says to tell the media servers of the folders that
-// changed, once any check and pass due are done; Smart to read the disks' SMART, after that; Hash to read new files'
-// hashes, after that; Backup to back the catalog up, when there is no hash to read; and Scrub to scrub, when there is
-// neither. ScrubOpenedNS is when the stretch of the scrub's window that holds now began, 0 outside it or with no scrub
-// pending.
+// changed, once any check and pass due are done; Smart to read the disks' SMART, after that; Balance to balance, after
+// that; Hash to read new files' hashes, after that; Backup to back the catalog up, when there is no hash to read; and
+// Scrub to scrub, when there is neither. ScrubOpenedNS is when the stretch of the scrub's window that holds now began,
+// 0 outside it or with no scrub pending.
 type WakeOutput struct {
 	Check         bool
 	Because       []string
 	Notify        bool
 	Smart         bool
+	Balance       bool
 	Hash          bool
 	Backup        bool
 	Scrub         bool
@@ -137,6 +140,13 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 			earliest(*in.SmartDueNS)
 		}
 	}
+	if in.BalanceDueNS != nil {
+		if *in.BalanceDueNS <= now {
+			out.Balance = true
+		} else {
+			earliest(*in.BalanceDueNS)
+		}
+	}
 	if in.HashPending {
 		nowLocal := time.Unix(0, now).In(in.Location)
 		out.Hash = in.Window.Contains(nowLocal)
@@ -168,7 +178,7 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 			earliest(in.ScrubWindow.Next(opened.AddDate(0, 0, 1)).UnixNano())
 		}
 	}
-	if len(out.Because) > 0 || out.Notify || out.Smart || out.Hash || out.Backup || out.Scrub {
+	if len(out.Because) > 0 || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
 		wake = now
 	}
 	out.WakeNS = max(wake, now)

@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The daemon's balancing (specs.md §13.3, §15.13)
+
+Commit "Balance from the daemon, as balance.schedule says", on `beta`.
+
+- The daemon that runs for good now checks `balance.trigger`, once a stretch of `balance.schedule`, or at most once an hour with `immediate`. While the trigger holds, it moves the misplaced copies as `atoll balance --yes` does, 5 minutes at a time under the catalog's lock, within `balance.budget`.
+- The trigger holds when the share of bytes correctly placed falls below `ratio_below`, compared exactly by the new `Percent.Below`, or when more than `or_more_than` bytes are to move. `balance.schedule` no longer warns of a later phase.
+- A run stopped at its budget, or by a crash after a copy was made, is taken on by the next run: its plan makes no second copy, and the old copy, marked surplus by then, goes to the trash.
+- Verified: 8 `percent.json` vectors of `below`; 3 `daemon_wake.json` vectors; `TestBalanceDue`, `TestBalanceHolds`, `TestBalanceChecksAnHour`, `TestBalanceStopsAtItsTime`; the scenario `balance-resume`, with a crash between the copy and the trash; `rules-check-preset-warnings` now on the preset `energy`, as `safety` no longer asks for a later phase; 15 mutants, each caught but two equivalent.
+- **Decided without the maintainer, to confirm:**
+  - **When to check:** at most once an hour with `immediate`, per the maintainer's answer. With a window, once per stretch.
+  - **The bytes to move:** a file's size once for each misplaced copy.
+  - **The order:** after notifications and SMART, before reading hashes.
+  - **Slices of 5 minutes** under the lock.
+  - **Not in shadow mode:** a daemon in shadow mode does not balance.
+  - The share of bytes correctly placed is not shown by `atoll status` yet (TODO.md).
+
 ## `atoll balance` (specs.md §13.3, §13.4)
 
 Commit "Move the copies a strict setting no longer allows", on `beta`.

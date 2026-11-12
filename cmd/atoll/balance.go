@@ -109,7 +109,7 @@ func balance(ctx context.Context, c *config.Config, m disks.Machine, apply bool,
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	if summary, err = jobs.Balance(ctx, db, c, m, apply, each); err != nil {
+	if summary, err = jobs.Balance(ctx, db, c, m, apply, 0, each); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	return summary, nil

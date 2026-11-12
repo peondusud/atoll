@@ -79,6 +79,13 @@ type settings struct {
 	// scrubWindow is integrity.window, maintenance.window when left out, and scrubBudget integrity.scrub_budget.
 	scrubWindow value.Window
 	scrubBudget time.Duration
+	// balanceSchedule is balance.schedule: never, immediate, or a window, which balanceWindow holds; balanceBudget is
+	// balance.budget, and balanceRatio and balanceMore balance.trigger (specs.md §13.3).
+	balanceSchedule string
+	balanceWindow   value.Window
+	balanceBudget   time.Duration
+	balanceRatio    value.Percent
+	balanceMore     int64
 }
 
 func readSettings(c *config.Config, opt *Options) (*settings, error) {
@@ -110,6 +117,21 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 	}
 	if s.scrubBudget, err = value.ParseDuration(text("integrity.scrub_budget")); err != nil {
 		return nil, fmt.Errorf("integrity.scrub_budget: %w", err)
+	}
+	s.balanceSchedule = text("balance.schedule")
+	if s.balanceSchedule != scheduleNever && s.balanceSchedule != scheduleImmediate {
+		if s.balanceWindow, err = value.ParseWindow(s.balanceSchedule); err != nil {
+			return nil, fmt.Errorf("balance.schedule: %w", err)
+		}
+	}
+	if s.balanceBudget, err = value.ParseDuration(text("balance.budget")); err != nil {
+		return nil, fmt.Errorf("balance.budget: %w", err)
+	}
+	if s.balanceRatio, err = value.ParsePercent(text("balance.trigger.ratio_below")); err != nil {
+		return nil, fmt.Errorf("balance.trigger.ratio_below: %w", err)
+	}
+	if s.balanceMore, err = value.ParseSize(text("balance.trigger.or_more_than")); err != nil {
+		return nil, fmt.Errorf("balance.trigger.or_more_than: %w", err)
 	}
 	if zone := text("timezone"); zone == "local" || zone == "" {
 		s.location = time.Local
@@ -166,6 +188,13 @@ type loop struct {
 	// until a pass takes them (specs.md §21.5).
 	queues  map[string]*notify.Queue
 	changed map[string]bool
+	// balanceStretch is the stretch of balance.schedule whose trigger was checked last, balanceNext when "immediate"
+	// checks it next, balanceWork that it held and copies are left to move, and balanceSpent what moving them spent
+	// since that check (specs.md §13.3).
+	balanceStretch int64
+	balanceNext    int64
+	balanceWork    bool
+	balanceSpent   time.Duration
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -257,7 +286,7 @@ func (l *loop) run(ctx context.Context) error {
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
 			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue,
-			NotifyDueNS: l.notifyDue()}
+			NotifyDueNS: l.notifyDue(), BalanceDueNS: l.balanceDue(now)}
 		if waiting {
 			in.GroupDueNS = &groupNext
 		}
@@ -279,6 +308,10 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if out.Smart {
 			l.readSmart(ctx)
+			continue
+		}
+		if out.Balance {
+			l.balance(ctx)
 			continue
 		}
 		if out.Hash {

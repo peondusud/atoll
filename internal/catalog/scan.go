@@ -592,6 +592,15 @@ func LargestFile(ctx context.Context, db *sql.DB) (int64, bool, error) {
 	return size.Int64, size.Valid, nil
 }
 
+// TotalBytes adds up the sizes of every file.
+func TotalBytes(ctx context.Context, db *sql.DB) (int64, error) {
+	var total int64
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(sum(size), 0) FROM files").Scan(&total); err != nil {
+		return 0, fmt.Errorf("files: %w", err)
+	}
+	return total, nil
+}
+
 // FileCount counts the file rows.
 func FileCount(ctx context.Context, db *sql.DB) (int, error) {
 	var count int

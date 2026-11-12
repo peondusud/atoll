@@ -315,7 +315,6 @@ func TestLaterPhaseWarnings(t *testing.T) {
 		got = append(got, w.Key)
 	}
 	want := []string{
-		"balance.schedule",
 		"disk[3].role",
 		"health.avoid_hotter_than",
 		"health.evacuate_on",

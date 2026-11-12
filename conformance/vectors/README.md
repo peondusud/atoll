@@ -66,6 +66,8 @@ A percentage is checked through its use: the share of a total, such as `min_free
 | `input` | string | the value as written in the configuration |
 | `of` | integer | the total, in bytes |
 | `result` | integer | the share of `of` that `input` gives, in bytes |
+| `count` | integer | with `below`: a count to compare with that share |
+| `below` | boolean | whether `count` is below `input` of `of`, compared exactly: `count` × 100 < percentage × `of`. The share of bytes correctly placed falls below `[balance].trigger.ratio_below` so (`specs.md` §13.3) |
 | `error` | boolean | `true` when `input` is rejected |
 
 ### `window.json` — time windows (§29.5)
@@ -395,10 +397,12 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `backup_pending` | boolean | the stretch of the window that holds now, or the next one, has no catalog backup yet |
 | `smart_due_ns` | integer | when the disks' SMART is next to be read; left out when it never is |
 | `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
+| `balance_due_ns` | integer | when the daemon next balances; left out when it never does |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
 | `notify` | boolean | `true` when the media servers are to be told now: `notify_due_ns` has come |
 | `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
+| `balance` | boolean | `true` when the daemon is to balance now: `balance_due_ns` has come |
 | `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
 | `backup` | boolean | `true` when the catalog is to be backed up now: `backup_pending`, inside the window, and no hash to read |
 | `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, no hash to read and no backup due |

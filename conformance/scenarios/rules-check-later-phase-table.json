@@ -21,11 +21,6 @@
             "message": "${ANY}"
           },
           {
-            "key": "balance.schedule",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "cache.enabled",
             "later_phase": true,
             "message": "${ANY}"

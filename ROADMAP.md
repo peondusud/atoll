@@ -9,7 +9,7 @@ A milestone is reached when its phase and every phase before it are done.
 | Milestone | Phase | What it brings | Progress |
 |---|---|---|---|
 | **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 96 % |
-| **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 84 % |
+| **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 88 % |
 | **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 30 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
 | — | 3 — Rust rewrite | the same contracts and conformance suite, switched to without migrating data | |
@@ -53,7 +53,7 @@ The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "
 
 - **Modes.** Done: the `immediate` and `scheduled` replication modes (§12.3).
 - **Repair and duplicates.** Done: the repair of corrupt copies, by chunk or whole (§16.1), and the report of duplicates, `atoll dupes` (§16).
-- **Placement.** Failure domains and tags as hard constraints, and `atoll balance` and `capacity`. The constraints are done: a rule's tags and domains, `tags_mode` and `spread_mode` in strict mode, and `overflow = "deny"` reach the plan, as does the capacity formula. `atoll capacity` is done, and so is `atoll balance` by hand, which moves the copies Atoll made that a change of rule leaves misplaced. The daemon's balancing inside `balance.schedule`, with its hysteresis and the share of bytes correctly placed, and `--move-originals` remain.
+- **Placement.** Failure domains and tags as hard constraints, and `atoll balance` and `capacity`. The constraints are done: a rule's tags and domains, `tags_mode` and `spread_mode` in strict mode, and `overflow = "deny"` reach the plan, as does the capacity formula. `atoll capacity` is done, and so is `atoll balance`, by hand and by the daemon inside `balance.schedule` once `balance.trigger` holds, which moves the copies Atoll made that a change of rule leaves misplaced. `--move-originals` remains.
 - **Monitoring and notifications.** Done: SMART, Gotify and SMTP alerts, and notifications to Plex, Emby and Jellyfin. The alert on an NTFS volume marked dirty remains.
 - **Conflicts.** Done: `atoll conflicts list` and `atoll conflicts resolve` (§15.7).
 - **Link guard.** The optional link guard against deletions through mergerfs (§17).

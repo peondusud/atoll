@@ -34,10 +34,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			if v == true {
 				phase = "1b"
 			}
-		case "balance.schedule":
-			if v != "never" {
-				phase = "1b"
-			}
 		case "balance.equalize":
 			if v != "off" {
 				phase = "2b"
