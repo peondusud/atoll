@@ -48,7 +48,6 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
 1. **Smaller limits**:
-   - a folder renamed into the old name of one that waits;
    - NTFS short names.
 2. **The memory of a daemon that runs for days**, measured.
 

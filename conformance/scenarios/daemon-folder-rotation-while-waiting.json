@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a715.12",
-  "description": "mv Dx N; mv D Dx on one disk, while Dx waits for a copy gone on another disk: D does not wait for it, and its entries take Dx's name, so the next look reads Dx as a folder made at N. What only another disk holds below Dx stays there, in the folder now named Dx: a stated limit, with nothing lost.",
+  "description": "mv Dx N; mv D Dx on one disk, while Dx waits for a copy gone on another disk: what lands in the old name of Dx, D and the file that moved with it, waits until Dx leaves that name, so that the file only other disks hold below Dx follows it to N, and D's file then takes the name Dx.",
   "disks": [
     {
       "id": "t1",
@@ -148,24 +148,12 @@
         ],
         "decisions": [
           {
-            "path": "D/b",
-            "decision": "renamed",
-            "to": "Dx/b"
-          },
-          {
             "path": "Dx/a",
             "decision": "renamed",
             "to": "N/a"
           }
         ],
         "operations": [
-          {
-            "disk": "t2",
-            "kind": "rename",
-            "path": "D/b",
-            "to": "Dx/b",
-            "outcome": "renamed"
-          },
           {
             "disk": "t2",
             "kind": "rename",
@@ -217,11 +205,36 @@
         ],
         "decisions": [
           {
+            "path": "D/b",
+            "decision": "renamed",
+            "to": "Dx/b"
+          },
+          {
             "path": "Dx/w",
             "decision": "kept"
+          },
+          {
+            "path": "Dx/w",
+            "decision": "renamed",
+            "to": "N/w"
           }
         ],
-        "operations": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "D/b",
+            "to": "Dx/b",
+            "outcome": "renamed"
+          },
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "Dx/w",
+            "to": "N/w",
+            "outcome": "renamed"
+          }
+        ],
         "guards": [],
         "waiting": 0,
         "next_due": null
@@ -285,17 +298,17 @@
           null
         ],
         [
-          "Dx/w",
-          "t2",
-          null
-        ],
-        [
           "N/a",
           "t1",
           null
         ],
         [
           "N/a",
+          "t2",
+          null
+        ],
+        [
+          "N/w",
           "t2",
           null
         ]
@@ -324,12 +337,12 @@
           "text": "a"
         },
         {
-          "path": "media/Dx/b",
-          "text": "b"
+          "path": "media/N/w",
+          "text": "w"
         },
         {
-          "path": "media/Dx/w",
-          "text": "w"
+          "path": "media/Dx/b",
+          "text": "b"
         },
         {
           "path": "media/D",

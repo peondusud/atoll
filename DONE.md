@@ -2,6 +2,17 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A folder renamed into the old name of one that waits (specs.md §15.12)
+
+Commit "Hold back what lands in the old name of a folder that waits", on `develop`.
+
+- `mv Dx N; mv D Dx` while `Dx` waits, for a copy below it on another disk whose clock runs, for the guard or for a look that cannot get there: the files of `D` took the name `Dx` at once, the next look read `Dx` as a folder made at `N`, and what only other disks held below `Dx` stayed in the folder that took its name. Before the files of a pass are decided, the folders that wait for what no decision of the pass ends are now worked out, and a copy that moved to a name at or below the old name of one of them waits for it; a folder renamed to below that name waits with its copies. Once the wait ends, the folder that waited leaves first, what only other disks hold follows it, and the rest lands.
+- Only such a wait holds anything back, so that nothing waits for itself, which a cycle would otherwise.
+- Verified: the scenario of that rotation, which now ends with the file only other disks hold at `N`; scenarios of a chain (`mv Dx N; mv D Dx; mv E D`), of a folder renamed below the old name (`mkdir Dx; mv D Dx/D`), and of two folders swapped, which no walk reads as folders renamed, pinned as the limit it is; two mutants, nothing held and no copy held, each failing three of them.
+- **Decided without the maintainer, to confirm:**
+  - A copy held so waits with no line of its own, as one whose debounce runs does.
+  - Two folders that swap their names stay a limit: no walk reads them as renamed, as each name still holds a row, and what only other disks hold below them stays at its path.
+
 ## A swap of two names (specs.md §15.12, §17.2)
 
 Commit "Exchange two names that wait for each other", on `develop`.
