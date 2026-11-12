@@ -1,0 +1,101 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a725",
+  "description": "init over a catalog that went missing starts the new catalog's operations past the highest id the disks' trash and tmp/ name, so that none meets an old one there; what those folders hold is left as it is.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/tmp/9.part",
+          "text": "half"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/old.mkv",
+          "text": "gone"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--json"
+      ],
+      "stdout_json": {
+        "configuration": "kept",
+        "catalog": "created"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT seq FROM sqlite_sequence WHERE name = 'ops'",
+      "rows": [
+        [
+          9
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--json"
+      ],
+      "stdout_json": {
+        "configuration": "kept",
+        "catalog": "kept"
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/tmp/9.part",
+          "text": "half"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/old.mkv",
+          "text": "gone"
+        }
+      ]
+    }
+  ]
+}

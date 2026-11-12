@@ -40,7 +40,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **The scrub.** `atoll scrub`, and the daemon inside `integrity.window`, check each chunk of the copies due, quarantine a corrupt copy when a healthy one exists, and resume at the chunk the budget reached (§16).
 - **The disk commands.** `atoll disk add`, `show`, `remove` with `--evacuate`, `fail` and `replace`, which edit the configuration keeping every other byte, check the topology and the mount point, and drain a disk through the daemon's passes (§10, §18).
 - **Tests.** The break-glass test, and the failed-mount test (§27).
-- **Contracts and conformance.** 45 vector files and 541 black-box scenarios shared with the Rust version (§29).
+- **Contracts and conformance.** 45 vector files and 542 black-box scenarios shared with the Rust version (§29).
 - **Local CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3 (`test/ci/run.sh`).
 
 ### Remaining
@@ -50,7 +50,6 @@ The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "
 1. **Smaller limits**:
    - an overwriting move or a swap of two names;
    - a folder renamed into the old name of one that waits;
-   - operation ids after `catalog rebuild`;
    - NTFS short names.
 2. **The memory of a daemon that runs for days**, measured.
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 )
 
@@ -113,7 +114,7 @@ func runInit(configPath string, args []string, stdout, stderr io.Writer) int {
 			return usage(stderr, "init: "+err.Error())
 		}
 	}
-	out, err := initialize(configPath, text)
+	out, err := initialize(configPath, text, stderr)
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -129,7 +130,7 @@ func runInit(configPath string, args []string, stdout, stderr io.Writer) int {
 }
 
 // initialize creates what is missing. text is the configuration to write, or empty.
-func initialize(configPath, text string) (initOutput, error) {
+func initialize(configPath, text string, stderr io.Writer) (initOutput, error) {
 	out := initOutput{Configuration: "kept", Catalog: "kept"}
 	exists, err := fsx.Exists(configPath)
 	if err != nil {
@@ -159,8 +160,49 @@ func initialize(configPath, text string) (initOutput, error) {
 	}
 	if created {
 		out.Catalog = "created"
+		if err := startPastTheDisks(c, stderr); err != nil {
+			return out, err
+		}
 	}
 	return out, nil
+}
+
+// startPastTheDisks starts a new catalog's operations past the highest id the disks' trash and tmp/ name, as catalog
+// rebuild does, so that none meets an old one there, as when a catalog went missing (specs.md §9, §25).
+func startPastTheDisks(c *config.Config, stderr io.Writer) (err error) {
+	if len(c.Disks) == 0 {
+		return nil
+	}
+	m, err := disks.NewMachine()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	var after int64
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		if d.State == config.DiskFailed {
+			continue
+		}
+		highest, err := highestOpID(m, d)
+		if err != nil {
+			report(stderr, fmt.Sprintf(T("warning: disk %s: the operations its trash and tmp/ name are not known (%v): a new one may meet an old one there, which costs it one io-error"), d.ID, err))
+			continue
+		}
+		after = max(after, highest)
+	}
+	if after == 0 {
+		return nil
+	}
+	ctx := context.Background()
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	if err := catalog.StartOpsAfter(ctx, db, after); err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	return nil
 }
 
 func catalogPath(c *config.Config) string {

@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `atoll init` over a catalog that went missing (specs.md §9, §25)
+
+Commit "Start a new catalog's operations past the disks' ids", on `develop`.
+
+- A catalog `init` creates starts its operations past the highest id the disks' trash and `tmp/` name, as `catalog rebuild` does, so that a new operation's folder of the trash or part never meets an old one. A disk whose folders cannot be read is a warning on standard error.
+- A scenario: an id in `tmp/` and another in a trash, the counter past both, the folders left as they are, and a second `init` that keeps the catalog.
+
 ## `atoll trash restore --to` (specs.md §14.2, §17.2, §17.4)
 
 Commit "Restore an entry of the trash to another disk", on `develop`.
