@@ -16,6 +16,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/notify"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/view"
@@ -74,6 +75,7 @@ type settings struct {
 	fstab        string
 	resetReasons []disks.Reason
 	channels     []alerts.Channel
+	servers      []notify.Server
 	// scrubWindow is integrity.window, maintenance.window when left out, and scrubBudget integrity.scrub_budget.
 	scrubWindow value.Window
 	scrubBudget time.Duration
@@ -121,6 +123,7 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 		s.disksByID[c.Disks[i].ID] = &c.Disks[i]
 	}
 	s.channels = alerts.Channels(c)
+	s.servers = notify.Servers(c)
 	return s, nil
 }
 
@@ -159,6 +162,10 @@ type loop struct {
 	lastEnd *int64
 	// smartDue is when the disks' SMART is next read: nil when it is not (specs.md §23).
 	smartDue *int64
+	// queues holds what each media server is to be told, by its name, and changed the folders ripe groups named,
+	// until a pass takes them (specs.md §21.5).
+	queues  map[string]*notify.Queue
+	changed map[string]bool
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -187,6 +194,7 @@ func Run(ctx context.Context, opt Options) error {
 		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true, closed: jobs.Closed{},
 		watcher:  watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
 		smartDue: smartFirst(opt.Machine),
+		queues:   newQueues(set.servers, nil), changed: map[string]bool{},
 	}
 	defer l.watcher.Close()
 	l.notify("READY=1")
@@ -222,6 +230,11 @@ func (l *loop) run(ctx context.Context) error {
 		for _, path := range ClosedPaths(ripe) {
 			l.closed[path] = true
 		}
+		if len(l.queues) > 0 {
+			for _, folder := range ChangedFolders(ripe) {
+				l.changed[folder] = true
+			}
+		}
 		var origins []string
 		for _, g := range ripe {
 			for _, o := range g.Origins {
@@ -243,7 +256,8 @@ func (l *loop) run(ctx context.Context) error {
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
-			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue}
+			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue,
+			NotifyDueNS: l.notifyDue()}
 		if waiting {
 			in.GroupDueNS = &groupNext
 		}
@@ -257,6 +271,10 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if len(out.Because) > 0 {
 			l.pass(ctx, out.Because)
+			continue
+		}
+		if out.Notify {
+			l.tell(ctx)
 			continue
 		}
 		if out.Smart {
@@ -308,6 +326,7 @@ func (l *loop) reload() {
 		return
 	}
 	l.opt.Config, l.set = c, set
+	l.queues = newQueues(set.servers, l.queues)
 	for id := range l.disks {
 		if set.disksByID[id] == nil {
 			l.unwatch(id)
@@ -428,7 +447,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	l.log.Info("a pass begins", "because", because)
 	// The sink counts what the pass did instead of keeping each line: a pass over a whole pool would not fit in the
 	// memory of specs.md §26.
-	sink := &passSink{}
+	sink := &passSink{folders: map[string]bool{}}
 	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		outcome, err := jobs.RunClosed(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
@@ -465,8 +484,9 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		l.log.Error("the pass failed", "error", err)
 		return
 	}
-	// What the watcher saw closed served this pass.
+	// What the watcher saw closed served this pass, and what changed goes to the media servers.
 	l.closed = jobs.Closed{}
+	l.queueFolders(sink.folders)
 	l.passDue = nil
 	l.hashPending = true
 	if outcome.NextDue.Valid {
@@ -486,10 +506,12 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	}
 }
 
-// passSink counts what a pass decided and did, and keeps the names a driver refused.
+// passSink counts what a pass decided and did, and keeps the names a driver refused and the folders its operations
+// changed.
 type passSink struct {
 	decisions, operations int64
 	refused               alerts.Refused
+	folders               map[string]bool
 }
 
 func (s *passSink) Disks([]jobs.DiskLine) error { return nil }
@@ -501,6 +523,11 @@ func (s *passSink) Decision(*jobs.Decision) error {
 
 func (s *passSink) Operation(op *jobs.Operation) error {
 	s.operations++
+	for _, f := range OperationFolders(op) {
+		if s.folders != nil {
+			s.folders[f] = true
+		}
+	}
 	if op.Outcome == trash.OutcomeNameRefused {
 		// A rename was refused its new name, a copy its own.
 		name := op.Path

@@ -2,6 +2,24 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Notifications to Plex, Emby and Jellyfin (specs.md §21.5)
+
+Commit "Tell Plex, Jellyfin and Emby of the folders that changed", on `beta`.
+
+- The daemon that runs for good tells each media server of `[notify]` which folders of the view changed beside it. That is where the watcher saw a file change straight on a disk, and where a pass renamed or trashed a copy. Plex gets a partial scan of each library that holds the folder. Jellyfin and Emby get `/Library/Media/Updated`. A folder is told at most once in 30 s. A server that fails is tried again 5 minutes later. While a disk is missing, a folder with a file that has a copy on it is held until a pass finds the disk back.
+- `atoll notify test` also reaches each media server set, with a request that changes nothing, to check its URL and its token or key.
+- The `notify.*.url` keys no longer warn of a later phase.
+- Verified: the 10 vectors of `conformance/vectors/path_map.json`; 3 new `daemon_wake.json` vectors; `TestQueue`, `TestPlexScan`, `TestPlexRefuses`, `TestMediaBrowserScan`, `TestServers`, `TestMediaServers`, `TestFoldersWithCopiesOn`, `TestChangedFolders`, `TestOperationFolders`, `TestTell`, `TestTellShadow` and `TestNotifyTestMediaServers`; `TestNotifyMediaServer` in qemu on Linux 6.12 and 7.3, against a fake Plex, with 24 mutants, each caught. The qemu guest now brings its loopback up, for the tests that answer as a local server would.
+- **Decided without the maintainer, to confirm:**
+  - **What is told.** A folder whose change someone other than the view and Atoll made, or with inotify, whoever made it, and that changed more than attributes. And the folders of a pass's renames and of its copies moved to the trash. A copy Atoll makes changes no name, so the initial replication tells nothing.
+  - **The window.** A folder is told at once, then not again for 30 s; what changes in between is told when they end.
+  - **Held folders.** While a disk is missing, a folder is held if any file below it has a copy on that disk, in any state, even when the view still shows it from another disk. That is broader than needed, and safe.
+  - **Plex.** The libraries are read again before each batch. A folder above a library's folder asks for a scan of that folder. With no `token_file`, no token is sent.
+  - **Jellyfin and Emby.** Jellyfin gets `Authorization: MediaBrowser Token="…"`, as Jellyfin 12.0 refuses `X-Emby-Token` by default; Emby gets `X-Emby-Token`. `UpdateType` is always `Modified`, a hundred folders a request, and a path that is not UTF-8 is left out.
+  - **Failures.** A server that fails waits 5 minutes, without an alert, with a warning in the log.
+  - **`atoll notify test`** checks the media servers too: Plex's `GET /library/sections`, Jellyfin's and Emby's `GET /System/Info`. This changes `api/schemas/notify-test.schema.json`, a contract (§29.3).
+  - **Not told:** a new file that a walk finds after the daemon was stopped (TODO.md).
+
 ## SMART (specs.md §23)
 
 Commit "Alert on a disk that SMART says is failing", on `beta`.

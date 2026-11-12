@@ -78,8 +78,28 @@ type Config struct {
 	Pool     rules.Pool
 	// Warnings are sorted by key in byte order (specs.md §24.4).
 	Warnings []Problem
+	// MediaServers are the tables of [notify] whose url is set, Plex, then Jellyfin, then Emby (specs.md §21.5).
+	MediaServers []MediaServer
 
 	effective map[string]any
+}
+
+// The media servers [notify] can tell of a change (specs.md §21.5).
+const (
+	Plex     = "plex"
+	Jellyfin = "jellyfin"
+	Emby     = "emby"
+)
+
+// MediaServer is one table of [notify] whose url is set.
+type MediaServer struct {
+	// Kind is Plex, Jellyfin or Emby.
+	Kind string
+	URL  string
+	// SecretFile is Plex's token_file, or the api_key_file of the others: empty when not set.
+	SecretFile string
+	// PathMap is path_map: a host path, to the path the server sees there.
+	PathMap map[string]string
 }
 
 // Effective returns every value of the configuration after the rules of specs.md
@@ -148,9 +168,34 @@ func Parse(data []byte) (*Config, error) {
 	}
 	c.effective = flatten(tree)
 	c.PoolID, c.Strategy = text(tree, "pool_id"), text(tree, "strategy")
+	c.MediaServers = mediaServers(tree)
 	c.Warnings = append(unknownLabels(tree), laterPhaseWarnings(set)...)
 	sortProblems(c.Warnings)
 	return c, nil
+}
+
+// mediaServers reads the tables of [notify] whose url is set, in the order of specs.md §21.5.
+func mediaServers(tree map[string]any) []MediaServer {
+	notify, _ := tree["notify"].(map[string]any)
+	var out []MediaServer
+	for _, kind := range []string{Plex, Jellyfin, Emby} {
+		t, _ := notify[kind].(map[string]any)
+		url := text(t, "url")
+		if url == "" {
+			continue
+		}
+		secret := "api_key_file"
+		if kind == Plex {
+			secret = "token_file"
+		}
+		m := MediaServer{Kind: kind, URL: url, SecretFile: text(t, secret), PathMap: map[string]string{}}
+		paths, _ := t["path_map"].(map[string]any)
+		for host, seen := range paths {
+			m.PathMap[host], _ = seen.(string)
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // problems collects at most one problem per key.

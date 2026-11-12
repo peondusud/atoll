@@ -1160,17 +1160,24 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
   - the scan examines every file, which wakes every disk and can take hours: try it on a small library first;
   - until then, keep `replication.enabled = false`; otherwise every replicated file appears in Plex as a second version of the same item.
 - Keep Plex's "Empty trash automatically after every scan" **off permanently**: when a disk is missing, its x1 files vanish from the view, and a scan would otherwise delete their entries, metadata and watch history.
-- While a disk is missing, Atoll sends no scan notification for the affected folders and raises an alert. How Jellyfin and Emby treat missing files during their own scans is to be checked (§30).
+- While a disk is missing, Atoll sends no scan notification for the affected folders (§21.5) and raises an alert. How Jellyfin and Emby treat missing files during their own scans is to be checked (§30).
 
 ### 21.5 Notifications
 
 - Partial scan of the changed folder:
-  - Plex: `GET /library/sections/<id>/refresh?path=<folder>`;
-  - Emby and Jellyfin: `POST /Library/Media/Updated`.
-- `path_map` translates host paths into the paths the server sees (Docker container). The longest key that is a prefix of the path, by whole components, applies.
-- Batching: one notification per folder per 30-second window.
-- A media server's automatic scan sees changes made through the mount on the same host; Atoll notifies the others (changes made on member disks, propagated renames and deletions).
-- The media server's periodic scan can then be disabled.
+  - Plex: `GET /library/sections/<id>/refresh?path=<folder>`, for each library whose folders, the `Location` entries `GET /library/sections` gives, hold the folder; a folder above a library's folder asks for that folder. The token `token_file` holds goes in `X-Plex-Token`; without `token_file`, Plex must take this host's requests without one.
+  - Emby and Jellyfin: `POST /Library/Media/Updated` with `{"Updates": [{"Path": <folder>, "UpdateType": "Modified"}]}`, a hundred folders a request. The key `api_key_file` holds goes in `Authorization: MediaBrowser Token="<key>"` for Jellyfin, which no longer takes `X-Emby-Token` from its version 12.0, and in `X-Emby-Token` for Emby; with no `api_key_file`, nothing is sent, and the log says why. A folder whose path is not UTF-8 cannot be named in JSON, and is left out.
+  - A request has 10 s. A server that does not answer 2xx is tried again 5 minutes later, with all it was to be told.
+- `path_map` translates host paths into the paths the server sees (Docker container). The longest key that is a prefix of the path, by whole components, applies. A folder's host path is `view.mount`, then the folder (`conformance/vectors/path_map.json`).
+- Batching: one notification per folder per 30-second window. A folder is told at once, then not again for 30 s; a change there in between is told when they end.
+- A media server's automatic scan sees changes made through the mount on the same host; Atoll notifies the others. The daemon that runs for good, after each pass, tells each server set of:
+  - the folder that holds each path a ripe group of the watcher names (§15.1), when someone other than the view and Atoll made it, or the watcher cannot tell who, as with inotify, and it changed more than attributes;
+  - the folders of the pass's operations that change a name: both paths of a rename of a file or a folder, and the path of a copy moved to the trash.
+
+  A copy Atoll makes or repairs changes no name, and calls for nothing. A command tells no server; a daemon in shadow mode logs what it would tell, and tells nothing.
+- While a disk is missing, a folder below which a file has a copy on that disk, in any state, is held. It is told after a pass finds the disk back, or once the disk is `failed` (§21.4).
+- `atoll notify test` asks each server set something that changes nothing (§23).
+- The media server's periodic scan can then be disabled. A new file written straight to a disk while the daemon is stopped is found by its next walk, which renames and deletes nothing, so nothing tells the server of it: keep a periodic scan where that happens.
 
 ### 21.6 One disk awake
 
@@ -1233,7 +1240,7 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
 - **ntfy.** An HTTP `POST` of the alert's text to `alerts.ntfy`, with its title in `Title`, its priority in `Priority` (4 for a disk `missing` or failing, a guard tripped, `corrupt` or `unavailable` files, sectors pending or uncorrectable; 3 for the others) and the tag `warning`. With `alerts.ntfy_token_file`, the token that file holds goes in `Authorization: Bearer`, so that the token stays out of the configuration. A request has 10 s.
 - **Gotify.** An HTTP `POST` to `<alerts.gotify>/message` of a JSON object, `title`, `message` and `priority`: 8 where ntfy's priority is 4, which Gotify's clients sound, and 5 otherwise. The application token that `alerts.gotify_token_file` holds goes in `X-Gotify-Key`, read at each send; Gotify takes no message without one, so a channel with no token file never goes, and says why. A request has 10 s.
 - **SMTP.** `alerts.smtp` is `smtp://[user@]host[:port]?from=<address>&to=<address>`, with one `from` and one `to` or more, bare addresses each; or `smtps://` for TLS from the first byte. The port is 587 for `smtp` and 465 for `smtps` when left out. `smtp` takes `STARTTLS` when the server offers it, and must when a user is given, as a password never goes in clear: that password is the one `alerts.smtp_password_file` holds, read at each send, sent by `AUTH PLAIN`, and never written in the address. The mail goes from `from` to each `to`; its subject is the alert's title, encoded as RFC 2047 says when it is not ASCII; its text is the alert's, in UTF-8 and quoted-printable; and `X-Priority: 1` marks what ntfy sends at 4. A conversation has 10 s, and a mail went when the server took it after `DATA`. A refusal by the server is its answer.
-- `atoll notify test` sends a test alert through each channel that is set, and says for each whether it went: a channel went when its server answered 2xx. It reads the configuration only, and needs no catalog. It exits with 0 when each did, with 4 when one did not, with 1, and nothing on standard output, when none is set or the configuration cannot be used, and with 2 on a usage error. Output: `api/schemas/notify-test.schema.json`.
+- `atoll notify test` sends a test alert through each channel that is set, then asks each media server set (§21.5) something that changes nothing, which its token or key must open: Plex's `GET /library/sections`, Jellyfin's and Emby's `GET /System/Info`. It says for each whether it went: when its server answered 2xx. It reads the configuration only, and needs no catalog. It exits with 0 when each did, with 4 when one did not, with 1, and nothing on standard output, when no channel and no media server is set or the configuration cannot be used, and with 2 on a usage error. Output: `api/schemas/notify-test.schema.json`.
 - Prometheus metrics on `/metrics` (phase 2b).
 
 ## 24. Configuration
@@ -1513,7 +1520,6 @@ Phase 1a warns about these settings, and each phase removes its own lines. The k
 | a rule's `tags`, `domains` | any | 1b | no effect |
 | `trash.link_guard` | `true` | 1b | no effect |
 | `balance.schedule` | anything but `never` | 1b | no effect |
-| `notify.plex.url`, `notify.jellyfin.url`, `notify.emby.url` | anything but `""` | 1b | no effect |
 | `read.policy` | anything but `oldest` | 2a | no effect |
 | `read.classes` | any | 2a | no effect |
 | `placement.new_files` | anything but `most-free` | 2b | works as `most-free` |

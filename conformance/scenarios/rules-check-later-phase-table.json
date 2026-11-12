@@ -46,21 +46,6 @@
             "message": "${ANY}"
           },
           {
-            "key": "notify.emby.url",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "notify.jellyfin.url",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "notify.plex.url",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "placement.colocate",
             "later_phase": true,
             "message": "${ANY}"

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -318,7 +319,6 @@ func TestLaterPhaseWarnings(t *testing.T) {
 		"disk[3].role",
 		"health.avoid_hotter_than",
 		"health.evacuate_on",
-		"notify.plex.url",
 		"placement.colocate", // set by the energy preset, unlike new_files, which the file sets
 		"read.classes",
 		"rule[5].cache_min_age",
@@ -414,5 +414,41 @@ func TestErrorMessage(t *testing.T) {
 	_, err = Parse([]byte("pool_id = \n"))
 	if err == nil || !strings.HasPrefix(err.Error(), "configuration: ") {
 		t.Errorf("got %v", err)
+	}
+}
+
+// The media servers are the tables of [notify] whose url is set, in the order Plex, Jellyfin, Emby, each with its
+// secret file and its path_map (specs.md §21.5).
+func TestMediaServers(t *testing.T) {
+	c, err := Parse([]byte(`pool_id = "p"
+catalog = "/srv/catalog.db"
+[view]
+mount = "/srv/pool"
+[notify.emby]
+url = "http://127.0.0.1:8096"
+api_key_file = "/etc/atoll/emby.key"
+[notify.jellyfin]
+url = ""
+api_key_file = "/etc/atoll/jellyfin.key"
+[notify.plex]
+url = "http://127.0.0.1:32400"
+token_file = "/etc/atoll/plex.token"
+path_map = { "/srv/pool" = "/data", "/srv/pool/tv" = "/tv" }
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []MediaServer{
+		{Kind: Plex, URL: "http://127.0.0.1:32400", SecretFile: "/etc/atoll/plex.token", PathMap: map[string]string{"/srv/pool": "/data", "/srv/pool/tv": "/tv"}},
+		{Kind: Emby, URL: "http://127.0.0.1:8096", SecretFile: "/etc/atoll/emby.key", PathMap: map[string]string{}},
+	}
+	if !reflect.DeepEqual(c.MediaServers, want) {
+		t.Errorf("%+v", c.MediaServers)
+	}
+	for _, w := range c.Warnings {
+		t.Errorf("a warning: %v", w)
+	}
+	if c, err := Parse([]byte("pool_id = \"p\"\ncatalog = \"/srv/catalog.db\"\n[view]\nmount = \"/srv/pool\"\n")); err != nil || len(c.MediaServers) != 0 {
+		t.Errorf("none set: %+v, %v", c, err)
 	}
 }

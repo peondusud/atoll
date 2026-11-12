@@ -74,10 +74,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			}
 		case "health.evacuate_on", "health.avoid_hotter_than":
 			phase = "4"
-		case "notify.plex.url", "notify.jellyfin.url", "notify.emby.url":
-			if v != "" {
-				phase = "1b"
-			}
 		}
 		if phase != "" {
 			if effect == "" {

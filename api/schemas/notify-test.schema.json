@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/peondusud/atoll/api/schemas/notify-test.schema.json",
   "title": "atoll notify test --json",
-  "description": "A test alert through each alert channel the configuration sets, and whether it went (specs.md §23, §25). Exit 0 when each went, 4 when one did not.",
+  "description": "A test alert through each alert channel the configuration sets, then a request that changes nothing to each media server it sets, which the server's token or key must open, and whether each went (specs.md §21.5, §23, §25). Exit 0 when each went, 4 when one did not.",
   "type": "object",
   "additionalProperties": false,
   "required": ["channels"],
   "properties": {
     "channels": {
-      "description": "The channels set, in the order of specs.md §23; never empty, as with none set the command exits with 1 and prints nothing.",
+      "description": "The alert channels set, in the order of specs.md §23, then the media servers set, in the order of specs.md §21.5; never empty, as with none set the command exits with 1 and prints nothing.",
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/channel" }
@@ -21,11 +21,11 @@
       "required": ["channel", "sent"],
       "properties": {
         "channel": {
-          "description": "The configuration key that sets the channel.",
-          "enum": ["alerts.ntfy", "alerts.gotify", "alerts.smtp"]
+          "description": "The configuration key that sets the channel, or the table that sets the media server.",
+          "enum": ["alerts.ntfy", "alerts.gotify", "alerts.smtp", "notify.plex", "notify.jellyfin", "notify.emby"]
         },
         "sent": {
-          "description": "Whether the server took the alert: a 2xx answer.",
+          "description": "Whether the server took the alert, or answered the request: a 2xx answer.",
           "type": "boolean"
         },
         "error": {

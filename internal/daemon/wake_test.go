@@ -33,6 +33,8 @@ func TestWakeVectors(t *testing.T) {
 		BackupPend    bool     `json:"backup_pending"`
 		SmartDueNS    *int64   `json:"smart_due_ns"`
 		Smart         bool     `json:"smart"`
+		NotifyDueNS   *int64   `json:"notify_due_ns"`
+		Notify        bool     `json:"notify"`
 		Backup        bool     `json:"backup"`
 		ReadHashes    bool     `json:"read_hashes"`
 		Scrub         bool     `json:"scrub"`
@@ -60,7 +62,7 @@ func TestWakeVectors(t *testing.T) {
 				GroupDueNS: v.GroupDueNS, RipeOrigins: v.RipeOrigins, LastPassEndNS: v.LastPassEndNS, RescanEveryNS: v.RescanEveryNS,
 				Window: w, Location: loc, HashPending: v.HashPending, ScrubPending: v.ScrubPending, ScrubWindow: scrubWindow,
 				ScrubBudgetNS: v.ScrubBudgetNS, ScrubSpentNS: v.ScrubSpentNS, ScrubSpentOpenedNS: v.ScrubSpentAt, BackupPending: v.BackupPend,
-				SmartDueNS: v.SmartDueNS,
+				SmartDueNS: v.SmartDueNS, NotifyDueNS: v.NotifyDueNS,
 			})
 		}
 		switch {
@@ -70,7 +72,7 @@ func TestWakeVectors(t *testing.T) {
 			}
 		case err != nil:
 			t.Errorf("case %d (%s): %v", i, v.Note, err)
-		case out.Check != v.Check || out.Smart != v.Smart || out.Hash != v.ReadHashes || out.Backup != v.Backup || out.Scrub != v.Scrub || out.ScrubOpenedNS != v.ScrubOpenedNS ||
+		case out.Check != v.Check || out.Notify != v.Notify || out.Smart != v.Smart || out.Hash != v.ReadHashes || out.Backup != v.Backup || out.Scrub != v.Scrub || out.ScrubOpenedNS != v.ScrubOpenedNS ||
 			!slices.Equal(out.Because, v.Because) && (len(out.Because) > 0 || len(v.Because) > 0) || out.WakeNS != v.WakeNS:
 			t.Errorf("case %d (%s): check %v, because %v, wake %s; want %v, %v, %s", i, v.Note, out.Check, out.Because,
 				time.Unix(0, out.WakeNS).UTC().Format(time.RFC3339), v.Check, v.Because, time.Unix(0, v.WakeNS).UTC().Format(time.RFC3339))

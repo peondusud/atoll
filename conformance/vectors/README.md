@@ -254,6 +254,15 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `reading` | object | `asleep`, the disk left asleep, nothing read; `needs_sat`, the answer asks for a device type, as behind a USB bridge; `failing`, its health check failed or an NVMe disk raised a critical warning; `reallocated`, `pending` and `uncorrectable`, ATA attributes 5, 197 and 198, or an NVMe disk's media errors; `temperature`, in degrees Celsius, 0 when none is given |
 | `error` | boolean | `true` for an answer with no exit status, or that holds no reading while the disk is neither asleep nor asking for a device type |
 
+### `path_map.json` — the path a media server sees (§21.5)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `view_mount` | string | `view.mount` |
+| `folder` | string | a folder of the view, relative to its top; `""` for the top itself |
+| `path_map` | array | `path_map` of the server's table, each entry a `host` path and the path the `server` sees there |
+| `seen` | string | the view's mount, then the folder, through the longest key of `path_map` that is the path or a prefix of it by whole components; the host's path when none is |
+
 ### `op_recovery.json` — what a reprise does with an operation (§17.2)
 
 | Field | Type | Meaning |
@@ -385,8 +394,10 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `scrub_spent_ns`, `scrub_spent_opened_ns` | integer | what the scrub spent, and when the stretch of its window it spent it in began |
 | `backup_pending` | boolean | the stretch of the window that holds now, or the next one, has no catalog backup yet |
 | `smart_due_ns` | integer | when the disks' SMART is next to be read; left out when it never is |
+| `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `notify` | boolean | `true` when the media servers are to be told now: `notify_due_ns` has come |
 | `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
 | `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
 | `backup` | boolean | `true` when the catalog is to be backed up now: `backup_pending`, inside the window, and no hash to read |
