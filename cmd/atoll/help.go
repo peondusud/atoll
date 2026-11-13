@@ -88,9 +88,22 @@ func helpAsked(args []string) bool {
 	return false
 }
 
+// subcommands gives the words a command's synopsis has right after its name: its subcommands, and none for a command
+// that takes its arguments at once.
+func (h *commandHelp) subcommands() []string {
+	var subs []string
+	for _, line := range h.synopsis {
+		if fields := strings.Fields(line); len(fields) > 2 && !strings.ContainsAny(fields[2][:1], "[<-") {
+			subs = append(subs, fields[2])
+		}
+	}
+	return subs
+}
+
 // writeHelp writes the list of commands, or with a name that command's synopsis and what it does, and exits with 0,
-// or with 2 for a command it does not know.
-func writeHelp(name string, stdout, stderr io.Writer) int {
+// or with 2 for a command it does not know, or for a subcommand, the word given after the command's name, that the
+// command does not have (specs.md §25).
+func writeHelp(name, sub string, stdout, stderr io.Writer) int {
 	helps := commandHelps()
 	var text strings.Builder
 	if name == "" {
@@ -108,6 +121,9 @@ func writeHelp(name string, stdout, stderr io.Writer) int {
 			return usage(stderr, fmt.Sprintf(T("unknown command %q"), name))
 		}
 		h := &helps[at]
+		if subs := h.subcommands(); sub != "" && len(subs) > 0 && !slices.Contains(subs, sub) {
+			return usage(stderr, fmt.Sprintf(T("unknown command %q"), name+" "+sub))
+		}
 		for _, line := range h.synopsis {
 			text.WriteString(line + "\n")
 		}

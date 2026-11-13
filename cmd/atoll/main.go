@@ -62,13 +62,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	switch {
 	case args[0] == "--help" || args[0] == "-h" || (args[0] == "help" && len(args) == 1):
-		return writeHelp("", stdout, stderr)
+		return writeHelp("", "", stdout, stderr)
 	case args[0] == "help" && len(args) == 2:
-		return writeHelp(args[1], stdout, stderr)
+		return writeHelp(args[1], "", stdout, stderr)
 	case args[0] == "help":
 		return usage(stderr, T("help takes one command at most"))
 	case helpAsked(args[1:]):
-		return writeHelp(args[0], stdout, stderr)
+		// What comes right after a command's name is its subcommand, when it has any: a flag there is not one.
+		sub := ""
+		if !strings.HasPrefix(args[1], "-") {
+			sub = args[1]
+		}
+		return writeHelp(args[0], sub, stdout, stderr)
 	}
 	switch args[0] {
 	case "rules":
