@@ -926,8 +926,60 @@ func fileChanged(f *catalog.FileRow, u *catalog.FileUpdate) bool {
 		f.Rule != u.Rule || f.Mode != u.Mode || f.Original != u.Original
 }
 
+// hashShare is how long the hashes of the files read wait for one transaction (specs.md §15.10).
+const hashShare = int64(time.Second)
+
+// hashWriter commits what reading files gave: the files read within a second together, and a file of more than a
+// chunk alone, what waited committed before it is read (specs.md §15.10). A transaction for each file made a library
+// of small files cost a sync of the catalog each, 31 minutes for 400,000 copies of a few bytes, and a slow system
+// disk one fsync a file. An interruption loses no more than the second under way, and the file being read.
+type hashWriter struct {
+	db      *sql.DB
+	machine disks.Machine
+	// stamp is the time the catalog records: when the run began.
+	stamp   int64
+	pending []catalog.HashWrite
+	since   int64
+}
+
+// add takes what reading one file gave, and commits what waits when a second has gone by, or at once for a file
+// that is alone.
+func (w *hashWriter) add(ctx context.Context, write *catalog.HashWrite, alone bool) error {
+	if len(w.pending) == 0 {
+		w.since = w.machine.Now()
+	}
+	w.pending = append(w.pending, *write)
+	if alone || w.machine.Now()-w.since >= hashShare {
+		return w.flush(ctx)
+	}
+	return nil
+}
+
+// flush commits what waits.
+func (w *hashWriter) flush(ctx context.Context) error {
+	if len(w.pending) == 0 {
+		return nil
+	}
+	if err := catalog.WriteHashesOf(ctx, w.db, w.stamp, w.pending); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	w.pending = w.pending[:0]
+	return nil
+}
+
+// kept commits what waits once a reading is over, whatever stopped it, an error or a cancellation: what was read
+// is not read again for that.
+func (w *hashWriter) kept(ctx context.Context, err error) error {
+	return errors.Join(err, w.flush(context.WithoutCancel(ctx)))
+}
+
 // hashCopies reads the copies on the disks that were walked, file after file (specs.md §15.10).
 func hashCopies(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, out *Outcome, now int64) error {
+	w := &hashWriter{db: db, machine: m, stamp: now}
+	return w.kept(ctx, hashWalked(ctx, db, c, m, out, w))
+}
+
+func hashWalked(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, out *Outcome, w *hashWriter) error {
 	var err error
 	readers := make(map[string]*diskReader, len(out.Disks))
 	defer func() {
@@ -966,7 +1018,7 @@ func hashCopies(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("scan: %w", err)
 			}
-			if err := hashFile(ctx, db, &page[i], readers, order, now); err != nil {
+			if err := hashFile(ctx, w, &page[i], readers, order); err != nil {
 				return err
 			}
 		}
@@ -995,7 +1047,15 @@ type HashSlice struct {
 // §15.13). It walks nothing: a copy that is no longer what its row says is left as it is, for the next pass to look
 // at, and so is one on a disk that fails.
 func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64) (*HashSlice, error) {
-	now := m.Now()
+	w := &hashWriter{db: db, machine: m, stamp: m.Now()}
+	out, err := hashNew(ctx, db, c, m, until, w)
+	if err = w.kept(ctx, err); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func hashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64, w *hashWriter) (*HashSlice, error) {
 	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
@@ -1042,7 +1102,7 @@ func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine,
 				out.Left = true
 				return said(), nil
 			}
-			if err := hashFile(ctx, db, &page[i], readers, order, now); err != nil {
+			if err := hashFile(ctx, w, &page[i], readers, order); err != nil {
 				return nil, err
 			}
 		}
@@ -1098,6 +1158,11 @@ type copyHash struct {
 // ReadReplicas re-reads the copies Atoll made of the files below a path, as a full scan reads a copy, on
 // the disks it may read: what atoll replicate --force does besides --now (specs.md §14.3).
 func ReadReplicas(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, now int64, readable func(id string) bool, below func(string) bool) error {
+	w := &hashWriter{db: db, machine: m, stamp: now}
+	return w.kept(ctx, readReplicas(ctx, db, c, m, w, readable, below))
+}
+
+func readReplicas(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, w *hashWriter, readable func(id string) bool, below func(string) bool) error {
 	readers := make(map[string]*diskReader, len(c.Disks))
 	defer func() {
 		for _, r := range readers {
@@ -1140,7 +1205,7 @@ func ReadReplicas(ctx context.Context, db *sql.DB, c *config.Config, m disks.Mac
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("replicate: %w", err)
 			}
-			if err := hashFile(ctx, db, &f, readers, order, now); err != nil {
+			if err := hashFile(ctx, w, &f, readers, order); err != nil {
 				return err
 			}
 		}
@@ -1155,7 +1220,14 @@ func ReadReplicas(ctx context.Context, db *sql.DB, c *config.Config, m disks.Mac
 	return nil
 }
 
-func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[string]*diskReader, order map[string]int, now int64) error {
+func hashFile(ctx context.Context, w *hashWriter, f *catalog.FileRow, readers map[string]*diskReader, order map[string]int) error {
+	// A file of more than a chunk has a transaction of its own: what waits is committed before it is read.
+	alone := f.Size > integrity.ChunkSize
+	if alone {
+		if err := w.flush(ctx); err != nil {
+			return err
+		}
+	}
 	copies := make([]*catalog.CopyRow, 0, len(f.Copies))
 	for i := range f.Copies {
 		// A pending copy has nothing on its disk to read yet (specs.md §14.1).
@@ -1207,10 +1279,7 @@ func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[s
 			write.Conflict = true
 		}
 	}
-	if err := catalog.WriteHashes(ctx, db, now, &write); err != nil {
-		return fmt.Errorf("catalog: %w", err)
-	}
-	return nil
+	return w.add(ctx, &write, alone)
 }
 
 // readCopy reads one copy to its end. It says false when that gives no hash to use: the name can

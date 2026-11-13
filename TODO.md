@@ -68,7 +68,6 @@ Every item here is a **decision**:
 Each point the review left to decide was put to the maintainer as a question, with its options and what each costs. What he chose is below; the reasons and the costs are in the entries of the sections that follow, which stay until each is done. Each is done as any fix: a test that fails first, the spec, DONE.md.
 
 7. **A copy found gone** (invariant 11): the journal is asked first where Atoll moved it, through an index on `ops(disk_id, file_key)`, a migration; the walk of the trash and `tmp/` stays as the fallback.
-8. **The hashes of new files** (§15.10): one transaction for the files read within a second.
 9. **The 200 MB of §26**: both. The link guard holds less of a disk at once, about 77 MiB, with no contract changed; and the plan asks the catalog whether a key is taken on an NTFS candidate, in place of holding every name, which changes the pure solver's input and `plan.json`.
 10. **The sync of each file `MakeLink` links** (§17.1): measured first on ext4, XFS and btrfs, as it was on ntfs3, a device failing right after the folder's sync; kept on NTFS alone only if the measure allows.
 11. **A pending copy** is kept only while `min_free` holds (§12.4, §13.4); otherwise it is placed again, or waits as `no-room`.
@@ -79,12 +78,6 @@ Each point the review left to decide was put to the maintainer as a question, wi
 16. **The soak of 72 hours** started on 2026-11-13 on `c294b35` was stopped the same evening, after 3 passes: several of the above change the loop it measures. It runs again once they are done and verified.
 
 Left as recommended, with no question put: the jobs read whole, the renames by rounds and the bound on a path's depth, the bursts of the watcher, `cannotLeave` and `GonePaths`; `guard list` is to write as it reads when the local API serves large pools.
-
-## What the review of the code leaves (2026-11-13)
-
-Each is a **decision**: the code does what the spec says, and the review found what that costs.
-
-- **One transaction for each file hashed** (§15.10), so that an interruption loses little. On 400,000 copies of a few bytes that is 31 minutes in qemu without KVM, 4.7 ms a copy, nearly all of it in commits (§26); on a slow system disk it is one `fsync` a file. To decide: one transaction for the files read within a second, which loses as little of a large file and costs a small one nearly nothing.
 
 ## What the review of the code found, still open (2026-11-13)
 
