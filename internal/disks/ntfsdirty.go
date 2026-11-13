@@ -40,14 +40,21 @@ func NTFSDirty(read func(off int64, n int) ([]byte, error)) (bool, error) {
 	}
 	perCluster := int64(boot[0x0D])
 	if perCluster > 0x80 {
-		perCluster = 1 << (256 - perCluster)
+		// A power of two, 2^(256 - n). Past 2^12 no volume has it, and 2^63 is no count that 64 bits hold: it would
+		// read as a negative one, which is under any limit, and leave clusters of 0 bytes.
+		power := 256 - perCluster
+		if power > 12 {
+			return false, fmt.Errorf("%w: 2^%d sectors a cluster", ErrNotNTFS, power)
+		}
+		perCluster = 1 << power
 	}
-	if perCluster == 0 || bits.OnesCount64(uint64(perCluster)) != 1 || perCluster > 1<<12 {
+	if perCluster <= 0 || bits.OnesCount64(uint64(perCluster)) != 1 || perCluster > 1<<12 {
 		return false, fmt.Errorf("%w: %d sectors a cluster", ErrNotNTFS, perCluster)
 	}
 	cluster := sector * perCluster
 	record := int64(0)
-	if n := int8(boot[0x40]); n < 0 {
+	// As an integer of its own width, -128 is its own opposite, and would pass for a small power.
+	if n := int(int8(boot[0x40])); n < 0 {
 		if -n > 20 {
 			return false, fmt.Errorf("%w: a record of 2^%d bytes", ErrNotNTFS, -n)
 		}
