@@ -346,12 +346,11 @@ func (a *diskAdding) checkTopology(c *config.Config, entry *disks.MountEntry) er
 // checkMarker refuses a disk whose marker says it is of another pool, another disk or another filesystem, and
 // says what to write when the configuration asks for a marker.
 func (a *diskAdding) checkMarker(c *config.Config) error {
-	data, err := fsx.ReadFile(filepath.Join(a.disk.Mount, a.disk.Workdir, layout.MarkerName))
+	data, found, err := ops.ReadMarkerAt(a.disk.Mount, a.disk.Workdir)
 	switch {
-	case fsx.IsAbsent(err):
 	case err != nil:
 		return fmt.Errorf("its marker: %w", err)
-	default:
+	case found:
 		mark, err := layout.ParseMarker(data)
 		if err != nil {
 			return fmt.Errorf(T("its marker %s: %w"), layout.MarkerName, err)

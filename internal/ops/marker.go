@@ -15,6 +15,41 @@ import (
 // ErrOtherMarker says that a disk holds a marker other than the one to write.
 var ErrOtherMarker = errors.New("the disk holds another marker")
 
+// markerLimit is more than any marker holds: a larger file at its name is not one.
+const markerLimit = 64 << 10
+
+// ErrNoMarker says that the file at a marker's name is too large to be one.
+var ErrNoMarker = errors.New("larger than a marker")
+
+// ReadMarkerAt reads the marker of a disk that has no session, as the command that adds a disk or shows one meets it,
+// and says whether there is one (specs.md §10). It goes through a handle on the mount point, one component at a time:
+// whoever can write at the top of that disk, or in its work folder, can put anything at the marker's name, so no link
+// is followed, nothing but a file is read, a FIFO there holds nothing, and a file past a marker's size is refused
+// rather than read into memory.
+func ReadMarkerAt(mount, workdir string) (text []byte, found bool, err error) {
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w", err)
+	}
+	defer func() { _ = top.Close() }()
+	file, err := fsx.OpenFileAt(top, workdir+"/"+layout.MarkerName)
+	if fsx.IsAbsent(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("%w", err)
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, markerLimit+1))
+	switch {
+	case err != nil:
+		return nil, false, fmt.Errorf("read %q: %w", layout.MarkerName, err)
+	case len(data) > markerLimit:
+		return nil, false, fmt.Errorf("%q: %w", layout.MarkerName, ErrNoMarker)
+	}
+	return data, true, nil
+}
+
 // ReadMarker reads the disk's Atoll/disk.toml, and says whether there is one.
 func (d *Disk) ReadMarker() (text []byte, found bool, err error) {
 	f, err := d.open(components(d.config.Workdir))
@@ -33,7 +68,7 @@ func (d *Disk) ReadMarker() (text []byte, found bool, err error) {
 		return nil, false, classify(fmt.Errorf("open %q: %w", layout.MarkerName, err))
 	}
 	defer func() { _ = file.Close() }()
-	data, err := io.ReadAll(io.LimitReader(file, 64<<10))
+	data, err := io.ReadAll(io.LimitReader(file, markerLimit))
 	if err != nil {
 		return nil, false, classify(fmt.Errorf("read %q: %w", layout.MarkerName, err))
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/ops"
 )
 
 // The changes atoll disk remove and atoll disk fail make (api/schemas/disk-change.schema.json).
@@ -380,8 +380,7 @@ func showDisk(ctx context.Context, c *config.Config, m disks.Machine, d *config.
 	}
 	// The marker is read only from a disk its check finds there: a missing disk's folder may be its mount point.
 	if verdict.State != disks.Missing && d.State != config.DiskFailed {
-		data, err := fsx.ReadFile(filepath.Join(d.Mount, d.Workdir, layout.MarkerName))
-		if err == nil {
+		if data, found, err := ops.ReadMarkerAt(d.Mount, d.Workdir); err == nil && found {
 			if mark, err := layout.ParseMarker(data); err == nil {
 				out.Marker = &diskShowMarker{PoolID: mark.PoolID, DiskID: mark.DiskID, FSUUID: mark.FSUUID}
 			}
