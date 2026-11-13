@@ -301,6 +301,21 @@ func TestTheAPIServerLimits(t *testing.T) {
 	}
 }
 
+// The unit closes the catalog's folder to other accounts. The catalog lists every path of the library, its trash and
+// its history: what the local API gives only through its socket, of mode 0660, or with its token (specs.md §25.1).
+func TestTheUnitClosesTheCatalogsFolder(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "deploy", "atoll.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, want := range []string{"StateDirectory=atoll", "StateDirectoryMode=0750"} {
+		if !slices.Contains(lines, want) {
+			t.Errorf("deploy/atoll.service has no line %q", want)
+		}
+	}
+}
+
 // serve asks a handler for a path, with a request of that context, and gives the status of its answer.
 func serve(ctx context.Context, h http.Handler, path string) int {
 	w := httptest.NewRecorder()

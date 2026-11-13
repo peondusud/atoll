@@ -27,6 +27,9 @@ ProtectHome=read-only
 PrivateTmp=yes
 # The catalog in /var/lib/atoll, the configuration in /etc/atoll, the local API's socket in /run/atoll.
 StateDirectory=atoll
+# The catalog lists every path of the library, its trash and its history: its folder is closed to other accounts, as
+# the socket is. Root's commands reach it all the same.
+StateDirectoryMode=0750
 ConfigurationDirectory=atoll
 RuntimeDirectory=atoll
 # A pass under way stops at its next step; what an operation left is the reprise's at the next start.
