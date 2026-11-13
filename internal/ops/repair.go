@@ -91,6 +91,9 @@ func (d *Disk) SaveChunk(op *Op, index int64, data []byte, copyStat *fsx.Stat) e
 		return err
 	}
 	defer tmp.close()
+	if err := private(tmp.Dir); err != nil {
+		return err
+	}
 	name := part[len(part)-1]
 	partStat, err := d.writePart(tmp.Dir, name, data, copyStat)
 	if err != nil {

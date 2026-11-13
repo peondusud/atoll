@@ -111,8 +111,9 @@ type Dir interface {
 	CreateFile(name string, mode uint32) (WritableFile, error)
 	// OpenWritable opens a regular file for reading and writing, to resume a copy in progress.
 	OpenWritable(name string) (WritableFile, error)
-	// SetMtime sets the modification time of the folder itself.
+	// SetMtime sets the modification time of the folder itself, and SetMode its permission bits, as fchmod does.
 	SetMtime(t Time) error
+	SetMode(mode uint32) error
 	Close() error
 }
 
@@ -367,6 +368,13 @@ func (d *realDir) Rmdir(name string) error {
 func (d *realDir) Sync() error {
 	if err := unix.Fsync(d.fd()); err != nil {
 		return fmt.Errorf("fsync %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
+func (d *realDir) SetMode(mode uint32) error {
+	if err := unix.Fchmod(d.fd(), mode); err != nil {
+		return fmt.Errorf("chmod %q: %w", d.file.Name(), err)
 	}
 	return nil
 }

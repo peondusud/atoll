@@ -161,6 +161,13 @@ func (d *faultDir) SetMtime(t Time) error {
 	return d.Dir.SetMtime(t)
 }
 
+func (d *faultDir) SetMode(mode uint32) error {
+	if err := d.fail("setmode", d.name); err != nil {
+		return err
+	}
+	return d.Dir.SetMode(mode)
+}
+
 type faultFile struct {
 	File
 	name string

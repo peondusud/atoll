@@ -3,6 +3,7 @@ package ops
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -24,8 +25,32 @@ type Part struct {
 	Stat fsx.Stat
 }
 
+// private closes the folder of the parts to every account but its owner's, one an earlier version left open
+// included. A part carries its source's mode and owner while it is read again, and what a repair saves there is a
+// file's own bytes: in a folder anyone may enter, a file that only its folders kept private would be open to all for
+// that time. A driver that holds no mode leaves the folder as it is.
+func private(dir fsx.Dir) error {
+	st, err := dir.Info()
+	if err != nil {
+		return classify(err)
+	}
+	if st.Mode&0o077 == 0 {
+		return nil
+	}
+	switch err := dir.SetMode(st.Mode &^ 0o077); {
+	case err == nil:
+		return nil
+	case fsx.IsDiskLost(err):
+		return lost(err)
+	default:
+		slog.Warn("the folder of the parts stays open to other accounts", "error", err)
+		return nil
+	}
+}
+
 // MakePart makes the part an operation names: <workdir>/tmp/ where it is missing, each folder synced, then
-// its parent; the part with mode 0600, never over anything, synced, then its folder (specs.md §14.2).
+// its parent, and closed to other accounts; the part with mode 0600, never over anything, synced, then its folder
+// (specs.md §14.2).
 func (d *Disk) MakePart(op *Op) (*Part, error) {
 	if err := d.Verify(); err != nil {
 		return nil, err
@@ -36,6 +61,9 @@ func (d *Disk) MakePart(op *Op) (*Part, error) {
 		return nil, err
 	}
 	defer dir.close()
+	if err := private(dir.Dir); err != nil {
+		return nil, err
+	}
 	name := path[len(path)-1]
 	f, err := dir.CreateFile(name, 0o600)
 	switch {

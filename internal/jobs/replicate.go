@@ -595,14 +595,19 @@ func (c *copier) restore(part *ops.Part, read *fsx.Stat) error {
 	if err := part.SetTimes(fsx.OmitTime, read.Mtime); err != nil {
 		return classifyDisk(err)
 	}
-	if err := part.SetMode(read.Mode); err != nil {
-		return classifyDisk(err)
-	}
+	// The owner first: a change of owner takes the setuid and setgid bits off a file, so a mode set before it would
+	// lose them. And a copy that could not take its source's owner does not keep the bits that would run it as
+	// another's.
+	mode := read.Mode
 	if err := part.SetOwner(read.Uid, read.Gid); err != nil {
 		if fsx.IsDiskLost(err) {
 			return classifyDisk(err)
 		}
 		slog.Warn("a copy keeps another owner", "disk", c.op.Disk, "path", c.job.Path, "error", err)
+		mode &^= 0o6000
+	}
+	if err := part.SetMode(mode); err != nil {
+		return classifyDisk(err)
 	}
 	if err := part.Sync(); err != nil {
 		return fmt.Errorf("%w: %w", ops.ErrDiskLost, err)

@@ -81,6 +81,39 @@ func only(t *testing.T, items []ReplicateItem, outcome string) {
 	}
 }
 
+// The folder of the parts is closed to others, one an earlier version left open included, and a part takes its owner
+// before its mode (specs.md §14.2). A part carries its source's mode and owner while it is read again, which takes as
+// long as the file is large: in a folder anyone may enter, a file that only its folders kept private was open to every
+// account for that time. And a mode set first lost its setuid and setgid bits to the change of owner that followed:
+// the copy of such a file was made without them.
+func TestAPartIsPrivateAndTakesItsOwnerFirst(t *testing.T) {
+	for _, left := range []bool{false, true} {
+		b := newBench(t, "t1", "t2")
+		b.write("t1", "a", "content")
+		if err := os.Chmod(filepath.Join(b.dirs["t1"], "media", "a"), 0o755|os.ModeSetuid); err != nil {
+			t.Fatal(err)
+		}
+		tmp := filepath.Join(b.dirs["t2"], "Atoll", "tmp")
+		if left {
+			if err := os.MkdirAll(tmp, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(tmp, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b.scan(false)
+		items, _ := b.replicate("a", ReplicateOptions{Now: true})
+		only(t, items, OutcomeReplicated)
+		if st, err := os.Stat(tmp); err != nil || st.Mode().Perm()&0o077 != 0 {
+			t.Errorf("left open before %v: tmp/ is %v, %v", left, st.Mode(), err)
+		}
+		if st, err := os.Stat(filepath.Join(b.dirs["t2"], "media", "a")); err != nil || st.Mode() != 0o755|os.ModeSetuid {
+			t.Errorf("left open before %v: the copy's mode is %v, %v", left, st.Mode(), err)
+		}
+	}
+}
+
 // A copy made: the same bytes and date at the same path, a copy of Atoll's, verified, with its source,
 // and the file's hash; nothing left of the job, of its operation or in tmp/ (specs.md §14.2).
 func TestReplicateMakesTheCopy(t *testing.T) {

@@ -225,14 +225,18 @@ func giveMetadata(part *ops.Part, read *fsx.Stat, disk, path string) error {
 	if err := part.SetTimes(fsx.OmitTime, read.Mtime); err != nil {
 		return fmt.Errorf("%w", err)
 	}
-	if err := part.SetMode(read.Mode); err != nil {
-		return fmt.Errorf("%w", err)
-	}
+	// The owner first, as for a copy: a change of owner takes the setuid and setgid bits off a file, and a copy that
+	// could not take its source's owner does not keep them.
+	mode := read.Mode
 	if err := part.SetOwner(read.Uid, read.Gid); err != nil {
 		if fsx.IsDiskLost(err) {
 			return fmt.Errorf("%w", err)
 		}
 		slog.Warn("a copy keeps another owner", "disk", disk, "path", path, "error", err)
+		mode &^= 0o6000
+	}
+	if err := part.SetMode(mode); err != nil {
+		return fmt.Errorf("%w", err)
 	}
 	if err := part.Sync(); err != nil {
 		return fmt.Errorf("%w: %w", ops.ErrDiskLost, err)
