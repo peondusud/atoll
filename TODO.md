@@ -70,6 +70,68 @@ Each is a **decision**: the code does what the spec says, and the review found w
 - **A file that cannot be opened stops the hashes of its disk** (§15.10). Any error but `ENOENT`, `ELOOP` and `ENOTDIR` stops the reading of a disk, as an I/O error must. One that says nothing of the disk does too: `EACCES`, `ENOKEY` for a file whose key is not loaded, `EMFILE` when the process is out of descriptors. The file stays without a hash, so each slice of the daemon stops at it again, and the files after it in the order of the paths are never hashed on that disk, with nothing to say so. To decide: report such a file as `unreadable` and go on, an I/O error alone stopping the disk.
 - **One transaction for each file hashed** (§15.10), so that an interruption loses little. On 400,000 copies of a few bytes that is 31 minutes in qemu without KVM, 4.7 ms a copy, nearly all of it in commits (§26); on a slow system disk it is one `fsync` a file. To decide: one transaction for the files read within a second, which loses as little of a large file and costs a small one nearly nothing.
 
+## What the review of the code found, still open (2026-11-13)
+
+Eight reads of the whole code, by area, for performance, security and conformance to the spec, at the commit of pull request #21. What follows was found by reading and is not fixed: each is to check in the code as it is now, then to fix after a test that fails without the fix. What was fixed is in DONE.md.
+
+### Security
+
+- **A trash folder that stands for a vanished private folder** takes the mode and owner of its nearest surviving ancestor (`internal/ops/linkguard.go`, `likeLogical`): a folder of mode 0700 deleted through the view has its files open to every account in the trash, and `trash restore` makes it again open, against §17.1, "a private folder is never open, even for a moment".
+- **A walk stopped by an answer about one name** (`internal/watch/walk.go`): a folder removed after it was opened, whose listing gives `ENOENT`, and a name that is no longer a symbolic link, whose `readlink` gives `EINVAL`, are read as the disk failing. The disk goes `missing`, its branch leaves mergerfs, and the next check brings it back: whoever can write under `media/` can repeat it at will. §15.10 says such a name says nothing about the disk.
+- **File names written raw to the terminal** by the human output of `scan`, `status --path`, `guard list`, `names check`, `daemon --until-idle` and the disk commands (`shownPath` in `cmd/atoll/trash.go` and the like): a name with escape sequences or a line feed forges lines of the output. Only the alerts quote them.
+- **SMTP answers read with no bound** (`internal/alerts/smtp.go`): a server, or whoever is on the way before `STARTTLS`, sends a line that never ends, and the daemon holds what the link carries in 10 s.
+- **The watcher opens a folder that arrived by its path** (`arrive`, `internal/watch/watcher.go` and `inotify.go`), with no check of its mount: a parent traded for a link puts the mark on a folder outside the root. Events are hints, so no decision is wrong, but a media server is told the wrong folder.
+- **An existing `links/` folder is used whatever its mode and owner** (`internal/ops/linkguard.go`), where §17 makes it 0700.
+- **`init` makes the configuration 0644** whatever the mask, while the spec's own example keeps an ntfy topic in it, which is a secret on a public server; and a schema error quotes the offending string, so a URL mistyped with a password reaches the log.
+
+### Data and conformance
+
+- **The scrub calls any copy that does not match `corrupt`**, and with `integrity.auto_repair` writes over it (`internal/jobs/scrub.go`): also a copy never verified, one of another size than its file, and one of a file in `conflict`. §16 says a mismatch on a copy that lost `verified_ns` is a `conflict`, and §15.7 that every version is kept. A second version of a file, brought by a disk added or a restore, is so rewritten from the first, and survives only as chunks in the trash.
+- **Repair and quarantine write to a disk that is `readonly`** (`internal/trash/repair.go`, `internal/jobs/scrub.go`, `internal/jobs/repair.go`): nothing asks whether the disk may be written, against §10.
+- **A repair that fails otherwise than for want of room leaves the corrupt copy in `media/`** (`internal/jobs/scrub.go`), where §16 sends it to the trash; a corrupt copy is never due again, and mergerfs serves it when its branch comes first.
+- **`atoll scrub` without `--yes` runs the reprise and cleans `tmp/`** (`cmd/atoll/scrub.go`), as its session is opened to write, against §17.2.
+- **`balance` sends to the trash a misplaced copy marked `surplus` with nothing made to stand in for it** (`internal/jobs/balance.go`, `finish`, `replaced`, `retire`): a job that ends `no-room` leaves a pending copy, which the plan counts. `retire` asks neither that the copies that stay are verified nor that the file is not in `conflict`.
+- **A stale copy can lose its `overwritten` job**, and then nothing ever sends it to the trash or makes it again: a rename with a moved copy, a guard rejected and a deletion each remove every queued trash job of the file (`internal/catalog/propagate.go`), not only those of a deletion. The old version stays in `media/`, and mergerfs serves it when its branch comes first.
+- **An error on the source loses the target disk** (`internal/jobs/replicate.go`, `place`): when the source's folder cannot be read at the end of a copy, the healthy target is set `missing`, and the failing source stays in service.
+- **The copy that replaces a stale one waits for the window of a `scheduled` file** (`internal/jobs/passcopies.go`), against §12.3, "Refreshing stale copies ignores the mode".
+- **The disk's copy of the catalog is unlinked before a rename that ntfs-3g refuses** (`internal/ops/marker.go`, `PutCatalog`); `WriteMarker` has no fallback either, so `disk add` never writes a marker on those drivers; and a failed `VACUUM INTO` leaves its `.part` beside the backups (`internal/catalog/backup.go`).
+- **Alerts are worked out only after a pass** (`internal/daemon/run.go`): on a pool where nothing changes, the reminder of §23, every 24 h, waits for the next pass, up to `rescan_every`; and an NTFS volume found dirty at a mount check brings no pass, so its alert waits too.
+- **A mail the server took counts as not sent when `QUIT` fails** (`internal/alerts/smtp.go`), against §23, and is sent again at each try.
+- **The reprise of a `mkdir` finishes a folder without the mode and owner it stands for** (`internal/ops/recover.go`), which the operation never journals.
+- **A watch that died is never armed again** (`internal/daemon/run.go`, `internal/watch/watcher.go`): a disk unmounted and mounted between two checks, or a watcher that stopped on an error, sends no event until the daemon starts again.
+- **Pending copies count as copies below a renamed folder** (`internal/catalog/propagate.go`): the folder is then never decided, and the copies made later bring the old folder back.
+- **A path counts as free while another file's copy sits there under its old path** (`internal/solver/plan.go`, `pathFree`): the copy sent there ends `conflict`, and is planned there again at each pass.
+- **A `replaced` copy is judged by the change time of the file that replaced it**, and a guard's answer never expires (`internal/watch/verdict.go`, `internal/catalog/modguard.go`): files staged before a confirm pass under it.
+- **A run reads the clock once**: `not_before_ns` after `changed`, `verified_ns` and the window of a scheduled copy are judged at the start of the pass or the command (`internal/jobs/replicate.go`, `passcopies.go`, `balance.go`).
+- **`Window.Next` on a night the clock springs forward**, west of UTC (`internal/value/window.go`): the start skipped is taken an hour early, the window is not entered, and the daemon sleeps through it. Europe/Paris with the sample window is not concerned.
+- **`atoll capacity` does not take the pending copies off the free space** (`internal/watch/capacity.go`), against §13.3.
+- **`reached` counts a pending copy the plan just canceled** (`internal/solver/plan.go`), so a file is not `degraded` until the next plan.
+- **A command does not find a daemon whose binary was replaced on disk** (`cmd/atoll/reload.go`), says that none runs and exits 0, and the daemon keeps the old configuration; and a `SIGHUP` that comes before the daemon has set its handler stops it.
+- **The disk commands read the configuration before they wait for the catalog's lock** (`cmd/atoll/diskadd.go`, `diskstate.go`): the second of two fails with "the file changed since it was read". A failure after the rename of the configuration says "unchanged" (`internal/fsx/replace.go`). A marker that says the same but is written otherwise ends in exit 4. The marker's `pool_id` takes the pattern of a time zone (`internal/layout/marker.go`). An unknown subcommand with `--help` exits 0, against §25.
+- **The walk's handle is never compared with the mount that was confirmed** (`internal/watch/scan.go`), against §10.
+- **A partition's parent is not followed down** (`internal/fsx/topology.go`, `disksBelow`): a filesystem on `md0p1` is not seen to share a disk with one on `sda3`, against R-06.
+- **The names a chunk repair makes are unknown to what cleans `tmp/` and to what counts operation ids** (`internal/catalog/replicate.go`, `internal/ops/marker.go`).
+
+### Performance
+
+- **A purge commits two transactions and syncs one folder for each entry**, under the catalog's lock (`internal/trash/trash.go`); `trash restore` of one file loads every entry.
+- **What the link guard holds of a disk at once** (above, with the 200 MB of §26); `MakeLink` syncs every linked file where only NTFS needs it; `GonePaths` filters the events by `json_extract`, which no index holds; `OwnFiles` walks the whole trash and `tmp/` to match a few inodes.
+- **Each slice of the scrub pays what grows with the pool** (`internal/jobs/scrub.go`): a plan of the whole pool at its end, the disk's copies sorted with no index for each page, a commit for each copy, and each disk woken before the catalog is asked whether anything is due. A read error on one chunk loses the disk at each slice, at the same copy, as §15.10 asks of the hashes. `SavedChunks` holds every chunk a repair saved at once (`internal/ops/repair.go`).
+- **The jobs are read whole**: `ReplicateJobs`, `JobOfPart` and `DueReader` use no index (`internal/catalog/replicate.go`), `FolderJobs` scans every job for each folder (`internal/catalog/propagate.go`), and whole lists of jobs are held where a page would do.
+- **The plan loads every name of every candidate NTFS disk** as soon as one file needs a copy (`internal/solver/plan.go`, `internal/names/collision.go`): 20 to 40 MB a disk of 200,000 names, by the sizes of the types.
+- **Renames by rounds**: a chain of files each renamed to the next's name costs the square of its length, in the plan (`assignTargets`, `internal/solver/propagate.go`) and in the pass (`internal/jobs/work.go`); `addParents` hashes every ancestor of every path, which is the cube of the depth for a chain of nested folders, and the walk has no bound on depth.
+- **The modify step reads every changed file whole, in one pass, with no budget** (`internal/jobs/modify.go`): a `touch` or a `chmod -R` over a disk holds the catalog's lock for as long as its files take to read, against §15.13, "A pass ... reads no file whole".
+- **The watcher gathers every event before it sends any** (`drain`, `internal/watch/watcher.go`); `readCopy` compares a copy with its row only after reading it whole, and each slice starts again from the first file with no hash (`internal/watch/scan.go`).
+- **`MissingBelow` is planned from the missing disk** (`internal/catalog/notify.go`): every copy of it for each folder held, at each pass; `cannotLeave` asks about every replaced copy once for each folder that waits; `guard list` and `/v1/guards` hold every held path several times.
+
+### Decisions
+
+- **A pending copy kept is taken off a disk's room with no check** (`internal/solver/plan.go`), so a copy queued while there was room is written into the reserve of `min_free`: §13.4 is silent on it, and §12.4 lists `min_free` among what is never violated.
+- **`depending_first` gives its paths as plain strings**, in `disk show`, `disk remove`, `disk fail` and `/v1/disks/{id}`, and in their schemas, where §29.3 asks for `path` or `path_b64`.
+- **An alert that cannot be sent brings a whole pass every 5 minutes** (§23): 288 passes a day while a server is down.
+- **A change of metadata alone makes the other copies stale outside the guard of modifications**, and **the copies a refused rename sends to the trash are in no guard's window**: both follow the letter of §15.6.
+- **A mount below the root that refuses the daemon's account stops the disk's walk** (`EACCES`), which a test pins; and **no bound on a path's depth**, which §15.8 says does not bind Atoll.
+
 ## Phase 1a, the alpha, not started (specs.md §28)
 
 - Configuration in the shell (§24.3, §10):
