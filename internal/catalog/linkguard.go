@@ -19,29 +19,36 @@ type LinkCopy struct {
 	There bool
 }
 
-// LinkCopies gives the copies of a disk, by file id.
-func LinkCopies(ctx context.Context, db *sql.DB, disk string) ([]LinkCopy, error) {
+// LinkCopies reads the copies of a disk, by file id: room is told how many there are, then each is told of each, so
+// that whoever asks holds them once, in a list of its own and of their number. A disk of 200,000 copies is most of
+// what a pass may hold (specs.md §26). The copy each is given is the same one each time.
+func LinkCopies(ctx context.Context, db *sql.DB, disk string, room func(n int), each func(c *LinkCopy)) error {
+	var n int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM copies WHERE disk_id = ?", disk).Scan(&n); err != nil {
+		return fmt.Errorf("copies: %w", err)
+	}
+	room(n)
 	rows, err := db.QueryContext(ctx, `
 		SELECT c.file_id, COALESCE(c.file_key, ''), COALESCE(c.old_lpath, f.lpath), c.state <> 'pending' AND c.gone_ns IS NULL
 		FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? ORDER BY c.file_id`, disk)
 	if err != nil {
-		return nil, fmt.Errorf("copies: %w", err)
+		return fmt.Errorf("copies: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	list := []LinkCopy{}
+	var c LinkCopy
+	// RawBytes: each is copied once, into the string that is kept.
+	var key, place sql.RawBytes
 	for rows.Next() {
-		var c LinkCopy
-		var place []byte
-		if err := rows.Scan(&c.FileID, &c.FileKey, &place, &c.There); err != nil {
-			return nil, fmt.Errorf("copies: %w", err)
+		if err := rows.Scan(&c.FileID, &key, &place, &c.There); err != nil {
+			return fmt.Errorf("copies: %w", err)
 		}
-		c.Place = string(place)
-		list = append(list, c)
+		c.FileKey, c.Place = string(key), string(place)
+		each(&c)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("copies: %w", err)
+		return fmt.Errorf("copies: %w", err)
 	}
-	return list, nil
+	return nil
 }
 
 // GuardUsed says whether the link guard ever journaled an operation on a disk: only then can its links folder hold

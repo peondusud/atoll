@@ -1,9 +1,12 @@
 package trash
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -402,5 +405,96 @@ func TestTheGuardClosesALinksFolderFoundOpen(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o700 {
 		t.Errorf("the links folder is %v", info.Mode().Perm())
+	}
+}
+
+// TestWhatTheGuardHoldsOfADisk: a pass with the guard on reads every link and every copy of a disk to decide what
+// becomes of each, and what it reads it holds until the last link is decided: on a disk of 200,000 copies that is most
+// of what the daemon may hold (specs.md §26). It held each several times over: a look of 112 bytes for each link, in
+// a list and again in a map by name, which only gave the size of a link sent to the trash; the copies as the
+// catalog's rows, then as the plan's; and a map from each file to its inode. What a pass allocates for a disk whose
+// links are all in place, where nothing is to do, is what it holds at most.
+func TestWhatTheGuardHoldsOfADisk(t *testing.T) {
+	const n = 4000
+	b := newBench(t)
+	for i := range n {
+		b.write("t3", fmt.Sprintf("set/%03d/%d.mkv", i%100, i), "z")
+	}
+	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	links := filepath.Join(b.dirs["t3"], "Atoll", "links")
+	if err := os.MkdirAll(links, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	made := 0
+	func() {
+		rows, err := b.db.QueryContext(t.Context(), "SELECT f.id, CAST(f.lpath AS TEXT) FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = 't3'")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var id int64
+			var path string
+			if err := rows.Scan(&id, &path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Link(filepath.Join(b.dirs["t3"], "media", filepath.FromSlash(path)), filepath.Join(links, strconv.FormatInt(id, 10))); err != nil {
+				t.Fatal(err)
+			}
+			made++
+		}
+		if err := rows.Err(); err != nil || made != n+1 {
+			t.Fatalf("%d links made, %v", made, err)
+		}
+	}()
+	s := b.opened()
+	defer s.Close()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	err := s.Guard(t.Context(), "t3", true, func(i *LinkItem) error {
+		t.Errorf("sent to the trash: %+v", i)
+		return nil
+	})
+	runtime.ReadMemStats(&after)
+	if err != nil || s.Lost() {
+		t.Fatalf("%v, lost %v", err, s.Lost())
+	}
+	if got := b.count("SELECT count(*) FROM ops"); got != 0 {
+		t.Errorf("%d operations where every link is in place", got)
+	}
+	if each := (after.TotalAlloc - before.TotalAlloc) / uint64(made); each > 900 {
+		t.Errorf("%d bytes allocated for each link of a disk where nothing is to do: what a pass reads of a disk is held more than once", each)
+	} else {
+		t.Logf("%d bytes for each link", each)
+	}
+}
+
+// TestTheSizeOfALinkSentToTheTrash: the entry of a link sent to the trash records the size its look found, among
+// the links of a disk, which come by name in byte order: 10 before 9.
+func TestTheSizeOfALinkSentToTheTrash(t *testing.T) {
+	b := newBench(t)
+	for i := range 12 {
+		b.write("t3", fmt.Sprintf("f%02d", i), strings.Repeat("x", i+2))
+	}
+	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	if items, lost := b.guarded("t3", true); len(items) != 0 || lost {
+		t.Fatalf("%+v, lost %v", items, lost)
+	}
+	for _, name := range []string{"f03", "f09"} {
+		if err := os.Remove(filepath.Join(b.dirs["t3"], "media", name)); err != nil {
+			t.Fatal(err)
+		}
+		b.exec("DELETE FROM copies WHERE disk_id = 't3' AND file_id = (SELECT id FROM files WHERE lpath = ?)", []byte(name))
+	}
+	items, lost := b.guarded("t3", true)
+	if lost || len(items) != 2 {
+		t.Fatalf("%+v, lost %v", items, lost)
+	}
+	if got := b.text("SELECT group_concat(CAST(lpath AS TEXT) || ' ' || size, ', ') FROM (SELECT lpath, size FROM trash ORDER BY lpath)"); got != "f03 5, f09 11" {
+		t.Errorf("the entries are %q", got)
 	}
 }

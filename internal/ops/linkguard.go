@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -29,13 +30,18 @@ func (d *Disk) linkPlace(fileID int64) []string {
 	return append(d.linksPlace(), strconv.FormatInt(fileID, 10))
 }
 
-// LinkEntry is an entry of the links folder, and what a look found there.
+// LinkEntry is an entry of the links folder, and what a look found there that the guard uses: whether it is a regular
+// file, the inode it leads to, and its size. No more of the look is kept: a disk has a link for each of its copies, and
+// they are all held while they are decided (specs.md §26).
 type LinkEntry struct {
 	Name string
-	Stat fsx.Stat
+	File bool
+	Ino  uint64
+	Size int64
 }
 
-// Links reads the links folder: each entry, and what it leads to. A disk with no such folder has none.
+// Links reads the links folder: each entry, and what it leads to, by name in byte order. A disk with no such folder
+// has none.
 func (d *Disk) Links() ([]LinkEntry, error) {
 	dir, err := d.open(d.linksPlace())
 	switch {
@@ -60,12 +66,13 @@ func (d *Disk) Links() ([]LinkEntry, error) {
 		case err != nil:
 			return nil, classify(err)
 		}
-		list = append(list, LinkEntry{Name: name, Stat: st})
+		list = append(list, LinkEntry{Name: name, File: st.Kind == fsx.KindFile, Ino: st.Ino, Size: st.Size})
 		if id, ok := layout.LinkID(name); ok && st.Kind == fsx.KindFile {
 			own[st.Ino] = append(own[st.Ino], id)
 		}
 	}
 	d.own = own
+	slices.SortFunc(list, func(a, b LinkEntry) int { return cmp.Compare(a.Name, b.Name) })
 	return list, nil
 }
 
