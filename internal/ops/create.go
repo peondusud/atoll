@@ -25,10 +25,11 @@ type Part struct {
 	Stat fsx.Stat
 }
 
-// private closes the folder of the parts to every account but its owner's, one an earlier version left open
-// included. A part carries its source's mode and owner while it is read again, and what a repair saves there is a
-// file's own bytes: in a folder anyone may enter, a file that only its folders kept private would be open to all for
-// that time. A driver that holds no mode leaves the folder as it is.
+// private closes a folder of Atoll's to every account but its owner's, one found open included: the folder of the
+// parts, which an earlier version left open, and the links folder. A part carries its source's mode and owner while
+// it is read again, what a repair saves there is a file's own bytes, and a link reaches a file whatever the folders
+// above it in the root forbid: in a folder anyone may enter, a file that only its folders kept private would be open
+// to all. A driver that holds no mode leaves the folder as it is.
 func private(dir fsx.Dir) error {
 	st, err := dir.Info()
 	if err != nil {
@@ -43,7 +44,7 @@ func private(dir fsx.Dir) error {
 	case fsx.IsDiskLost(err):
 		return lost(err)
 	default:
-		slog.Warn("the folder of the parts stays open to other accounts", "error", err)
+		slog.Warn("a folder of Atoll's stays open to other accounts", "error", err)
 		return nil
 	}
 }

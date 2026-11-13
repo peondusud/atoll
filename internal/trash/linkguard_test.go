@@ -377,3 +377,30 @@ func TestAFolderThatWentIsPrivateInTheTrash(t *testing.T) {
 		}
 	}
 }
+
+// A links folder found open to other accounts is closed before anything is linked in it, as the folder of the parts
+// is: each link reaches a file whatever the folders above it in the root forbid, so in a folder anyone may enter, a
+// file that only its folders kept private is open to all. It was used as it was found (specs.md §17).
+func TestTheGuardClosesALinksFolderFoundOpen(t *testing.T) {
+	b := newBench(t)
+	links := filepath.Join(b.dirs["t3"], "Atoll", "links")
+	if err := os.MkdirAll(links, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(links, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, lost := b.guarded("t3", true); lost {
+		t.Fatal("lost")
+	}
+	if inodeOf(t, b.linkOf("t3", 1)) == 0 {
+		t.Fatal("no link was made")
+	}
+	info, err := os.Stat(links)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("the links folder is %v", info.Mode().Perm())
+	}
+}

@@ -168,6 +168,13 @@ func (d *Disk) OpenLinks(create bool) (*LinksFolder, error) {
 	place := d.linksPlace()
 	dir, err := d.open(place)
 	if err == nil {
+		// Found open, it is closed before a link is made in it. A run that makes none writes nothing.
+		if create {
+			if err := private(dir.Dir); err != nil {
+				dir.close()
+				return nil, err
+			}
+		}
 		return &LinksFolder{dir: dir}, nil
 	}
 	if !fsx.IsAbsent(err) {
@@ -196,6 +203,11 @@ func (d *Disk) OpenLinks(create bool) (*LinksFolder, error) {
 	dir, err = d.open(place)
 	if err != nil {
 		return nil, classify(err)
+	}
+	// One that came there since the look above, made by someone else, is closed too.
+	if err := private(dir.Dir); err != nil {
+		dir.close()
+		return nil, err
 	}
 	return &LinksFolder{dir: dir}, nil
 }
