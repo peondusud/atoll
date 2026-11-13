@@ -35,6 +35,13 @@ type passSeen struct {
 // runDaemon runs the daemon on a bench until the test ends, and gives its passes.
 func runDaemon(t *testing.T, b *passBench, fstab string) (<-chan passSeen, func()) {
 	t.Helper()
+	return runDaemonAfter(t, b, fstab, nil)
+}
+
+// runDaemonAfter is runDaemon that also calls after at the end of each pass, unless it is nil: in the daemon's own
+// goroutine, before its next step, when what the pass held is let go.
+func runDaemonAfter(t *testing.T, b *passBench, fstab string, after func()) (<-chan passSeen, func()) {
+	t.Helper()
 	// The bench's connection goes: the daemon opens the catalog for each pass, and its lock must not be shared
 	// with a connection of this process.
 	mustDo(t, b.db.Close())
@@ -45,7 +52,12 @@ func runDaemon(t *testing.T, b *passBench, fstab string) (<-chan passSeen, func(
 		done <- daemon.Run(ctx, daemon.Options{
 			Config: b.config, Machine: b.machine, Apply: true, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 			CheckEvery: 300 * time.Millisecond, Fstab: fstab,
-			OnPass: func(because []string, o *jobs.Outcome) { passes <- passSeen{because, o} },
+			OnPass: func(because []string, o *jobs.Outcome) {
+				if after != nil {
+					after()
+				}
+				passes <- passSeen{because, o}
+			},
 		})
 	}()
 	var once sync.Once

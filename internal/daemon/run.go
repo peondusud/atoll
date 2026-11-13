@@ -171,6 +171,9 @@ type loop struct {
 	disks    map[string]*diskState
 
 	first, reloaded, gone, back bool
+	// afterPass says that the last step the loop took was a pass, a check aside: another step due then runs before a
+	// pass for events or next_due alone (specs.md §15.13).
+	afterPass bool
 	// hashPending says that files may be waiting for their hash: set by each pass, cleared once none is left.
 	hashPending bool
 	// scrubSpent is what the scrub spent in the stretch of its window that began at scrubOpened, and scrubIdle the
@@ -284,6 +287,7 @@ func (l *loop) run(ctx context.Context) error {
 			return nil
 		default:
 		}
+		l.listen()
 		now := l.opt.Machine.Now()
 		groupNext, waiting := l.takeRipe(now)
 		// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
@@ -293,7 +297,7 @@ func (l *loop) run(ctx context.Context) error {
 		// One catalog backup a stretch of maintenance.window.
 		window := l.set.window.Opened(nowLocal)
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
-		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
+		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
 			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
 			HashPending: l.hashPending && l.opt.Apply,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
@@ -314,7 +318,12 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if len(out.Because) > 0 {
 			l.pass(ctx, out.Because)
+			l.afterPass = true
 			continue
+		}
+		if out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+			// The turn another step has after a pass.
+			l.afterPass = false
 		}
 		if out.Notify {
 			l.tell(ctx)
@@ -386,6 +395,23 @@ func (l *loop) reload() {
 		l.smartDue = smartFirst(l.opt.Machine)
 	}
 	l.log.Info("the configuration was read again", "disks", len(c.Disks))
+}
+
+// listen takes, without waiting, what the watcher and SIGHUP said since the last turn. The sleep is not the only time
+// they are heard: a step due turn after turn, as the hashes of a large pool's new files are slice after slice, would
+// keep every change and every reload waiting until it is over, the watcher's queue filling meanwhile (specs.md
+// §15.13).
+func (l *loop) listen() {
+	for {
+		select {
+		case e := <-l.watcher.Events():
+			l.add(e)
+		case <-l.opt.Reload:
+			l.reload()
+		default:
+			return
+		}
+	}
 }
 
 // add puts an event, and every other already waiting, in its group.

@@ -401,6 +401,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `rescan_every_ns` | integer | `maintenance.rescan_every` |
 | `window`, `timezone` | string | `maintenance.window`, and the IANA zone its wall clock is in |
 | `reloaded` | boolean | the configuration was read again since the last pass |
+| `after_pass` | boolean | the last step the daemon took was a pass, a check aside: another step due then runs before a pass whose every reason is `events` or `due`, and `because` is empty |
 | `hash_pending` | boolean | files may be waiting for their hash |
 | `scrub_pending` | boolean | copies may be due for the scrub |
 | `scrub_window` | string | `integrity.window` |
@@ -411,7 +412,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
 | `balance_due_ns` | integer | when the daemon next balances; left out when it never does |
 | `check` | boolean | `true` when the mount check is due |
-| `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is, or when `after_pass` makes it wait |
 | `notify` | boolean | `true` when the media servers are to be told now: `notify_due_ns` has come |
 | `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
 | `balance` | boolean | `true` when the daemon is to balance now: `balance_due_ns` has come |

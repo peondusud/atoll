@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## What the soak on 200,000 files found (specs.md §15.13, §26)
+
+Commit "Hear the watcher between the daemon's steps, and give the others a turn after a pass", on `beta`, from the first runs of `TestDaemonSoak` and `TestScale` on 200,000 files a disk, in qemu without KVM.
+
+- **No pass while hashes were read.** The daemon's loop heard the watcher and `SIGHUP` only while it slept. After the first pass on 200,000 files a disk, the 400,000 copies wait for their hash, read by slices of 30 s, each due as soon as the one before ends: the loop never slept. For 18 minutes, the soak's writer, a change every second, brought no pass at all, its events piling up in the watcher's queue. Each turn of the loop now begins with what the watcher and `SIGHUP` said since the last, taken without waiting. `TestRunListensBetweenSteps` fails without it: a `SIGHUP` waits for as long as checks come one after the other.
+- **Nothing but passes, once they are heard.** On that pool, a pass walks 400,000 copies: about 7 minutes in qemu without KVM, 5 s on a machine (§26). That is longer than the writer takes to change something again, so every pass ends with a ripe group, and the next pass follows at once. The hashes, the catalog backup, the scrub, balancing, SMART and the media servers all come after the passes: they would never run for as long as the changes went on. Right after a pass, another step due now runs before a pass whose every reason is `events` or `due`, which waits one slice at most. A pass for any other reason does not wait. 12 vectors in `daemon_wake.json`, 7 of which failed before the change.
+- **What the soak measures at that scale.** `TestDaemonSoak` and `TestScale` now set the binary's soft memory limit, 170 MiB unless `GOMEMLIMIT` says otherwise, which the test's process lacked: the peaks they log are now the daemon's. The soak samples each tenth's memory at the end of the pass that follows it, in the daemon's own goroutine. A pass over 400,000 copies holds over a hundred MiB while it runs, and a sample taken in its middle would say how far the pass had gone rather than what the daemon keeps. The pass count the soak requires shrinks with the pool: a pass a minute on 2,000 files a disk, a hundred times fewer on a hundred times as many, and at least 10. It compares the passes of the second tenth with the last only when the second holds at least 4.
+
+### Decided without the maintainer, to confirm
+
+- **The turn after a pass.** Another step due runs before a pass for `events` or `due` alone. It does not run before a pass for `start`, `reload`, `gone`, `back` or `rescan`. The first two reasons are routine: they already wait for their group to ripen or their time to come. The others say that the pool itself changed, or that the window asked for a rescan. A check does not count as a turn.
+- **What stays open.** Under a change every second on 200,000 files, passes still follow one another, each walking every copy. That is about one core's worth on a machine, far from the 5 % of §26. Only passes that walk what changed, rather than every disk, would fix that; phase 2b changes passes the same way to spare the disks' sleep. It is left to the maintainer, in TODO.md.
+
 ## What the local CI found on the beta (specs.md §15.13, §16)
 
 Commit "Keep what ripe events ask for until a pass", on `beta`, after `test/ci/run.sh` on `8c3facf` failed two tests of `test/loopdev`, on both kernels.

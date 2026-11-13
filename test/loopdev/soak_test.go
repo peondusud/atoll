@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +41,20 @@ func sizedVolume(t *testing.T, files int) *volume {
 	return newVolumeSized(t, names.Ext4, mb, "-b", "1024", "-N", strconv.Itoa(inodes))
 }
 
+// daemonMemoryLimit is the soft memory limit cmd/atoll sets unless GOMEMLIMIT says otherwise (specs.md §26). The soak
+// and TestScale run the daemon in the test's own process, which must have it too to measure what the daemon holds:
+// without it, the collector lets the heap grow far past it between collections.
+const daemonMemoryLimit = 170 << 20
+
+// asTheBinary gives the test's process the memory limit of the daemon's, until the test ends.
+func asTheBinary(t *testing.T) {
+	t.Helper()
+	if os.Getenv("GOMEMLIMIT") == "" {
+		before := debug.SetMemoryLimit(daemonMemoryLimit)
+		t.Cleanup(func() { debug.SetMemoryLimit(before) })
+	}
+}
+
 // firstPassWithin is how long the first pass of a run with files a disk may take: it walks every file of both disks,
 // which in qemu without KVM is slow.
 func firstPassWithin(files int) time.Duration {
@@ -61,7 +76,7 @@ type memorySample struct {
 }
 
 // sampleMemory collects, then reads the heap in use, what the kernel says of the process, and the catalog's size
-// with its write-ahead log.
+// with its write-ahead log. It may run in any goroutine.
 func sampleMemory(t *testing.T, since time.Time, catalog string) memorySample {
 	t.Helper()
 	runtime.GC()
@@ -69,7 +84,10 @@ func sampleMemory(t *testing.T, since time.Time, catalog string) memorySample {
 	runtime.ReadMemStats(&ms)
 	s := memorySample{at: time.Since(since).Round(time.Second), heap: ms.HeapInuse, goroutines: runtime.NumGoroutine()}
 	f, err := os.Open("/proc/self/status")
-	mustDo(t, err)
+	if err != nil {
+		t.Error(err)
+		return s
+	}
 	defer func() { _ = f.Close() }()
 	lines := bufio.NewScanner(f)
 	for lines.Scan() {
@@ -94,16 +112,17 @@ func sampleMemory(t *testing.T, since time.Time, catalog string) memorySample {
 }
 
 // TestDaemonSoak: the daemon that runs for good, for -atoll.soak, on two ext4 disks, while a writer adds, edits,
-// renames and deletes files every second or so. It logs the memory every tenth of the run; at the end, the heap in use
-// after a collection, its open files and its goroutines must not have grown past the second tenth's by more than a
-// tenth and 8 MiB, 16 files and 16 goroutines: what a daemon that runs for days would keep growing (specs.md §26).
-// No pass may be held by a guard, and the last tenth must run at least half the passes of the second: a pass that
-// costs more as the catalog grows would run fewer.
+// renames and deletes files every second or so. It logs the memory every tenth of the run, at the end of the pass that
+// follows it; at the end, the heap in use after a collection, its open files and its goroutines must not have grown
+// past the second tenth's by more than a tenth and 8 MiB, 16 files and 16 goroutines: what a daemon that runs for days
+// would keep growing (specs.md §26). No pass may be held by a guard, and the last tenth must run at least half the
+// passes of the second: a pass that costs more as the catalog grows would run fewer.
 func TestDaemonSoak(t *testing.T) {
 	needRoot(t)
 	if *soakFor <= 0 {
 		t.Skip("-atoll.soak is not set")
 	}
+	asTheBinary(t)
 	v := sizedVolume(t, *soakFiles)
 	at := mountPoint(t)
 	mountVolume(t, v, "", at)
@@ -117,7 +136,18 @@ func TestDaemonSoak(t *testing.T) {
 			write(t, top, fmt.Sprintf("set/%03d/%d.mkv", i%100, i), fmt.Sprintf("film %d", i))
 		}
 	}
-	passes, stop := runDaemon(t, b, filepath.Join(t.TempDir(), "fstab"))
+	// Each tenth's memory is read at the end of the pass that follows it, in the daemon's own goroutine: on 200,000
+	// files a disk a pass holds over a hundred MiB while it runs, and a sample taken in the middle of one would say
+	// how far it had gone rather than what the daemon keeps.
+	var start time.Time
+	asked := make(chan chan memorySample, 1)
+	passes, stop := runDaemonAfter(t, b, filepath.Join(t.TempDir(), "fstab"), func() {
+		select {
+		case reply := <-asked:
+			reply <- sampleMemory(t, start, b.catalog)
+		default:
+		}
+	})
 	// The first pass walks every file of both disks, which in qemu without KVM is slow.
 	for started := false; !started; {
 		select {
@@ -140,7 +170,7 @@ func TestDaemonSoak(t *testing.T) {
 		}
 	}()
 
-	start := time.Now()
+	start = time.Now()
 	// The writer is a process of its own: the watcher takes what the daemon's own process does for Atoll's own
 	// operations, and would see nothing of it (specs.md §15.1). Each second it edits a file, renames another or puts
 	// it back, adds a file and deletes the one it added five seconds before.
@@ -154,9 +184,16 @@ func TestDaemonSoak(t *testing.T) {
 	var samples []memorySample
 	var tenths []int
 	every := *soakFor / 10
-	for range 10 {
-		time.Sleep(every)
-		s := sampleMemory(t, start, b.catalog)
+	for i := range 10 {
+		time.Sleep(time.Until(start.Add(time.Duration(i+1) * every)))
+		reply := make(chan memorySample, 1)
+		asked <- reply
+		var s memorySample
+		select {
+		case s = <-reply:
+		case <-time.After(firstPassWithin(*soakFiles)):
+			t.Fatalf("no pass ended within %v after %v", firstPassWithin(*soakFiles), time.Since(start).Round(time.Second))
+		}
 		mu.Lock()
 		passed := count
 		mu.Unlock()
@@ -187,14 +224,17 @@ func TestDaemonSoak(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	// A soak in which the daemon did nothing, or held everything, measures nothing.
-	if minutes := int(*soakFor / time.Minute); count < minutes {
+	// A soak in which the daemon did nothing, or held everything, measures nothing. A pass walks every file of both
+	// disks: one a minute on the default 2,000 files a disk, a hundred times fewer on a hundred times as many.
+	if want := max(10, int(*soakFor/time.Minute)*2000/max(*soakFiles, 2000)); count < want {
 		t.Errorf("%d passes in %v: the writer's changes did not reach the daemon", count, *soakFor)
 	}
 	if held > 0 {
 		t.Errorf("a guard held %d passes of %d: the soak measured a daemon that decides nothing", held, count)
 	}
-	if tenths[9]*2 < tenths[1] {
+	// Fewer passes than that in a tenth say nothing of a trend: on 200,000 files a disk in qemu without KVM, a tenth of
+	// an hour holds one at most.
+	if tenths[1] >= 4 && tenths[9]*2 < tenths[1] {
 		t.Errorf("the passes slowed down: %d in the second tenth, %d in the last (%v)", tenths[1], tenths[9], tenths)
 	}
 }

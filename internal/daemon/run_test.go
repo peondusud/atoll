@@ -499,6 +499,47 @@ func TestRunReloads(t *testing.T) {
 	}
 }
 
+// TestRunListensBetweenSteps: a step due turn after turn, here a mount check every nanosecond, as the hashes of a large
+// pool's new files come slice after slice, must not keep what the loop is sent waiting until it is over: a SIGHUP is
+// taken at the next turn, and the watcher's events with it (specs.md §15.13). The loop used to hear them only while it
+// slept, and the soak on 200,000 files a disk ran no pass while the hashes were read.
+func TestRunListensBetweenSteps(t *testing.T) {
+	c := bench(t, "")
+	machine, err := disks.NewMachine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reload := make(chan struct{})
+	loaded := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{Config: c, Machine: machine, Apply: true, Log: slog.New(slog.DiscardHandler), CheckEvery: time.Nanosecond,
+			Reload: reload, Load: func() (*config.Config, error) {
+				select {
+				case loaded <- struct{}{}:
+				default:
+				}
+				return c, nil
+			}})
+	}()
+	select {
+	case reload <- struct{}{}:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a SIGHUP waited 10 s while checks came one after the other")
+	}
+	select {
+	case <-loaded:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the configuration was not read again")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("stopped: %v", err)
+	}
+}
+
 type passLine struct {
 	because []string
 	disks   int

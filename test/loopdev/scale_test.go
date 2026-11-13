@@ -27,6 +27,7 @@ func TestScale(t *testing.T) {
 	if *scaleFiles <= 0 {
 		t.Skip("-atoll.scale is not set")
 	}
+	asTheBinary(t)
 	n := *scaleFiles
 	v := sizedVolume(t, n)
 	at := mountPoint(t)
