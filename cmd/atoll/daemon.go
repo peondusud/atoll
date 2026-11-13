@@ -446,7 +446,7 @@ func guardList(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	items, err := readGuards(c)
+	items, err := readGuards(context.Background(), c)
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -473,8 +473,7 @@ func guardList(configPath string, args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-func readGuards(c *config.Config) (items []guardItem, err error) {
-	ctx := context.Background()
+func readGuards(ctx context.Context, c *config.Config) (items []guardItem, err error) {
 	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)

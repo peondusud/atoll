@@ -135,14 +135,13 @@ func runStatus(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	if err := writeStatus(c, parsed, stdout); err != nil {
+	if err := writeStatus(context.Background(), c, parsed, stdout); err != nil {
 		return failure(stderr, err)
 	}
 	return exitOK
 }
 
-func writeStatus(c *config.Config, parsed statusArgs, stdout io.Writer) (err error) {
-	ctx := context.Background()
+func writeStatus(ctx context.Context, c *config.Config, parsed statusArgs, stdout io.Writer) (err error) {
 	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return fmt.Errorf("%w", err)

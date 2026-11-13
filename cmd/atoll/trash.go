@@ -244,15 +244,14 @@ func trashList(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	if err := writeTrash(c, asJSON, stdout); err != nil {
+	if err := writeTrash(context.Background(), c, asJSON, stdout); err != nil {
 		return failure(stderr, err)
 	}
 	return exitOK
 }
 
 // writeTrash reads the catalog and touches no disk (specs.md §17.4), and writes as it reads.
-func writeTrash(c *config.Config, asJSON bool, stdout io.Writer) (err error) {
-	ctx := context.Background()
+func writeTrash(ctx context.Context, c *config.Config, asJSON bool, stdout io.Writer) (err error) {
 	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return fmt.Errorf("%w", err)

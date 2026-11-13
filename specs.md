@@ -1646,7 +1646,7 @@ The daemon that runs for good (§15.13) answers questions about the pool over HT
   - `/v1/guards`: what `atoll guard list --json` gives.
 
   Each answer is the output of that command, with its schema, made whole before it is sent, with 200. One that cannot be made, as when the catalog cannot be used, gives 503 with `{"error": …}`; another path gives 404.
-- **Limits**: 10 s for a request's headers, 60 s for its answer, 16 KiB of headers, and no body. After a reload (§15.13) the answers follow the new configuration; a changed `api.socket` or `api.listen` takes effect at the next start. A daemon in `--dry-run` answers too: answering writes nothing.
+- **Limits**: 10 s for a request's headers, 60 s for its answer, 16 KiB of headers, and no body; a connection that asks nothing more is closed after 60 s, as one left open holds a descriptor the daemon needs for its disks. An answer whose 60 s are over, or whose client is gone, is given up. The answers that read the catalog, `/v1/status`, `/v1/trash` and `/v1/guards`, are made one at a time, as each is made in the daemon's own process, beside its passes, and `/v1/status` may plan the whole pool (§13.3): another waits for it within its own 60 s, and gives 503 past them. After a reload (§15.13) the answers follow the new configuration; a changed `api.socket` or `api.listen` takes effect at the next start. A daemon in `--dry-run` answers too: answering writes nothing.
 
 ## 26. Non-functional requirements
 
