@@ -44,6 +44,52 @@ func TestReplaceFile(t *testing.T) {
 	}
 }
 
+// The new text goes through a file made for it alone, of a name nobody can tell beforehand. At a name anyone could
+// tell, <file>.new, a draft left there was written over and renamed away, and a link there was followed: its
+// target took the configuration's text, and the link took the configuration's place.
+func TestReplaceFileLeavesWhatIsBesideIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "atoll.toml")
+	if err := os.WriteFile(path, []byte("old\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	draft := path + ".new"
+	if err := os.WriteFile(draft, []byte("a draft\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplaceFile(path, []byte("old\n"), []byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(draft); err != nil || string(data) != "a draft\n" {
+		t.Errorf("the draft beside the file: %q, %v", data, err)
+	}
+	if err := os.Remove(draft); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "other")
+	if err := os.WriteFile(other, []byte("keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, draft); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplaceFile(path, []byte("new\n"), []byte("newer\n")); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(other); err != nil || string(data) != "keep\n" {
+		t.Errorf("what a link beside the file names: %q, %v", data, err)
+	}
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("the configuration is no longer a file: %v", err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "newer\n" {
+		t.Errorf("%q, %v", data, err)
+	}
+	if names, _ := os.ReadDir(dir); len(names) != 3 {
+		t.Errorf("left behind: %v", names)
+	}
+}
+
 // disksBelow follows partitions to their disk, and device-mapper or md devices to the disks below them.
 func TestDisksBelow(t *testing.T) {
 	sys := t.TempDir()

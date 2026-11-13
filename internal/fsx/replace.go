@@ -15,10 +15,11 @@ import (
 // ErrChangedMeanwhile says that a file no longer holds what was read of it.
 var ErrChangedMeanwhile = errors.New("the file changed since it was read")
 
-// ReplaceFile writes data over the file at path, all or nothing: a file beside it, <name>.new, with the mode and
-// owner of the old one, synced, renamed over it, then the folder synced. It refuses with ErrChangedMeanwhile when
-// the file no longer holds was, so that an edit made meanwhile is never lost (specs.md §10). A symbolic link is
-// followed, and the file it leads to replaced.
+// ReplaceFile writes data over the file at path, all or nothing: a file beside it, made for this alone under a name
+// nobody can tell beforehand, with the mode and owner of the old one, synced, renamed over it, then the folder synced.
+// A name anyone could tell, as <name>.new, would be written through whatever was put there: a draft, or a link to
+// another file. It refuses with ErrChangedMeanwhile when the file no longer holds was, so that an edit made meanwhile
+// is never lost (specs.md §10). A symbolic link at path is followed, and the file it leads to replaced.
 func ReplaceFile(path string, was, data []byte) error {
 	path, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -35,9 +36,8 @@ func ReplaceFile(path string, was, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	tmp := path + ".new"
-	if err := writeSynced(tmp, data, info); err != nil {
-		_ = os.Remove(tmp)
+	tmp, err := writeSynced(path, data, info)
+	if err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -55,32 +55,38 @@ func ReplaceFile(path string, was, data []byte) error {
 	return nil
 }
 
-func writeSynced(path string, data []byte, like os.FileInfo) (err error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, like.Mode().Perm())
+// writeSynced writes data to a new file beside path, like the file there, and gives its name. The file is made by
+// this call alone, never opened if something has its name, and removed when it could not be written whole.
+func writeSynced(path string, data []byte, like os.FileInfo) (name string, err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.new")
 	if err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return "", fmt.Errorf("%s: %w", path, err)
 	}
+	name = f.Name()
 	defer func() {
 		if closeErr := f.Close(); err == nil && closeErr != nil {
-			err = fmt.Errorf("%s: %w", path, closeErr)
+			err = fmt.Errorf("%s: %w", name, closeErr)
+		}
+		if err != nil {
+			_ = os.Remove(name)
 		}
 	}()
-	// The umask may have taken bits away, and a file root writes is root's.
-	if err := f.Chmod(like.Mode().Perm()); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
-	}
+	// Made 0600 and the writer's: the mode and the owner are the old file's, as far as the writer may give them.
 	if st, ok := like.Sys().(*syscall.Stat_t); ok {
 		if err := f.Chown(int(st.Uid), int(st.Gid)); err != nil && !errors.Is(err, os.ErrPermission) {
-			return fmt.Errorf("%s: %w", path, err)
+			return "", fmt.Errorf("%s: %w", name, err)
 		}
 	}
+	if err := f.Chmod(like.Mode().Perm()); err != nil {
+		return "", fmt.Errorf("%s: %w", name, err)
+	}
 	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return "", fmt.Errorf("%s: %w", name, err)
 	}
 	if err := f.Sync(); err != nil {
-		return fmt.Errorf("%s: %w", path, err)
+		return "", fmt.Errorf("%s: %w", name, err)
 	}
-	return nil
+	return name, nil
 }
 
 // RemoveFile removes a file of the system disk, the catalog's or the configuration's, never one of a pool disk.
