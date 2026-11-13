@@ -1,0 +1,223 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a712.3, \u00a714.1, \u00a715.13",
+  "description": "The copy of a file in scheduled mode runs only inside replication.window, in the time zone of timezone: outside it, it waits in the queue, counts in waiting, and next_due says when the window opens. A file in deferred mode is copied as ever.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/soon.mkv",
+          "text": "soon"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "timezone = \"UTC\"\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[defaults]\nmode = \"scheduled\"\nsettle = \"0s\"\n[replication]\nwindow = \"02:00-04:00\"\n[[rule]]\nlabel = \"soon\"\npath = \"soon.mkv\"\nmode = \"deferred\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "soon.mkv",
+            "source": "t1",
+            "outcome": "replicated"
+          }
+        ],
+        "guards": [],
+        "waiting": 1,
+        "next_due": "2030-01-01T02:00:00.000000000Z"
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        },
+        {
+          "path": "media/soon.mkv",
+          "text": "soon"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, state FROM jobs",
+      "rows": [
+        [
+          "replicate",
+          "queued"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "119m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 1,
+        "next_due": "2030-01-01T02:00:00.000000000Z"
+      }
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "a.mkv",
+            "source": "t1",
+            "outcome": "replicated"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        },
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/soon.mkv",
+          "text": "soon"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

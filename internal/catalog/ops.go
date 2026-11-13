@@ -22,6 +22,8 @@ const (
 	OpMkdir   = "mkdir"
 	OpRename  = "rename"
 	OpCreate  = "create"
+	// OpLink makes the link guard's link of a copy (specs.md §17).
+	OpLink = "link"
 )
 
 // Op is one operation of the journal.
@@ -32,6 +34,9 @@ type Op struct {
 	Path    string // the logical path, or for a rename where it sat
 	Path2   string // the location inside the trash, or for a rename the target
 	FileKey string // the identity of the file moved
+	// Link is the id of the file whose link in <workdir>/links/ the operation is about, 0 for any other: the source of
+	// a trash, or what a link or unlink makes or removes (specs.md §17).
+	Link int64
 }
 
 // TrashStart is what sending a copy to the trash needs.
@@ -44,6 +49,8 @@ type TrashStart struct {
 	Reason    string
 	NowNS     int64
 	ExpiresNS int64
+	// Link says that what goes is the link guard's link of that file, rather than the copy at Path (specs.md §17).
+	Link int64
 }
 
 // eventData is the data of an event (specs.md §9).
@@ -55,9 +62,13 @@ type eventData struct {
 	Reason  string `json:"reason,omitempty"`
 	Source  string `json:"source,omitempty"`
 	MtimeNS *int64 `json:"mtime_ns,omitempty"`
-	Mode    *int64 `json:"mode,omitempty"`
-	UID     *int64 `json:"uid,omitempty"`
-	GID     *int64 `json:"gid,omitempty"`
+	// Chunks holds the indexes of the bad chunks of a repair (specs.md §16.1).
+	Chunks []int64 `json:"chunks,omitempty"`
+	Mode   *int64  `json:"mode,omitempty"`
+	UID    *int64  `json:"uid,omitempty"`
+	GID    *int64  `json:"gid,omitempty"`
+	// Link is the file whose link in <workdir>/links/ went to the trash (specs.md §17).
+	Link int64 `json:"link,omitempty"`
 }
 
 // writeEvent writes an event, in the transaction of the operation it speaks of, so before it runs.
@@ -66,7 +77,7 @@ func writeEvent(ctx context.Context, tx *sql.Tx, nowNS int64, level, kind string
 }
 
 func writeEventData(ctx context.Context, tx *sql.Tx, nowNS int64, level, kind string, op *Op, data eventData) error {
-	data.Op, data.Disk = op.ID, op.Disk
+	data.Op, data.Disk, data.Link = op.ID, op.Disk, op.Link
 	if utf8.ValidString(op.Path) {
 		data.Path = op.Path
 	} else {
@@ -85,10 +96,10 @@ func writeEventData(ctx context.Context, tx *sql.Tx, nowNS int64, level, kind st
 // BeginTrash journals sending a copy to the trash, before anything is written to a disk. Until its
 // operation is done, a trash row says nothing of what the trash holds (specs.md §17.1).
 func BeginTrash(ctx context.Context, db *sql.DB, s *TrashStart) (*Op, error) {
-	op := &Op{Disk: s.Disk, Kind: OpTrash, Path: s.Path, FileKey: s.FileKey}
+	op := &Op{Disk: s.Disk, Kind: OpTrash, Path: s.Path, FileKey: s.FileKey, Link: s.Link}
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, file_key, started_ns, state) VALUES (?, 'trash', ?, ?, ?, 'planned')",
-			s.Disk, []byte(s.Path), s.FileKey, s.NowNS)
+		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, file_key, started_ns, state, link) VALUES (?, 'trash', ?, ?, ?, 'planned', ?)",
+			s.Disk, []byte(s.Path), s.FileKey, s.NowNS, linkOf(s.Link))
 		if err != nil {
 			return fmt.Errorf("journal: %w", err)
 		}
@@ -147,14 +158,17 @@ func writeLinks(ctx context.Context, tx *sql.Tx, disk string, links *Links) erro
 	return nil
 }
 
-// FinishTrash says that a copy is in the trash, once that is durable.
+// FinishTrash says that a copy is in the trash, once that is durable. A link of the link guard that went there was no
+// copy: no row goes with it (specs.md §17).
 func FinishTrash(ctx context.Context, db *sql.DB, op *Op, restart *Restart, links *Links) error {
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
 		if err := markOp(ctx, tx, op.ID, "done"); err != nil {
 			return err
 		}
-		if err := finishCopy(ctx, tx, op); err != nil {
-			return err
+		if op.Link == 0 {
+			if err := finishCopy(ctx, tx, op); err != nil {
+				return err
+			}
 		}
 		if restart != nil {
 			if _, err := tx.ExecContext(ctx, "UPDATE trash SET deleted_ns = ?, expires_ns = ? WHERE op_id = ?", restart.DeletedNS, restart.ExpiresNS, op.ID); err != nil {
@@ -474,7 +488,7 @@ func Undo(ctx context.Context, db *sql.DB, op *Op, warn bool, nowNS int64) error
 
 // PlannedOps gives the operations left planned, by id.
 func PlannedOps(ctx context.Context, db *sql.DB) ([]Op, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, disk_id, kind, path, COALESCE(path2, x''), COALESCE(file_key, '') FROM ops WHERE state = 'planned' ORDER BY id")
+	rows, err := db.QueryContext(ctx, "SELECT id, disk_id, kind, path, COALESCE(path2, x''), COALESCE(file_key, ''), COALESCE(link, 0) FROM ops WHERE state = 'planned' ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
@@ -483,7 +497,7 @@ func PlannedOps(ctx context.Context, db *sql.DB) ([]Op, error) {
 	for rows.Next() {
 		var op Op
 		var path, path2 []byte
-		if err := rows.Scan(&op.ID, &op.Disk, &op.Kind, &path, &path2, &op.FileKey); err != nil {
+		if err := rows.Scan(&op.ID, &op.Disk, &op.Kind, &path, &path2, &op.FileKey, &op.Link); err != nil {
 			return nil, fmt.Errorf("journal: %w", err)
 		}
 		op.Path, op.Path2 = string(path), string(path2)

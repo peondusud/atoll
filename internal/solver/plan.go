@@ -101,6 +101,13 @@ type Input struct {
 	Files   []File
 	Entries []Entry
 	MinFree value.MinFree
+	// Balance makes the plan of atoll balance (specs.md §13.3): an Atoll copy that breaks a strict setting of its
+	// file counts for nothing, so that one is made where the setting wants it. It stays a source, and its disk still
+	// holds a copy; its result names it.
+	Balance bool
+	// MoveOriginals makes a user copy count as one too, with Balance: the plan of atoll balance --move-originals, the
+	// only way a user copy moves (specs.md §6.1, §13.3).
+	MoveOriginals bool
 }
 
 // JobKind is a kind of job (specs.md §9).
@@ -129,6 +136,8 @@ type Result struct {
 	Back     []string // disks whose copy, surplus so far, goes back to ok
 	Cancel   []string // disks whose pending copy is canceled
 	Overflow bool     // a copy went to a disk the rule did not list
+	// Misplaced holds, in a plan of atoll balance, the disks whose Atoll copy breaks a strict setting of the file.
+	Misplaced []string
 }
 
 // Plan is a placement plan (specs.md §13.4).
@@ -199,7 +208,7 @@ func makePlan(in Input, each func(file int, jobs []Job) error) (Plan, error) {
 	// Counted first: grown one by one, a result for each of 200,000 files is for a moment twice its size.
 	count := 0
 	for _, f := range p.files {
-		if r := p.result(f); r.States != nil || f.marks != nil {
+		if r := p.result(f); r.States != nil || f.marks != nil || r.Misplaced != nil {
 			count++
 		}
 	}
@@ -207,7 +216,7 @@ func makePlan(in Input, each func(file int, jobs []Job) error) (Plan, error) {
 		plan.Results = make([]Result, 0, count)
 	}
 	for _, f := range p.files {
-		if r := p.result(f); r.States != nil || f.marks != nil {
+		if r := p.result(f); r.States != nil || f.marks != nil || r.Misplaced != nil {
 			plan.Results = append(plan.Results, r)
 		}
 	}
@@ -246,6 +255,8 @@ type planFile struct {
 	refused  nameRefusal // what the searches for a disk met
 	stale    nameRefusal // what a refresh met
 	marks    *fileMarks  // nil for most files
+	// misplaced holds, in a plan of atoll balance, the disks of its Atoll copies that break a strict setting.
+	misplaced []*planDisk
 }
 
 // fileMarks holds the marks a file's copies get.
@@ -283,10 +294,14 @@ type planner struct {
 	files   []*planFile
 	byPath  map[string]*planFile
 	entries []Entry
+	balance bool
+	// originals says that a user copy can be misplaced too (Input.MoveOriginals).
+	originals bool
 }
 
 func newPlanner(in Input) (*planner, error) {
-	p := &planner{byID: map[string]*planDisk{}, byPath: map[string]*planFile{}, entries: in.Entries}
+	p := &planner{byID: map[string]*planDisk{}, byPath: map[string]*planFile{}, entries: in.Entries, balance: in.Balance,
+		originals: in.Balance && in.MoveOriginals}
 	if err := p.addDisks(in); err != nil {
 		return nil, err
 	}
@@ -395,22 +410,33 @@ func checkFile(f *File) error {
 func (p *planner) addCopies(f *planFile) error {
 	var source *planDisk
 	var counted []countedCopy
+	seen := make([]*planDisk, 0, len(f.Copies))
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		d := p.byID[c.Disk]
 		if d == nil {
 			return fmt.Errorf("plan: %q: a copy on unknown disk %q", f.Path, c.Disk)
 		}
-		if slices.Contains(f.holding, d) {
+		if slices.Contains(seen, d) {
 			return fmt.Errorf("plan: %q: two copies on disk %q", f.Path, c.Disk)
 		}
+		seen = append(seen, d)
 		if err := checkCopy(c); err != nil {
 			return fmt.Errorf("plan: %q: %w", f.Path, err)
 		}
+	}
+	if p.balance && !f.Leaving {
+		f.misplaced = p.misplaced(f)
+	}
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		d := p.byID[c.Disk]
 		f.holding = append(f.holding, d)
 		addParents(d, f.Path)
-		// A file leaving keeps no pending copy: the copy made would end its deletion (specs.md §13.4).
-		if counts(c, d) && (!f.Leaving || c.State != CopyPending) {
+		if slices.Contains(f.misplaced, d) {
+			// It counts for nothing, so that one is made where the setting wants it; it is no loss.
+		} else if counts(c, d) && (!f.Leaving || c.State != CopyPending) {
+			// A file leaving keeps no pending copy: the copy made would end its deletion (specs.md §13.4).
 			counted = append(counted, countedCopy{c, d})
 		} else {
 			f.lost = true
@@ -504,7 +530,7 @@ type countedCopy struct {
 // sets their marks, and takes the size of each pending one off its disk.
 func (f *planFile) keep(counted []countedCopy) {
 	byRank := slices.Clone(counted)
-	slices.SortFunc(byRank, compareKeep)
+	slices.SortFunc(byRank, func(a, b countedCopy) int { return compareKeep(a, b, f.Placement) })
 	take := func(d *planDisk) {
 		f.counted = append(f.counted, d)
 		f.covered = appendNew(f.covered, d.domain)
@@ -540,11 +566,15 @@ func (f *planFile) keep(counted []countedCopy) {
 	}
 }
 
-func compareKeep(a, b countedCopy) int {
+// compareKeep orders the copies that count, the first kept first (specs.md §13.4). Where only listed disks are
+// candidates, a copy on one outranks a copy of the same maker on a disk the lists no longer allow.
+func compareKeep(a, b countedCopy, place *Placement) int {
+	strict := onlyListed(place)
 	return cmp.Or(
 		boolRank(a.copy.State == CopyPending, b.copy.State == CopyPending),
 		boolRank(a.disk.State == DiskMissing, b.disk.State == DiskMissing),
 		boolRank(a.copy.CreatedBy != CreatedByUser, b.copy.CreatedBy != CreatedByUser),
+		boolRank(strict && !listed(a.disk, place), strict && !listed(b.disk, place)),
 		cmp.Compare(a.copy.FirstSeenNS, b.copy.FirstSeenNS),
 		cmp.Compare(a.disk.Position, b.disk.Position),
 	)
@@ -720,8 +750,9 @@ func onlyListed(place *Placement) bool {
 	return place.TagsMode == ModeStrict || place.Overflow == OverflowDeny
 }
 
-// domainsLeft is how many failure domains a file with strict domains has yet to cover.
-func (p *planner) domainsLeft(f *planFile) int {
+// domainsOf gives the failure domains a file with strict domains is to cover: those of the data disks that are not
+// failed, retired or draining, and listed when only listed disks are candidates (specs.md §13.4).
+func (p *planner) domainsOf(f *planFile) []string {
 	var domains []string
 	for _, d := range p.disks {
 		if d.Role != RoleData || d.State == DiskFailed || d.State == DiskRetired || d.State == DiskDraining {
@@ -732,6 +763,77 @@ func (p *planner) domainsLeft(f *planFile) int {
 		}
 		domains = appendNew(domains, d.domain)
 	}
+	return domains
+}
+
+// misplaced gives the disks of a file's Atoll copies that break a strict setting of its placement, for atoll balance
+// (specs.md §13.3). Where only listed disks are candidates, a copy on a disk the lists do not allow. Then, with
+// spread_mode strict, while the copies of a file at its level cover fewer domains than it must, copies that double up
+// a domain, the youngest first, as many as domains are missing. A user copy is never one, but with --move-originals,
+// nor is a copy that does not count or is pending.
+func (p *planner) misplaced(f *planFile) []*planDisk {
+	var out []*planDisk
+	type held struct {
+		c *Copy
+		d *planDisk
+	}
+	var kept []held
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		d := p.byID[c.Disk]
+		if !counts(c, d) || c.State == CopyPending {
+			continue
+		}
+		if p.movable(c) && onlyListed(f.Placement) && !listed(d, f.Placement) {
+			out = append(out, d)
+			continue
+		}
+		kept = append(kept, held{c, d})
+	}
+	// Below its level, a file's next copies go to the domains it lacks, as strict spreading has them: nothing to move.
+	if f.Placement.SpreadMode != ModeStrict || len(kept)+len(out) < f.level {
+		return out
+	}
+	domains := p.domainsOf(f)
+	var covered []string
+	for _, h := range kept {
+		if slices.Contains(domains, h.d.domain) {
+			covered = appendNew(covered, h.d.domain)
+		}
+	}
+	short := min(f.level, len(domains)) - len(covered)
+	if short <= 0 {
+		return out
+	}
+	// In each domain, the copy the plan would keep first stays; the Atoll copies after it are what can go, and with
+	// --move-originals the user copies too.
+	slices.SortFunc(kept, func(a, b held) int { return compareKeep(countedCopy{a.c, a.d}, countedCopy{b.c, b.d}, f.Placement) })
+	var first []string
+	var extra []held
+	for _, h := range kept {
+		if !slices.Contains(first, h.d.domain) {
+			first = append(first, h.d.domain)
+		} else if p.movable(h.c) {
+			extra = append(extra, h)
+		}
+	}
+	slices.SortFunc(extra, func(a, b held) int {
+		return cmp.Or(cmp.Compare(b.c.FirstSeenNS, a.c.FirstSeenNS), cmp.Compare(b.d.Position, a.d.Position))
+	})
+	for _, h := range extra[:min(short, len(extra))] {
+		out = append(out, h.d)
+	}
+	return out
+}
+
+// movable says whether atoll balance may move a copy: an Atoll copy, or with --move-originals any.
+func (p *planner) movable(c *Copy) bool {
+	return c.CreatedBy == CreatedByAtoll || p.originals
+}
+
+// domainsLeft is how many failure domains a file with strict domains has yet to cover.
+func (p *planner) domainsLeft(f *planFile) int {
+	domains := p.domainsOf(f)
 	covered := 0
 	for _, domain := range domains {
 		if slices.Contains(f.covered, domain) {
@@ -831,7 +933,7 @@ func (p *planner) pathFree(f *planFile, d *planDisk) bool {
 
 // result gives the states and marks of a file once the plan is made.
 func (p *planner) result(f *planFile) Result {
-	r := Result{Path: f.Path, Overflow: f.overflow}
+	r := Result{Path: f.Path, Overflow: f.overflow, Misplaced: disksByPosition(f.misplaced)}
 	if f.marks != nil {
 		r.Surplus = disksByPosition(f.marks.surplus)
 		r.Back = disksByPosition(f.marks.back)

@@ -1,0 +1,295 @@
+{
+ "format_version": 1,
+ "spec": "specs.md \u00a715.7",
+ "description": "atoll conflicts resolve keeps the copy on the disk named and sends the other version to the trash, with --yes only. The file then takes the kept copy's size and time, its hash is read again, and its replica is made from the kept copy.",
+ "disks": [
+  {
+   "id": "t1",
+   "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t2",
+   "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "text": "xx",
+     "mtime_ns": 1700000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t3",
+   "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  }
+ ],
+ "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+ "steps": [
+  {
+   "do": "atoll",
+   "args": [
+    "init"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "scan",
+    "--full"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t2",
+    "--json"
+   ],
+   "exit": 3,
+   "stdout_json": {
+    "path": "a",
+    "keep": "t2",
+    "applied": false,
+    "resolved": false,
+    "bytes": 1024,
+    "copies": [
+     {
+      "disk": "t2",
+      "size": 2,
+      "mtime_ns": 1700000000000000000,
+      "outcome": "kept"
+     },
+     {
+      "disk": "t1",
+      "size": 1024,
+      "mtime_ns": 1600000000000000000,
+      "outcome": "to-trash"
+     }
+    ]
+   }
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep=t2",
+    "--dry-run",
+    "--json"
+   ],
+   "stdout_json": {
+    "path": "a",
+    "keep": "t2",
+    "applied": false,
+    "resolved": false,
+    "bytes": 1024,
+    "copies": [
+     {
+      "disk": "t2",
+      "size": 2,
+      "mtime_ns": 1700000000000000000,
+      "outcome": "kept"
+     },
+     {
+      "disk": "t1",
+      "size": 1024,
+      "mtime_ns": 1600000000000000000,
+      "outcome": "to-trash"
+     }
+    ]
+   }
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t1",
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t2",
+    "--yes",
+    "--json"
+   ],
+   "stdout_json": {
+    "path": "a",
+    "keep": "t2",
+    "applied": true,
+    "resolved": true,
+    "bytes": 1024,
+    "copies": [
+     {
+      "disk": "t2",
+      "size": 2,
+      "mtime_ns": 1700000000000000000,
+      "outcome": "kept"
+     },
+     {
+      "disk": "t1",
+      "size": 1024,
+      "mtime_ns": 1600000000000000000,
+      "outcome": "trashed"
+     }
+    ]
+   }
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t1",
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    },
+    {
+     "path": "Atoll/trash/2026-01-01/1/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t2",
+   "tree": [
+    {
+     "path": "media/a",
+     "text": "xx",
+     "mtime_ns": 1700000000000000000
+    }
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT CAST(lpath AS TEXT), size, mtime_ns, state, blake3 IS NULL, original_disk FROM files",
+   "rows": [
+    [
+     "a",
+     2,
+     1700000000000000000,
+     "pending",
+     1,
+     "t2"
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT disk_id, verified_ns IS NULL FROM copies",
+   "rows": [
+    [
+     "t2",
+     1
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT reason, size FROM trash",
+   "rows": [
+    [
+     "overwritten",
+     1024
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT level, json_extract(data, '$.disk'), json_extract(data, '$.path') FROM events WHERE kind = 'conflict-resolve'",
+   "rows": [
+    [
+     "info",
+     "t2",
+     "a"
+    ]
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "list",
+    "--json"
+   ],
+   "stdout_json": {
+    "files": []
+   }
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t2",
+    "--yes",
+    "--json"
+   ],
+   "exit": 1
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "replicate",
+    "a",
+    "--now",
+    "--json"
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT count(*), sum(disk_id <> 't2' AND size = 2) FROM copies",
+   "rows": [
+    [
+     2,
+     1
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT state, size, blake3 IS NOT NULL FROM files",
+   "rows": [
+    [
+     "ok",
+     2,
+     1
+    ]
+   ]
+  }
+ ]
+}

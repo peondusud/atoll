@@ -135,8 +135,10 @@ api_key_file = ""
 [alerts]
 ntfy            = "https://ntfy.sh/my-secret-topic"
 ntfy_token_file = ""                    # a Bearer token, for a ntfy server that asks one
-gotify          = ""
-smtp            = ""
+gotify          = ""                    # "https://gotify.example", the server
+gotify_token_file = ""                  # the application token Gotify asks for
+smtp            = ""                    # "smtps://user@mail.example?from=atoll@example&to=me@example"
+smtp_password_file = ""                 # the password of that user
 
 [api]                                   # the local API of the daemon (§25.1)
 socket     = "/run/atoll/atoll.sock"

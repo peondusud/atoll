@@ -25,14 +25,17 @@ type Status struct {
 	FilesAtLevel int
 	BytesTotal   int64
 	BytesAtLevel int64
-	ByState      map[string]int
+	// BytesPlaced is the bytes of the files with no misplaced copy (specs.md §13.3).
+	BytesPlaced int64
+	ByState     map[string]int
 }
 
 // ReadStatus reads the catalog and touches no disk. A non-empty under keeps that path and what is
 // below it in the counts, and gives each file it keeps to each, by path in byte order, with its
 // copies by position. It keeps none of them, as a folder of 200,000 files would not fit in the
-// memory of specs.md §26.
-func ReadStatus(ctx context.Context, db *sql.DB, under string, each func(*catalog.FileRow) error) (*Status, error) {
+// memory of specs.md §26. misplaced holds the files with a misplaced copy, which the bytes correctly
+// placed leave out.
+func ReadStatus(ctx context.Context, db *sql.DB, under string, misplaced map[string]bool, each func(*catalog.FileRow) error) (*Status, error) {
 	diskList, err := catalog.Disks(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
@@ -60,6 +63,9 @@ func ReadStatus(ctx context.Context, db *sql.DB, under string, each func(*catalo
 				continue
 			}
 			out.countFile(f, at)
+			if !misplaced[f.Path] {
+				out.BytesPlaced += f.Size
+			}
 			if under == "" {
 				continue
 			}

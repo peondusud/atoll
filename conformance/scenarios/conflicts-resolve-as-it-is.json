@@ -1,0 +1,246 @@
+{
+ "format_version": 1,
+ "spec": "specs.md \u00a715.7",
+ "description": "A walk leaves the copies of a file in conflict as it found them, so a resolution looks at each again: the copy kept is what its disk holds now, a copy replaced since goes to the trash as it is, and one no longer there loses its row.",
+ "disks": [
+  {
+   "id": "t1",
+   "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t2",
+   "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "text": "xx",
+     "mtime_ns": 1700000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t3",
+   "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media/a",
+     "text": "xx",
+     "mtime_ns": 1700000000000000000
+    }
+   ]
+  }
+ ],
+ "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+ "steps": [
+  {
+   "do": "atoll",
+   "args": [
+    "init"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "scan",
+    "--full"
+   ]
+  },
+  {
+   "do": "write",
+   "disk": "t1",
+   "path": "media/a",
+   "text": "edited",
+   "mtime_ns": 1800000000000000000
+  },
+  {
+   "do": "write",
+   "disk": "t2",
+   "path": "media/a.part",
+   "text": "yyy",
+   "mtime_ns": 1900000000000000000
+  },
+  {
+   "do": "rename",
+   "disk": "t2",
+   "path": "media/a.part",
+   "to": "media/a"
+  },
+  {
+   "do": "delete",
+   "disk": "t3",
+   "path": "media/a"
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "scan",
+    "--full"
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT disk_id, size FROM copies ORDER BY disk_id",
+   "rows": [
+    [
+     "t1",
+     1024
+    ],
+    [
+     "t2",
+     2
+    ],
+    [
+     "t3",
+     2
+    ]
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t1",
+    "--dry-run",
+    "--json"
+   ],
+   "stdout_json": {
+    "path": "a",
+    "keep": "t1",
+    "applied": false,
+    "resolved": false,
+    "bytes": 3,
+    "copies": [
+     {
+      "disk": "t1",
+      "size": 6,
+      "mtime_ns": 1800000000000000000,
+      "outcome": "kept"
+     },
+     {
+      "disk": "t2",
+      "size": 3,
+      "mtime_ns": 1900000000000000000,
+      "outcome": "to-trash"
+     },
+     {
+      "disk": "t3",
+      "size": 2,
+      "mtime_ns": 1700000000000000000,
+      "outcome": "gone"
+     }
+    ]
+   }
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "conflicts",
+    "resolve",
+    "a",
+    "--keep",
+    "t1",
+    "--yes",
+    "--json"
+   ],
+   "stdout_json": {
+    "path": "a",
+    "keep": "t1",
+    "applied": true,
+    "resolved": true,
+    "bytes": 3,
+    "copies": [
+     {
+      "disk": "t1",
+      "size": 6,
+      "mtime_ns": 1800000000000000000,
+      "outcome": "kept"
+     },
+     {
+      "disk": "t2",
+      "size": 3,
+      "mtime_ns": 1900000000000000000,
+      "outcome": "trashed"
+     },
+     {
+      "disk": "t3",
+      "size": 2,
+      "mtime_ns": 1700000000000000000,
+      "outcome": "gone"
+     }
+    ]
+   }
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t2",
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    },
+    {
+     "path": "Atoll/trash/2026-01-01/1/a",
+     "text": "yyy",
+     "mtime_ns": 1900000000000000000
+    }
+   ]
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t3",
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT size, mtime_ns, state FROM files",
+   "rows": [
+    [
+     6,
+     1800000000000000000,
+     "pending"
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT disk_id, size, mtime_ns FROM copies",
+   "rows": [
+    [
+     "t1",
+     6,
+     1800000000000000000
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT size FROM trash",
+   "rows": [
+    [
+     3
+    ]
+   ]
+  }
+ ]
+}

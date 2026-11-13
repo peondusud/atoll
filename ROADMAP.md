@@ -9,7 +9,7 @@ A milestone is reached when its phase and every phase before it are done.
 | Milestone | Phase | What it brings | Progress |
 |---|---|---|---|
 | **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 96 % |
-| **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 35 % |
+| **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 98 % |
 | **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 30 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
 | — | 3 — Rust rewrite | the same contracts and conformance suite, switched to without migrating data | |
@@ -51,12 +51,14 @@ The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "
 
 ## Beta: phase 1b, the complete Linux MVP
 
-- **Modes.** The `immediate` and `scheduled` replication modes; the watcher brings what `immediate` needs.
-- **Repair.** Repair and quarantine of corrupt copies, and duplicates (§16).
-- **Placement.** Failure domains and tags as hard constraints, and `atoll balance` and `capacity`. The capacity formula and the strict domains are done in the solver.
-- **Monitoring and notifications.** SMART, Gotify and SMTP alerts, and notifications to Plex, Emby and Jellyfin.
-- **Conflicts.** `atoll conflicts resolve`.
-- **Link guard.** The optional link guard against deletions through mergerfs (§17).
+- **Modes.** Done: the `immediate` and `scheduled` replication modes (§12.3).
+- **Repair and duplicates.** Done: the repair of corrupt copies, by chunk or whole (§16.1), and the report of duplicates, `atoll dupes` (§16).
+- **Placement.** Failure domains and tags as hard constraints, and `atoll balance` and `capacity`. The constraints are done: a rule's tags and domains, `tags_mode` and `spread_mode` in strict mode, and `overflow = "deny"` reach the plan, as does the capacity formula. `atoll capacity` is done, and so is `atoll balance`, by hand and by the daemon inside `balance.schedule` once `balance.trigger` holds, which moves the copies Atoll made that a change of rule leaves misplaced, and with `--move-originals` the user's copies too. `atoll status` gives the bytes correctly placed.
+- **Monitoring and notifications.** Done: SMART, Gotify and SMTP alerts, the alert on an NTFS volume marked dirty, and notifications to Plex, Emby and Jellyfin.
+- **Conflicts.** Done: `atoll conflicts list` and `atoll conflicts resolve` (§15.7).
+- **Link guard.** Done: the optional link guard against deletions and replacements through mergerfs (§17).
+
+Every item of phase 1b is done. What the beta still needs is the alpha's: the memory of a daemon that runs for days, at 200,000 files, which is also where the link guard and `bytes_placed` are still to be measured (TODO.md).
 
 ## v0.1: phase 2a, Atoll's own view
 

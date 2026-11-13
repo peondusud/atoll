@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -29,6 +30,9 @@ const (
 	KeyPoolFull     = "pool-full"
 	KeyNameRefused  = "name-refused"
 	KeyTrashFull    = "trash-full:"
+	KeySmartFailing = "smart-failing:"
+	KeySmartSectors = "smart-sectors:"
+	KeyNTFSDirty    = "ntfs-dirty:"
 )
 
 // FirstN is how many paths an alert names, at most.
@@ -80,6 +84,17 @@ type Facts struct {
 	TrashFull []TrashFull
 	// MaxSize is trash.max_size, as the configuration writes it.
 	MaxSize string
+	// Smart holds the last reading of SMART of each disk that has one, neither failed nor retired, in the catalog's
+	// order of the disks.
+	Smart []SmartLine
+	// Dirty holds the missing disks whose NTFS volume the daemon found marked dirty (specs.md §22).
+	Dirty []string
+}
+
+// SmartLine is a disk's last reading of SMART.
+type SmartLine struct {
+	ID string
+	disks.SmartRecord
 }
 
 // TrashFull is a disk whose trash holds more than trash.max_size of its capacity: Used bytes of Capacity.
@@ -115,6 +130,7 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 	}
 	for i := range list {
 		d := &list[i]
+		f.Smart = appendSmart(f.Smart, d)
 		if !slices.Contains([]string{"online", "standby", "readonly", "draining"}, d.State) {
 			continue
 		}
@@ -128,6 +144,19 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 		f.Used += max(d.Capacity-d.Free, 0)
 	}
 	return f, nil
+}
+
+// appendSmart adds a disk's last reading of SMART, unless it has none, or is failed or retired: the user knows of it
+// then. A reading the catalog holds that does not decode counts as none, so that it cannot hold up every alert.
+func appendSmart(lines []SmartLine, d *catalog.Disk) []SmartLine {
+	if d.SmartJSON == "" || d.State == "failed" || d.State == "retired" {
+		return lines
+	}
+	var r disks.SmartRecord
+	if err := json.Unmarshal([]byte(d.SmartJSON), &r); err != nil {
+		return lines
+	}
+	return append(lines, SmartLine{ID: d.ID, SmartRecord: r})
 }
 
 // Holdings gives the conditions that hold, each once, with its count.
@@ -163,6 +192,18 @@ func Holdings(f *Facts) []Holding {
 	}
 	for _, d := range f.TrashFull {
 		counts[KeyTrashFull+d.ID] = 1
+	}
+	for _, id := range f.Dirty {
+		counts[KeyNTFSDirty+id] = 1
+	}
+	for i := range f.Smart {
+		s := &f.Smart[i]
+		if s.Failing {
+			counts[KeySmartFailing+s.ID] = 1
+		}
+		if n := s.Sectors(); n > 0 {
+			counts[KeySmartSectors+s.ID] = n
+		}
 	}
 	out := make([]Holding, 0, len(counts))
 	for key, n := range counts {
@@ -225,6 +266,28 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Body = fmt.Sprintf("The trash of disk %s holds %d bytes, more than trash.max_size (%s) of its %d bytes, once purged: "+
 			"what is left there, deleted or renamed files, waits for its retention. atoll trash list shows it; "+
 			"atoll trash purge --older-than <duration> --yes purges it sooner.", id, d.Used, f.MaxSize, d.Capacity)
+	case strings.HasPrefix(h.Key, KeyNTFSDirty):
+		id := strings.TrimPrefix(h.Key, KeyNTFSDirty)
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s is marked dirty", id)
+		m.Body = fmt.Sprintf("The disk %s is missing: its NTFS volume is marked dirty, as an unclean unplugging leaves it, and Linux "+
+			"mounts it only by force, which Atoll never does. Repair it with chkdsk /f on Windows, then plug it back.", id)
+	case strings.HasPrefix(h.Key, KeySmartFailing):
+		id := strings.TrimPrefix(h.Key, KeySmartFailing)
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: disk %s is failing", id)
+		m.Body = fmt.Sprintf("The disk %s failed its own SMART health check%s. Move what it holds to the other disks while it "+
+			"still answers: atoll disk remove %s --evacuate --dry-run says what that takes.", id, smartSays(f, id), id)
+	case strings.HasPrefix(h.Key, KeySmartSectors):
+		id := strings.TrimPrefix(h.Key, KeySmartSectors)
+		s := smartOf(f, id)
+		if s.Pending > 0 || s.Uncorrectable > 0 {
+			m.Priority = priorityHigh
+		}
+		m.Title = fmt.Sprintf("Atoll: disk %s has %d bad %s", id, h.Count, plural(h.Count, "sector", "sectors"))
+		m.Body = fmt.Sprintf("SMART says that the disk %s moved %d sectors, waits to move %d and could not read %d%s. A count "+
+			"that grows is a disk failing: atoll scrub reads its copies against their hashes, and atoll disk remove %s "+
+			"--evacuate --dry-run says what moving its files would take.", id, s.Reallocated, s.Pending, s.Uncorrectable, temperature(&s), id)
 	case h.Key == KeyPoolFull:
 		m.Title = fmt.Sprintf("Atoll: the pool is %d %% full", f.Used*100/f.Capacity)
 		m.Body = fmt.Sprintf("The data disks hold %d of their %d bytes. New copies may find no room.", f.Used, f.Capacity)
@@ -246,6 +309,34 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		return nil, fmt.Errorf("alerts: no condition %q", h.Key)
 	}
 	return m, nil
+}
+
+// smartOf gives a disk's last reading of SMART, none when it has none.
+func smartOf(f *Facts, id string) disks.Smart {
+	for i := range f.Smart {
+		if f.Smart[i].ID == id {
+			return f.Smart[i].Smart
+		}
+	}
+	return disks.Smart{}
+}
+
+// smartSays tells what else a disk's last reading of SMART said: its bad sectors and its temperature.
+func smartSays(f *Facts, id string) string {
+	s := smartOf(f, id)
+	if s.Sectors() == 0 {
+		return temperature(&s)
+	}
+	return fmt.Sprintf(", with %d sectors moved, %d waiting to move and %d it could not read%s", s.Reallocated, s.Pending, s.Uncorrectable,
+		temperature(&s))
+}
+
+// temperature says a reading's temperature, when it gave one.
+func temperature(s *disks.Smart) string {
+	if s.Temperature == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", at %d °C", s.Temperature)
 }
 
 // why gives the reason of a disk's state, as its verdict says it.

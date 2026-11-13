@@ -95,10 +95,15 @@ func TestPercentVectors(t *testing.T) {
 		Input  string `json:"input"`
 		Of     *int64 `json:"of"`
 		Result *int64 `json:"result"`
+		Count  *int64 `json:"count"`
+		Below  *bool  `json:"below"`
 		Error  bool   `json:"error"`
 		Note   string `json:"note"`
 	}
 	for _, v := range vectors.Load[vector](t, "percent.json") {
+		if (v.Count == nil) != (v.Below == nil) {
+			t.Errorf("vector %q: want count and below together", v.Input)
+		}
 		p, err := ParsePercent(v.Input)
 		switch {
 		case v.Error == (v.Of != nil) || (v.Of == nil) != (v.Result == nil):
@@ -110,6 +115,9 @@ func TestPercentVectors(t *testing.T) {
 		case !v.Error:
 			if got := p.Of(*v.Of); got != *v.Result {
 				t.Errorf("ParsePercent(%q).Of(%d) = %d, want %d", v.Input, *v.Of, got, *v.Result)
+			}
+			if v.Count != nil && p.Below(*v.Count, *v.Of) != *v.Below {
+				t.Errorf("ParsePercent(%q).Below(%d, %d): want %v (%s)", v.Input, *v.Count, *v.Of, *v.Below, v.Note)
 			}
 			if p.String() != v.Input {
 				t.Errorf("ParsePercent(%q).String() = %q", v.Input, p.String())

@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/conflicts-resolve.schema.json",
+  "title": "atoll conflicts resolve <path> --keep <disk> --json",
+  "description": "What keeping one copy of a file in conflict did, or would do with --yes: the copy kept first, then the others by disk position, each to the trash (specs.md §15.7). Exit 0 once the file is resolved, and with --dry-run; 3 when there is something to do and no --yes; 4 when a copy stayed, so the file is still in conflict; and 1, with nothing on standard output, when the catalog has no file at the path, the file is not in conflict, or it has no copy on that disk.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "keep",
+    "applied",
+    "resolved",
+    "bytes",
+    "copies"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "path"
+      ]
+    },
+    {
+      "required": [
+        "path_b64"
+      ]
+    }
+  ],
+  "properties": {
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "path_b64": {
+      "type": "string",
+      "minLength": 1
+    },
+    "keep": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The disk whose copy is kept."
+    },
+    "applied": {
+      "type": "boolean",
+      "description": "Whether it was allowed to write: --yes."
+    },
+    "resolved": {
+      "type": "boolean",
+      "description": "The file is no longer in conflict: every other copy went to the trash, and the next pass makes its copies from the one kept."
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The sizes of the copies to-trash or trashed."
+    },
+    "copies": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/copy"
+      }
+    }
+  },
+  "$defs": {
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "size",
+        "mtime_ns",
+        "outcome"
+      ],
+      "properties": {
+        "disk": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mtime_ns": {
+          "type": "integer"
+        },
+        "outcome": {
+          "description": "The copy kept, as its disk holds it now: kept; or gone, no longer there, or disk-unavailable, and then nothing moves and every other copy is not-moved. Any other copy: to-trash without --yes, trashed with it, gone when no longer on its disk, which removes its row, or why it stayed: disk-unavailable, changed between the look and the move, name-refused or io-error.",
+          "enum": [
+            "kept",
+            "gone",
+            "disk-unavailable",
+            "not-moved",
+            "to-trash",
+            "trashed",
+            "changed",
+            "name-refused",
+            "io-error"
+          ]
+        }
+      }
+    }
+  }
+}

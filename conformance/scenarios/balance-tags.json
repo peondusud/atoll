@@ -1,0 +1,290 @@
+{
+ "format_version": 1,
+ "spec": "specs.md \u00a712.4, \u00a713.3",
+ "description": "A rule that now keeps a file's copies on usb disks leaves the copy Atoll made on a sata disk misplaced: atoll balance makes one on the usb disk, then sends the old one to the trash, as rebalance. The user's copy stays. With --move-originals, a dry run would move the user's copies too: that of c.mkv to the usb disk, while a.mkv has no other usb disk to go to.",
+ "disks": [
+  {
+   "id": "t1",
+   "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 9000000,
+   "tree": [
+    {
+     "path": "media/a.mkv",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    },
+    {
+     "path": "media/c.mkv",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t2",
+   "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+   "fs": "ext4",
+   "capacity": 9000000,
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  },
+  {
+   "id": "t3",
+   "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  }
+ ],
+ "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\ntags = [\"usb\"]\n",
+ "steps": [
+  {
+   "do": "atoll",
+   "args": [
+    "init"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "scan"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "replicate",
+    "a.mkv",
+    "--now",
+    "--json"
+   ],
+   "stdout_json": {
+    "applied": true,
+    "bytes": 1024,
+    "copies": [
+     {
+      "path": "a.mkv",
+      "disk": "t2",
+      "source": "t1",
+      "size": 1024,
+      "outcome": "replicated"
+     }
+    ]
+   }
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "balance",
+    "--yes",
+    "--json"
+   ],
+   "stdout_json": {
+    "moves": [],
+    "applied": true,
+    "bytes": 0
+   }
+  },
+  {
+   "do": "config",
+   "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\ntags = [\"usb\"]\n[[rule]]\nlabel = \"usb\"\npath = \"**\"\ntags = [\"usb\"]\ntags_mode = \"strict\"\n"
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "balance",
+    "--json"
+   ],
+   "exit": 3,
+   "stdout_json": {
+    "moves": [
+     {
+      "path": "a.mkv",
+      "from": "t2",
+      "to": "t3",
+      "size": 1024,
+      "outcome": "to-move"
+     }
+    ],
+    "applied": false,
+    "bytes": 1024
+   }
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "balance",
+    "--dry-run",
+    "--json"
+   ],
+   "stdout_json": {
+    "moves": [
+     {
+      "path": "a.mkv",
+      "from": "t2",
+      "to": "t3",
+      "size": 1024,
+      "outcome": "to-move"
+     }
+    ],
+    "applied": false,
+    "bytes": 1024
+   }
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT disk_id, created_by, state FROM copies WHERE file_id = (SELECT id FROM files WHERE lpath = CAST('a.mkv' AS BLOB)) ORDER BY disk_id",
+   "rows": [
+    [
+     "t1",
+     "user",
+     "ok"
+    ],
+    [
+     "t2",
+     "atoll",
+     "ok"
+    ]
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "balance",
+    "--yes",
+    "--json"
+   ],
+   "stdout_json": {
+    "moves": [
+     {
+      "path": "a.mkv",
+      "from": "t2",
+      "to": "t3",
+      "size": 1024,
+      "outcome": "moved"
+     }
+    ],
+    "applied": true,
+    "bytes": 1024
+   }
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.created_by, c.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+   "rows": [
+    [
+     "a.mkv",
+     "t1",
+     "user",
+     "ok"
+    ],
+    [
+     "a.mkv",
+     "t3",
+     "atoll",
+     "ok"
+    ],
+    [
+     "c.mkv",
+     "t1",
+     "user",
+     "ok"
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT disk_id, reason, size FROM trash",
+   "rows": [
+    [
+     "t2",
+     "rebalance",
+     1024
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+   "rows": [
+    [
+     "a.mkv",
+     "ok"
+    ],
+    [
+     "c.mkv",
+     "pending"
+    ]
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT count(*) FROM jobs",
+   "rows": [
+    [
+     0
+    ]
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "balance",
+    "--yes",
+    "--json"
+   ],
+   "stdout_json": {
+    "moves": [],
+    "applied": true,
+    "bytes": 0
+   }
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "balance",
+    "--move-originals",
+    "--dry-run",
+    "--json"
+   ],
+   "stdout_json": {
+    "moves": [
+     {
+      "path": "a.mkv",
+      "from": "t1",
+      "size": 1024,
+      "outcome": "no-target"
+     },
+     {
+      "path": "c.mkv",
+      "from": "t1",
+      "to": "t3",
+      "size": 1024,
+      "outcome": "to-move"
+     }
+    ],
+    "applied": false,
+    "bytes": 1024
+   }
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "balance",
+    "--dry-run",
+    "--yes"
+   ],
+   "exit": 2
+  }
+ ]
+}

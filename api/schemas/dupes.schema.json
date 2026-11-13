@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/dupes.schema.json",
+  "title": "atoll dupes --json",
+  "description": "The files that hold the same content under different logical paths, from the catalog alone (specs.md §16, §25). Groups by the bytes they hold more than once, the most first, then by hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "groups",
+    "files",
+    "wasted",
+    "unhashed"
+  ],
+  "properties": {
+    "groups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/group"
+      }
+    },
+    "files": {
+      "description": "The files of the groups listed.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "wasted": {
+      "description": "The bytes the groups listed hold more than once, together.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "unhashed": {
+      "description": "The files at or below --path that hold something and have no hash yet: no group can hold them until a full scan reads them.",
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 1
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ]
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "size",
+        "blake3",
+        "wasted",
+        "paths"
+      ],
+      "properties": {
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "blake3": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "wasted": {
+          "description": "size times one less than the files of the group.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "paths": {
+          "description": "In byte order: two at least.",
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/path"
+          }
+        }
+      }
+    }
+  }
+}

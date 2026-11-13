@@ -1,0 +1,114 @@
+{
+ "format_version": 1,
+ "spec": "specs.md \u00a712.4, \u00a713.4",
+ "description": "With spread_mode strict, a file that must cover two failure domains waits for the other one, here full, rather than doubling up on its own; in prefer mode it falls back to its own domain.",
+ "disks": [
+  {
+   "id": "t1",
+   "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 9000000,
+   "tree": [
+    {
+     "path": "media/strict/a.mkv",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    },
+    {
+     "path": "media/prefer/b.mkv",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t2",
+   "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+   "fs": "ext4",
+   "capacity": 9000000,
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  },
+  {
+   "id": "t3",
+   "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000,
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  }
+ ],
+ "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ndomain = \"a\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\ndomain = \"a\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\ndomain = \"b\"\n[[rule]]\nlabel = \"strict\"\npath = \"strict/**\"\nspread_mode = \"strict\"\n",
+ "steps": [
+  {
+   "do": "atoll",
+   "args": [
+    "init"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "scan"
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+   "rows": [
+    [
+     "prefer/b.mkv",
+     "pending"
+    ],
+    [
+     "strict/a.mkv",
+     "degraded"
+    ]
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "replicate",
+    "prefer/b.mkv",
+    "--now",
+    "--json"
+   ],
+   "stdout_json": {
+    "applied": true,
+    "bytes": 1024,
+    "copies": [
+     {
+      "path": "prefer/b.mkv",
+      "disk": "t2",
+      "source": "t1",
+      "size": 1024,
+      "outcome": "replicated"
+     }
+    ]
+   }
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "replicate",
+    "strict/a.mkv",
+    "--now",
+    "--json"
+   ],
+   "stdout_json": {
+    "applied": true,
+    "bytes": 0,
+    "copies": []
+   }
+  }
+ ]
+}

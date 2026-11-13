@@ -16,6 +16,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/notify"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/view"
@@ -74,9 +75,17 @@ type settings struct {
 	fstab        string
 	resetReasons []disks.Reason
 	channels     []alerts.Channel
+	servers      []notify.Server
 	// scrubWindow is integrity.window, maintenance.window when left out, and scrubBudget integrity.scrub_budget.
 	scrubWindow value.Window
 	scrubBudget time.Duration
+	// balanceSchedule is balance.schedule: never, immediate, or a window, which balanceWindow holds; balanceBudget is
+	// balance.budget, and balanceRatio and balanceMore balance.trigger (specs.md §13.3).
+	balanceSchedule string
+	balanceWindow   value.Window
+	balanceBudget   time.Duration
+	balanceRatio    value.Percent
+	balanceMore     int64
 }
 
 func readSettings(c *config.Config, opt *Options) (*settings, error) {
@@ -109,6 +118,21 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 	if s.scrubBudget, err = value.ParseDuration(text("integrity.scrub_budget")); err != nil {
 		return nil, fmt.Errorf("integrity.scrub_budget: %w", err)
 	}
+	s.balanceSchedule = text("balance.schedule")
+	if s.balanceSchedule != scheduleNever && s.balanceSchedule != scheduleImmediate {
+		if s.balanceWindow, err = value.ParseWindow(s.balanceSchedule); err != nil {
+			return nil, fmt.Errorf("balance.schedule: %w", err)
+		}
+	}
+	if s.balanceBudget, err = value.ParseDuration(text("balance.budget")); err != nil {
+		return nil, fmt.Errorf("balance.budget: %w", err)
+	}
+	if s.balanceRatio, err = value.ParsePercent(text("balance.trigger.ratio_below")); err != nil {
+		return nil, fmt.Errorf("balance.trigger.ratio_below: %w", err)
+	}
+	if s.balanceMore, err = value.ParseSize(text("balance.trigger.or_more_than")); err != nil {
+		return nil, fmt.Errorf("balance.trigger.or_more_than: %w", err)
+	}
 	if zone := text("timezone"); zone == "local" || zone == "" {
 		s.location = time.Local
 	} else if s.location, err = time.LoadLocation(zone); err != nil {
@@ -121,6 +145,7 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 		s.disksByID[c.Disks[i].ID] = &c.Disks[i]
 	}
 	s.channels = alerts.Channels(c)
+	s.servers = notify.Servers(c)
 	return s, nil
 }
 
@@ -132,6 +157,9 @@ type diskState struct {
 	watched bool
 	// reset says that it went missing for a reason a USB reset gives, so each check tries the remount.
 	reset bool
+	// probed says that the NTFS volume of a missing disk was read once since it went missing, and dirty that it was
+	// marked dirty then (specs.md §22).
+	probed, dirty bool
 }
 
 type loop struct {
@@ -154,7 +182,26 @@ type loop struct {
 	backupOpened int64
 	checkDue     int64
 	passDue      *int64
-	lastEnd      *int64
+	// closed holds what ripe groups said was closed after a write, until a pass takes it (specs.md §14.1).
+	closed jobs.Closed
+	// origins holds who the ripe groups say made their changes, until a pass takes them: a group is out of the grouping
+	// once ripe, so a turn of the loop that does something else first, as a check, must not lose what it asks for
+	// (specs.md §15.13).
+	origins []string
+	lastEnd *int64
+	// smartDue is when the disks' SMART is next read: nil when it is not (specs.md §23).
+	smartDue *int64
+	// queues holds what each media server is to be told, by its name, and changed the folders ripe groups named,
+	// until a pass takes them (specs.md §21.5).
+	queues  map[string]*notify.Queue
+	changed map[string]bool
+	// balanceStretch is the stretch of balance.schedule whose trigger was checked last, balanceNext when "immediate"
+	// checks it next, balanceWork that it held and copies are left to move, and balanceSpent what moving them spent
+	// since that check (specs.md §13.3).
+	balanceStretch int64
+	balanceNext    int64
+	balanceWork    bool
+	balanceSpent   time.Duration
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -180,8 +227,10 @@ func Run(ctx context.Context, opt Options) error {
 		return fmt.Errorf("%w: %w", ErrStartup, err)
 	}
 	l := &loop{
-		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true,
-		watcher: watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
+		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true, closed: jobs.Closed{},
+		watcher:  watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
+		smartDue: smartFirst(opt.Machine),
+		queues:   newQueues(set.servers, nil), changed: map[string]bool{},
 	}
 	defer l.watcher.Close()
 	l.notify("READY=1")
@@ -203,6 +252,29 @@ func (l *loop) notify(state string) {
 	}
 }
 
+// takeRipe takes the groups ripe now out of the grouping, and keeps what they say until a pass takes it: the files closed
+// after a write, the folders that changed, and who made the changes. It gives when the next group is due, and whether
+// one waits.
+func (l *loop) takeRipe(now int64) (groupNext int64, waiting bool) {
+	ripe, _, groupNext, waiting := l.grouping.Ripe(now)
+	for _, path := range ClosedPaths(ripe) {
+		l.closed[path] = true
+	}
+	if len(l.queues) > 0 {
+		for _, folder := range ChangedFolders(ripe) {
+			l.changed[folder] = true
+		}
+	}
+	for _, g := range ripe {
+		for _, o := range g.Origins {
+			if !slices.Contains(l.origins, o) {
+				l.origins = append(l.origins, o)
+			}
+		}
+	}
+	return groupNext, waiting
+}
+
 // run is the loop of §15.13: what Wake says is due, then a sleep until it says to look again.
 func (l *loop) run(ctx context.Context) error {
 	for {
@@ -213,15 +285,7 @@ func (l *loop) run(ctx context.Context) error {
 		default:
 		}
 		now := l.opt.Machine.Now()
-		ripe, _, groupNext, waiting := l.grouping.Ripe(now)
-		var origins []string
-		for _, g := range ripe {
-			for _, o := range g.Origins {
-				if !slices.Contains(origins, o) {
-					origins = append(origins, o)
-				}
-			}
-		}
+		groupNext, waiting := l.takeRipe(now)
 		// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
 		nowLocal := time.Unix(0, now).In(l.set.location)
 		opened := l.set.scrubWindow.Opened(nowLocal)
@@ -230,12 +294,13 @@ func (l *loop) run(ctx context.Context) error {
 		window := l.set.window.Opened(nowLocal)
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
-			RipeOrigins: origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
+			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
 			HashPending: l.hashPending && l.opt.Apply,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
-			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp}
+			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue,
+			NotifyDueNS: l.notifyDue(), BalanceDueNS: l.balanceDue(now)}
 		if waiting {
 			in.GroupDueNS = &groupNext
 		}
@@ -249,6 +314,18 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if len(out.Because) > 0 {
 			l.pass(ctx, out.Because)
+			continue
+		}
+		if out.Notify {
+			l.tell(ctx)
+			continue
+		}
+		if out.Smart {
+			l.readSmart(ctx)
+			continue
+		}
+		if out.Balance {
+			l.balance(ctx)
 			continue
 		}
 		if out.Hash {
@@ -296,6 +373,7 @@ func (l *loop) reload() {
 		return
 	}
 	l.opt.Config, l.set = c, set
+	l.queues = newQueues(set.servers, l.queues)
 	for id := range l.disks {
 		if set.disksByID[id] == nil {
 			l.unwatch(id)
@@ -304,6 +382,9 @@ func (l *loop) reload() {
 	}
 	l.reloaded = true
 	l.checkDue = l.opt.Machine.Now()
+	if l.smartDue == nil {
+		l.smartDue = smartFirst(l.opt.Machine)
+	}
 	l.log.Info("the configuration was read again", "disks", len(c.Disks))
 }
 
@@ -356,10 +437,17 @@ func (l *loop) check(ctx context.Context) {
 			l.log.Info("a disk changed state", "disk", d.ID, "from", st.state, "to", v.State, "reason", v.Reason)
 		}
 		st.state = v.State
-		if st.state == disks.Missing && st.reset && d.State != config.DiskFailed {
+		l.probeDirty(d, st)
+		if remountWanted(d, st) {
 			l.remount(ctx, d)
 		}
 	}
+}
+
+// remountWanted says whether to try the remount of a disk: missing for a reason a USB reset gives, not failed, and
+// not with a volume marked dirty, which Linux mounts only by force (specs.md §10, §22).
+func remountWanted(d *config.Disk, st *diskState) bool {
+	return st.state == disks.Missing && st.reset && d.State != config.DiskFailed && !st.dirty
 }
 
 // remount tries umount -l then mount of a disk a USB reset took, through its fstab entry (specs.md §15.13).
@@ -410,13 +498,15 @@ func (l *loop) unwatch(id string) {
 func (l *loop) pass(ctx context.Context, because []string) {
 	start := l.opt.Machine.Now()
 	l.first, l.reloaded, l.gone, l.back = false, false, false, false
+	// The pass walks every disk, which takes in every change the ripe groups told of.
+	l.origins = nil
 	l.log.Info("a pass begins", "because", because)
 	// The sink counts what the pass did instead of keeping each line: a pass over a whole pool would not fit in the
 	// memory of specs.md §26.
-	sink := &passSink{}
+	sink := &passSink{folders: map[string]bool{}}
 	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
-		outcome, err := jobs.RunTo(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink)
+		outcome, err := jobs.RunClosed(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
 		if err != nil {
 			return nil, err
 		}
@@ -450,6 +540,9 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		l.log.Error("the pass failed", "error", err)
 		return
 	}
+	// What the watcher saw closed served this pass, and what changed goes to the media servers.
+	l.closed = jobs.Closed{}
+	l.queueFolders(sink.folders)
 	l.passDue = nil
 	l.hashPending = true
 	if outcome.NextDue.Valid {
@@ -469,10 +562,12 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	}
 }
 
-// passSink counts what a pass decided and did, and keeps the names a driver refused.
+// passSink counts what a pass decided and did, and keeps the names a driver refused and the folders its operations
+// changed.
 type passSink struct {
 	decisions, operations int64
 	refused               alerts.Refused
+	folders               map[string]bool
 }
 
 func (s *passSink) Disks([]jobs.DiskLine) error { return nil }
@@ -484,6 +579,11 @@ func (s *passSink) Decision(*jobs.Decision) error {
 
 func (s *passSink) Operation(op *jobs.Operation) error {
 	s.operations++
+	for _, f := range OperationFolders(op) {
+		if s.folders != nil {
+			s.folders[f] = true
+		}
+	}
 	if op.Outcome == trash.OutcomeNameRefused {
 		// A rename was refused its new name, a copy its own.
 		name := op.Path
@@ -504,6 +604,7 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 	now := l.opt.Machine.Now()
 	facts, err := alerts.Gather(ctx, db, l.opt.Config, now, outcome, refused)
 	if err == nil {
+		facts.Dirty = l.dirtyDisks()
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {
@@ -593,7 +694,7 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		left = left || d.Left
 		corrupt += len(d.Corrupt)
 		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Changed) > 0 {
-			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "quarantined", len(d.Quarantined),
+			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "repaired", len(d.Repaired), "quarantined", len(d.Quarantined),
 				"kept", len(d.Kept), "changed", len(d.Changed))
 		}
 	}
@@ -732,4 +833,18 @@ func (l *loop) branches(ctx context.Context, db *sql.DB) {
 		return
 	}
 	l.log.Info("mergerfs's branches changed", "from", current, "to", want)
+}
+
+// ClosedPaths gives the paths of the ripe groups that say a file was closed after a write by someone other than
+// Atoll, in the order of the groups: Atoll's own copies close files too, and a folder is no file (specs.md §14.1).
+func ClosedPaths(ripe []watch.Group) []string {
+	var out []string
+	for i := range ripe {
+		g := &ripe[i]
+		if g.Folder || !slices.Contains(g.Kinds, watch.KindWritten) || !slices.ContainsFunc(g.Origins, func(o string) bool { return o != watch.OriginAtoll }) {
+			continue
+		}
+		out = append(out, g.Path)
+	}
+	return out
 }

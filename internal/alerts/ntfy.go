@@ -34,8 +34,7 @@ type Channel interface {
 	Send(ctx context.Context, m *Message) error
 }
 
-// Channels gives the channels the configuration sets, in the order of specs.md §23. Gotify and SMTP come with
-// phase 1b: the configuration says so when it loads.
+// Channels gives the channels the configuration sets, in the order of specs.md §23.
 func Channels(c *config.Config) []Channel {
 	effective := c.Effective()
 	var out []Channel
@@ -43,7 +42,28 @@ func Channels(c *config.Config) []Channel {
 		token, _ := effective["alerts.ntfy_token_file"].(string)
 		out = append(out, &Ntfy{URL: url, TokenFile: token})
 	}
+	if url, _ := effective["alerts.gotify"].(string); url != "" {
+		token, _ := effective["alerts.gotify_token_file"].(string)
+		out = append(out, &Gotify{URL: url, TokenFile: token})
+	}
+	if url, _ := effective["alerts.smtp"].(string); url != "" {
+		password, _ := effective["alerts.smtp_password_file"].(string)
+		out = append(out, &SMTP{URL: url, PasswordFile: password})
+	}
 	return out
+}
+
+// readToken reads the token a file holds, on one line, at each send, so that a new token needs no reload.
+func readToken(file string) (string, error) {
+	data, err := fsx.ReadFile(file)
+	if err != nil {
+		return "", fmt.Errorf("the token file: %w", err)
+	}
+	token := strings.TrimSpace(string(data))
+	if token == "" || strings.ContainsAny(token, "\r\n") {
+		return "", fmt.Errorf("the token file %s holds no token on one line", file)
+	}
+	return token, nil
 }
 
 // Ntfy sends an alert to a ntfy topic, with an HTTP POST of its text (specs.md §23).
@@ -69,13 +89,9 @@ func (n *Ntfy) Send(ctx context.Context, m *Message) error {
 	req.Header.Set("Tags", "warning")
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	if n.TokenFile != "" {
-		data, err := fsx.ReadFile(n.TokenFile)
+		token, err := readToken(n.TokenFile)
 		if err != nil {
-			return fmt.Errorf("ntfy: the token file: %w", err)
-		}
-		token := strings.TrimSpace(string(data))
-		if token == "" || strings.ContainsAny(token, "\r\n") {
-			return fmt.Errorf("ntfy: the token file %s holds no token on one line", n.TokenFile)
+			return fmt.Errorf("ntfy: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

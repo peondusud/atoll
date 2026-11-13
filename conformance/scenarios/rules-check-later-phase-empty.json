@@ -24,16 +24,6 @@
             "key": "read.classes",
             "later_phase": true,
             "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].domains",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].tags",
-            "later_phase": true,
-            "message": "${ANY}"
           }
         ]
       }

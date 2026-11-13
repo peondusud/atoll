@@ -137,6 +137,8 @@ func TestRefusingAScenario(t *testing.T) {
 		{"a field on the wrong step", "exit 0", steps(`{"do": "atoll", "tree": []}`), "does not apply"},
 		{"a field on the wrong step: advance", "exit 0", steps(`{"do": "advance", "by": "1m", "exit": 1}`), "does not apply"},
 		{"a tick", "exit 0", steps(`{"do": "tick"}`), ""},
+		{"a config step with no config", "exit 0", steps(`{"do": "config", "text": "x"}`), "no config"},
+		{"a field on the wrong step: config", "exit 0", steps(`{"do": "config", "text": "x", "by": "1m"}`), "does not apply"},
 		{"a field on the wrong step: tick", "exit 0", steps(`{"do": "tick", "by": "1m"}`), "does not apply"},
 		{"a field on the wrong step: expect_tree", "exit 0", steps(`{"do": "expect_tree", "disk": "d", "tree": [], "path": "a"}`), "does not apply"},
 		{"a field on the wrong step: delete", "exit 0", steps(`{"do": "delete", "disk": "d", "path": "a", "text": "x"}`), "does not apply"},

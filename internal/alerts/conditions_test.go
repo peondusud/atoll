@@ -56,13 +56,20 @@ func TestHoldings(t *testing.T) {
 		Used:      91,
 		Capacity:  100,
 		TrashFull: []TrashFull{{ID: "t3", Used: 6, Capacity: 100}},
+		Dirty:     []string{"t7"},
+		Smart: []SmartLine{
+			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2}}},
+			{ID: "t5", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Temperature: 50}}},
+			{ID: "t6", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Reallocated: 3}}},
+		},
 	}
 	var got []string
 	for _, h := range Holdings(f) {
 		got = append(got, fmt.Sprintf("%s=%d", h.Key, h.Count))
 	}
 	want := []string{"disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
-		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "pool-full=1", "trash-full:t3=1"}
+		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "ntfs-dirty:t7=1", "pool-full=1", "smart-failing:t4=1", "smart-sectors:t4=10",
+		"smart-sectors:t6=3", "trash-full:t3=1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)
 	}
@@ -87,6 +94,14 @@ func TestGather(t *testing.T) {
 	if err := catalog.SyncDisks(t.Context(), db, list); err != nil {
 		t.Fatal(err)
 	}
+	// The last reading of SMART of each disk that has one, but a failed disk's, and one that does not decode.
+	for id, reading := range map[string]string{"a": `{"read_ns":7,"failing":false,"reallocated":8,"pending":0,"uncorrectable":0,"temperature":41}`,
+		"e": `{"read_ns":6,"failing":true,"reallocated":0,"pending":0,"uncorrectable":0,"temperature":0}`, "f": `{"read_ns":5,"failing":true}`,
+		"b": `{"failing":"yes"}`} {
+		if err := catalog.SetSmart(t.Context(), db, id, []byte(reading)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	c, err := config.Parse([]byte("pool_id = \"p\"\ncatalog = \"/srv/catalog.db\"\n[view]\nmount = \"/srv/pool\"\n[defaults]\nmanual_alert_after = \"1h\"\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +115,11 @@ func TestGather(t *testing.T) {
 	if f.Used != 290 || f.Capacity != 400 || f.SeenByNS != hour || f.ManualAfter != "1h" || f.Files.ByState["corrupt"] != 2 || f.Files.Manual != 1 ||
 		f.Refused.Count != 3 || len(f.Disks) != 1 || len(f.Guards) != 1 || f.MaxSize != "5%" || len(f.TrashFull) != 0 {
 		t.Errorf("%+v, files %+v", f, f.Files)
+	}
+	smart := []SmartLine{{ID: "a", SmartRecord: disks.SmartRecord{ReadNS: 7, Smart: disks.Smart{Reallocated: 8, Temperature: 41}}},
+		{ID: "e", SmartRecord: disks.SmartRecord{ReadNS: 6, Smart: disks.Smart{Failing: true}}}}
+	if !slices.Equal(f.Smart, smart) {
+		t.Errorf("SMART %+v", f.Smart)
 	}
 	// Seen an hour ago at most: not waiting yet.
 	if f, _ := Gather(t.Context(), db, c, hour-1, outcome, &Refused{}); f.Files.Manual != 0 {
@@ -238,6 +258,11 @@ func TestDescribe(t *testing.T) {
 		Used:     95,
 		Capacity: 100,
 		SeenByNS: 10, ManualAfter: "7d",
+		Smart: []SmartLine{
+			{ID: "t3", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2, Uncorrectable: 1, Temperature: 52}}},
+			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Reallocated: 3}}},
+			{ID: "t5", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true}}},
+		},
 	}
 	for _, tc := range []struct {
 		key      string
@@ -257,6 +282,15 @@ func TestDescribe(t *testing.T) {
 		{"files-name-incompatible", 2, "Atoll: 2 name-incompatible files", 3, []string{"\nand 2 more"}},
 		{"pool-full", 1, "Atoll: the pool is 95 % full", 3, []string{"95 of their 100 bytes"}},
 		{"name-refused", 1, "Atoll: a driver refused 1 name", 3, []string{"\n(base64) YmFk/w=="}},
+		{"smart-failing:t3", 1, "Atoll: disk t3 is failing", 4, []string{
+			"The disk t3 failed its own SMART health check, with 8 sectors moved, 2 waiting to move and 1 it could not read, at 52 °C. Move",
+			"atoll disk remove t3 --evacuate --dry-run"}},
+		{"smart-failing:t5", 1, "Atoll: disk t5 is failing", 4, []string{"The disk t5 failed its own SMART health check. Move"}},
+		{"smart-sectors:t3", 11, "Atoll: disk t3 has 11 bad sectors", 4, []string{"the disk t3 moved 8 sectors, waits to move 2 and could not read 1, at 52 °C. A count"}},
+		{"smart-sectors:t4", 3, "Atoll: disk t4 has 3 bad sectors", 3, []string{"the disk t4 moved 3 sectors, waits to move 0 and could not read 0. A count",
+			"atoll disk remove t4 --evacuate --dry-run"}},
+		{"smart-sectors:t4", 1, "Atoll: disk t4 has 1 bad sector", 3, nil},
+		{"ntfs-dirty:t6", 1, "Atoll: the NTFS volume of disk t6 is marked dirty", 4, []string{"The disk t6 is missing", "chkdsk /f on Windows"}},
 	} {
 		m, err := Describe(t.Context(), db, f, Holding{Key: tc.key, Count: tc.count})
 		if err != nil {

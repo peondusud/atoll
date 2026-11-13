@@ -9,6 +9,8 @@ mount -t devtmpfs dev /dev
 exec </dev/console >/dev/console 2>&1
 # The loop images of the tests live here, in the guest's memory.
 mount -t tmpfs -o size=2g tmpfs /tmp
+# The loopback, for the tests that answer as a local server would, as Plex does to the daemon.
+ip link set lo up || echo "no loopback"
 # sd_mod by hand, as no udev loads it: without it the disk scsi_debug makes has no block device.
 for m in loop ext4 xfs btrfs ntfs3 fuse dm_mod dm_flakey sd_mod; do
 	modprobe "$m" 2>/dev/null || echo "no module $m in this kernel"

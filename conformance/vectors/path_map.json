@@ -1,0 +1,17 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a721.5",
+  "description": "The path a media server sees for a folder of the merged view: the view's mount, then the folder, through the longest key of path_map that is a prefix of it by whole components.",
+  "cases": [
+    {"note": "no path_map: the host's path", "view_mount": "/srv/pool", "folder": "tv/Show", "path_map": [], "seen": "/srv/pool/tv/Show"},
+    {"note": "the top of the view", "view_mount": "/srv/pool", "folder": "", "path_map": [], "seen": "/srv/pool"},
+    {"note": "the view's mount mapped", "view_mount": "/srv/pool", "folder": "tv/Show", "path_map": [{"host": "/srv/pool", "server": "/data"}], "seen": "/data/tv/Show"},
+    {"note": "the top of the view mapped", "view_mount": "/srv/pool", "folder": "", "path_map": [{"host": "/srv/pool", "server": "/data"}], "seen": "/data"},
+    {"note": "the longest key applies", "view_mount": "/srv/pool", "folder": "tv/Show/Season 1", "path_map": [{"host": "/srv/pool", "server": "/data"}, {"host": "/srv/pool/tv", "server": "/tv"}], "seen": "/tv/Show/Season 1"},
+    {"note": "a key that is the whole path", "view_mount": "/srv/pool", "folder": "tv", "path_map": [{"host": "/srv/pool", "server": "/data"}, {"host": "/srv/pool/tv", "server": "/tv"}], "seen": "/tv"},
+    {"note": "by whole components: tv is not a prefix of tvshows", "view_mount": "/srv/pool", "folder": "tvshows/A", "path_map": [{"host": "/srv/pool/tv", "server": "/tv"}], "seen": "/srv/pool/tvshows/A"},
+    {"note": "a key elsewhere applies to nothing", "view_mount": "/srv/pool", "folder": "films", "path_map": [{"host": "/mnt/t1", "server": "/x"}, {"host": "/srv", "server": "/s"}], "seen": "/s/pool/films"},
+    {"note": "to a deeper path", "view_mount": "/srv/pool", "folder": "films/Brazil (1985)", "path_map": [{"host": "/srv/pool", "server": "/media/library"}], "seen": "/media/library/films/Brazil (1985)"},
+    {"note": "bytes as they are, never normalized", "view_mount": "/srv/pool", "folder": "s\u00e9ries/E\u0301t\u00e9", "path_map": [{"host": "/srv/pool", "server": "/data"}], "seen": "/data/s\u00e9ries/E\u0301t\u00e9"}
+  ]
+}

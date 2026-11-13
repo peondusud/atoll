@@ -206,6 +206,9 @@ type Disk struct {
 	TimePrecisionNS int64
 	// HasCapacity says that a scan recorded Capacity: it is 0 when none did.
 	HasCapacity bool
+	// SmartJSON is the disk's last reading of SMART, as smart_json holds it: empty when none was recorded (specs.md
+	// §23). Disks gives it; SyncDisks keeps what is there.
+	SmartJSON string
 }
 
 // SyncDisks rewrites the disks from the configuration, which wins (specs.md §9). A disk it no longer

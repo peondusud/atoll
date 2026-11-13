@@ -2,7 +2,7 @@
   "format_version": 1,
   "spec": "specs.md \u00a724.4",
   "description": "Every row of the table of settings that a later phase brings, at a value that asks for it. Each phase removes its own lines from the table and from this list.",
-  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[defaults]\nmode = \"immediate\"\n[placement]\nnew_files = \"ordered\"\nspread_mode = \"strict\"\ntags_mode = \"strict\"\ncolocate = \"season\"\noverflow = \"deny\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[read]\npolicy = \"prefer-spinning\"\nclasses = [\"sata\"]\n[balance]\nschedule = \"immediate\"\nequalize = \"percent\"\n[integrity]\nauto_repair = true\nrepair_mode = \"chunk\"\n[trash]\nlink_guard = true\n[cache]\nenabled = true\n[health]\nevacuate_on = [\"smart_failing\"]\navoid_hotter_than = \"50C\"\n[ups]\nenabled = true\nnut = \"ups@localhost\"\n[notify.plex]\nurl = \"http://127.0.0.1:32400\"\n[notify.jellyfin]\nurl = \"http://127.0.0.1:8096\"\n[notify.emby]\nurl = \"http://127.0.0.1:8097\"\n[alerts]\ngotify = \"http://127.0.0.1:8000\"\nsmtp = \"smtp://127.0.0.1\"\n[[disk]]\nid = \"c1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/c1\"\nfs = \"ext4\"\nrole = \"cache\"\ndomain = \"d1\"\ntags = [\"sata\"]\n[[rule]]\nlabel = \"r\"\nmode = \"scheduled\"\ntags = [\"sata\"]\ntags_mode = \"strict\"\ndomains = [\"d1\"]\nspread_mode = \"strict\"\ncolocate = \"season\"\noverflow = \"deny\"\ncache = false\ncache_min_age = \"1d\"\n",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[placement]\nnew_files = \"ordered\"\nspread_mode = \"strict\"\ntags_mode = \"strict\"\ncolocate = \"season\"\noverflow = \"deny\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[read]\npolicy = \"prefer-spinning\"\nclasses = [\"sata\"]\n[balance]\nschedule = \"immediate\"\nequalize = \"percent\"\n[trash]\nlink_guard = true\n[cache]\nenabled = true\n[health]\nevacuate_on = [\"smart_failing\"]\navoid_hotter_than = \"50C\"\n[ups]\nenabled = true\nnut = \"ups@localhost\"\n[notify.plex]\nurl = \"http://127.0.0.1:32400\"\n[notify.jellyfin]\nurl = \"http://127.0.0.1:8096\"\n[notify.emby]\nurl = \"http://127.0.0.1:8097\"\n[alerts]\n[[disk]]\nid = \"c1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/c1\"\nfs = \"ext4\"\nrole = \"cache\"\ndomain = \"d1\"\ntags = [\"sata\"]\n[[rule]]\nlabel = \"r\"\ntags = [\"sata\"]\ntags_mode = \"strict\"\ndomains = [\"d1\"]\nspread_mode = \"strict\"\ncolocate = \"season\"\noverflow = \"deny\"\ncache = false\ncache_min_age = \"1d\"\n",
   "steps": [
     {
       "do": "atoll",
@@ -16,32 +16,12 @@
         "problems": [],
         "warnings": [
           {
-            "key": "alerts.gotify",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "alerts.smtp",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "balance.equalize",
             "later_phase": true,
             "message": "${ANY}"
           },
           {
-            "key": "balance.schedule",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "cache.enabled",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "defaults.mode",
             "later_phase": true,
             "message": "${ANY}"
           },
@@ -61,52 +41,12 @@
             "message": "${ANY}"
           },
           {
-            "key": "integrity.auto_repair",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "integrity.repair_mode",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "notify.emby.url",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "notify.jellyfin.url",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "notify.plex.url",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "placement.colocate",
             "later_phase": true,
             "message": "${ANY}"
           },
           {
             "key": "placement.new_files",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "placement.overflow",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "placement.spread_mode",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "placement.tags_mode",
             "later_phase": true,
             "message": "${ANY}"
           },
@@ -132,41 +72,6 @@
           },
           {
             "key": "rule[0].colocate",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].domains",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].mode",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].overflow",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].spread_mode",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].tags",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].tags_mode",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "trash.link_guard",
             "later_phase": true,
             "message": "${ANY}"
           },

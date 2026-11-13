@@ -6,8 +6,11 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -43,6 +46,10 @@ func (p *pass) copies(ctx context.Context) error {
 	}
 	p.settled = true
 	r := &replicator{db: p.db, config: p.config, machine: p.machine, session: p.session, now: p.now, sum: &ReplicateSummary{Applied: true}}
+	schedule, err := scheduleOf(p.config)
+	if err != nil {
+		return err
+	}
 	reader := catalog.NewDueReader(p.db, p.now)
 	for {
 		page, err := reader.Next(ctx)
@@ -57,6 +64,9 @@ func (p *pass) copies(ctx context.Context) error {
 				return fmt.Errorf("replicate: %w", err)
 			}
 			job := &page[i]
+			if p.waitsForWindow(job, schedule) {
+				continue
+			}
 			// What a copy does, the files must be worked out again for.
 			p.settled = false
 			outcome, err := r.run(ctx, job)
@@ -80,12 +90,17 @@ func (p *pass) copies(ctx context.Context) error {
 
 // settledCopies keeps the copies of the files whose settle has passed since they were first seen, and counts
 // the files that still wait for it (specs.md §14.1): with no watcher, that is all that tells a file still
-// being written. The copies of one file come together.
+// being written. A file in immediate mode the watcher saw closed, and quiet since, waits for nothing. The copies of
+// one file come together.
 func (p *pass) settledCopies(jobs []watch.PlannedJob) []watch.PlannedJob {
 	last := int64(-1)
 	return slices.DeleteFunc(jobs, func(j watch.PlannedJob) bool {
 		size := j.Size
-		due := j.FirstSeenNS + p.config.Policy(j.Path, &size).Settle.Nanoseconds()
+		policy := p.config.Policy(j.Path, &size)
+		if policy.Mode == "immediate" && p.closed[j.Path] {
+			return false
+		}
+		due := j.FirstSeenNS + policy.Settle.Nanoseconds()
 		if p.now >= due {
 			return false
 		}
@@ -122,6 +137,10 @@ type copyLine struct {
 
 // dueLines adds the jobs due already, in the order a real pass runs them.
 func (p *pass) dueLines(ctx context.Context, lines []copyLine) ([]copyLine, error) {
+	schedule, err := scheduleOf(p.config)
+	if err != nil {
+		return nil, err
+	}
 	reader := catalog.NewDueReader(p.db, p.now)
 	for {
 		page, err := reader.Next(ctx)
@@ -133,6 +152,9 @@ func (p *pass) dueLines(ctx context.Context, lines []copyLine) ([]copyLine, erro
 		}
 		for i := range page {
 			j := &page[i]
+			if p.waitsForWindow(j, schedule) {
+				continue
+			}
 			lines = append(lines, copyLine{path: j.Path, dst: j.Dst, src: j.Src, priority: j.Priority, queued: true})
 		}
 	}
@@ -152,4 +174,45 @@ func (p *pass) listCopies(lines []copyLine) error {
 		}
 	}
 	return nil
+}
+
+// schedule is replication.window, in the time zone of timezone: where the copies of a file in scheduled mode run
+// (specs.md §12.3).
+type schedule struct {
+	window   value.Window
+	location *time.Location
+}
+
+// scheduleOf reads replication.window, maintenance.window when left out, and timezone, local when left out.
+func scheduleOf(c *config.Config) (schedule, error) {
+	effective := c.Effective()
+	text, _ := effective["replication.window"].(string)
+	w, err := value.ParseWindow(text)
+	if err != nil {
+		return schedule{}, fmt.Errorf("replication.window: %w", err)
+	}
+	s := schedule{window: w, location: time.Local}
+	if zone, _ := effective["timezone"].(string); zone != "" && zone != "local" {
+		if s.location, err = time.LoadLocation(zone); err != nil {
+			return schedule{}, fmt.Errorf("timezone: %w", err)
+		}
+	}
+	return s, nil
+}
+
+// waitsForWindow says whether a copy of a file in scheduled mode waits for replication.window: outside it, it stays
+// queued, it counts as waiting, and the pass says when the window opens, so that the daemon wakes then (specs.md
+// §12.3, §14.1).
+func (p *pass) waitsForWindow(job *catalog.ReplicateJob, s schedule) bool {
+	size := job.Size
+	if p.config.Policy(job.Path, &size).Mode != "scheduled" {
+		return false
+	}
+	now := time.Unix(0, p.now).In(s.location)
+	if s.window.Contains(now) {
+		return false
+	}
+	p.copiesWaiting++
+	p.copiesDue = earliest(p.copiesDue, sql.NullInt64{Int64: s.window.Next(now).UnixNano(), Valid: true})
+	return true
 }

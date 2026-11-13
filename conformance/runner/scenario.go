@@ -128,6 +128,8 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "path", "path_b64", "uid", "gid"}, true
 	case "advance":
 		return []string{"by"}, true
+	case "config":
+		return []string{"text"}, true
 	case "tick":
 		return nil, true
 	case "unmount", "mount":
@@ -387,6 +389,22 @@ func (b *sandbox) diskPath(id string) string {
 	return filepath.Join(b.dir, "disks", id)
 }
 
+// rewriteConfig gives the steps after it another configuration, as a user who edits it would: atoll balance is for
+// what a change of rule leaves misplaced.
+func (b *sandbox) rewriteConfig(s *step) error {
+	if b.s.Config == nil {
+		return errors.New("a config step in a scenario with no config")
+	}
+	if s.Text == nil {
+		return errors.New("a config step needs its text")
+	}
+	config := strings.ReplaceAll(*s.Text, sandboxToken, b.dir)
+	if err := os.WriteFile(b.configPath(), []byte(config), 0o644); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	return nil
+}
+
 func (b *sandbox) configPath() string {
 	return filepath.Join(b.dir, "atoll.toml")
 }
@@ -445,6 +463,8 @@ func (b *sandbox) do(s *step) error {
 	case "tick":
 		time.Sleep(tickWait)
 		return nil
+	case "config":
+		return b.rewriteConfig(s)
 	case "advance":
 		by, err := parseDuration(s.By)
 		if err != nil {

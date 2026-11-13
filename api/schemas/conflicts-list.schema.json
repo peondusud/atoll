@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/conflicts-list.schema.json",
+  "title": "atoll conflicts list --json",
+  "description": "The files in conflict, by path in byte order, each with its copies by disk position, and the size and modification time each disk holds (specs.md §15.7). From the catalog only, which the last walk filled.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "files"
+  ],
+  "properties": {
+    "files": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/file"
+      }
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "copies"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "required": [
+            "path_b64"
+          ]
+        }
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path_b64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "copies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/copy"
+          }
+        }
+      }
+    },
+    "copy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disk",
+        "size",
+        "mtime_ns"
+      ],
+      "properties": {
+        "disk": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mtime_ns": {
+          "type": "integer",
+          "description": "The modification time this disk holds, in integer Unix nanoseconds."
+        }
+      }
+    }
+  }
+}

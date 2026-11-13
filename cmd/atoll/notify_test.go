@@ -74,3 +74,62 @@ func TestNotifyTest(t *testing.T) {
 		t.Errorf("on a broken output: exit %d", code)
 	}
 }
+
+// notify test reaches each media server set with a request that changes nothing, after the alert channels: Plex's
+// libraries, with its token, and Jellyfin's information, with its key; a server that refuses gives exit 4 (specs.md
+// §21.5).
+func TestNotifyTestMediaServers(t *testing.T) {
+	var asked []string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Plex-Token")+r.Header.Get("Authorization"))
+		w.WriteHeader(status)
+		if r.URL.Path == "/library/sections" {
+			_, _ = w.Write([]byte(`{"MediaContainer":{"Directory":[]}}`))
+		}
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	token, key := filepath.Join(dir, "plex.token"), filepath.Join(dir, "jellyfin.key")
+	if err := os.WriteFile(token, []byte("tok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(key, []byte("k3y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "atoll.toml")
+	text := "pool_id = \"p\"\ncatalog = " + strconv.Quote(filepath.Join(dir, "catalog.db")) + "\n[view]\nmount = " + strconv.Quote(filepath.Join(dir, "pool")) + "\n" +
+		"[notify.plex]\nurl = " + strconv.Quote(srv.URL) + "\ntoken_file = " + strconv.Quote(token) + "\n" +
+		"[notify.jellyfin]\nurl = " + strconv.Quote(srv.URL) + "\napi_key_file = " + strconv.Quote(key) + "\n"
+	if err := os.WriteFile(config, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--config", config, "notify", "test"}, &stdout, &stderr); code != exitOK ||
+		stdout.String() != "notify.plex: reached\nnotify.jellyfin: reached\n" {
+		t.Errorf("exit %d, %q, %q", code, stdout.String(), stderr.String())
+	}
+	if want := []string{"GET /library/sections tok", `GET /System/Info MediaBrowser Token="k3y"`}; strings.Join(asked, "|") != strings.Join(want, "|") {
+		t.Errorf("asked %q", asked)
+	}
+	status = http.StatusUnauthorized
+	stdout.Reset()
+	if code := run([]string{"--config", config, "notify", "test", "--json"}, &stdout, &stderr); code != exitPartial {
+		t.Errorf("refused: exit %d", code)
+	}
+	var out notifyOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || len(out.Channels) != 2 || out.Channels[0].Channel != "notify.plex" || out.Channels[0].Sent ||
+		!strings.Contains(out.Channels[1].Error, "401") {
+		t.Errorf("refused: %q, %v", stdout.String(), err)
+	}
+}
+
+// conflicts resolve refuses a disk the configuration does not have, and says so, before it opens the catalog.
+func TestConflictsResolveUnknownDisk(t *testing.T) {
+	config := notifyConfig(t, "")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--config", config, "conflicts", "resolve", "a", "--keep", "t9", "--yes"}, &stdout, &stderr); code != exitError ||
+		stdout.Len() != 0 || !strings.Contains(stderr.String(), `"t9"`) {
+		t.Errorf("exit %d, %q, %q", code, stdout.String(), stderr.String())
+	}
+}

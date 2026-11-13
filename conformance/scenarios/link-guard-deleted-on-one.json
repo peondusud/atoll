@@ -1,0 +1,214 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717, \u00a715.5",
+  "description": "Deleted on one disk only: the deletion goes to the other disk's trash as Atoll's own move, whose link then goes, and the link of the disk it was deleted on sends its data to that disk's trash.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n[trash]\nlink_guard = true\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/links",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/4/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/links",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/3/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, CAST(lpath AS TEXT), CAST(trash_path AS TEXT), size, reason FROM trash ORDER BY op_id",
+      "rows": [
+        [
+          "t2",
+          "a",
+          "2026-01-01/3/a",
+          1024,
+          "deleted"
+        ],
+        [
+          "t1",
+          "a",
+          "2026-01-01/4/a",
+          1024,
+          "deleted"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, kind, link, state FROM ops WHERE id > 2 ORDER BY id",
+      "rows": [
+        [
+          "t2",
+          "trash",
+          null,
+          "done"
+        ],
+        [
+          "t1",
+          "trash",
+          1,
+          "done"
+        ],
+        [
+          "t2",
+          "unlink",
+          1,
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--older-than",
+        "0s",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/links",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/links",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash",
+          "kind": "dir"
+        }
+      ]
+    }
+  ]
+}

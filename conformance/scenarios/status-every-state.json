@@ -157,6 +157,7 @@
         "files_at_level": 3,
         "bytes_total": 2008,
         "bytes_at_level": 3,
+        "bytes_placed": 2008,
         "by_state": {
           "ok": 1,
           "pending": 2,
@@ -228,6 +229,7 @@
         "files_at_level": 1,
         "bytes_total": 1,
         "bytes_at_level": 1,
+        "bytes_placed": 1,
         "by_state": {
           "ok": 0,
           "pending": 0,
@@ -318,6 +320,7 @@
         "files_at_level": 0,
         "bytes_total": 1,
         "bytes_at_level": 0,
+        "bytes_placed": 1,
         "by_state": {
           "ok": 0,
           "pending": 0,
@@ -408,6 +411,7 @@
         "files_at_level": 1,
         "bytes_total": 1,
         "bytes_at_level": 1,
+        "bytes_placed": 1,
         "by_state": {
           "ok": 0,
           "pending": 0,

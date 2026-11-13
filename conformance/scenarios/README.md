@@ -35,7 +35,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `config` | string | the text of the configuration, written to `${SANDBOX}/atoll.toml`, which each `atoll` step gets through `--config`, before its `args`. Left out, no step gets it |
 | `steps` | array of objects | what happens, in order: below |
 
-`${SANDBOX}`, in `config`, in `args`, in `stdout_json`, in `rows` and in the `text` of a `write` step, is the scenario's temporary folder. An unknown field, or a field on a step it does not apply to, is an error: a typo must not disable a check.
+`${SANDBOX}`, in `config`, in `args`, in `stdout_json`, in `rows` and in the `text` of a `write` or `config` step, is the scenario's temporary folder. An unknown field, or a field on a step it does not apply to, is an error: a typo must not disable a check.
 
 ## Steps
 
@@ -52,6 +52,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `chmod` | `disk`, a path, `mode` | sets a file's mode, written in octal digits with a leading 0, as `"0640"`: the permission bits, setuid, setgid and sticky |
 | `chown` | `disk`, a path, `uid`, `gid` | gives a file an owner, both ids from 0 to 4294967294: only in a scenario with `root` |
 | `advance` | `by` | moves the clock forward, by a duration of `specs.md` §29.5 |
+| `config` | `text` | rewrites the configuration with that text, `${SANDBOX}` replaced as in `config`, for the steps after it, as a user who edits it would. Only in a scenario with a `config` |
 | `tick` | | waits until the real clock behind a change time has moved, which it may not do within a clock tick (`specs.md` §17.1). `advance` moves another clock |
 | `unmount` | `disk` | a failed mount: the disk's folder is left empty and leaves the control file, and its tree is set aside |
 | `mount` | `disk` | brings an unmounted disk back, with its tree. A step fails if something was written to the empty folder meanwhile |
@@ -109,7 +110,8 @@ After each `atoll` step, on each disk (`specs.md` §6):
 | `folder-made` | once a restore has made a folder below the root, before it is synced or recorded |
 | `linked` | between `link` and the `fsync` that follows it, so only on a disk with `renameat2` at `false` |
 | `moved` | once the name has moved, a file's or a folder's, or the file of a purge is gone, before any later `fsync` of what holds it. With `renameat2` at `false`, `unlink` has run too, so the source's name is gone, which is not yet synced, and the target folder was synced once already, between `link` and `unlink` |
-| `times-set` | once a `utimens` has set the time on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
+| `chunk-saved`, `chunks-saved`, `chunk-written` | in a chunk repair (`specs.md` §16.1): once a bad chunk is saved in the trash, its folder synced; once the folder of the chunks is synced, before the copy is looked at again; and once a chunk is written in place and synced, before it is read back |
+| `times-set` | once a `utimens`, or a chunk repair, has set the time on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `mode-set` | once a `chmod` has set the mode on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `owner-set` | once a `chown` has set the owner on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |
 | `rmdir-journaled`, `rmdir-removed`, `rmdir-synced` | once the removal of a folder Atoll made is committed `planned`; once the folder is gone, before its parent's time is restored and the parent synced; and after that sync, before the operation is committed `done` (`specs.md` §17.5) |
@@ -120,4 +122,4 @@ A disk's entry also holds what the scenario says of it, when it says so: `rename
 
 A disk of the configuration is found here by its `mount`, equal to a `path`, and never by its `id`. To the mount check of `specs.md` §10, a `path` listed here has an entry that names it, with the root `/`, the type `fs` (`ntfs3` for `ntfs`), the mount options `rw` and the superblock options `rw`, plus `iocharset=utf8` on `ntfs3`. Its device answers, and its head holds the magic of `fs` and the identifier `uuid`. Any other folder has no such entry, and fails question 2. Question 10 and `ignore-case` look at the real folder, and the others of the second table find nothing to report.
 
-Its clock is `now`. A disk's capacity is `capacity`, and its free space is that minus the size of every file below `path`, or 0. A conformance build reads this file only for a command that looks at disks, such as `atoll disk list`, even with no disk in the configuration, after the configuration has loaded. With `ATOLL_CONFORMANCE` unset or the file refused, such a command exits with 1.
+Its clock is `now`. A disk's capacity is `capacity`, and its free space is that minus the size of every file below `path`, a file with several names counted once, as a filesystem holds its data once, or 0. A conformance build reads this file only for a command that looks at disks, such as `atoll disk list`, even with no disk in the configuration, after the configuration has loaded. With `ATOLL_CONFORMANCE` unset or the file refused, such a command exits with 1.

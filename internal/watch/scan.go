@@ -7,7 +7,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/integrity"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/rules"
 	"github.com/peondusud/atoll/internal/solver"
@@ -287,7 +290,52 @@ func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, er
 	walked, err := Walk(ctx, root)
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = root.Close()
-	return walked, err
+	if err != nil {
+		return walked, err
+	}
+	if err := withoutOwnLinks(m, d, walked); err != nil {
+		return nil, err
+	}
+	return walked, nil
+}
+
+// withoutOwnLinks takes the link guard's links out of the count of names of each file a walk found: they are Atoll's,
+// in <workdir>/links/, and no count of a file's names includes them (specs.md §17). Only a file with two names or more
+// can have one, so a walk that found none spares the folder.
+func withoutOwnLinks(m disks.Machine, d *config.Disk, w *Walked) error {
+	if !slices.ContainsFunc(w.Files, func(f FoundFile) bool { return f.Nlink >= 2 }) {
+		return nil
+	}
+	dir, err := m.OpenRoot(d.Mount, path.Join(d.Workdir, layout.LinksFolder))
+	switch {
+	case fsx.IsAbsent(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
+	defer func() { _ = dir.Close() }()
+	names, err := dir.Names()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
+	own := make(map[string]int64, len(names))
+	for _, name := range names {
+		st, err := dir.Stat(name)
+		switch {
+		case fsx.IsAbsent(err):
+			continue
+		case err != nil:
+			return fmt.Errorf("%w: %w", ErrInterrupted, err)
+		case st.Kind == fsx.KindFile:
+			own[strconv.FormatUint(st.Ino, 10)]++
+		}
+	}
+	for i := range w.Files {
+		if f := &w.Files[i]; own[f.FileKey] > 0 {
+			f.Nlink -= min(own[f.FileKey], f.Nlink-1)
+		}
+	}
+	return nil
 }
 
 // compareWalk says what a walk means against what the catalog knows, and fills the report. Both
@@ -484,6 +532,14 @@ type Replicate struct {
 	Queue func(jobs []PlannedJob) error
 	// DryRun writes nothing of the plan.
 	DryRun bool
+	// Balance makes the plan of atoll balance (specs.md §13.3): Misplaced gets each file with an Atoll copy that
+	// breaks a strict setting, and the disks of those copies, and nothing of the plan is written, as its results are
+	// not the pool's.
+	Balance   bool
+	Misplaced func(path string, disks []string) error
+	// MoveOriginals makes a user copy that breaks a strict setting count as misplaced too, with Balance: atoll
+	// balance --move-originals (specs.md §13.3).
+	MoveOriginals bool
 }
 
 // PlannedJob is a job of the plan, with what queueing it needs of its file.
@@ -514,7 +570,8 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	if err != nil {
 		return err
 	}
-	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries)}
+	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance,
+		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals}
 	var release func(string) bool
 	if rep != nil {
 		release = rep.Release
@@ -535,6 +592,16 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	}
 	if err != nil {
 		return fmt.Errorf("plan: %w", err)
+	}
+	if input.Balance {
+		for i := range results {
+			if len(results[i].Misplaced) > 0 && rep.Misplaced != nil {
+				if err := rep.Misplaced(results[i].Path, results[i].Misplaced); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 	if rep != nil && rep.DryRun {
 		return nil
@@ -653,10 +720,13 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			if err != nil {
 				return nil, fmt.Errorf("%q: %w", f.Path, err)
 			}
-			placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread}
+			// A rule that now ignores a file leaves it what it was, with the pool's placement (specs.md §15.10).
+			placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread,
+				spreadMode: c.Pool.SpreadMode, tagsMode: c.Pool.TagsMode, overflow: c.Pool.Overflow}
 			size := update.Size
 			if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
-				placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread}
+				placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread, spreadMode: policy.SpreadMode,
+					tagsMode: policy.TagsMode, overflow: policy.Overflow, tags: joinNames(policy.Tags), domains: joinNames(policy.Domains)}
 			}
 			copies := make([]solver.Copy, 0, len(f.Copies))
 			for j := range f.Copies {
@@ -710,21 +780,33 @@ func settleFile(c *config.Config, f *catalog.FileRow, position map[string]int, s
 	return update, nil
 }
 
+// placementKey is what a file's effective policy says of where its copies go (specs.md §12.4), as a map key: its
+// tags and domains joined by a NUL, which no name holds.
 type placementKey struct {
-	replicas, priority int
-	spread             string
+	replicas, priority                     int
+	spread, spreadMode, tagsMode, overflow string
+	tags, domains                          string
 }
 
-// placementFor gives the plan what it may act on. Until phase 1b, what specs.md §24.4 says has no
-// effect is not given to it: no tags or domains, and no strict mode or denied overflow. Delete a
-// line here when its phase lands.
+func joinNames(list []string) string {
+	return strings.Join(list, "\x00")
+}
+
+func splitNames(joined string) []string {
+	if joined == "" {
+		return nil
+	}
+	return strings.Split(joined, "\x00")
+}
+
+// placementFor gives the plan the placement of a policy, made once for all the files that share it.
 func placementFor(known map[placementKey]*solver.Placement, key placementKey) *solver.Placement {
 	if p, ok := known[key]; ok {
 		return p
 	}
 	p := &solver.Placement{
-		Replicas: key.replicas, Priority: key.priority, Spread: key.spread,
-		TagsMode: "prefer", SpreadMode: "prefer", Overflow: "allow",
+		Replicas: key.replicas, Priority: key.priority, Spread: key.spread, SpreadMode: key.spreadMode, TagsMode: key.tagsMode, Overflow: key.overflow,
+		Tags: splitNames(key.tags), Domains: splitNames(key.domains),
 	}
 	known[key] = p
 	return p

@@ -48,6 +48,16 @@ func (p Percent) Exceeded(count, total int64) bool {
 	return left.Cmp(new(big.Int).Mul(big.NewInt(total), p.n.num)) > 0
 }
 
+// Below says whether count is below the share p of total, compared exactly: count * 100 < p * total, so that no
+// rounding decides it (specs.md §13.3).
+func (p Percent) Below(count, total int64) bool {
+	if p.n.num == nil {
+		return false
+	}
+	left := new(big.Int).Mul(big.NewInt(count), new(big.Int).Mul(big.NewInt(100), pow10(p.n.scale)))
+	return left.Cmp(new(big.Int).Mul(big.NewInt(total), p.n.num)) < 0
+}
+
 // String returns the percentage as written in the configuration.
 func (p Percent) String() string {
 	if p.text == "" {

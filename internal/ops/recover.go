@@ -11,6 +11,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -78,7 +79,12 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 	case catalog.OpRestore:
 		return d.recoverRestore(ctx, db, op, nowNS, out)
 	case catalog.OpUnlink:
+		if op.Link != 0 {
+			return d.recoverDropLink(ctx, db, op)
+		}
 		return d.recoverUnlink(ctx, db, op, nowNS)
+	case catalog.OpLink:
+		return d.recoverMakeLink(ctx, db, op)
 	case catalog.OpMkdir:
 		return d.recoverMkdir(ctx, db, op, nowNS)
 	case catalog.OpRmdir:
@@ -93,6 +99,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverChmod(ctx, db, op, nowNS)
 	case catalog.OpChown:
 		return d.recoverChown(ctx, db, op, nowNS)
+	case catalog.OpRepair:
+		return d.recoverRepair(ctx, db, op, nowNS)
 	default:
 		return fmt.Errorf("reprise: operation %d: no reprise for %q", op.ID, op.Kind)
 	}
@@ -115,6 +123,10 @@ func (d *Disk) seen(path []string, op *Op) (Seen, fsx.Stat, error) {
 
 func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64, retention time.Duration, out *Recovered) error {
 	src, dst := d.rootPlace(op.Path), d.trashPlace(op.Path2)
+	if op.Link != 0 {
+		// The link guard's link went there, not the copy at the path (specs.md §17).
+		src = d.linkPlace(op.Link)
+	}
 	// First, as these can be long, and nothing long may come between the looks and what they decide.
 	if err := d.syncWay(dst); err != nil {
 		return err
@@ -127,12 +139,13 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	if err != nil {
 		return err
 	}
-	row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
-	if err != nil {
-		return fmt.Errorf("catalog: %w", err)
-	}
 	changed := false
-	if source == SeenSame && target == SeenSame {
+	// A link has no row to be edited from: whatever its data holds now is what goes.
+	if source == SeenSame && target == SeenSame && op.Link == 0 {
+		row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
+		if err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
 		if changed, err = editedInPlace(&row, &sourceStat); err != nil {
 			return err
 		}
@@ -558,6 +571,17 @@ func (d *Disk) syncFolder(path []string) error {
 }
 
 func (d *Disk) recoverUnlink(ctx context.Context, db *sql.DB, op *Op, nowNS int64) error {
+	if layout.IsChunks(op.Path2) {
+		// Atoll's own chunks, which nobody else writes: the purge goes on, and ends.
+		if err := d.PurgeChunks(op); err != nil {
+			return err
+		}
+		if err := catalog.FinishPurge(ctx, db, op, nil); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+		d.CleanTrash(op.Path2)
+		return nil
+	}
 	path := d.trashPlace(op.Path2)
 	source, _, err := d.seen(path, op)
 	if err != nil {

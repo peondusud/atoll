@@ -22,10 +22,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 	for key, v := range set {
 		var phase, effect string
 		switch index.ReplaceAllString(key, "") {
-		case "defaults.mode", "rule.mode":
-			if v == "immediate" || v == "scheduled" {
-				phase, effect = "1b", "works as deferred"
-			}
 		case "placement.new_files":
 			if v != "most-free" {
 				phase, effect = "2b", "works as most-free"
@@ -33,30 +29,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 		case "placement.colocate", "rule.colocate":
 			if v != "none" {
 				phase = "2b"
-			}
-		case "placement.spread_mode", "rule.spread_mode", "placement.tags_mode", "rule.tags_mode":
-			if v == "strict" {
-				phase = "1b"
-			}
-		case "placement.overflow", "rule.overflow":
-			if v == "deny" {
-				phase = "1b"
-			}
-		case "rule.tags", "rule.domains":
-			phase = "1b"
-		case "integrity.auto_repair":
-			if v == true {
-				phase, effect = "1b", "scrubs only detect"
-			}
-		case "integrity.repair_mode":
-			phase, effect = "1b", "scrubs only detect"
-		case "trash.link_guard":
-			if v == true {
-				phase = "1b"
-			}
-		case "balance.schedule":
-			if v != "never" {
-				phase = "1b"
 			}
 		case "balance.equalize":
 			if v != "off" {
@@ -84,10 +56,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			}
 		case "health.evacuate_on", "health.avoid_hotter_than":
 			phase = "4"
-		case "notify.plex.url", "notify.jellyfin.url", "notify.emby.url", "alerts.gotify", "alerts.smtp":
-			if v != "" {
-				phase = "1b"
-			}
 		}
 		if phase != "" {
 			if effect == "" {

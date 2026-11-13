@@ -277,27 +277,32 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 	return writeRebuild(&out, flags["--json"], code, stdout, stderr)
 }
 
-// rebuildInto fills the new catalog: its operations past the highest id the disks' trash and tmp/ name, then a full
-// scan, which reads every copy whole.
+// rebuildInto fills the new catalog: its operations past the highest id the disks' trash and tmp/ name, and its files
+// past the highest id their links folders name, then a full scan, which reads every copy whole.
 func rebuildInto(ctx context.Context, c *config.Config, m disks.Machine, fresh string, out *catalogRebuildOutput, stderr io.Writer) (outcome *watch.Outcome, err error) {
 	db, err := catalog.OpenPool(ctx, fresh, c.PoolID)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
+	filesAfter := int64(0)
 	for i := range c.Disks {
 		d := &c.Disks[i]
 		if d.State == config.DiskFailed {
 			continue
 		}
-		highest, err := highestOpID(m, d)
+		highest, files, err := highestOpID(m, d)
 		if err != nil {
 			report(stderr, fmt.Sprintf(T("warning: disk %s: the operations its trash and tmp/ name are not known (%v): a new one may meet an old one there, which costs it one io-error"), d.ID, err))
 			continue
 		}
 		out.OpsAfter = max(out.OpsAfter, highest)
+		filesAfter = max(filesAfter, files)
 	}
 	if err := catalog.StartOpsAfter(ctx, db, out.OpsAfter); err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	if err := catalog.StartFilesAfter(ctx, db, filesAfter); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	outcome, err = watch.Scan(ctx, db, c, m, watch.Options{Full: true})
@@ -307,21 +312,24 @@ func rebuildInto(ctx context.Context, c *config.Config, m disks.Machine, fresh s
 	return outcome, nil
 }
 
-// highestOpID reads the highest operation id a disk's work folder names, through a handle on its top.
-func highestOpID(m disks.Machine, d *config.Disk) (int64, error) {
+// highestOpID reads the highest operation id a disk's work folder names, and the highest file id its links folder
+// names, through a handle on its top.
+func highestOpID(m disks.Machine, d *config.Disk) (op, file int64, err error) {
 	if v := disks.Check(m, d); v.State == disks.Missing {
-		return 0, fmt.Errorf(T("it is missing (%s)"), v.Reason)
+		return 0, 0, fmt.Errorf(T("it is missing (%s)"), v.Reason)
 	}
 	handle, err := ops.Open(m, d, 0)
 	if err != nil {
-		return 0, fmt.Errorf("%w", err)
+		return 0, 0, fmt.Errorf("%w", err)
 	}
 	defer handle.Close()
-	n, err := handle.HighestOpID()
-	if err != nil {
-		return 0, fmt.Errorf("%w", err)
+	if op, err = handle.HighestOpID(); err != nil {
+		return 0, 0, fmt.Errorf("%w", err)
 	}
-	return n, nil
+	if file, err = handle.HighestLinkID(); err != nil {
+		return 0, 0, fmt.Errorf("%w", err)
+	}
+	return op, file, nil
 }
 
 func writeRebuild(out *catalogRebuildOutput, asJSON bool, code int, stdout, stderr io.Writer) int {

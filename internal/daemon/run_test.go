@@ -22,6 +22,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/trash"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 func TestFstabHas(t *testing.T) {
@@ -501,4 +502,21 @@ func TestRunReloads(t *testing.T) {
 type passLine struct {
 	because []string
 	disks   int
+}
+
+// A ripe group says a file was closed when it holds written, at a file, made by someone other than Atoll: through
+// the merged view, by a user, or by a process the watcher cannot name (specs.md §14.1).
+func TestClosedPaths(t *testing.T) {
+	ripe := []watch.Group{
+		{Disk: "t1", Path: "user", Kinds: []string{watch.KindCreated, watch.KindWritten}, Origins: []string{watch.OriginUser}},
+		{Disk: "t1", Path: "view", Kinds: []string{watch.KindWritten}, Origins: []string{watch.OriginView}},
+		{Disk: "t1", Path: "unknown", Kinds: []string{watch.KindWritten}, Origins: []string{watch.OriginUnknown}},
+		{Disk: "t2", Path: "atoll", Kinds: []string{watch.KindWritten}, Origins: []string{watch.OriginAtoll}},
+		{Disk: "t2", Path: "both", Kinds: []string{watch.KindWritten}, Origins: []string{watch.OriginAtoll, watch.OriginUser}},
+		{Disk: "t1", Path: "created", Kinds: []string{watch.KindCreated}, Origins: []string{watch.OriginUser}},
+		{Disk: "t1", Path: "folder", Folder: true, Kinds: []string{watch.KindWritten}, Origins: []string{watch.OriginUser}},
+	}
+	if got := ClosedPaths(ripe); !slices.Equal(got, []string{"user", "view", "unknown", "both"}) {
+		t.Errorf("%q", got)
+	}
 }

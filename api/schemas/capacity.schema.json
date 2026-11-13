@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/capacity.schema.json",
+  "title": "atoll capacity --json",
+  "description": "What the pool can hold with 1, 2 and 3 copies of every file, from the catalog alone (specs.md §13.1, §13.3). Bytes are of files: a file of 1 MB at 3 copies takes 3 MB of disks and counts 1 MB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "spread_mode",
+    "levels"
+  ],
+  "properties": {
+    "spread_mode": {
+      "enum": [
+        "prefer",
+        "strict"
+      ],
+      "description": "[placement] spread_mode: with strict, the formula is that of failure domains."
+    },
+    "levels": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "copies",
+          "theoretical",
+          "reachable",
+          "stored",
+          "short"
+        ],
+        "properties": {
+          "copies": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3,
+            "description": "k, the copies of every file: replicas + 1."
+          },
+          "theoretical": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The formula of §13.1 over the disks the solver can write to, data disks online or in standby, each its capacity less min_free."
+          },
+          "reachable": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "stored, and the formula over the free space a plan that wants k copies of every file leaves on those disks, less min_free. That plan moves no copy, so a user copy stays where it is."
+          },
+          "stored": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The bytes of the files that reach k copies in that plan."
+          },
+          "short": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The files that do not."
+          }
+        }
+      }
+    }
+  }
+}

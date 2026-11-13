@@ -66,6 +66,8 @@ A percentage is checked through its use: the share of a total, such as `min_free
 | `input` | string | the value as written in the configuration |
 | `of` | integer | the total, in bytes |
 | `result` | integer | the share of `of` that `input` gives, in bytes |
+| `count` | integer | with `below`: a count to compare with that share |
+| `below` | boolean | whether `count` is below `input` of `of`, compared exactly: `count` × 100 < percentage × `of`. The share of bytes correctly placed falls below `[balance].trigger.ratio_below` so (`specs.md` §13.3) |
 | `error` | boolean | `true` when `input` is rejected |
 
 ### `window.json` — time windows (§29.5)
@@ -206,9 +208,12 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 |---|---|---|
 | `started_ns` | integer | when the operation started |
 | `op_id` | integer | its id |
+| `chunks` | boolean | optional: `true` for where the chunks a repair overwrites go, `<op-id>.chunks` |
 | `path`, `path_b64` | string | the logical path |
 | `trash_path`, `trash_path_b64` | string | the location inside `<workdir>/trash/` |
-| `error` | boolean | `true` when the id is not positive or the path is not well-formed |
+| `index` | integer | in place of the fields above: a chunk's index, whose name `chunk_name` gives |
+| `chunk_name` | string | the name of that chunk in its folder |
+| `error` | boolean | `true` when the id is not positive, the path is not well-formed, or the index is negative |
 
 ### `prune.json` — what `atoll prune` does with each surplus copy (§17.3)
 
@@ -233,6 +238,44 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `purge` | array of objects | what goes, by operation: `op` and `why`, one of `expired`, `older-than` and `max-size` |
 | `full` | array of strings | the disks whose trash still holds more than `max_size` of their capacity once those are gone, by id in byte order |
 | `error` | boolean | `true` when a reason is unknown, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
+
+### `link_guard.json` — what the link guard does with a disk's links (§17)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `on` | boolean | `trash.link_guard` |
+| `links` | array of objects | the entries of `<workdir>/links/`, in any order: `name`, `file` for a regular file, and `inode`, what it leads to |
+| `copies` | array of objects | the copies of the disk: `file`, its file's id; `inode`, empty for a copy not on the disk yet; `place`, where it sits; `there`, that the last look found it there |
+| `trash` | array of strings | the inodes of what the disk's trash holds |
+| `files` | array of objects | `file` and `path` of each file the catalog still has |
+| `copy_gone` | array of objects | `file` and `path` that the last `copy-gone` event of the disk gives a file |
+| `steps` | array of objects | what to do, the links by `name` in byte order, then the copies by `file`. `do` is `keep`, `unlink`, `unnamed` or `stray`, with `name`; `trash`, with `name`, `path` and `reason`, `deleted` or `overwritten`; or `make`, with `file`, `inode` and `path`. A name is a file id as Atoll writes it, decimal, positive and with no leading zero, or `stray` |
+
+### `repair_reprise.json` — what the reprise of a chunk repair does (§16.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `chunks` | array of objects | each chunk of the copy, by index: `bad`, whether the repair found it bad; `saved`, whether its bytes reached the trash; `holds`, what it holds now: `good`, what its hash says, `saved`, what was saved of it, or `other` |
+| `ctime_same` | boolean | whether the copy's change time is still its row's |
+| `action` | string | `finish`, `keep`, `untouched` or `foreign` |
+| `error` | boolean | `true` for a chunk saved that was not found bad, what was saved of a chunk never saved, or a word it does not know |
+
+### `smart.json` — what a reading of SMART says of a device (§23)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `output` | object | what `smartctl -j -n standby` printed |
+| `reading` | object | `asleep`, the disk left asleep, nothing read; `needs_sat`, the answer asks for a device type, as behind a USB bridge; `failing`, its health check failed or an NVMe disk raised a critical warning; `reallocated`, `pending` and `uncorrectable`, ATA attributes 5, 197 and 198, or an NVMe disk's media errors; `temperature`, in degrees Celsius, 0 when none is given |
+| `error` | boolean | `true` for an answer with no exit status, or that holds no reading while the disk is neither asleep nor asking for a device type |
+
+### `path_map.json` — the path a media server sees (§21.5)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `view_mount` | string | `view.mount` |
+| `folder` | string | a folder of the view, relative to its top; `""` for the top itself |
+| `path_map` | array | `path_map` of the server's table, each entry a `host` path and the path the `server` sees there |
+| `seen` | string | the view's mount, then the folder, through the longest key of `path_map` that is the path or a prefix of it by whole components; the host's path when none is |
 
 ### `op_recovery.json` — what a reprise does with an operation (§17.2)
 
@@ -364,8 +407,14 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `scrub_budget_ns` | integer | `integrity.scrub_budget`, which must be positive when `scrub_pending` |
 | `scrub_spent_ns`, `scrub_spent_opened_ns` | integer | what the scrub spent, and when the stretch of its window it spent it in began |
 | `backup_pending` | boolean | the stretch of the window that holds now, or the next one, has no catalog backup yet |
+| `smart_due_ns` | integer | when the disks' SMART is next to be read; left out when it never is |
+| `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
+| `balance_due_ns` | integer | when the daemon next balances; left out when it never does |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `notify` | boolean | `true` when the media servers are to be told now: `notify_due_ns` has come |
+| `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
+| `balance` | boolean | `true` when the daemon is to balance now: `balance_due_ns` has come |
 | `read_hashes` | boolean | `true` when the hashes of new files are to be read now: `hash_pending`, inside the window |
 | `backup` | boolean | `true` when the catalog is to be backed up now: `backup_pending`, inside the window, and no hash to read |
 | `scrub` | boolean | `true` when the scrub is to run now: `scrub_pending`, inside `scrub_window`, its budget not spent in this stretch, no hash to read and no backup due |
@@ -476,7 +525,9 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 | `entries` | array of objects | `disk`, `path`, `kind`: `dir`, `symlink` or `ignored` |
 | `min_free` | array of strings | as in the configuration; `["0%"]` when left out |
 | `jobs` | array of objects | `kind` (`refresh` or `replicate`), `path` or `path_b64`, `src`, `dst` |
-| `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel` (disks by position), `overflow`. What is left out is empty or false |
+| `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel`, `misplaced` (disks by position), `overflow`. What is left out is empty or false |
+| `balance` | boolean | `true` for the plan of `atoll balance` (`specs.md` §13.3): an Atoll copy that breaks a strict setting of its file counts for nothing, and its result lists its disk in `misplaced` |
+| `move_originals` | boolean | with `balance`, the plan of `atoll balance --move-originals`: a user copy breaks a setting as an Atoll copy does. Without `balance`, nothing |
 | `error` | boolean | `true` when the input is refused |
 
 ### `catalog.json` — what the catalog schema accepts and refuses (§9, §29.3)
@@ -512,6 +563,15 @@ The text of `/proc/self/mountinfo`, one line per mount: `id parent major:minor r
 | `id` | string | the identifier |
 | `variant` | string | `casefold` or `ascii-ci`, when the superblock says so; left out otherwise |
 | `error` | boolean | `true` when the head holds no such filesystem, or `fs` is unknown |
+
+### `ntfs_dirty.json` — an NTFS volume marked dirty (§22, §23)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `length` | integer | the size of the device: that many bytes, all zero but for `bytes` |
+| `bytes` | array of objects | what the device holds: `at`, an offset, and `hex`, the bytes |
+| `dirty` | boolean | whether the flag `VOLUME_IS_DIRTY` (0x0001) of `$VOLUME_INFORMATION` is set, in the fourth record of the MFT (`$Volume`): at the MFT's cluster, from the boot sector, plus three records. Bytes per sector at 0x0B; sectors per cluster at 0x0D, `2^(256 - n)` above 0x80; the MFT's cluster at 0x30; at 0x40, clusters per record, or `2^-n` bytes when negative. The record's update sequence is applied first |
+| `error` | boolean | `true` for a device that is no NTFS, a geometry that is not powers of two, a record that is not `FILE`, torn (a block whose end is not the update number) or whose update sequence does not fit it, or with no resident `$VOLUME_INFORMATION` |
 
 ### `time_precision.json` — how finely a filesystem holds a time (§9, §10)
 

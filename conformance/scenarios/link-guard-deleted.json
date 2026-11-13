@@ -1,0 +1,246 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717",
+  "description": "Deleted from every disk at once, as through mergerfs: the data each disk's link kept goes to that disk's trash, deleted, at the file's path, and comes back from there.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n[trash]\nlink_guard = true\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/a"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/links",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/3/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/links",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/4/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, CAST(lpath AS TEXT), CAST(trash_path AS TEXT), size, reason FROM trash ORDER BY op_id",
+      "rows": [
+        [
+          "t1",
+          "a",
+          "2026-01-01/3/a",
+          1024,
+          "deleted"
+        ],
+        [
+          "t2",
+          "a",
+          "2026-01-01/4/a",
+          1024,
+          "deleted"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, link, state FROM ops WHERE id > 2 ORDER BY id",
+      "rows": [
+        [
+          "trash",
+          1,
+          "done"
+        ],
+        [
+          "trash",
+          1,
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM files",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, json_extract(data, '$.link'), json_extract(data, '$.reason') FROM events WHERE kind = 'trash' ORDER BY id",
+      "rows": [
+        [
+          "trash",
+          1,
+          "deleted"
+        ],
+        [
+          "trash",
+          1,
+          "deleted"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "a",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/links",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/links/2",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/trash",
+          "kind": "dir"
+        }
+      ]
+    }
+  ]
+}

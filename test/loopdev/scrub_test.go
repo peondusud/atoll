@@ -33,14 +33,15 @@ func physicalOffset(t *testing.T, path string) int64 {
 // TestScrubFindsRot: a byte changed below the filesystem, on the device itself, leaves the copy's size and times as
 // they were. The scrub reads it, finds a chunk that does not match, reads it again past the cache, calls the copy
 // corrupt, and moves it to the trash, as the other copy, read whole first, is healthy; the next pass makes the copy
-// again from that one (specs.md §16).
+// again from that one (specs.md §16). Without integrity.auto_repair, as with it the scrub repairs the copy in place
+// instead, which TestRepairOnEachDriver covers.
 func TestScrubFindsRot(t *testing.T) {
 	needRoot(t)
 	v := newVolume(t, names.Ext4)
 	at := mountPoint(t)
 	mountVolume(t, v, "", at)
 	// No settle, so that the pass after the scrub makes the copy again at once.
-	b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n")
+	b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n[integrity]\nauto_repair = false\n")
 	content := bytes.Repeat([]byte("a film "), 900_000) // past one chunk of 4 MiB
 	for _, top := range []string{b.keep, at} {
 		mustDo(t, os.WriteFile(filepath.Join(top, "media", "a.mkv"), content, 0o644))

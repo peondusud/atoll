@@ -5,13 +5,14 @@
   "description": "What the catalog holds (specs.md §15.11). Disks are by position, files by path in byte order, and each file's copies by position.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["disks", "files_total", "files_at_level", "bytes_total", "bytes_at_level", "by_state", "files"],
+  "required": ["disks", "files_total", "files_at_level", "bytes_total", "bytes_at_level", "bytes_placed", "by_state", "files"],
   "properties": {
     "disks": { "type": "array", "items": { "$ref": "#/$defs/disk" } },
     "files_total": { "$ref": "#/$defs/count" },
     "files_at_level": { "$ref": "#/$defs/count" },
     "bytes_total": { "$ref": "#/$defs/count" },
     "bytes_at_level": { "$ref": "#/$defs/count" },
+    "bytes_placed": { "$ref": "#/$defs/count", "description": "The bytes of the files with no misplaced copy (specs.md §13.3): over bytes_total, the share of bytes correctly placed." },
     "by_state": {
       "description": "Every state of specs.md §4, at 0 when no file has it.",
       "type": "object",

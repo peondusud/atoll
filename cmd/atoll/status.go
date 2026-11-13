@@ -17,6 +17,8 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/watch"
@@ -114,6 +116,7 @@ type statusSummary struct {
 	FilesAtLevel int            `json:"files_at_level"`
 	BytesTotal   int64          `json:"bytes_total"`
 	BytesAtLevel int64          `json:"bytes_at_level"`
+	BytesPlaced  int64          `json:"bytes_placed"`
 	ByState      map[string]int `json:"by_state"`
 }
 
@@ -151,7 +154,11 @@ func writeStatus(c *config.Config, parsed statusArgs, stdout io.Writer) (err err
 	if parsed.asJSON {
 		writer = newJSONStatus(buffered)
 	}
-	status, err := watch.ReadStatus(ctx, db, parsed.under, writer.file)
+	misplaced, err := misplacedFiles(ctx, db, c)
+	if err != nil {
+		return err
+	}
+	status, err := watch.ReadStatus(ctx, db, parsed.under, misplaced, writer.file)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
@@ -162,6 +169,23 @@ func writeStatus(c *config.Config, parsed statusArgs, stdout io.Writer) (err err
 		return fmt.Errorf(T("writing the output: %w"), err)
 	}
 	return nil
+}
+
+// misplacedFiles gives the files with a misplaced copy, from a plan of the whole pool that reads the catalog only
+// (specs.md §13.3). With no strict setting there is none, and no plan to make.
+func misplacedFiles(ctx context.Context, db *sql.DB, c *config.Config) (map[string]bool, error) {
+	if !c.StrictPlacement() {
+		return nil, nil //nolint:nilnil // nothing misplaced is an answer
+	}
+	m, err := disks.NewMachine()
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	misplaced, err := jobs.MisplacedFiles(ctx, db, c, m.Now())
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	return misplaced, nil
 }
 
 // timeText writes a time of specs.md §29.3: both versions write the same bytes.
@@ -198,7 +222,7 @@ func nullText(s sql.NullString) *string {
 func statusSummaryFrom(s *watch.Status) *statusSummary {
 	out := &statusSummary{
 		Disks:      make([]statusDisk, 0, len(s.Disks)),
-		FilesTotal: s.FilesTotal, FilesAtLevel: s.FilesAtLevel, BytesTotal: s.BytesTotal, BytesAtLevel: s.BytesAtLevel,
+		FilesTotal: s.FilesTotal, FilesAtLevel: s.FilesAtLevel, BytesTotal: s.BytesTotal, BytesAtLevel: s.BytesAtLevel, BytesPlaced: s.BytesPlaced,
 		ByState: map[string]int{},
 	}
 	for _, state := range []solver.State{
@@ -342,6 +366,7 @@ func (t textStatus) end(s *statusSummary) error {
 	}
 	fmt.Fprintf(&text, T("files: %d, at their level: %d%s\n"), s.FilesTotal, s.FilesAtLevel, share(int64(s.FilesAtLevel), int64(s.FilesTotal)))
 	fmt.Fprintf(&text, T("bytes: %d, at their level: %d%s\n"), s.BytesTotal, s.BytesAtLevel, share(s.BytesAtLevel, s.BytesTotal))
+	fmt.Fprintf(&text, T("bytes correctly placed: %d%s\n"), s.BytesPlaced, share(s.BytesPlaced, s.BytesTotal))
 	for _, state := range []string{"unavailable", "corrupt", "conflict", "name-incompatible", "name-collision", "degraded", "pending", "unprotected", "ok"} {
 		if n := s.ByState[state]; n > 0 {
 			fmt.Fprintf(&text, "  %s: %d\n", state, n)

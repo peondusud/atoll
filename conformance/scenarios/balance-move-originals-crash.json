@@ -1,0 +1,170 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.3, \u00a714.2, \u00a717.2",
+  "description": "Stopped once the copy that stands in for a user copy is in place, before it was recorded: the reprise records it as the user copy, and the copy it replaces as an Atoll copy, in one transaction, and the next run sends the old copies to the trash.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 9000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 9000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t4",
+      "uuid": "5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\ntags = [\"usb\"]\n[[disk]]\nid = \"t4\"\nuuid = \"5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t4\"\nfs = \"ext4\"\ntags = [\"usb\"]\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a.mkv",
+        "--now"
+      ]
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\ntags = [\"usb\"]\n[[disk]]\nid = \"t4\"\nuuid = \"5f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t4\"\nfs = \"ext4\"\ntags = [\"usb\"]\n[[rule]]\nlabel = \"usb\"\npath = \"**\"\ntags = [\"usb\"]\ntags_mode = \"strict\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "balance",
+        "--move-originals",
+        "--yes",
+        "--json"
+      ],
+      "crash_at": "source-synced",
+      "exit": 137
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "user",
+          "ok"
+        ],
+        [
+          "t2",
+          "atoll",
+          "ok"
+        ],
+        [
+          "t3",
+          "atoll",
+          "pending"
+        ],
+        [
+          "t4",
+          "atoll",
+          "pending"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "balance",
+        "--move-originals",
+        "--yes",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t3",
+          "user",
+          "ok"
+        ],
+        [
+          "t4",
+          "atoll",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, reason, size FROM trash ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "rebalance",
+          1024
+        ],
+        [
+          "t2",
+          "rebalance",
+          1024
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

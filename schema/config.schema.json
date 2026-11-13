@@ -308,9 +308,19 @@
           "default": ""
         },
         "gotify": { "$ref": "#/$defs/http_url", "default": "" },
+        "gotify_token_file": {
+          "description": "A file that holds the application token of the Gotify server (specs.md §23).",
+          "$ref": "#/$defs/optional_path",
+          "default": ""
+        },
         "smtp": {
           "type": "string",
           "pattern": "^(smtps?://[^ \\t\\r\\n]+)?$",
+          "default": ""
+        },
+        "smtp_password_file": {
+          "description": "A file that holds the password of the user alerts.smtp names (specs.md §23).",
+          "$ref": "#/$defs/optional_path",
           "default": ""
         }
       }

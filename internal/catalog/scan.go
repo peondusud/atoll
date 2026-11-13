@@ -547,7 +547,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, fs_uuid, fs_type, mount_path, root, workdir, role, position, COALESCE(domain, ''), tags,
 			capacity_bytes IS NOT NULL, COALESCE(capacity_bytes, 0), COALESCE(free_bytes, 0), state, COALESCE(last_seen_ns, 0),
-			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0)
+			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, '')
 		FROM disks ORDER BY position`)
 	if err != nil {
 		return nil, fmt.Errorf("disks: %w", err)
@@ -557,7 +557,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	for rows.Next() {
 		var d Disk
 		var tags string
-		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS); err != nil {
+		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON); err != nil {
 			return nil, fmt.Errorf("disks: %w", err)
 		}
 		if err := json.Unmarshal([]byte(tags), &d.Tags); err != nil {
@@ -590,6 +590,15 @@ func LargestFile(ctx context.Context, db *sql.DB) (int64, bool, error) {
 		return 0, false, fmt.Errorf("largest file: %w", err)
 	}
 	return size.Int64, size.Valid, nil
+}
+
+// TotalBytes adds up the sizes of every file.
+func TotalBytes(ctx context.Context, db *sql.DB) (int64, error) {
+	var total int64
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(sum(size), 0) FROM files").Scan(&total); err != nil {
+		return 0, fmt.Errorf("files: %w", err)
+	}
+	return total, nil
 }
 
 // FileCount counts the file rows.

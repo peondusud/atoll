@@ -28,6 +28,14 @@
     { "input": ".5%", "error": true, "note": "digits needed before the dot" },
     { "input": "5 %", "error": true, "note": "no space" },
     { "input": "5%%", "error": true },
-    { "input": "5GiB", "error": true, "note": "a size is not a percentage" }
+    { "input": "5GiB", "error": true, "note": "a size is not a percentage" },
+    { "input": "90%", "of": 1000, "result": 900, "count": 899, "below": true, "note": "899 of 1000 is below 90 %" },
+    { "input": "90%", "of": 1000, "result": 900, "count": 900, "below": false, "note": "at 90 % is not below it" },
+    { "input": "90.5%", "of": 1000, "result": 905, "count": 904, "below": true },
+    { "input": "90.5%", "of": 1001, "result": 905, "count": 905, "below": true, "note": "905 is below 905.905: compared exactly, not to the share rounded down" },
+    { "input": "90.5%", "of": 1000, "result": 905, "count": 905, "below": false },
+    { "input": "0%", "of": 1000, "result": 0, "count": 0, "below": false, "note": "nothing is below 0 %" },
+    { "input": "100%", "of": 1000, "result": 1000, "count": 999, "below": true },
+    { "input": "100%", "of": 0, "result": 0, "count": 0, "below": false, "note": "of nothing, nothing is below" }
   ]
 }
