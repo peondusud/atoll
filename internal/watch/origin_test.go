@@ -42,3 +42,18 @@ func TestOriginIsAskedAgain(t *testing.T) {
 		t.Errorf("a minute later, %q: the answer was kept past the life of a process", o)
 	}
 }
+
+// The watcher takes another view.mount while it runs, as a configuration read again gives it, and forgets what each
+// process was found to be: the view's process is told by that path (specs.md §15.1, §15.13).
+func TestSetViewMount(t *testing.T) {
+	w := NewWatcher(WatcherOptions{ViewMount: "/srv/pool", Now: func() int64 { return 1 }})
+	defer w.Close()
+	w.origins[4242] = originSeen{origin: OriginUser, atNS: 1}
+	w.SetViewMount("/srv/other")
+	if got := w.ViewMount(); got != "/srv/other" {
+		t.Errorf("the view is at %q", got)
+	}
+	if len(w.origins) != 0 {
+		t.Errorf("what %d processes were is still known", len(w.origins))
+	}
+}

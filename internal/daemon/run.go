@@ -394,6 +394,12 @@ func (l *loop) reload() {
 	}
 	l.opt.Config, l.set = c, set
 	l.queues = newQueues(set.servers, l.queues)
+	// What was made from the configuration read before takes the new one too: the groups that wait are ripe by the
+	// new debounce, and the view's process is told by the new mount (specs.md §15.1).
+	if err := l.grouping.SetDebounce(set.debounce.Nanoseconds()); err != nil {
+		l.log.Warn("the debounce read before stays", "error", err)
+	}
+	l.watcher.SetViewMount(set.viewMount)
 	for id := range l.disks {
 		if set.disksByID[id] == nil {
 			l.unwatch(id)

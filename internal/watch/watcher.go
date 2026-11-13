@@ -89,6 +89,22 @@ func NewWatcher(opt WatcherOptions) *Watcher {
 	return &Watcher{opt: opt, events: make(chan Event, 4096), self: os.Getpid(), exe: exe, disks: map[string]*diskWatch{}, origins: map[int]originSeen{}}
 }
 
+// SetViewMount gives the watcher another view.mount, as a configuration read again does. What each process was
+// found to be is forgotten with it: the view's process is told by that path.
+func (w *Watcher) SetViewMount(mount string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.opt.ViewMount = mount
+	w.origins = map[int]originSeen{}
+}
+
+// ViewMount gives the view.mount the watcher tells the view's process by.
+func (w *Watcher) ViewMount() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.opt.ViewMount
+}
+
 // Events gives what changed. A reader that stops reading lets the kernel's queue fill, and an overflow is a
 // rescan of that disk.
 func (w *Watcher) Events() <-chan Event {
@@ -325,6 +341,7 @@ func (w *Watcher) origin(pid int) string {
 	now := w.now()
 	w.mu.Lock()
 	known, ok := w.origins[pid]
+	view := w.opt.ViewMount
 	w.mu.Unlock()
 	if ok && now-known.atNS < originKept.Nanoseconds() && now >= known.atNS {
 		return known.origin
@@ -333,7 +350,7 @@ func (w *Watcher) origin(pid int) string {
 	switch {
 	case w.exe != "" && procExe(pid) == w.exe:
 		o = OriginAtoll
-	case w.opt.ViewMount != "" && servesView(pid, w.opt.ViewMount):
+	case view != "" && servesView(pid, view):
 		o = OriginView
 	}
 	w.mu.Lock()

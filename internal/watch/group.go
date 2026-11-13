@@ -69,6 +69,16 @@ func NewGrouping(debounceNS int64) (*Grouping, error) {
 	return &Grouping{debounce: debounceNS, groups: map[groupKey]*Group{}}, nil
 }
 
+// SetDebounce gives the grouping another debounce, in nanoseconds, as a configuration read again does: the groups
+// that wait are ripe by it from then on. A negative one is refused, and the one before stays.
+func (g *Grouping) SetDebounce(debounceNS int64) error {
+	if debounceNS < 0 {
+		return fmt.Errorf("grouping: a negative debounce, %d", debounceNS)
+	}
+	g.debounce = debounceNS
+	return nil
+}
+
 // Add puts an event in its group. An error is an event outside the closed lists of specs.md §15.1.
 func (g *Grouping) Add(e Event) error {
 	switch {

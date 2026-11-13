@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -116,5 +117,48 @@ func TestACheckWatchesAgainADiskWhoseWatchEnded(t *testing.T) {
 		case <-deadline:
 			t.Fatal("a file made after the check sent no event: the disk is still not heard")
 		}
+	}
+}
+
+// A configuration read again takes effect at once (specs.md §15.13), deletes.debounce and view.mount included. The
+// grouping and the watcher kept those they were made with: a debounce changed for a disk that takes long to spin
+// up, or a view moved, waited for the daemon to start again, and until then the view's own changes read as a user's.
+func TestAReloadTakesTheDebounceAndTheView(t *testing.T) {
+	dir := t.TempDir()
+	text := func(debounce, pool string) string {
+		return "pool_id = \"p\"\ncatalog = " + strconv.Quote(filepath.Join(dir, "catalog.db")) + "\n[view]\nmount = " + strconv.Quote(filepath.Join(dir, pool)) + "\n" +
+			"[deletes]\ndebounce = " + strconv.Quote(debounce) + "\n"
+	}
+	first, err := config.Parse([]byte(text("30s", "pool")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := config.Parse([]byte(text("5s", "other")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &folderDisks{}
+	opt := &Options{Machine: m, Config: first, Load: func() (*config.Config, error) { return second, nil }}
+	set, err := readSettings(first, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grouping, err := watch.NewGrouping(set.debounce.Nanoseconds())
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &loop{
+		opt: opt, set: set, log: slog.New(slog.DiscardHandler), disks: map[string]*diskState{}, grouping: grouping,
+		watcher: watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: m.Now}),
+		queues:  newQueues(set.servers, nil),
+	}
+	defer l.watcher.Close()
+	l.add(watch.Event{Disk: "t1", Path: "a", Kind: watch.KindWritten, Origin: watch.OriginUser, AtNS: 0})
+	l.reload()
+	if got, want := l.watcher.ViewMount(), filepath.Join(dir, "other"); got != want {
+		t.Errorf("the watcher's view is at %q, want %q", got, want)
+	}
+	if ripe, _, _, _ := l.grouping.Ripe(10_000_000_000); len(ripe) != 1 {
+		t.Errorf("ten seconds on, under a debounce of 5 s: %d groups ripe", len(ripe))
 	}
 }
