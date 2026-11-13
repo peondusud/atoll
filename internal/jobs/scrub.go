@@ -58,6 +58,9 @@ type ScrubDisk struct {
 	Kept []string
 	// Changed are the copies that changed since their row, or while read: for the next pass to look at.
 	Changed []string
+	// Conflict are the copies never verified whose content is not their file's, read again past the cache, size and
+	// times unchanged: another version of the file, which becomes a conflict. Nothing is written to them.
+	Conflict []string
 	// Left says that copies due were left when the budget ran out.
 	Left bool
 }
@@ -271,6 +274,9 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 				return false, s.lost(ctx, d.ID, err)
 			}
 			if !match {
+				if !cp.VerifiedNS.Valid {
+					return false, s.conflict(ctx, d, cp, sd)
+				}
 				return false, s.corrupt(ctx, d, cp, sd)
 			}
 			slog.Warn("a chunk read wrong once, then right past the cache", "disk", d.ID, "path", cp.Path, "chunk", i)
@@ -312,6 +318,20 @@ func (s *scrubber) readChunk(f fsx.File, size, i int64, want []byte) (bool, erro
 // corrupt records a corrupt copy, and when another copy is healthy repairs it from that one, with auto_repair, or
 // sends it to the trash (specs.md §16, §16.1): the file is then degraded, and replication makes the copy again. With
 // none, it stays, and alerts say so.
+// conflict records that a copy never verified does not hold its file's content: nothing says it ever did, so it is
+// another version of the file, and no rot. The file becomes a conflict, with every version kept (specs.md §15.7, §16):
+// the copy is neither repaired nor moved, as a corrupt one would be, which would lose the version it holds.
+func (s *scrubber) conflict(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
+	sd.Conflict = append(sd.Conflict, cp.Path)
+	slog.Warn("a copy never verified holds another version of its file: a conflict", "disk", d.ID, "path", cp.Path)
+	if s.opts.Apply {
+		if err := catalog.WriteHashes(ctx, s.db, s.now, &catalog.HashWrite{FileID: cp.FileID, Conflict: true}); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
 	sd.Corrupt = append(sd.Corrupt, cp.Path)
 	slog.Warn("a corrupt copy", "disk", d.ID, "path", cp.Path)

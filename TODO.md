@@ -86,7 +86,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Data and conformance
 
-- **The scrub calls any copy that does not match `corrupt`**, and with `integrity.auto_repair` writes over it (`internal/jobs/scrub.go`): also a copy never verified, one of another size than its file, and one of a file in `conflict`. §16 says a mismatch on a copy that lost `verified_ns` is a `conflict`, and §15.7 that every version is kept. A second version of a file, brought by a disk added or a restore, is so rewritten from the first, and survives only as chunks in the trash.
 - **Repair and quarantine write to a disk that is `readonly`** (`internal/trash/repair.go`, `internal/jobs/scrub.go`, `internal/jobs/repair.go`): nothing asks whether the disk may be written, against §10.
 - **A repair that fails otherwise than for want of room leaves the corrupt copy in `media/`** (`internal/jobs/scrub.go`), where §16 sends it to the trash; a corrupt copy is never due again, and mergerfs serves it when its branch comes first.
 - **`atoll scrub` without `--yes` runs the reprise and cleans `tmp/`** (`cmd/atoll/scrub.go`), as its session is opened to write, against §17.2.

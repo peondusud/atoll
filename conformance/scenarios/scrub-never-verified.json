@@ -1,0 +1,198 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.7, \u00a716, \u00a725",
+  "description": "A copy never verified that does not hold its file's content is another version of the file, not a corrupt copy: nothing says it ever held that content. The scrub makes the file a conflict, with every version kept, writes nothing to any copy, even with integrity.auto_repair, and exits with 4. While the conflict lasts, no scrub reads its copies again.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/b.mkv",
+          "text": "bb"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/b.mkv",
+          "text": "bb"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/a.mkv",
+      "text": "A FILM"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scrub",
+        "--yes",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "applied": true,
+        "disks": [
+          {
+            "id": "t1",
+            "scrubbed": true,
+            "copies_read": 0,
+            "bytes_read": 0,
+            "corrupt": [],
+            "repaired": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "conflict": [],
+            "left": false
+          },
+          {
+            "id": "t2",
+            "scrubbed": true,
+            "copies_read": 0,
+            "bytes_read": 0,
+            "corrupt": [],
+            "repaired": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "conflict": [
+              {
+                "path": "a.mkv"
+              }
+            ],
+            "left": false
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        },
+        {
+          "path": "media/b.mkv",
+          "text": "bb"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "A FILM"
+        },
+        {
+          "path": "media/b.mkv",
+          "text": "bb"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY 1",
+      "rows": [
+        [
+          "a.mkv",
+          "conflict"
+        ],
+        [
+          "b.mkv",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT (SELECT count(*) FROM trash), (SELECT count(*) FROM events WHERE kind = 'corrupt')",
+      "rows": [
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scrub",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "applied": true,
+        "disks": [
+          {
+            "id": "t1",
+            "scrubbed": true,
+            "copies_read": 0,
+            "bytes_read": 0,
+            "corrupt": [],
+            "repaired": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "conflict": [],
+            "left": false
+          },
+          {
+            "id": "t2",
+            "scrubbed": true,
+            "copies_read": 0,
+            "bytes_read": 0,
+            "corrupt": [],
+            "repaired": [],
+            "quarantined": [],
+            "kept": [],
+            "changed": [],
+            "conflict": [],
+            "left": false
+          }
+        ]
+      }
+    }
+  ]
+}

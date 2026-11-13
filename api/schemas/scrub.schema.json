@@ -34,7 +34,7 @@
     "disk": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "scrubbed", "copies_read", "bytes_read", "corrupt", "repaired", "quarantined", "kept", "changed", "left"],
+      "required": ["id", "scrubbed", "copies_read", "bytes_read", "corrupt", "repaired", "quarantined", "kept", "changed", "conflict", "left"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
         "scrubbed": {
@@ -65,6 +65,10 @@
         },
         "changed": {
           "description": "The copies changed since their row, or while read: a modification, for the next pass.",
+          "$ref": "#/$defs/paths"
+        },
+        "conflict": {
+          "description": "The copies never verified whose content is not their file's, read again past the cache, their size and times unchanged: another version of the file, which becomes a conflict (specs.md §15.7). Nothing is written to them, and no copy of a file in conflict is read again.",
           "$ref": "#/$defs/paths"
         },
         "left": {

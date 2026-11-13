@@ -47,6 +47,46 @@ func diskOf(out *ScrubOutcome, id string) *ScrubDisk {
 	return nil
 }
 
+// A copy never verified that does not hold its file's content is another version of the file, not a corrupt copy:
+// nothing says it ever held that content. The file becomes a conflict, both versions kept, and nothing is written to
+// either (specs.md §15.7, §16). The scrub called it corrupt: with auto_repair it wrote the first version over the
+// second, and without it sent the second to the trash.
+func TestScrubCallsACopyNeverVerifiedAConflict(t *testing.T) {
+	for _, config := range []string{"", "[integrity]\nauto_repair = false\n"} {
+		b := newBenchWith(t, config, "t1", "t2")
+		b.write("t1", "a.mkv", "a film")
+		b.scan(true)
+		// Another version, of the same size, comes with the second disk, as when a disk is added: recorded, not read.
+		b.write("t2", "a.mkv", "A FILM")
+		b.scan(false)
+		if n := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND state = 'ok' AND verified_ns IS NULL"); n != 1 {
+			t.Fatalf("%q: %d copies of t2 recorded and never verified", config, n)
+		}
+		out := b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+		t2 := diskOf(out, "t2")
+		if len(t2.Corrupt) != 0 || len(t2.Repaired) != 0 || len(t2.Quarantined) != 0 || len(t2.Kept) != 0 || !slices.Equal(t2.Conflict, []string{"a.mkv"}) {
+			t.Errorf("%q: %+v", config, *t2)
+		}
+		if got := b.read("t2", "a.mkv"); got != "A FILM" {
+			t.Errorf("%q: the second version now holds %q", config, got)
+		}
+		if got := b.read("t1", "a.mkv"); got != "a film" {
+			t.Errorf("%q: the first version now holds %q", config, got)
+		}
+		if state := b.text("SELECT state FROM files WHERE CAST(lpath AS TEXT) = 'a.mkv'"); state != "conflict" {
+			t.Errorf("%q: the file is %s", config, state)
+		}
+		if n := b.count("SELECT count(*) FROM trash"); n != 0 {
+			t.Errorf("%q: %d entries in the trash", config, n)
+		}
+		// While the conflict stands, no scrub reads its copies again: nothing tells them apart.
+		out = b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+		if t1, t2 := diskOf(out, "t1"), diskOf(out, "t2"); t1.Read != 0 || t2.Read != 0 || len(t2.Conflict) != 0 || len(t2.Corrupt) != 0 {
+			t.Errorf("%q, a second scrub: %+v, %+v", config, *t1, *t2)
+		}
+	}
+}
+
 // A copy that rotted, read again past the cache, is corrupt: with a healthy copy elsewhere it goes to the trash,
 // and the next pass makes it again from the healthy one (specs.md §16).
 func TestScrubQuarantines(t *testing.T) {
