@@ -213,3 +213,72 @@ func TestAnAnsweredChangeAfterANewTrip(t *testing.T) {
 		t.Errorf("%+v", out)
 	}
 }
+
+// answered gives, for each modified event in turn, whether a confirm answered it.
+func (b *bench) answered() string {
+	b.t.Helper()
+	return b.text("SELECT group_concat(COALESCE(json_extract(data, '$.answered'), 0), ',') FROM (SELECT data FROM events WHERE kind = 'modified' ORDER BY id)")
+}
+
+// An answer holds for the guard's window after it is given, and a pass that starts past it finds none (specs.md
+// §15.6): what the answer covered is then a change like any other, which counts, and the guard asks again. An answer
+// stood for good: a disk put back from an older image, whose every file reads as changed long ago, went under a
+// confirm given a year before, and overwrote the newer copies of the other disks.
+func TestAnAnswerToTheModifyGuardLapses(t *testing.T) {
+	for _, answer := range []string{catalog.EventModifyGuardConfirm, catalog.EventModifyGuardReject} {
+		b := guarded(t, "files = 1\npercent = \"100%\"\nwindow = \"10m\"\n", "a", "b", "c", "d")
+		b.rewrite("a", "b", "c", "d")
+		if out := b.pass(); !out.Held {
+			t.Fatalf("%s: %+v", answer, out)
+		}
+		given := b.now
+		if _, err := catalog.AnswerModifyGuard(t.Context(), b.db, "t1", answer, given); err != nil {
+			t.Fatal(err)
+		}
+		b.now = given + int64(10*time.Minute) + 1
+		out := b.pass()
+		// b counts, and c would trip the guard: neither a confirm nor a reject decides them any more.
+		if want := []Decision{{Path: "b", Kind: "modified"}}; !slices.Equal(decisionsOf(out), want) || !out.Held {
+			t.Fatalf("%s: %+v", answer, out)
+		}
+		if want := []GuardLine{{Disk: "t1", Kind: GuardModifications, Count: 1}}; !slices.Equal(out.Guards, want) {
+			t.Errorf("%s: guards %+v", answer, out.Guards)
+		}
+		if got := b.answered(); got != "0,0" {
+			t.Errorf("%s: answered %s", answer, got)
+		}
+		if got := b.count("SELECT count(*) FROM events WHERE kind = 'modify-guard'"); got != 2 {
+			t.Errorf("%s: %d guard events, for one that asks again", answer, got)
+		}
+		if b.read("t2", "c") != "x" || b.read("t2", "d") != "x" {
+			t.Errorf("%s: a held file reached the other copy", answer)
+		}
+		// Answered again, and decided by a pass within the window.
+		if _, err := catalog.AnswerModifyGuard(t.Context(), b.db, "t1", catalog.EventModifyGuardConfirm, b.now); err != nil {
+			t.Fatal(err)
+		}
+		out = b.pass()
+		if want := []Decision{{Path: "c", Kind: "modified"}, {Path: "d", Kind: "modified"}}; !slices.Equal(decisionsOf(out), want) || out.Held {
+			t.Errorf("%s: then %+v", answer, out)
+		}
+	}
+}
+
+// A pass that starts as the window ends still has the answer.
+func TestAnAnswerToTheModifyGuardHoldsForItsWindow(t *testing.T) {
+	b := guarded(t, "files = 1\npercent = \"100%\"\nwindow = \"10m\"\n", "a", "b", "c")
+	b.rewrite("a", "b", "c")
+	b.pass()
+	given := b.now
+	if _, err := catalog.AnswerModifyGuard(t.Context(), b.db, "t1", catalog.EventModifyGuardConfirm, given); err != nil {
+		t.Fatal(err)
+	}
+	b.now = given + int64(10*time.Minute)
+	out := b.pass()
+	if want := []Decision{{Path: "b", Kind: "modified"}, {Path: "c", Kind: "modified"}}; !slices.Equal(decisionsOf(out), want) || out.Held {
+		t.Fatalf("%+v", out)
+	}
+	if got := b.answered(); got != "0,1,1" {
+		t.Errorf("answered %s", got)
+	}
+}

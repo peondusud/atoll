@@ -1,0 +1,564 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §15.6",
+  "description": "An answer to the mass-modification guard holds for modifies.mass_guard.window after it is given, 10 minutes by default. A pass that starts past it finds no answer: the changes the answer covered are changes like any other, which count, so one is modified and the next trips the guard again, with a modify-guard event of its own. A confirm given then, and a pass within its window, decides what is left, and that counts for nothing.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/c",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/c",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\nfiles = 1\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/a",
+      "text": "yy"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/b",
+      "text": "yy"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/c",
+      "text": "yy"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "a",
+            "decision": "modified"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "a",
+            "reason": "overwritten",
+            "outcome": "trashed"
+          },
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "a",
+            "source": "t1",
+            "outcome": "replicated"
+          }
+        ],
+        "guards": [
+          {
+            "disk": "t1",
+            "kind": "modifications",
+            "count": 1
+          }
+        ],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "yy"
+        },
+        {
+          "path": "media/b",
+          "text": "x"
+        },
+        {
+          "path": "media/c",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/a",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, level FROM events WHERE kind IN ('modified', 'modify-guard') ORDER BY id",
+      "rows": [
+        [
+          "modified",
+          "info"
+        ],
+        [
+          "modify-guard",
+          "warning"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "disk": "t1",
+            "kind": "deletions",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
+            "disk": "t1",
+            "kind": "modifications",
+            "tripped": true,
+            "count": 1,
+            "paths": [
+              {
+                "path": "a"
+              }
+            ]
+          },
+          {
+            "disk": "t2",
+            "kind": "deletions",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          },
+          {
+            "disk": "t2",
+            "kind": "modifications",
+            "tripped": false,
+            "count": 0,
+            "paths": []
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [
+          {
+            "disk": "t1",
+            "kind": "modifications",
+            "count": 1
+          }
+        ],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "confirm",
+        "--disk",
+        "t1",
+        "--kind",
+        "modifications",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t1",
+        "kind": "modifications",
+        "done": true,
+        "up_to": "2030-01-01T00:00:00.000000000Z"
+      }
+    },
+    {
+      "do": "advance",
+      "by": "11m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "b",
+            "decision": "modified"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "b",
+            "reason": "overwritten",
+            "outcome": "trashed"
+          },
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "b",
+            "source": "t1",
+            "outcome": "replicated"
+          }
+        ],
+        "guards": [
+          {
+            "disk": "t1",
+            "kind": "modifications",
+            "count": 1
+          }
+        ],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT json_extract(data, '$.path'), json_extract(data, '$.answered') FROM events WHERE kind = 'modified' ORDER BY id",
+      "rows": [
+        [
+          "a",
+          null
+        ],
+        [
+          "b",
+          null
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind FROM events WHERE kind LIKE 'modify-guard%' ORDER BY id",
+      "rows": [
+        [
+          "modify-guard"
+        ],
+        [
+          "modify-guard-confirm"
+        ],
+        [
+          "modify-guard"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "yy"
+        },
+        {
+          "path": "media/b",
+          "text": "yy"
+        },
+        {
+          "path": "media/c",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/a",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/b",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "confirm",
+        "--disk",
+        "t1",
+        "--kind",
+        "modifications",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t1",
+        "kind": "modifications",
+        "done": true,
+        "up_to": "2030-01-01T00:11:00.000000000Z"
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "c",
+            "decision": "modified"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t2",
+            "kind": "trash",
+            "path": "c",
+            "reason": "overwritten",
+            "outcome": "trashed"
+          },
+          {
+            "disk": "t2",
+            "kind": "replicate",
+            "path": "c",
+            "source": "t1",
+            "outcome": "replicated"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT json_extract(data, '$.path'), json_extract(data, '$.answered') FROM events WHERE kind = 'modified' ORDER BY id",
+      "rows": [
+        [
+          "a",
+          null
+        ],
+        [
+          "b",
+          null
+        ],
+        [
+          "c",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "yy"
+        },
+        {
+          "path": "media/b",
+          "text": "yy"
+        },
+        {
+          "path": "media/c",
+          "text": "yy"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/a",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/b",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/c",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [],
+        "operations": [],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    }
+  ]
+}

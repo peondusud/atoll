@@ -638,6 +638,9 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		return failure(stderr, err)
 	}
+	if upTo.Valid {
+		tellOfAnswer(c, kind, stderr)
+	}
 	answer := guardAnswer{Disk: disk, Kind: kind, Done: upTo.Valid}
 	if upTo.Valid {
 		at := timeText(upTo.Int64)
@@ -662,6 +665,29 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 		return failure(stderr, err)
 	}
 	return exitOK
+}
+
+// tellOfAnswer tells the daemon that runs for good of an answer to a guard, as systemctl reload atoll would, so that
+// its pass takes the answer at once: an answer to the mass-modification guard holds for the guard's window only
+// (specs.md §15.6). The answer is recorded either way: a daemon that could not be told, or none running, is a line of
+// standard error, which says how long a pass has to start.
+func tellOfAnswer(c *config.Config, kind string, stderr io.Writer) {
+	told, err := tellDaemon()
+	if err == nil && told > 0 {
+		return
+	}
+	window := ""
+	if kind == jobs.GuardModifications {
+		window, _ = c.Effective()["modifies.mass_guard.window"].(string)
+	}
+	switch {
+	case err != nil && window != "":
+		report(stderr, fmt.Sprintf(T("the daemon was not told, %v: the answer holds for %s, for a pass that starts by then (systemctl reload atoll)"), err, window))
+	case err != nil:
+		report(stderr, fmt.Sprintf(T("the daemon was not told, %v: its next pass takes the answer (systemctl reload atoll)"), err))
+	case window != "":
+		report(stderr, fmt.Sprintf(T("no daemon runs: the answer holds for %s, for a pass that starts by then"), window))
+	}
 }
 
 func actOnGuard(c *config.Config, what, kind, id string, stderr io.Writer) (upTo sql.NullInt64, err error) {
