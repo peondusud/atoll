@@ -20,6 +20,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // smtpMail is what a fake server took.
@@ -36,9 +37,15 @@ type fakeSMTP struct {
 	addr     string
 	starttls bool
 	refuse   string
-	config   *tls.Config
-	mu       sync.Mutex
-	got      []smtpMail
+	// refusal is what it says of the recipient it refuses, "no such user here" when left out.
+	refusal string
+	// hangsUp makes it close the connection at QUIT with no answer, as a server that is done with a client does.
+	hangsUp bool
+	// flood makes it answer EHLO with a line of that many bytes that never ends, then wait for the client to leave.
+	flood  int
+	config *tls.Config
+	mu     sync.Mutex
+	got    []smtpMail
 }
 
 // selfSigned makes a certificate for 127.0.0.1, and the pool that trusts it.
@@ -108,6 +115,10 @@ func (f *fakeSMTP) serve(conn net.Conn, implicit bool) {
 		line = strings.TrimRight(line, "\r\n")
 		upper := strings.ToUpper(line)
 		switch {
+		case strings.HasPrefix(upper, "EHLO") && f.flood > 0:
+			_, _ = conn.Write([]byte("250-" + strings.Repeat("x", f.flood)))
+			_, _ = r.ReadString('\n')
+			return
 		case strings.HasPrefix(upper, "EHLO"):
 			lines := []string{"250-fake", "250-AUTH PLAIN"}
 			if f.starttls && !m.tls {
@@ -131,7 +142,11 @@ func (f *fakeSMTP) serve(conn net.Conn, implicit bool) {
 		case strings.HasPrefix(upper, "RCPT TO:"):
 			to := between(line)
 			if to == f.refuse {
-				say("550 no such user here")
+				text := "no such user here"
+				if f.refusal != "" {
+					text = f.refusal
+				}
+				say("550 " + text)
 				continue
 			}
 			m.to = append(m.to, to)
@@ -155,7 +170,9 @@ func (f *fakeSMTP) serve(conn net.Conn, implicit bool) {
 			f.mu.Unlock()
 			say("250 queued")
 		case upper == "QUIT":
-			say("221 bye")
+			if !f.hangsUp {
+				say("221 bye")
+			}
 			return
 		default:
 			say("502 not here")
@@ -261,6 +278,57 @@ func TestSMTPRefusal(t *testing.T) {
 	}
 	if got := f.mails(); len(got) != 0 {
 		t.Errorf("%+v", got)
+	}
+}
+
+// A mail went when the server took it after DATA (specs.md §23): what QUIT gets then changes nothing. A server that
+// hung up there had its mail counted as not sent, and sent again at each try, for as long as the alert stood.
+func TestSMTPAMailTakenIsSent(t *testing.T) {
+	f, trust := newFakeSMTP(t, false, true)
+	f.hangsUp = true
+	s := &SMTP{URL: "smtp://" + f.addr + "?from=a@example.com&to=b@example.com", TLS: trust}
+	if err := s.Send(t.Context(), urgent); err != nil {
+		t.Errorf("a mail the server took: %v", err)
+	}
+	if got := f.mails(); len(got) != 1 {
+		t.Errorf("%d mails", len(got))
+	}
+}
+
+// A server may send only so much in one conversation: a line that never ends is not held whole for as long as the
+// conversation has, as fast as the link carries it. It was, by the daemon, from any server, or from anyone on the way
+// before STARTTLS.
+func TestSMTPTakesOnlySoMuch(t *testing.T) {
+	f, trust := newFakeSMTP(t, false, true)
+	f.flood = 4 << 20
+	s := &SMTP{URL: "smtp://" + f.addr + "?from=a@example.com&to=b@example.com", TLS: trust}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	began := time.Now()
+	err := s.Send(ctx, urgent)
+	if !errors.Is(err, errSMTPTooMuch) {
+		t.Errorf("%v", err)
+	}
+	if took := time.Since(began); took > 2*time.Second {
+		t.Errorf("it read on for %s", took)
+	}
+	if got := f.mails(); len(got) != 0 {
+		t.Errorf("%+v", got)
+	}
+}
+
+// What a server says of a refusal is kept short, and whole characters (specs.md §23): it goes to the log.
+func TestSMTPRefusalIsKeptShort(t *testing.T) {
+	f, trust := newFakeSMTP(t, false, true)
+	f.refuse, f.refusal = "nobody@example.com", strings.Repeat("é", 2000)
+	s := &SMTP{URL: "smtp://" + f.addr + "?from=a@example.com&to=nobody@example.com", TLS: trust}
+	err := s.Send(t.Context(), urgent)
+	var answer *AnswerError
+	if !errors.As(err, &answer) || answer.Status != "550" {
+		t.Fatalf("%v", err)
+	}
+	if len(answer.Text) > 512 || len(answer.Text) < 500 || !utf8.ValidString(answer.Text) {
+		t.Errorf("%d bytes, valid %v", len(answer.Text), utf8.ValidString(answer.Text))
 	}
 }
 
