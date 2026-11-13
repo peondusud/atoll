@@ -161,3 +161,50 @@ func TestDiskAddRefusesAWorkFolderOfAnotherAccount(t *testing.T) {
 		t.Errorf("the catalog's owner: %v", err)
 	}
 }
+
+// A marker that says the same is left as it is, however it is written: with the lines of another system, or its keys
+// in another order (specs.md §10). Atoll then went to write its own over it, which is refused, as a marker is never
+// replaced: the disk was added with a warning and exit 4, for a marker that was right.
+func TestDiskAddLeavesAMarkerThatSaysTheSame(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "catalog.db")
+	text := []byte("pool_id = \"p\"\ncatalog = " + strconv.Quote(file) + "\n[view]\nmount = " + strconv.Quote(filepath.Join(dir, "pool")) + "\n")
+	c, err := config.Parse(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
+		t.Fatal(err)
+	}
+	mount := filepath.Join(dir, "u2")
+	for _, folder := range []string{filepath.Join(mount, "media"), filepath.Join(mount, "Atoll")} {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	marker := filepath.Join(mount, "Atoll", "disk.toml")
+	const uuid = "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"
+	for name, written := range map[string]string{
+		"none":            "",
+		"as Atoll writes": "format_version = 1\npool_id = \"p\"\ndisk_id = \"u2\"\nfs_uuid = \"" + uuid + "\"\n",
+		"other line ends": "format_version = 1\r\npool_id = \"p\"\r\ndisk_id = \"u2\"\r\nfs_uuid = \"" + uuid + "\"\r\n",
+		"another order":   "fs_uuid = \"" + uuid + "\"\ndisk_id = \"u2\"\npool_id = \"p\"\nformat_version = 1\n",
+		"literal strings": "format_version = 1\npool_id = 'p'\ndisk_id = 'u2'\nfs_uuid = '" + uuid + "'\n",
+	} {
+		if written == "" {
+			_ = os.Remove(marker)
+		} else if err := os.WriteFile(marker, []byte(written), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var stderr bytes.Buffer
+		a, err := checkDiskAdd(t.Context(), c, &fakeDisk{mount: mount, fsType: "ext4", options: []string{"rw"}}, text, &diskAddArgs{mount: mount}, &stderr)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		// Only a disk with no marker has one to write.
+		if (a.marker != "") != (written == "") {
+			t.Errorf("%s: the marker to write is %q", name, a.marker)
+		}
+	}
+}

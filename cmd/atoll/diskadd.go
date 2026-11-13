@@ -385,6 +385,8 @@ func (a *diskAdding) checkMarker(c *config.Config) error {
 		case mark.FSUUID != a.disk.UUID:
 			return fmt.Errorf(T("its marker names the filesystem %s, and this one is %s: a marker copied from another disk"), mark.FSUUID, a.disk.UUID)
 		}
+		// It says the same, and is left as it is, however it is written (specs.md §10).
+		return nil
 	}
 	if on, _ := c.Effective()["layout.marker"].(bool); on && a.out.Disk.State == string(disks.Online) {
 		text, err := layout.MarkerText(layout.Marker{PoolID: c.PoolID, DiskID: a.disk.ID, FSUUID: a.disk.UUID})
