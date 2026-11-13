@@ -415,6 +415,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `after_pass` | boolean | the last step the daemon took was a pass, a check aside: another step due then runs before a pass whose every reason is `events` or `due`, and `because` is empty |
 | `hash_pending` | boolean | files may be waiting for their hash |
 | `changed_pending` | boolean | the last pass left files whose changed copies must be read to be decided (§15.4) |
+| `purge_pending` | boolean | the purge of the trash stopped at its slice with entries left (§17) |
 | `scrub_pending` | boolean | copies may be due for the scrub |
 | `scrub_window` | string | `integrity.window` |
 | `scrub_budget_ns` | integer | `integrity.scrub_budget`, which must be positive when `scrub_pending` |
@@ -426,6 +427,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is, or when `after_pass` makes it wait |
 | `read_changed` | boolean | `true` when the changed copies are to be read now: `changed_pending`, inside the window or not, before every other step |
+| `purge` | boolean | `true` when the purge of the trash is to go on now: `purge_pending`, inside the window or not, after the changed copies |
 | `notify` | boolean | `true` when the media servers are to be told now: `notify_due_ns` has come |
 | `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
 | `balance` | boolean | `true` when the daemon is to balance now: `balance_due_ns` has come |

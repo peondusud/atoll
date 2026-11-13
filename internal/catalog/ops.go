@@ -564,8 +564,9 @@ func PlannedAt(ctx context.Context, db *sql.DB, disk, path string) (bool, error)
 	return planned, nil
 }
 
-// TrashEntry is what a disk's trash holds at one location.
+// TrashEntry is what a disk's trash holds at one location. RowID is its row, which finds it again at once.
 type TrashEntry struct {
+	RowID     int64
 	Path      string
 	Disk      string
 	TrashPath string
@@ -589,18 +590,25 @@ const (
 	staleTrashSQL   = "SELECT reason, deleted_ns FROM trash WHERE lpath = ?1 AND op_id = ?2"
 	repairedSizeSQL = "UPDATE trash SET size = ?1 WHERE lpath = ?2 AND op_id = ?3"
 	dropTrashRowSQL = "DELETE FROM trash WHERE lpath = ?1 AND disk_id = ?2 AND trash_path = ?3"
-	// A page of the list, in the index's own order: no sort, and nothing read before the page.
-	trashPageSQL = `
-		SELECT t.lpath, t.disk_id, t.trash_path, t.op_id, t.size, t.blake3, t.reason, t.deleted_ns, t.expires_ns, COALESCE(o.file_key, '')
+	trashEntrySQL   = `
+		SELECT t.id, t.lpath, t.disk_id, t.trash_path, t.op_id, t.size, t.blake3, t.reason, t.deleted_ns, t.expires_ns, COALESCE(o.file_key, '')
 		FROM trash t JOIN ops o ON o.id = t.op_id
-		WHERE o.state = 'done' AND (t.lpath, t.op_id) > (?, ?)
-		ORDER BY t.lpath, t.op_id
-		LIMIT ?`
+		WHERE o.state = 'done'`
+	// A page of the list, in the index's own order: no sort, and nothing read before the page.
+	trashPageSQL = trashEntrySQL + ` AND (t.lpath, t.op_id) > (?, ?) ORDER BY t.lpath, t.op_id LIMIT ?`
+	// A page of the entries from one path up to another, through trash_by_path: what a restore of a path reads, and
+	// nothing of the rest of the trash.
+	trashRangeSQL = trashEntrySQL + ` AND t.lpath >= ?1 AND t.lpath < ?2 AND (t.lpath, t.op_id) > (?3, ?4) ORDER BY t.lpath, t.op_id LIMIT ?5`
+	// A page of the entries whose time has come, through trash_by_expiry, which holds each row after its expiry: what
+	// a purge reads first, whatever else the trash holds.
+	trashExpiredSQL = trashEntrySQL + ` AND t.expires_ns <= ?1 AND (t.expires_ns, t.id) > (?2, ?3) ORDER BY t.expires_ns, t.id LIMIT ?4`
+	trashByRowSQL   = trashEntrySQL + ` AND t.id = ?`
+	trashDueSQL     = `SELECT EXISTS(SELECT 1 FROM trash t JOIN ops o ON o.id = t.op_id WHERE t.expires_ns <= ? AND o.state = 'done')`
 	// Every entry once, in the order the table holds them, which costs no sort.
 	trashWeightsSQL = `
-		SELECT t.disk_id, t.op_id, t.reason, t.size, t.deleted_ns, t.expires_ns
+		SELECT t.id, t.disk_id, t.op_id, t.reason, t.size, t.deleted_ns, t.expires_ns
 		FROM trash t JOIN ops o ON o.id = t.op_id
-		WHERE o.state = 'done'
+		WHERE o.state = 'done' AND (?1 = '' OR t.disk_id = ?1)
 		ORDER BY t.id`
 )
 
@@ -630,7 +638,12 @@ func EachTrashEntry(ctx context.Context, db *sql.DB, fn func(*TrashEntry) error)
 }
 
 func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]TrashEntry, error) {
-	rows, err := db.QueryContext(ctx, trashPageSQL, after, afterOp, trashPageSize)
+	return trashEntries(ctx, db, trashPageSQL, after, afterOp, trashPageSize)
+}
+
+// trashEntries reads the entries a query of trashEntrySQL gives.
+func trashEntries(ctx context.Context, db *sql.DB, query string, args ...any) ([]TrashEntry, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("trash: %w", err)
 	}
@@ -639,7 +652,7 @@ func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]
 	for rows.Next() {
 		var e TrashEntry
 		var path, trashPath []byte
-		if err := rows.Scan(&path, &e.Disk, &trashPath, &e.OpID, &e.Size, &e.Hash, &e.Reason, &e.DeletedNS, &e.ExpiresNS, &e.FileKey); err != nil {
+		if err := rows.Scan(&e.RowID, &path, &e.Disk, &trashPath, &e.OpID, &e.Size, &e.Hash, &e.Reason, &e.DeletedNS, &e.ExpiresNS, &e.FileKey); err != nil {
 			return nil, fmt.Errorf("trash: %w", err)
 		}
 		e.Path, e.TrashPath = string(path), string(trashPath)
@@ -649,6 +662,59 @@ func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]
 		return nil, fmt.Errorf("trash: %w", err)
 	}
 	return list, nil
+}
+
+// EachTrashEntryBelow gives each entry at a path or below it, by whole components, whose operation is done, by path in
+// byte order, then by operation: read through trash_by_path, a page at a time, and nothing of the rest of the trash.
+func EachTrashEntryBelow(ctx context.Context, db *sql.DB, under string, fn func(*TrashEntry) error) error {
+	// Between a path and what follows everything below it lie the names that begin as it does and go on with a byte
+	// before the slash: those are left aside.
+	lo, hi := []byte(under), []byte(under+"0")
+	after, afterOp := []byte{}, int64(0)
+	for {
+		page, err := trashEntries(ctx, db, trashRangeSQL, lo, hi, after, afterOp, trashPageSize)
+		if err != nil {
+			return err
+		}
+		if len(page) == 0 {
+			return nil
+		}
+		for i := range page {
+			e := &page[i]
+			if e.Path != under && !strings.HasPrefix(e.Path, under+"/") {
+				continue
+			}
+			if err := fn(e); err != nil {
+				return err
+			}
+		}
+		last := &page[len(page)-1]
+		after, afterOp = []byte(last.Path), last.OpID
+	}
+}
+
+// TrashExpired gives a page of the entries whose time has come by nowNS and whose operation is done, by expiry then
+// by row, after the entry of afterNS and afterRow: read through trash_by_expiry (specs.md §17).
+func TrashExpired(ctx context.Context, db *sql.DB, nowNS, afterNS, afterRow int64) ([]TrashEntry, error) {
+	return trashEntries(ctx, db, trashExpiredSQL, nowNS, afterNS, afterRow, trashPageSize)
+}
+
+// TrashEntryByRow gives the entry of a row, and false when it is gone, or its operation is not done.
+func TrashEntryByRow(ctx context.Context, db *sql.DB, row int64) (TrashEntry, bool, error) {
+	list, err := trashEntries(ctx, db, trashByRowSQL, row)
+	if err != nil || len(list) == 0 {
+		return TrashEntry{}, false, err
+	}
+	return list[0], true, nil
+}
+
+// TrashDue says whether an entry whose operation is done has reached its time by nowNS.
+func TrashDue(ctx context.Context, db *sql.DB, nowNS int64) (bool, error) {
+	var due bool
+	if err := db.QueryRowContext(ctx, trashDueSQL, nowNS).Scan(&due); err != nil {
+		return false, fmt.Errorf("trash: %w", err)
+	}
+	return due, nil
 }
 
 // TrashUsed gives, for each disk whose trash holds entries, the sum of their sizes, an entry of unknown size counting
@@ -693,6 +759,7 @@ func TrashEntries(ctx context.Context, db *sql.DB) ([]TrashEntry, error) {
 // TrashWeight is what choosing what a purge reaches needs of an entry of the trash: its disk, its operation, why and
 // when it came, and its size. No path.
 type TrashWeight struct {
+	RowID     int64
 	Disk      string
 	OpID      int64
 	Reason    string
@@ -705,7 +772,13 @@ type TrashWeight struct {
 // after each pass whether a purge is due: the paths of a large trash, in their order, are not for that (specs.md
 // §15.13, §26).
 func TrashWeights(ctx context.Context, db *sql.DB) ([]TrashWeight, error) {
-	rows, err := db.QueryContext(ctx, trashWeightsSQL)
+	return TrashWeightsOn(ctx, db, "")
+}
+
+// TrashWeightsOn gives that for the entries of one disk, or of all with "": a purge for room is chosen among the
+// entries of a disk whose trash holds too much, and of no other (specs.md §17).
+func TrashWeightsOn(ctx context.Context, db *sql.DB, disk string) ([]TrashWeight, error) {
+	rows, err := db.QueryContext(ctx, trashWeightsSQL, disk)
 	if err != nil {
 		return nil, fmt.Errorf("trash: %w", err)
 	}
@@ -713,7 +786,7 @@ func TrashWeights(ctx context.Context, db *sql.DB) ([]TrashWeight, error) {
 	list := []TrashWeight{}
 	for rows.Next() {
 		var w TrashWeight
-		if err := rows.Scan(&w.Disk, &w.OpID, &w.Reason, &w.Size, &w.DeletedNS, &w.ExpiresNS); err != nil {
+		if err := rows.Scan(&w.RowID, &w.Disk, &w.OpID, &w.Reason, &w.Size, &w.DeletedNS, &w.ExpiresNS); err != nil {
 			return nil, fmt.Errorf("trash: %w", err)
 		}
 		list = append(list, w)

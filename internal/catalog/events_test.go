@@ -31,6 +31,31 @@ func TestGuardReadsUseAnIndex(t *testing.T) {
 	}
 }
 
+// What a purge by slices and a restore read of the trash, they read through its indexes, never the whole of it: the
+// entries whose time has come by their expiry, those of a path and below it by path, and one entry by its row
+// (specs.md §17). A purge listed every entry of the trash, with its paths, to find the few that were due.
+func TestTheTrashIsReadThroughItsIndexes(t *testing.T) {
+	b := openForOps(t)
+	for name, want := range map[string]struct{ query, step string }{
+		"expired":      {trashExpiredSQL, "SEARCH t USING INDEX trash_by_expiry"},
+		"due":          {trashDueSQL, "SEARCH t USING INDEX trash_by_expiry"},
+		"below a path": {trashRangeSQL, "SEARCH t USING INDEX trash_by_path"},
+		"by row":       {trashByRowSQL, "SEARCH t USING INTEGER PRIMARY KEY (rowid=?)"},
+	} {
+		plan := planOf(t, b.sql(), name, want.query)
+		found := false
+		for _, step := range plan {
+			if strings.HasPrefix(step, "SCAN t") || strings.Contains(step, "TEMP B-TREE") {
+				t.Errorf("%s reads or sorts the whole trash: %q", name, plan)
+			}
+			found = found || strings.HasPrefix(step, want.step)
+		}
+		if !found {
+			t.Errorf("%s: %q", name, plan)
+		}
+	}
+}
+
 // Looking for the operations that name a part of tmp/ goes from its id on, never over the whole journal (specs.md
 // §14.2): read at each pass, that took 0.35 s over a million copies.
 func TestPartStatesReadFromTheirID(t *testing.T) {

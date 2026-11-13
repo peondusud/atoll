@@ -191,6 +191,8 @@ type loop struct {
 	// those reads left something for a pass since: copies made stale, a guard tripped, a disk lost (specs.md §15.13).
 	toRead      []jobs.PendingRead
 	readDecided bool
+	// purgePending says that the purge of the trash stopped at its slice with entries left (specs.md §17).
+	purgePending bool
 	// unopened holds, by disk, the files a read could not open for a reason that says nothing of their disk, in byte
 	// order, until one opens: the alerts after a pass count those that still refuse (specs.md §15.10, §23).
 	unopened map[string][]string
@@ -317,7 +319,7 @@ func (l *loop) run(ctx context.Context) error {
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
 			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
-			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0,
+			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
@@ -339,12 +341,16 @@ func (l *loop) run(ctx context.Context) error {
 			l.afterPass = true
 			continue
 		}
-		if out.Read || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+		if out.Read || out.Purge || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
 			// The turn another step has after a pass.
 			l.afterPass = false
 		}
 		if out.Read {
 			l.readChanged(ctx)
+			continue
+		}
+		if out.Purge {
+			l.purgeMore(ctx)
 			continue
 		}
 		if out.Notify {
@@ -702,6 +708,16 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 		facts.Dirty = l.dirtyDisks()
 		facts.Foreign = l.foreignWorkdirs(outcome)
 		facts.Unopened = l.stillUnopened()
+		// A trash that a purge still under way will bring back under its limit is not full: only one that stays over
+		// once everything due is gone is told of (specs.md §23).
+		if l.purgePending && len(facts.TrashFull) > 0 {
+			var full map[string]bool
+			if full, err = trash.FullOncePurged(ctx, db, l.opt.Config, now); err == nil {
+				facts.TrashFull = slices.DeleteFunc(facts.TrashFull, func(t alerts.TrashFull) bool { return !full[t.ID] })
+			}
+		}
+	}
+	if err == nil {
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {
@@ -966,28 +982,44 @@ func (l *loop) backup(ctx context.Context, opened int64) {
 
 // purge purges the trash after a pass, under the same lock, as atoll trash purge --yes does: what has reached its
 // time, then what goes for room (specs.md §15.13, §17). It reads the catalog first, and checks no disk when nothing is
-// due. A dry run purges nothing.
+// due. It stops at its slice, and what is left goes by slices of its own, the lock let go between two: the day a mass
+// deletion reaches its retention, no command waits for the whole of it. A dry run purges nothing.
 func (l *loop) purge(ctx context.Context, db *sql.DB) {
-	if !l.opt.Apply {
-		return
+	l.purgePending = l.opt.Apply && l.purgeSlice(ctx, db)
+}
+
+// purgeMore goes on with a purge that stopped at its slice, under the catalog's lock.
+func (l *loop) purgeMore(ctx context.Context) {
+	left := false
+	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
+		left = l.purgeSlice(ctx, db)
+		return nil, nil
+	})
+	if err != nil && ctx.Err() == nil {
+		l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
 	}
+	l.purgePending = left && err == nil
+}
+
+// purgeSlice purges the trash for a slice of time, and says whether it stopped there with entries left.
+func (l *loop) purgeSlice(ctx context.Context, db *sql.DB) bool {
 	due, err := trash.PurgeDue(ctx, db, l.opt.Config, l.opt.Machine.Now())
 	if err != nil || !due {
 		if err != nil && ctx.Err() == nil {
 			l.log.Warn("the trash could not be read: the next pass tries again", "error", err)
 		}
-		return
+		return false
 	}
 	s, err := trash.Open(ctx, db, l.opt.Config, l.opt.Machine, true)
 	if err != nil {
 		if ctx.Err() == nil {
 			l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
 		}
-		return
+		return false
 	}
 	defer s.Close()
 	var purged, stayed int
-	summary, err := s.Purge(ctx, nil, func(e *trash.EntryItem) error {
+	summary, left, err := s.PurgeUntil(ctx, l.opt.Machine.Now()+hashSlice.Nanoseconds(), func(e *trash.EntryItem) error {
 		if e.Outcome == trash.OutcomePurged {
 			purged++
 		} else {
@@ -1002,9 +1034,10 @@ func (l *loop) purge(ctx context.Context, db *sql.DB) {
 		if ctx.Err() == nil {
 			l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
 		}
-		return
+		return false
 	}
-	l.log.Info("the trash was purged", "entries", purged, "bytes", summary.Bytes, "stayed", stayed, "full", summary.Full)
+	l.log.Info("the trash was purged", "entries", purged, "bytes", summary.Bytes, "stayed", stayed, "full", summary.Full, "left", left)
+	return left
 }
 
 // locked runs fn on the catalog, under its lock, which it takes after the others' and lets go of last.

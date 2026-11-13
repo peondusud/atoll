@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -769,20 +770,14 @@ func (s *Session) Restore(ctx context.Context, under string, each func(*EntryIte
 
 // restore gives one function each newest entry at or below under, as Restore says.
 func (s *Session) restore(ctx context.Context, under string, one func(context.Context, *catalog.TrashEntry) (string, error), each func(*EntryItem) error) (*Summary, error) {
-	entries, err := catalog.TrashEntries(ctx, s.db)
-	if err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
-	}
 	summary := &Summary{Applied: s.apply}
-	for i := range entries {
-		e := &entries[i]
-		// By path, then by operation, so the last of a path is its newest.
-		if !atOrBelow(e.Path, under) || (i+1 < len(entries) && entries[i+1].Path == e.Path) || e.OpID < s.reprised[e.Path] {
-			continue
+	settle := func(e *catalog.TrashEntry) error {
+		if e.OpID < s.reprised[e.Path] {
+			return nil
 		}
 		outcome, err := one(ctx, e)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		switch outcome {
 		case OutcomeToRestore:
@@ -792,15 +787,37 @@ func (s *Session) restore(ctx context.Context, under string, one func(context.Co
 			summary.Stayed++
 		}
 		if err := each(&EntryItem{TrashEntry: *e, Outcome: outcome}); err != nil {
-			return nil, fmt.Errorf("%w", err)
+			return fmt.Errorf("%w", err)
+		}
+		return nil
+	}
+	// The entries of that path and below it, read through their index, and nothing of the rest of the trash. By
+	// path, then by operation, so the last of a path is its newest: each waits for the next to say so.
+	var held *catalog.TrashEntry
+	var failed error
+	err := catalog.EachTrashEntryBelow(ctx, s.db, under, func(e *catalog.TrashEntry) error {
+		if held != nil && held.Path != e.Path {
+			if failed = settle(held); failed != nil {
+				return failed
+			}
+		}
+		entry := *e
+		held = &entry
+		return nil
+	})
+	switch {
+	case failed != nil:
+		return nil, failed
+	case err != nil:
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	if held != nil {
+		if err := settle(held); err != nil {
+			return nil, err
 		}
 	}
 	summary.DiskLost = s.lost
 	return summary, nil
-}
-
-func atOrBelow(path, under string) bool {
-	return path == under || strings.HasPrefix(path, under+"/")
 }
 
 func (s *Session) restoreEntry(ctx context.Context, e *catalog.TrashEntry) (string, error) {
@@ -1037,24 +1054,187 @@ func purgeInput(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, 
 }
 
 // PurgeDue says whether a purge would reach anything now, reading the catalog only: the daemon looks before it checks
-// a disk (specs.md §15.13). It reads no path: it is asked after each pass, whatever the trash holds.
+// a disk (specs.md §15.13). It is asked after each pass, whatever the trash holds, so it lists no entry it need not:
+// it asks the index of the expiries whether one has reached its time, then each disk's sum, and looks at the entries
+// of a disk only when its trash holds more than trash.max_size.
 func PurgeDue(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64) (bool, error) {
-	entries, err := catalog.TrashWeights(ctx, db)
+	due, err := catalog.TrashDue(ctx, db, nowNS)
 	if err != nil {
 		return false, fmt.Errorf("catalog: %w", err)
 	}
-	if len(entries) == 0 {
-		return false, nil
+	if due {
+		return true, nil
 	}
-	in, err := purgeInput(ctx, db, c, nowNS, entries)
+	room, err := forRoom(ctx, db, c, nowNS, nil)
 	if err != nil {
 		return false, err
 	}
-	choice, err := solver.ChoosePurge(in)
+	return slices.ContainsFunc(room, func(r diskRoom) bool { return len(r.rows) > 0 }), nil
+}
+
+// diskRoom is a disk whose trash holds more than trash.max_size of its capacity: the rows of the entries that go for
+// room, in the order they go, and whether it still holds too much once those and what has reached its time are gone.
+type diskRoom struct {
+	id    string
+	rows  []int64
+	stays bool
+}
+
+// forRoom gives the disks whose trash holds more than trash.max_size, each with what a purge for room reaches there,
+// chosen as ChoosePurge chooses among the entries of that disk alone: the choice for room on a disk reads no other
+// disk's entries, so the whole trash is never listed (specs.md §17). held says which entries a reprise of this run
+// sent to the trash: they count, and do not go.
+func forRoom(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, held map[int64]bool) ([]diskRoom, error) {
+	text, _ := c.Effective()["trash.max_size"].(string)
+	maxSize, err := value.ParsePercent(text)
 	if err != nil {
-		return false, fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("trash.max_size: %w", err)
 	}
-	return len(choice.Purge) > 0, nil
+	rows, err := catalog.Disks(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	used, err := catalog.TrashUsed(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	var out []diskRoom
+	for i := range rows {
+		d := &rows[i]
+		if !solver.TrashOver(maxSize, used[d.ID], &solver.TrashDisk{ID: d.ID, Capacity: d.Capacity, HasCapacity: d.HasCapacity}) {
+			continue
+		}
+		weights, err := catalog.TrashWeightsOn(ctx, db, d.ID)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		in, err := purgeInput(ctx, db, c, nowNS, weights)
+		if err != nil {
+			return nil, err
+		}
+		rowOf := make(map[int64]int64, len(weights))
+		for j := range weights {
+			rowOf[weights[j].OpID] = weights[j].RowID
+			in.Entries[j].Held = held[weights[j].OpID]
+		}
+		choice, err := solver.ChoosePurge(in)
+		if err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+		room := diskRoom{id: d.ID, stays: slices.Contains(choice.Full, d.ID)}
+		for _, p := range choice.Purge {
+			if p.Why == solver.PurgeMaxSize {
+				room.rows = append(room.rows, rowOf[p.OpID])
+			}
+		}
+		out = append(out, room)
+	}
+	return out, nil
+}
+
+// FullOncePurged gives the disks whose trash still holds more than trash.max_size of its capacity once everything a
+// purge reaches now is gone, by id: what the alert of a full trash tells of while a purge by slices is not over
+// (specs.md §23).
+func FullOncePurged(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64) (map[string]bool, error) {
+	room, err := forRoom(ctx, db, c, nowNS, nil)
+	if err != nil {
+		return nil, err
+	}
+	full := map[string]bool{}
+	for _, r := range room {
+		if r.stays {
+			full[r.id] = true
+		}
+	}
+	return full, nil
+}
+
+// PurgeUntil purges as Purge does without an age, until the time until, and says whether it stopped there with entries
+// left: the daemon purges by slices, so that no command waits for a large purge, as the day a mass deletion reaches
+// its retention (specs.md §15.13, §17). It never lists the whole trash: what has reached its time is read through the
+// index of the expiries, a page at a time, then what goes for room on each disk whose trash holds too much. Each entry
+// is one operation, journaled before it runs, as in Purge.
+func (s *Session) PurgeUntil(ctx context.Context, until int64, each func(*EntryItem) error) (*Summary, bool, error) {
+	summary := &Summary{Applied: s.apply}
+	settle := func(e *catalog.TrashEntry, why solver.PurgeWhy) error {
+		outcome, err := s.purgeEntry(ctx, e)
+		if err != nil {
+			return err
+		}
+		switch outcome {
+		case OutcomeToPurge:
+			summary.ToDo++
+		case OutcomePurged:
+		default:
+			summary.Stayed++
+		}
+		if outcome == OutcomeToPurge || outcome == OutcomePurged {
+			summary.Bytes += e.Size.Int64
+		}
+		if err := each(&EntryItem{TrashEntry: *e, Outcome: outcome, Why: string(why)}); err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		return nil
+	}
+	afterNS, afterRow := int64(math.MinInt64), int64(0)
+	for {
+		page, err := catalog.TrashExpired(ctx, s.db, s.now, afterNS, afterRow)
+		if err != nil {
+			return nil, false, fmt.Errorf("catalog: %w", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for i := range page {
+			e := &page[i]
+			if s.repriseTrashed[e.OpID] {
+				afterNS, afterRow = e.ExpiresNS, e.RowID
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, false, fmt.Errorf("purge: %w", err)
+			}
+			if s.machine.Now() >= until {
+				summary.DiskLost = s.lost
+				return summary, true, nil
+			}
+			afterNS, afterRow = e.ExpiresNS, e.RowID
+			if err := settle(e, solver.PurgeExpired); err != nil {
+				return nil, false, err
+			}
+		}
+	}
+	room, err := forRoom(ctx, s.db, s.config, s.now, s.repriseTrashed)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, r := range room {
+		for _, row := range r.rows {
+			if err := ctx.Err(); err != nil {
+				return nil, false, fmt.Errorf("purge: %w", err)
+			}
+			if s.machine.Now() >= until {
+				summary.DiskLost = s.lost
+				return summary, true, nil
+			}
+			e, found, err := catalog.TrashEntryByRow(ctx, s.db, row)
+			if err != nil {
+				return nil, false, fmt.Errorf("catalog: %w", err)
+			}
+			if !found {
+				continue
+			}
+			if err := settle(&e, solver.PurgeMaxSize); err != nil {
+				return nil, false, err
+			}
+		}
+		if r.stays {
+			summary.Full = append(summary.Full, r.id)
+		}
+	}
+	slices.Sort(summary.Full)
+	summary.DiskLost = s.lost
+	return summary, false, nil
 }
 
 // purgeChunks ends a purge of the chunks a repair left in the trash: Atoll's own files, removed with their folder

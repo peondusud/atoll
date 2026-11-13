@@ -248,7 +248,7 @@ func TestATrashQueryReadsOnlyItsEntries(t *testing.T) {
 			t.Errorf("%s: no %q in %q", q.name, q.want, plan)
 		}
 	}
-	plan := queryPlan(t, b, trashWeightsSQL)
+	plan := queryPlan(t, b, trashWeightsSQL, "")
 	if len(plan) != 2 || plan[0] != "SCAN t" || plan[1] != "SEARCH o USING INTEGER PRIMARY KEY (rowid=?)" {
 		t.Errorf("TrashWeights: %q", plan)
 	}
@@ -301,6 +301,34 @@ func TestKeyTaken(t *testing.T) {
 		got, err := KeyTaken(b.t.Context(), b.sql(), tc.disk, tc.path)
 		if err != nil || got != tc.want {
 			t.Errorf("%s %q: %v, %v", tc.disk, tc.path, got, err)
+		}
+	}
+}
+
+// The entries at a path or below it are those of that path and of what it holds, by whole components: nothing else
+// may match, as a restore puts back what it is given (specs.md §17.4). They come by path, then by operation.
+func TestTheEntriesBelowAPath(t *testing.T) {
+	b := openForOps(t)
+	for i, path := range []string{"a", "a/b", "a/b/c", "ab", "a b/c", "a.mkv", "a0", "b"} {
+		id := i + 1
+		b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (?, 't1', 'trash', CAST(? AS BLOB), 1, 'done')", id, path)
+		b.exec("INSERT INTO trash(lpath, disk_id, trash_path, op_id, reason, deleted_ns, expires_ns) VALUES (CAST(? AS BLOB), 't1', CAST(? AS BLOB), ?, 'surplus', 1, 2)", path, fmt.Sprint(id), id)
+	}
+	// A second entry of one path, and one whose operation is not done, which is no entry yet.
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (20, 't1', 'trash', CAST('a/b' AS BLOB), 1, 'done')")
+	b.exec("INSERT INTO trash(lpath, disk_id, trash_path, op_id, reason, deleted_ns, expires_ns) VALUES (CAST('a/b' AS BLOB), 't1', CAST('20' AS BLOB), 20, 'surplus', 1, 2)")
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (21, 't1', 'trash', CAST('a/z' AS BLOB), 1, 'planned')")
+	b.exec("INSERT INTO trash(lpath, disk_id, trash_path, op_id, reason, deleted_ns, expires_ns) VALUES (CAST('a/z' AS BLOB), 't1', CAST('21' AS BLOB), 21, 'surplus', 1, 2)")
+	for under, want := range map[string]string{
+		"a": "a:1 a/b:2 a/b:20 a/b/c:3", "a/b": "a/b:2 a/b:20 a/b/c:3", "ab": "ab:4", "a/b/c/d": "", "c": "",
+	} {
+		var got []string
+		err := EachTrashEntryBelow(t.Context(), b.sql(), under, func(e *TrashEntry) error {
+			got = append(got, fmt.Sprintf("%s:%d", e.Path, e.OpID))
+			return nil
+		})
+		if err != nil || strings.Join(got, " ") != want {
+			t.Errorf("below %q: %q, %v; want %q", under, strings.Join(got, " "), err, want)
 		}
 	}
 }
