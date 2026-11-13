@@ -168,12 +168,15 @@ func TestQueriesBelowAFolderReadOnlyWhatIsBelowIt(t *testing.T) {
 		{"DisksBelow", disksBelowSQL, []any{lo, hi, "u1"}},
 		{"folderRows", folderRowsSQL, []any{"u1", lo, hi, false}},
 		{"folderRows in a reprise", folderRowsSQL, []any{"u1", lo, hi, true}},
+		// Asked for each folder to tell a media server of, while a disk is missing (specs.md §21.4).
+		{"FoldersWithCopiesOn", copiesOnBelowSQL(2), []any{"u1", "u2", lo, hi}},
 	} {
 		plan := queryPlan(t, b, q.sql, q.args...)
 		for _, line := range plan {
-			// The disks themselves are a handful of rows, and a constant row reads no table.
+			// The disks themselves are a handful of rows, and a constant row reads no table. A copy looked up by its
+			// disk and its file is one row; the copies of a disk, by the disk alone, are all of them.
 			scans := strings.HasPrefix(line, "SCAN") && !strings.HasPrefix(line, "SCAN disks") && line != "SCAN CONSTANT ROW"
-			if scans || strings.Contains(line, "copies_by_disk") {
+			if scans || strings.Contains(line, "copies_by_disk (disk_id=?)") {
 				t.Errorf("%s: %q in %q", q.name, line, plan)
 			}
 		}

@@ -93,7 +93,7 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 - **Renames by rounds**: a chain of files each renamed to the next's name costs the square of its length, in the plan (`assignTargets`, `internal/solver/propagate.go`) and in the pass (`internal/jobs/work.go`); `addParents` hashes every ancestor of every path, which is the cube of the depth for a chain of nested folders, and the walk has no bound on depth.
 - **The modify step reads every changed file whole, in one pass, with no budget** (`internal/jobs/modify.go`): a `touch` or a `chmod -R` over a disk holds the catalog's lock for as long as its files take to read, against §15.13, "A pass ... reads no file whole".
 - **The watcher gathers every event before it sends any** (`drain`, `internal/watch/watcher.go`); `readCopy` compares a copy with its row only after reading it whole, and each slice starts again from the first file with no hash (`internal/watch/scan.go`).
-- **`MissingBelow` is planned from the missing disk** (`internal/catalog/notify.go`): every copy of it for each folder held, at each pass; `cannotLeave` asks about every replaced copy once for each folder that waits; `guard list` and `/v1/guards` hold every held path several times.
+- **`cannotLeave` asks about every replaced copy once for each folder that waits; `guard list` and `/v1/guards` hold every held path several times.
 
 ### Decisions
 
