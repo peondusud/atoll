@@ -63,6 +63,29 @@ Every item here is a **decision**:
 
 - The local API's commands that write (moving, deleting, answering a guard), which the alpha leaves to the CLI (§25.1).
 
+## The review's decisions, made by the maintainer on 2026-11-13, to do
+
+Each point the review left to decide was put to the maintainer as a question, with its options and what each costs. What he chose is below; the reasons and the costs are in the entries of the sections that follow, which stay until each is done. Each is done as any fix: a test that fails first, the spec, DONE.md.
+
+1. **A read that fails in a scrub** (§16, invariant 4): the disk is confirmed (§10). Confirmed, the fault is the chunk's: the copy is `corrupt`, repaired from a healthy copy or sent to the trash, with its alert. Not confirmed, the disk is lost, as now.
+2. **A corrupt copy whose size or times moved** (§15.4, §16.1): a repair reads it whole. It holds the file's content: `ok`, verified. Otherwise it is a `conflict`, both versions kept, for `conflicts resolve`.
+3. **An answer to the mass-modification guard** (§15.6) holds for `modifies.mass_guard.window` after it is given; past it, the guard asks again.
+4. **A file that cannot be opened for its hash** (§15.10) and says nothing of its disk is `unreadable`, counted in the alert `no-access:<disk>`, and the hashes go on. An I/O error alone stops the disk; a process out of descriptors stops the slice, not the disk.
+5. **The modify step** (§15.13) reads the changed copies after the pass, by slices of 30 s, as the hashes of new files are read; a file is decided only once its changed copy is read.
+6. **A purge** goes by slices of 30 s and reads the entries due through their indexes; `trash purge` by hand stays whole.
+7. **A copy found gone** (invariant 11): the journal is asked first where Atoll moved it, through an index on `ops(disk_id, file_key)`, a migration; the walk of the trash and `tmp/` stays as the fallback.
+8. **The hashes of new files** (§15.10): one transaction for the files read within a second.
+9. **The 200 MB of §26**: both. The link guard holds less of a disk at once, about 77 MiB, with no contract changed; and the plan asks the catalog whether a key is taken on an NTFS candidate, in place of holding every name, which changes the pure solver's input and `plan.json`.
+10. **The sync of each file `MakeLink` links** (§17.1): measured first on ext4, XFS and btrfs, as it was on ntfs3, a device failing right after the folder's sync; kept on NTFS alone only if the measure allows.
+11. **A pending copy** is kept only while `min_free` holds (§12.4, §13.4); otherwise it is placed again, or waits as `no-room`.
+12. **`depending_first`** gives `path` or `path_b64`, as §29.3 asks, in `disk show`, `disk remove`, `disk fail` and `/v1/disks/{id}`.
+13. **An alert that cannot be sent** (§23) is sent again alone, with no pass: every 5 minutes, then less and less often, up to once an hour.
+14. **The guards of §15.6 stay as they are** for a change of metadata alone and for the copies a refused rename sends to the trash: §15.6 is to say that the guards protect content, which neither destroys.
+15. **Four small fixes**: a copy whose part cannot be made for want of room ends `no-room`; a guard rejected removes its deletions alone, and a dry run of a pass lists the overwrites; the owners of `tmp/`, `links/` and `trash/` are looked at as `<workdir>`'s is, with the same alert and nothing stopped; a slice of the scrub works the states out again only when it changed one.
+16. **The soak of 72 hours** started on 2026-11-13 on `c294b35` was stopped the same evening, after 3 passes: several of the above change the loop it measures. It runs again once they are done and verified.
+
+Left as recommended, with no question put: the jobs read whole, the renames by rounds and the bound on a path's depth, the bursts of the watcher, `cannotLeave` and `GonePaths`; `guard list` is to write as it reads when the local API serves large pools.
+
 ## What the review of the code leaves (2026-11-13)
 
 Each is a **decision**: the code does what the spec says, and the review found what that costs.
