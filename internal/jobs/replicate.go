@@ -674,7 +674,7 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 		if err != nil {
 			return nil, c.sourceFailed(ctx, err)
 		}
-		op, err := catalog.BeginMkdir(ctx, c.r.db, c.op.Disk, folder, c.r.now)
+		op, err := catalog.BeginMkdir(ctx, c.r.db, c.op.Disk, folder, ops.LikeOf(like), c.r.now)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errCatalog, err)
 		}

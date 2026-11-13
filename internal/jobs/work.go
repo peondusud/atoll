@@ -448,7 +448,7 @@ func (p *pass) makeParents(ctx context.Context, d *config.Disk, handle *ops.Disk
 		if err != nil {
 			return err
 		}
-		op, err := catalog.BeginMkdir(ctx, p.db, d.ID, folder, p.now)
+		op, err := catalog.BeginMkdir(ctx, p.db, d.ID, folder, ops.LikeOf(like), p.now)
 		if err != nil {
 			return fmt.Errorf("catalog: %w", err)
 		}

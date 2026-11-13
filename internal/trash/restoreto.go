@@ -346,17 +346,15 @@ func (s *Session) collidesOn(ctx context.Context, disk, path string) (bool, erro
 // makeFolderOn makes one missing folder on the disk a copy goes to, as an operation of its own, with the mode and owner
 // of the same folder in the trash it comes from (specs.md §17.4).
 func (s *Session) makeFolderOn(ctx context.Context, to string, dst, src *ops.Disk, e *catalog.TrashEntry, folder string) error {
-	op, err := catalog.BeginMkdir(ctx, s.db, to, folder, s.now)
-	if err != nil {
-		return catalogError{fmt.Errorf("catalog: %w", err)}
-	}
 	trashFolder := strings.TrimSuffix(e.TrashPath, e.Path) + folder
 	like, err := src.TrashFolderInfo(trashFolder)
 	if err != nil {
-		if undo := catalog.Undo(ctx, s.db, op, false, s.now); undo != nil {
-			return catalogError{fmt.Errorf("catalog: %w", undo)}
-		}
 		return sourceError{err}
+	}
+	// The look first: the operation holds what the folder is to take, for its reprise.
+	op, err := catalog.BeginMkdir(ctx, s.db, to, folder, ops.LikeOf(like), s.now)
+	if err != nil {
+		return catalogError{fmt.Errorf("catalog: %w", err)}
 	}
 	st, err := dst.MakeRootFolder(folder, like)
 	switch {

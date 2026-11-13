@@ -629,10 +629,50 @@ func (d *Disk) recoverMkdir(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	if !decision.Finish {
 		return d.Undo(ctx, db, op, decision.Warn, nowNS)
 	}
+	// Made, and stopped before it was given the mode and owner of the folder it stands for: its event holds them, and
+	// it takes them now, while it holds nothing. Finished as it was found, a private folder of someone's came back the
+	// daemon's own, closed to them on this disk (specs.md §17.4).
+	like, err := catalog.MkdirLikeOf(ctx, db, op.ID)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	if like != nil && (int64(st.Mode) != like.Mode || int64(st.Uid) != like.UID || int64(st.Gid) != like.GID) {
+		if st, err = d.adoptAt(path, like); err != nil {
+			return err
+		}
+	}
 	if err := d.syncWay(path); err != nil {
 		return err
 	}
 	return d.FinishMkdir(ctx, db, op, &st)
+}
+
+// LikeOf gives what a folder's operation journals of the folder it stands for, and nil with none.
+func LikeOf(st *fsx.Stat) *catalog.MkdirLike {
+	if st == nil {
+		return nil
+	}
+	return &catalog.MkdirLike{Mode: int64(st.Mode), UID: int64(st.Uid), GID: int64(st.Gid)}
+}
+
+// adoptAt gives a folder below the top the mode and owner its operation journaled, where the driver allows it, and
+// says what it is then.
+func (d *Disk) adoptAt(path []string, like *catalog.MkdirLike) (fsx.Stat, error) {
+	parent, err := d.open(path[:len(path)-1])
+	if err != nil {
+		return fsx.Stat{}, classify(err)
+	}
+	defer parent.close()
+	name := path[len(path)-1]
+	want := fsx.Stat{Kind: fsx.KindDir, Mode: uint32(like.Mode), Uid: uint32(like.UID), Gid: uint32(like.GID)} //nolint:gosec // what a stat gave, journaled
+	if err := adopt(parent, name, &want); err != nil {
+		return fsx.Stat{}, err
+	}
+	st, err := parent.Stat(name)
+	if err != nil {
+		return fsx.Stat{}, classify(err)
+	}
+	return st, nil
 }
 
 // FinishMkdir records a folder made below the root as Atoll's own (specs.md §6.1).

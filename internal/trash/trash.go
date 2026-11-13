@@ -873,19 +873,17 @@ func (s *Session) collides(ctx context.Context, e *catalog.TrashEntry) (bool, er
 // makeFolder makes one missing folder for a restore, as an operation of its own, with the mode and
 // owner of the same folder in the trash. One made by someone else meanwhile is theirs, and fine.
 func (s *Session) makeFolder(ctx context.Context, handle *ops.Disk, e *catalog.TrashEntry, folder string) error {
-	op, err := catalog.BeginMkdir(ctx, s.db, e.Disk, folder, s.now)
-	if err != nil {
-		return catalogError{fmt.Errorf("catalog: %w", err)}
-	}
 	trashFolder := strings.TrimSuffix(e.TrashPath, e.Path) + folder
 	like, err := handle.TrashFolderInfo(trashFolder)
 	if err != nil {
 		// Nothing can be said of the mode it should have, and a private folder must not come back open.
-		// Nothing was made, whatever the error says of the disk.
-		if undo := catalog.Undo(ctx, s.db, op, false, s.now); undo != nil {
-			return catalogError{fmt.Errorf("catalog: %w", undo)}
-		}
+		// Nothing is journaled, and nothing made, whatever the error says of the disk.
 		return err
+	}
+	// The look first: the operation holds what the folder is to take, for its reprise.
+	op, err := catalog.BeginMkdir(ctx, s.db, e.Disk, folder, ops.LikeOf(like), s.now)
+	if err != nil {
+		return catalogError{fmt.Errorf("catalog: %w", err)}
 	}
 	st, err := handle.MakeRootFolder(folder, like)
 	switch {

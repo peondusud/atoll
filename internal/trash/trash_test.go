@@ -3678,3 +3678,68 @@ func TestAtOrBelow(t *testing.T) {
 		}
 	}
 }
+
+// A folder made below the root takes the mode and owner of the one it stands for, in two steps: made, then given
+// them. A disk that fails in between leaves its operation planned, and the reprise finishes it: with that mode and
+// owner, which its event holds. It finished whatever folder it found, the daemon's own: a private folder of
+// someone's came back closed to them on that disk (specs.md §17.2, §17.4).
+func TestAFolderHalfMadeTakesItsOwnerAtTheReprise(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("giving a folder to another account takes root")
+	}
+	b := newBench(t)
+	b.addFiles("p/x")
+	private := filepath.Join(b.dirs["t3"], "media", "p")
+	if err := os.Chmod(private, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(private, 1000, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	b.prune()
+	if err := os.Remove(private); err != nil {
+		t.Fatal(err)
+	}
+	// The disk fails as the folder is given its owner.
+	b.fail[b.dirs["t3"]] = func(call, name string) error {
+		if call == "adopt" && name == "p" {
+			return syscall.EIO
+		}
+		return nil
+	}
+	if outcomes, _ := b.restored("p/x"); len(outcomes) != 1 || outcomes[0] != OutcomeIOError {
+		t.Fatalf("%+v", outcomes)
+	}
+	if got := b.text("SELECT group_concat(kind || ':' || state) FROM ops WHERE kind = 'mkdir'"); got != "mkdir:planned" {
+		t.Fatalf("the folder's operation: %s", got)
+	}
+	info, err := os.Stat(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := info.Sys().(*syscall.Stat_t); st.Uid == 1000 { //nolint:forcetypeassert // Linux only
+		t.Fatal("the folder took its owner before the disk failed")
+	}
+	// The next command that writes resolves it.
+	delete(b.fail, b.dirs["t3"])
+	if _, err := b.db.ExecContext(t.Context(), "UPDATE disks SET state = 'online'"); err != nil {
+		t.Fatal(err)
+	}
+	b.opened().Close()
+	if got := b.text("SELECT group_concat(kind || ':' || state) FROM ops WHERE kind = 'mkdir'"); got != "mkdir:done" {
+		t.Errorf("the folder's operation: %s", got)
+	}
+	if info, err = os.Stat(private); err != nil {
+		t.Fatal(err)
+	}
+	st := info.Sys().(*syscall.Stat_t) //nolint:forcetypeassert // Linux only
+	if info.Mode().Perm() != 0o750 || st.Uid != 1000 || st.Gid != 1001 {
+		t.Errorf("after the reprise the folder is %v of %d:%d, want 0750 of 1000:1001", info.Mode().Perm(), st.Uid, st.Gid)
+	}
+	if got := b.text("SELECT mode FROM entries WHERE CAST(lpath AS TEXT) = 'p' AND disk_id = 't3'"); got != "488" {
+		t.Errorf("its entry says mode %s", got)
+	}
+}

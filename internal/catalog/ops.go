@@ -402,17 +402,52 @@ func CopyCtimes(ctx context.Context, db *sql.DB, fileID int64) (map[string]sql.N
 	return out, nil
 }
 
-// BeginMkdir journals a folder made below the root (specs.md §6.1, §17.4).
-func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, nowNS int64) (*Op, error) {
-	result, err := db.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES (?, 'mkdir', ?, ?, 'planned')", disk, []byte(path), nowNS)
+// MkdirLike is the mode and owner a folder made below the root is to take: those of the folder it stands for
+// (specs.md §17.4).
+type MkdirLike struct {
+	Mode, UID, GID int64
+}
+
+// BeginMkdir journals a folder made below the root (specs.md §6.1, §17.4). With like, its event holds the mode and
+// owner the folder is to take: it is made, then given them, and a reprise that finds it made and not yet given them
+// has nothing else to say whose it is (§17.2).
+func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, like *MkdirLike, nowNS int64) (*Op, error) {
+	op := &Op{Disk: disk, Kind: OpMkdir, Path: path}
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES (?, 'mkdir', ?, ?, 'planned')", disk, []byte(path), nowNS)
+		if err != nil {
+			return fmt.Errorf("journal: %w", err)
+		}
+		if op.ID, err = result.LastInsertId(); err != nil {
+			return fmt.Errorf("journal: %w", err)
+		}
+		if like == nil {
+			return nil
+		}
+		return writeEventData(ctx, tx, nowNS, "info", OpMkdir, op, eventData{Mode: &like.Mode, UID: &like.UID, GID: &like.GID})
+	})
 	if err != nil {
-		return nil, fmt.Errorf("journal: %w", err)
+		return nil, fmt.Errorf("%q: %w", path, err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("journal: %w", err)
+	return op, nil
+}
+
+// MkdirLikeOf gives the mode and owner the event of a folder's operation holds, and nil when it holds none: a folder
+// that stood for none, or one journaled before its event held them.
+func MkdirLikeOf(ctx context.Context, db *sql.DB, opID int64) (*MkdirLike, error) {
+	var mode, uid, gid sql.NullInt64
+	err := db.QueryRowContext(ctx, `
+		SELECT json_extract(data, '$.mode'), json_extract(data, '$.uid'), json_extract(data, '$.gid')
+		FROM events WHERE kind = ? AND json_extract(data, '$.op') = ?`, OpMkdir, opID).Scan(&mode, &uid, &gid)
+	switch {
+	case isNoRows(err):
+		return nil, nil //nolint:nilnil // no event is an answer
+	case err != nil:
+		return nil, fmt.Errorf("event: %w", err)
+	case !mode.Valid || !uid.Valid || !gid.Valid:
+		return nil, nil //nolint:nilnil // likewise
 	}
-	return &Op{ID: id, Disk: disk, Kind: OpMkdir, Path: path}, nil
+	return &MkdirLike{Mode: mode.Int64, UID: uid.Int64, GID: gid.Int64}, nil
 }
 
 // FinishMkdir says that a folder is there, and Atoll's own.
