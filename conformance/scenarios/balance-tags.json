@@ -1,7 +1,7 @@
 {
  "format_version": 1,
  "spec": "specs.md \u00a712.4, \u00a713.3",
- "description": "A rule that now keeps a file's copies on usb disks leaves the copy Atoll made on a sata disk misplaced: atoll balance makes one on the usb disk, then sends the old one to the trash, as rebalance. The user's copy stays.",
+ "description": "A rule that now keeps a file's copies on usb disks leaves the copy Atoll made on a sata disk misplaced: atoll balance makes one on the usb disk, then sends the old one to the trash, as rebalance. The user's copy stays. With --move-originals, a dry run would move the user's copies too: that of c.mkv to the usb disk, while a.mkv has no other usb disk to go to.",
  "disks": [
   {
    "id": "t1",
@@ -253,9 +253,29 @@
    "do": "atoll",
    "args": [
     "balance",
-    "--move-originals"
+    "--move-originals",
+    "--dry-run",
+    "--json"
    ],
-   "exit": 2
+   "stdout_json": {
+    "moves": [
+     {
+      "path": "a.mkv",
+      "from": "t1",
+      "size": 1024,
+      "outcome": "no-target"
+     },
+     {
+      "path": "c.mkv",
+      "from": "t1",
+      "to": "t3",
+      "size": 1024,
+      "outcome": "to-move"
+     }
+    ],
+    "applied": false,
+    "bytes": 1024
+   }
   },
   {
    "do": "atoll",

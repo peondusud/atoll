@@ -537,6 +537,9 @@ type Replicate struct {
 	// not the pool's.
 	Balance   bool
 	Misplaced func(path string, disks []string) error
+	// MoveOriginals makes a user copy that breaks a strict setting count as misplaced too, with Balance: atoll
+	// balance --move-originals (specs.md §13.3).
+	MoveOriginals bool
 }
 
 // PlannedJob is a job of the plan, with what queueing it needs of its file.
@@ -567,7 +570,8 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	if err != nil {
 		return err
 	}
-	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance}
+	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance,
+		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals}
 	var release func(string) bool
 	if rep != nil {
 		release = rep.Release

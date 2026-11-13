@@ -130,6 +130,31 @@ func (c *Config) Policy(path string, size *int64) rules.Policy {
 	return rules.Effective(c.Rules, c.Pool, path, size)
 }
 
+// StrictPlacement says whether the pool or a rule sets what can leave a copy misplaced (specs.md §13.3): tags_mode or
+// spread_mode "strict", or overflow "deny". Without any, no copy ever is, and nothing need plan the pool to say so.
+func (c *Config) StrictPlacement() bool {
+	strict := func(tagsMode, spreadMode, overflow string) bool {
+		return tagsMode == "strict" || spreadMode == "strict" || overflow == "deny"
+	}
+	if strict(c.Pool.TagsMode, c.Pool.SpreadMode, c.Pool.Overflow) {
+		return true
+	}
+	for i := range c.Rules {
+		set := &c.Rules[i].Set
+		if strict(deref(set.TagsMode), deref(set.SpreadMode), deref(set.Overflow)) {
+			return true
+		}
+	}
+	return false
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 // Parse loads a configuration from its text, in the three steps of specs.md §24.3.
 // The error is an *Error. A timezone is only checked for its form: which names exist
 // depends on the machine.

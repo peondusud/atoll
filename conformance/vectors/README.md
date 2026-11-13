@@ -527,6 +527,7 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 | `jobs` | array of objects | `kind` (`refresh` or `replicate`), `path` or `path_b64`, `src`, `dst` |
 | `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel`, `misplaced` (disks by position), `overflow`. What is left out is empty or false |
 | `balance` | boolean | `true` for the plan of `atoll balance` (`specs.md` §13.3): an Atoll copy that breaks a strict setting of its file counts for nothing, and its result lists its disk in `misplaced` |
+| `move_originals` | boolean | with `balance`, the plan of `atoll balance --move-originals`: a user copy breaks a setting as an Atoll copy does. Without `balance`, nothing |
 | `error` | boolean | `true` when the input is refused |
 
 ### `catalog.json` — what the catalog schema accepts and refuses (§9, §29.3)

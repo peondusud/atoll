@@ -30,12 +30,14 @@ type balanceEnd struct {
 }
 
 // runBalance runs atoll balance (specs.md §13.3): it moves the Atoll copies that break a strict setting of their
-// file, with --yes, and says what it would move without it.
+// file, with --yes, and says what it would move without it. With --move-originals, the user copies too.
 func runBalance(configPath string, args []string, stdout, stderr io.Writer) int {
 	var flags writeFlags
+	originals := false
 	for _, a := range args {
 		if a == "--move-originals" {
-			return usage(stderr, T("balance: --move-originals comes later: for now only Atoll's copies move"))
+			originals = true
+			continue
 		}
 		known, err := flags.take(a)
 		if err != nil {
@@ -64,7 +66,7 @@ func runBalance(configPath string, args []string, stdout, stderr io.Writer) int 
 	defer release()
 	buffered := bufio.NewWriter(stdout)
 	list := newJSONList(buffered, "moves")
-	summary, err := balance(ctx, c, m, flags.yes, func(item *jobs.BalanceItem) error {
+	summary, err := balance(ctx, c, m, flags.yes, originals, func(item *jobs.BalanceItem) error {
 		if !flags.asJSON {
 			to := item.To
 			if to == "" {
@@ -103,13 +105,13 @@ func runBalance(configPath string, args []string, stdout, stderr io.Writer) int 
 	}
 }
 
-func balance(ctx context.Context, c *config.Config, m disks.Machine, apply bool, each func(*jobs.BalanceItem) error) (summary *jobs.BalanceSummary, err error) {
+func balance(ctx context.Context, c *config.Config, m disks.Machine, apply, originals bool, each func(*jobs.BalanceItem) error) (summary *jobs.BalanceSummary, err error) {
 	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	if summary, err = jobs.Balance(ctx, db, c, m, apply, 0, each); err != nil {
+	if summary, err = jobs.Balance(ctx, db, c, m, apply, 0, originals, each); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	return summary, nil

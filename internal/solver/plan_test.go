@@ -23,7 +23,9 @@ type planVector struct {
 	Results []resultVector `json:"results"`
 	Error   bool           `json:"error"`
 	Balance bool           `json:"balance"`
-	Note    string         `json:"note"`
+	// MoveOriginals is the plan of atoll balance --move-originals, with Balance.
+	MoveOriginals bool   `json:"move_originals"`
+	Note          string `json:"note"`
 }
 
 type diskVector struct {
@@ -106,7 +108,7 @@ func or[T any](v *T, fallback T) T {
 // input turns a vector into the input of MakePlan, with the defaults of
 // conformance/vectors/README.md.
 func (v *planVector) input() (Input, error) {
-	in := Input{Balance: v.Balance}
+	in := Input{Balance: v.Balance, MoveOriginals: v.MoveOriginals}
 	var err error
 	minFree := v.MinFree
 	if minFree == nil {

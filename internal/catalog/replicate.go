@@ -26,16 +26,20 @@ type ReplicateJob struct {
 	NotBefore sql.NullInt64
 	Part      string // the name in <workdir>/tmp/ it copies into, empty before its first operation
 	Hash      []byte // the whole-file hash its verification gave, nil until then
+	// Replaces is the disk whose user copy this copy stands in for, as atoll balance --move-originals makes it: the
+	// copy becomes a user copy, and that one an Atoll copy, when it is recorded (specs.md §13.3).
+	Replaces string
 }
 
 // jobPayload is what a replicate job holds beyond its columns (specs.md §9).
 type jobPayload struct {
-	Part   string `json:"part,omitempty"`
-	Blake3 string `json:"blake3,omitempty"`
+	Part     string `json:"part,omitempty"`
+	Blake3   string `json:"blake3,omitempty"`
+	Replaces string `json:"replaces,omitempty"`
 }
 
 func (j *ReplicateJob) payload() (string, error) {
-	data := jobPayload{Part: j.Part}
+	data := jobPayload{Part: j.Part, Replaces: j.Replaces}
 	if j.Hash != nil {
 		data.Blake3 = hex.EncodeToString(j.Hash)
 	}
@@ -54,7 +58,7 @@ func (j *ReplicateJob) readPayload(text sql.NullString) error {
 	if err := json.Unmarshal([]byte(text.String), &data); err != nil {
 		return fmt.Errorf("job %d: payload: %w", j.ID, err)
 	}
-	j.Part = data.Part
+	j.Part, j.Replaces = data.Part, data.Replaces
 	if data.Blake3 != "" {
 		hash, err := hex.DecodeString(data.Blake3)
 		if err != nil || len(hash) != 32 {
@@ -70,6 +74,31 @@ type Queue struct {
 	FileID   int64
 	Src, Dst string
 	Priority int64
+	// Replaces is the disk whose user copy the copy stands in for (ReplicateJob.Replaces).
+	Replaces string
+}
+
+// HandOver gives a user copy's part to another copy of its file, ok or surplus: that one becomes a user copy, if it is
+// not one already, and this one an Atoll copy, in one transaction, so that the file never has fewer user copies
+// (specs.md §6.1, §13.3). A copy no longer there, or no longer in step, takes nothing, and the user copy keeps its part.
+func HandOver(ctx context.Context, db *sql.DB, fileID int64, from, to string) error {
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "UPDATE copies SET created_by = 'user' WHERE file_id = ? AND disk_id = ? AND state IN ('ok', 'surplus')", fileID, to)
+		if err != nil {
+			return fmt.Errorf("heir: %w", err)
+		}
+		if n, err := result.RowsAffected(); err != nil || n == 0 {
+			return err //nolint:wrapcheck // nil, or what the driver says of a count
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE copies SET created_by = 'atoll' WHERE file_id = ? AND disk_id = ? AND created_by = 'user'", fileID, from); err != nil {
+			return fmt.Errorf("user copy: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("file %d: %w", fileID, err)
+	}
+	return nil
 }
 
 // QueueReplicate queues copies, each a job and its pending copy on the target, in one transaction. The
@@ -87,9 +116,17 @@ func QueueReplicate(ctx context.Context, db *sql.DB, nowNS int64, list []Queue) 
 				q.FileID, q.Dst, nowNS); err != nil {
 				return fmt.Errorf("file %d on %q: pending copy: %w", q.FileID, q.Dst, err)
 			}
+			payload := sql.NullString{}
+			if q.Replaces != "" {
+				text, err := (&ReplicateJob{Replaces: q.Replaces}).payload()
+				if err != nil {
+					return err
+				}
+				payload = sql.NullString{String: text, Valid: true}
+			}
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO jobs(kind, file_id, src_disk, dst_disk, priority, state) VALUES ('replicate', ?, ?, ?, ?, 'queued')`,
-				q.FileID, q.Src, q.Dst, q.Priority); err != nil {
+				INSERT INTO jobs(kind, file_id, src_disk, dst_disk, priority, state, payload) VALUES ('replicate', ?, ?, ?, ?, 'queued', ?)`,
+				q.FileID, q.Src, q.Dst, q.Priority, payload); err != nil {
 				return fmt.Errorf("file %d on %q: job: %w", q.FileID, q.Dst, err)
 			}
 		}
@@ -431,12 +468,22 @@ func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, ma
 		if hash != nil && (known == nil || string(known) == string(hash)) {
 			verified = sql.NullInt64{Int64: nowNS, Valid: true}
 		}
+		// A copy made in place of a user copy takes its part: it becomes the user copy, and the one it replaces an
+		// Atoll copy, in this transaction, so that the file never has fewer user copies (specs.md §6.1, §13.3).
+		createdBy := "atoll"
+		if job != nil && job.Replaces != "" {
+			createdBy = "user"
+			if _, err := tx.ExecContext(ctx, "UPDATE copies SET created_by = 'atoll' WHERE file_id = ? AND disk_id = ? AND created_by = 'user'",
+				fileID, job.Replaces); err != nil {
+				return fmt.Errorf("replaced copy: %w", err)
+			}
+		}
 		result, err := tx.ExecContext(ctx, `
-			UPDATE copies SET state = 'ok', created_by = 'atoll', file_key = ?3, nlink = ?4, size = ?5, mtime_ns = ?6, ctime_ns = ?7,
+			UPDATE copies SET state = 'ok', created_by = ?14, file_key = ?3, nlink = ?4, size = ?5, mtime_ns = ?6, ctime_ns = ?7,
 				btime_ns = ?8, first_seen_ns = ?9, verified_ns = ?10, gone_ns = NULL, gone_kind = NULL, old_lpath = NULL, old_lpath_key = NULL,
 				mode = ?11, uid = ?12, gid = ?13
 			WHERE file_id = ?1 AND disk_id = ?2`,
-			fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, verified, made.Mode, made.UID, made.GID)
+			fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, verified, made.Mode, made.UID, made.GID, createdBy)
 		if err != nil {
 			return fmt.Errorf("copy: %w", err)
 		}
@@ -445,8 +492,8 @@ func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, ma
 		} else if n == 0 {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO copies(file_id, disk_id, file_key, nlink, size, mtime_ns, ctime_ns, btime_ns, created_by, first_seen_ns, verified_ns, state, mode, uid, gid)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'atoll', ?, ?, 'ok', ?, ?, ?)`,
-				fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, verified, made.Mode, made.UID, made.GID); err != nil {
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?)`,
+				fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, createdBy, nowNS, verified, made.Mode, made.UID, made.GID); err != nil {
 				return fmt.Errorf("copy: %w", err)
 			}
 		}

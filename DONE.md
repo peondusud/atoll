@@ -2,6 +2,24 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `balance --move-originals`, and the bytes correctly placed in `atoll status` (specs.md §13.3, §15.11)
+
+Commit "Move user copies with balance --move-originals, and count the bytes correctly placed", on `beta`.
+
+- `atoll balance --move-originals` moves the user copies that break a strict setting too. A file's misplaced user copies come first; each copy made in place of one carries that copy's disk in its job (`replaces`). The transaction that records the new copy makes it the user copy, and the old one an Atoll copy, which then goes to the trash as `rebalance` as Atoll's do. When the file's well-placed copies already reach its level, no copy is made: the user copy hands its part to the first of them, in one transaction, then goes the same way. The daemon never moves a user copy.
+- `atoll status` gives `bytes_placed`, the bytes of the files with no misplaced copy, from the same plan as `balance.trigger`, and its share in the text output. With no strict setting in the pool or a rule, no plan is made.
+- Verified:
+  - 5 new plan vectors (`move_originals`);
+  - 5 new scenarios: the moves themselves, a user copy on a disk after the Atoll copy's, a hand-over with no copy, a crash once the new copy is in place, before it is recorded, and the placed bytes before and after a balance, within `--path` too;
+  - the 13 status scenarios, which now give `bytes_placed`, and `balance-tags`, whose dry run with `--move-originals` shows a user copy with no other usb disk to go to.
+  - unit tests of the hand-over, of the measure `balance.trigger` takes, which leaves user copies out, and of the daemon's balancing, which never moves one (`BalanceAtoll`);
+  - 19 mutants of the new code, all caught.
+- **Decided without the maintainer, to confirm:**
+  - **The user copy's part moves with it.** The copy made in its place becomes the user copy, so that invariant 2 (never remove the last user copy) holds through the move. Otherwise a file whose only user copy moved would be left with Atoll copies alone.
+  - **The hand-over with no copy**, when the file's well-placed copies already reach its level. Without it, such a user copy would stay misplaced forever, as `no-target`.
+  - **The contracts:** the `replaces` field of a replicate job's payload; `bytes_placed`, required, in `api/schemas/status.schema.json`.
+  - **`atoll balance` without the flag says nothing yet** of the user copies that `--move-originals` would move (TODO.md).
+
 ## The link guard (specs.md §17)
 
 Commit "Keep what a deletion through mergerfs removes, with the link guard", on `beta`.

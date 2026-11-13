@@ -105,6 +105,9 @@ type Input struct {
 	// file counts for nothing, so that one is made where the setting wants it. It stays a source, and its disk still
 	// holds a copy; its result names it.
 	Balance bool
+	// MoveOriginals makes a user copy count as one too, with Balance: the plan of atoll balance --move-originals, the
+	// only way a user copy moves (specs.md §6.1, §13.3).
+	MoveOriginals bool
 }
 
 // JobKind is a kind of job (specs.md §9).
@@ -292,10 +295,13 @@ type planner struct {
 	byPath  map[string]*planFile
 	entries []Entry
 	balance bool
+	// originals says that a user copy can be misplaced too (Input.MoveOriginals).
+	originals bool
 }
 
 func newPlanner(in Input) (*planner, error) {
-	p := &planner{byID: map[string]*planDisk{}, byPath: map[string]*planFile{}, entries: in.Entries, balance: in.Balance}
+	p := &planner{byID: map[string]*planDisk{}, byPath: map[string]*planFile{}, entries: in.Entries, balance: in.Balance,
+		originals: in.Balance && in.MoveOriginals}
 	if err := p.addDisks(in); err != nil {
 		return nil, err
 	}
@@ -763,8 +769,8 @@ func (p *planner) domainsOf(f *planFile) []string {
 // misplaced gives the disks of a file's Atoll copies that break a strict setting of its placement, for atoll balance
 // (specs.md §13.3). Where only listed disks are candidates, a copy on a disk the lists do not allow. Then, with
 // spread_mode strict, while the copies of a file at its level cover fewer domains than it must, copies that double up
-// a domain, the youngest first, as many as domains are missing. A user copy is never one, nor a copy that does not
-// count or is pending.
+// a domain, the youngest first, as many as domains are missing. A user copy is never one, but with --move-originals,
+// nor is a copy that does not count or is pending.
 func (p *planner) misplaced(f *planFile) []*planDisk {
 	var out []*planDisk
 	type held struct {
@@ -778,7 +784,7 @@ func (p *planner) misplaced(f *planFile) []*planDisk {
 		if !counts(c, d) || c.State == CopyPending {
 			continue
 		}
-		if c.CreatedBy == CreatedByAtoll && onlyListed(f.Placement) && !listed(d, f.Placement) {
+		if p.movable(c) && onlyListed(f.Placement) && !listed(d, f.Placement) {
 			out = append(out, d)
 			continue
 		}
@@ -799,14 +805,15 @@ func (p *planner) misplaced(f *planFile) []*planDisk {
 	if short <= 0 {
 		return out
 	}
-	// In each domain, the copy the plan would keep first stays; the Atoll copies after it are what can go.
+	// In each domain, the copy the plan would keep first stays; the Atoll copies after it are what can go, and with
+	// --move-originals the user copies too.
 	slices.SortFunc(kept, func(a, b held) int { return compareKeep(countedCopy{a.c, a.d}, countedCopy{b.c, b.d}, f.Placement) })
 	var first []string
 	var extra []held
 	for _, h := range kept {
 		if !slices.Contains(first, h.d.domain) {
 			first = append(first, h.d.domain)
-		} else if h.c.CreatedBy == CreatedByAtoll {
+		} else if p.movable(h.c) {
 			extra = append(extra, h)
 		}
 	}
@@ -817,6 +824,11 @@ func (p *planner) misplaced(f *planFile) []*planDisk {
 		out = append(out, h.d)
 	}
 	return out
+}
+
+// movable says whether atoll balance may move a copy: an Atoll copy, or with --move-originals any.
+func (p *planner) movable(c *Copy) bool {
+	return c.CreatedBy == CreatedByAtoll || p.originals
 }
 
 // domainsLeft is how many failure domains a file with strict domains has yet to cover.

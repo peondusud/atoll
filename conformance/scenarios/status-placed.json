@@ -1,0 +1,312 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.3, \u00a715.11",
+  "description": "A rule that now keeps a file's copies on usb disks leaves the copy Atoll made of a.mkv misplaced: its bytes are not counted as correctly placed, also within --path, until atoll balance moves it. The user copy of c.mkv, on a sata disk, is never misplaced.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 9000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/c.mkv",
+          "size": 2048,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 9000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\ntags = [\"usb\"]\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a.mkv",
+        "--now"
+      ]
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\ntags = [\"sata\"]\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\ntags = [\"usb\"]\n[[rule]]\nlabel = \"usb\"\npath = \"**\"\ntags = [\"usb\"]\ntags_mode = \"strict\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "files": [],
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 9000000,
+            "free_bytes": 8996928,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 3072
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 9000000,
+            "free_bytes": 9000000,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1024
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t3",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 1000000,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 0,
+            "bytes": 0
+          }
+        ],
+        "files_total": 2,
+        "files_at_level": 1,
+        "bytes_total": 3072,
+        "bytes_at_level": 1024,
+        "bytes_placed": 2048,
+        "by_state": {
+          "conflict": 0,
+          "corrupt": 0,
+          "degraded": 0,
+          "name-collision": 0,
+          "name-incompatible": 0,
+          "ok": 1,
+          "pending": 1,
+          "unavailable": 0,
+          "unprotected": 0
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "a.mkv",
+        "--json"
+      ],
+      "stdout_json": {
+        "files": [
+          {
+            "path": "a.mkv",
+            "state": "ok",
+            "size": 1024,
+            "mtime": "2020-09-13T12:26:40.000000000Z",
+            "blake3": "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+            "replicas": 1,
+            "mode": "deferred",
+            "rule": null,
+            "original": "t1",
+            "first_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": [
+              {
+                "disk": "t1",
+                "state": "ok",
+                "size": 1024,
+                "mtime": "2020-09-13T12:26:40.000000000Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": "2026-01-01T00:00:00.000000000Z"
+              },
+              {
+                "disk": "t2",
+                "state": "ok",
+                "size": 1024,
+                "mtime": "2020-09-13T12:26:40.000000000Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "atoll",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": "2026-01-01T00:00:00.000000000Z"
+              }
+            ]
+          }
+        ],
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 9000000,
+            "free_bytes": 8996928,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 3072
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 9000000,
+            "free_bytes": 9000000,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1024
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t3",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 1000000,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 0,
+            "bytes": 0
+          }
+        ],
+        "files_total": 1,
+        "files_at_level": 1,
+        "bytes_total": 1024,
+        "bytes_at_level": 1024,
+        "bytes_placed": 0,
+        "by_state": {
+          "conflict": 0,
+          "corrupt": 0,
+          "degraded": 0,
+          "name-collision": 0,
+          "name-incompatible": 0,
+          "ok": 1,
+          "pending": 0,
+          "unavailable": 0,
+          "unprotected": 0
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "balance",
+        "--yes"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "stdout_json": {
+        "files": [],
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 9000000,
+            "free_bytes": 8996928,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 2,
+            "bytes": 3072
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t2",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 9000000,
+            "free_bytes": 8998976,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 0,
+            "bytes": 0
+          },
+          {
+            "id": "t3",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t3",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 1000000,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 1,
+            "bytes": 1024
+          }
+        ],
+        "files_total": 2,
+        "files_at_level": 1,
+        "bytes_total": 3072,
+        "bytes_at_level": 1024,
+        "bytes_placed": 3072,
+        "by_state": {
+          "conflict": 0,
+          "corrupt": 0,
+          "degraded": 0,
+          "name-collision": 0,
+          "name-incompatible": 0,
+          "ok": 1,
+          "pending": 1,
+          "unavailable": 0,
+          "unprotected": 0
+        }
+      }
+    }
+  ]
+}

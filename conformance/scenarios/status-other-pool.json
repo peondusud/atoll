@@ -46,6 +46,7 @@
         "files_at_level": 0,
         "bytes_total": 0,
         "bytes_at_level": 0,
+        "bytes_placed": 0,
         "by_state": {
           "ok": 0,
           "pending": 0,

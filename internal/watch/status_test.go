@@ -11,7 +11,7 @@ import (
 
 func readAll(t *testing.T, b *bench) *Status {
 	t.Helper()
-	s, err := ReadStatus(t.Context(), b.db, "", nil)
+	s, err := ReadStatus(t.Context(), b.db, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestStatusGivesFilesAndStops(t *testing.T) {
 	b.scan(Options{})
 
 	var seen []string
-	s, err := ReadStatus(t.Context(), b.db, "Films", func(f *catalog.FileRow) error {
+	s, err := ReadStatus(t.Context(), b.db, "Films", nil, func(f *catalog.FileRow) error {
 		seen = append(seen, f.Path)
 		if f.Path == "Films/a" && (len(f.Copies) != 2 || f.Copies[0].Disk != "z" || f.Copies[1].Disk != "a") {
 			t.Errorf("copies: %+v", f.Copies)
@@ -125,13 +125,13 @@ func TestStatusGivesFilesAndStops(t *testing.T) {
 
 	stop := errors.New("stop")
 	calls := 0
-	if _, err := ReadStatus(t.Context(), b.db, "Films", func(*catalog.FileRow) error { calls++; return stop }); !errors.Is(err, stop) || calls != 1 {
+	if _, err := ReadStatus(t.Context(), b.db, "Films", nil, func(*catalog.FileRow) error { calls++; return stop }); !errors.Is(err, stop) || calls != 1 {
 		t.Errorf("%v after %d calls", err, calls)
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := ReadStatus(ctx, b.db, "", nil); !errors.Is(err, context.Canceled) {
+	if _, err := ReadStatus(ctx, b.db, "", nil, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("canceled: %v", err)
 	}
 }
