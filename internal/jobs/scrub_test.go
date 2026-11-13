@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -112,6 +113,33 @@ func TestScrubWritesNothingToAReadonlyDisk(t *testing.T) {
 				t.Errorf("%q, --yes %v: a work folder was made on the readonly disk", config, yes)
 			}
 		}
+	}
+}
+
+// A scrub that was not told --yes writes to no disk, and so resolves nothing of what a crash left (specs.md §17.2):
+// an operation stays planned, for a run that may write. It did resolve them, as its session was opened to write so
+// that its disks were confirmed.
+func TestAScrubWithoutYesResolvesNothing(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "a.mkv", "a film")
+	b.write("t2", "a.mkv", "a film")
+	b.scan(true)
+	// A move to the trash journaled, and stopped before it was made.
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, path2, file_key, started_ns, state) VALUES (900, 't2', 'trash', CAST('a.mkv' AS BLOB), CAST('2026-01-01/900/a.mkv' AS BLOB), ?, 1, 'planned')",
+		strconv.FormatUint(b.inode("t2", "a.mkv"), 10))
+	b.exec("INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, reason, deleted_ns, expires_ns) VALUES (CAST('a.mkv' AS BLOB), 't2', CAST('2026-01-01/900/a.mkv' AS BLOB), 900, 6, 'surplus', 1, 2)")
+	state := func() string { return b.text("SELECT state FROM ops WHERE id = 900") }
+	b.scrub(ScrubOptions{Apply: true})
+	if got := state(); got != "planned" {
+		t.Errorf("after a scrub without --yes the operation is %s", got)
+	}
+	if b.exists("t2", "Atoll") {
+		t.Error("a scrub without --yes made a work folder")
+	}
+	// With --yes it may write, and the reprise comes first.
+	b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+	if got := state(); got == "planned" {
+		t.Error("after a scrub with --yes the operation is still planned")
 	}
 }
 

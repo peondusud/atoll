@@ -87,7 +87,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 ### Data and conformance
 
 - **A repair that fails otherwise than for want of room leaves the corrupt copy in `media/`** (`internal/jobs/scrub.go`), where §16 sends it to the trash; a corrupt copy is never due again, and mergerfs serves it when its branch comes first.
-- **`atoll scrub` without `--yes` runs the reprise and cleans `tmp/`** (`cmd/atoll/scrub.go`), as its session is opened to write, against §17.2.
 - **`balance` sends to the trash a misplaced copy marked `surplus` with nothing made to stand in for it** (`internal/jobs/balance.go`, `finish`, `replaced`, `retire`): a job that ends `no-room` leaves a pending copy, which the plan counts. `retire` asks neither that the copies that stay are verified nor that the file is not in `conflict`.
 - **A stale copy can lose its `overwritten` job**, and then nothing ever sends it to the trash or makes it again: a rename with a moved copy, a guard rejected and a deletion each remove every queued trash job of the file (`internal/catalog/propagate.go`), not only those of a deletion. The old version stays in `media/`, and mergerfs serves it when its branch comes first.
 - **An error on the source loses the target disk** (`internal/jobs/replicate.go`, `place`): when the source's folder cannot be read at the end of a copy, the healthy target is set `missing`, and the failing source stays in service.

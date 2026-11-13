@@ -108,7 +108,14 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 			return nil, fmt.Errorf("integrity.scrub_budget: %w", err)
 		}
 	}
-	session, err := trash.Open(ctx, db, c, m, opts.Apply)
+	// Without Quarantine it writes to no disk, and so resolves nothing of what a crash left (specs.md §17.2): it only
+	// has its disks confirmed, to read through them.
+	var session *trash.Session
+	if opts.Apply && !opts.Quarantine {
+		session, err = trash.OpenToRead(ctx, db, c, m)
+	} else {
+		session, err = trash.Open(ctx, db, c, m, opts.Apply)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

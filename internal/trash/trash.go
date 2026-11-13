@@ -60,10 +60,13 @@ type slot struct {
 // writes it, and resolves what a crash left (specs.md §10, §17.2). Without apply it writes nothing
 // to a disk, and looks at them through what a mount check found.
 type Session struct {
-	db        *sql.DB
-	config    *config.Config
-	machine   disks.Machine
-	apply     bool
+	db      *sql.DB
+	config  *config.Config
+	machine disks.Machine
+	apply   bool
+	// writes says that the session may write to the disks: false for one that only confirms them to read through
+	// them, which then resolves nothing a crash left and cleans no tmp/ (specs.md §17.2).
+	writes    bool
 	now       int64
 	retention time.Duration
 	slots     map[string]*slot
@@ -83,8 +86,20 @@ type Session struct {
 
 // Open checks every disk and, when it is going to write, resolves what a crash left.
 func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool) (*Session, error) {
+	return openSession(ctx, db, c, m, apply, apply)
+}
+
+// OpenToRead opens a session that confirms each disk it reads through, as one that writes does, and writes to none: it
+// resolves nothing of what a crash left, and cleans no tmp/ (specs.md §17.2). A scrub that was not told --yes is one:
+// it reads copies through confirmed handles, and records what it finds.
+func OpenToRead(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine) (*Session, error) {
+	return openSession(ctx, db, c, m, true, false)
+}
+
+// openSession is Open, with whether the session may write to the disks: only one that may runs the reprise.
+func openSession(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply, writes bool) (*Session, error) {
 	s := &Session{
-		db: db, config: c, machine: m, apply: apply, now: m.Now(), slots: map[string]*slot{},
+		db: db, config: c, machine: m, apply: apply, writes: writes, now: m.Now(), slots: map[string]*slot{},
 		reprised: map[string]int64{}, repriseTrashed: map[int64]bool{}, emptied: map[string]map[string]bool{}, full: map[string]bool{},
 	}
 	text, _ := c.Effective()["trash.retention"].(string)
@@ -108,7 +123,7 @@ func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, ap
 			sl.config = &c.Disks[i]
 		}
 	}
-	if apply {
+	if writes {
 		if err := s.recoverAll(ctx); err != nil {
 			s.Close()
 			return nil, err
@@ -283,7 +298,7 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 				return nil, fmt.Errorf("catalog: %w", err)
 			}
 		}
-		if s.writable(id) {
+		if s.writes && s.writable(id) {
 			if err := s.cleanTmp(ctx, id, handle); err != nil {
 				handle.Close()
 				return nil, err
