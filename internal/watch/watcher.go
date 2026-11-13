@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -44,9 +45,20 @@ type Watcher struct {
 
 	mu      sync.Mutex
 	disks   map[string]*diskWatch
-	origins map[int]string
+	origins map[int]originSeen
 	closed  bool
 }
+
+// originSeen is what a process was found to be, and when.
+type originSeen struct {
+	origin string
+	atNS   int64
+}
+
+// originKept is how long what a process is stays known by its number: the events of one burst, not the life of the
+// daemon. The kernel gives the number of a process that ended to another, and an answer kept for good counted a
+// user's changes as Atoll's own once a command of Atoll that wrote to a disk had ended.
+const originKept = 10 * time.Second
 
 type diskWatch struct {
 	stop    chan struct{}
@@ -69,7 +81,7 @@ func NewWatcher(opt WatcherOptions) *Watcher {
 	if err != nil {
 		exe = ""
 	}
-	return &Watcher{opt: opt, events: make(chan Event, 4096), self: os.Getpid(), exe: exe, disks: map[string]*diskWatch{}, origins: map[int]string{}}
+	return &Watcher{opt: opt, events: make(chan Event, 4096), self: os.Getpid(), exe: exe, disks: map[string]*diskWatch{}, origins: map[int]originSeen{}}
 }
 
 // Events gives what changed. A reader that stops reading lets the kernel's queue fill, and an overflow is a
@@ -190,7 +202,7 @@ func (w *Watcher) now() int64 {
 }
 
 // origin tells who made an event, from the process behind it (specs.md §15.1). What a process is changes only
-// when its number is used again, so the answer is kept a while.
+// when its number is used again, so the answer is kept for originKept.
 func (w *Watcher) origin(pid int) string {
 	if pid <= 0 {
 		return OriginUnknown
@@ -198,11 +210,12 @@ func (w *Watcher) origin(pid int) string {
 	if pid == w.self {
 		return OriginAtoll
 	}
+	now := w.now()
 	w.mu.Lock()
 	known, ok := w.origins[pid]
 	w.mu.Unlock()
-	if ok {
-		return known
+	if ok && now-known.atNS < originKept.Nanoseconds() && now >= known.atNS {
+		return known.origin
 	}
 	o := OriginUser
 	switch {
@@ -213,9 +226,9 @@ func (w *Watcher) origin(pid int) string {
 	}
 	w.mu.Lock()
 	if len(w.origins) > 1024 {
-		w.origins = map[int]string{}
+		w.origins = map[int]originSeen{}
 	}
-	w.origins[pid] = o
+	w.origins[pid] = originSeen{origin: o, atNS: now}
 	w.mu.Unlock()
 	return o
 }
