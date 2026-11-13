@@ -66,17 +66,38 @@ func (w Window) Contains(t time.Time) bool {
 	}
 }
 
+// startOn gives the window's start on a day, in a location: that wall-clock time, or, on a night when the clock
+// jumps over it, the instant it jumps to, which is the first after it. For a wall-clock time that does not exist,
+// time.Date gives one on either side of the jump, as far from it as the time asked for: the hour before it west of
+// UTC, where the daemon then slept through that night's window, and after it east of UTC. Whichever it gave is in a
+// zone that ends, or began, at the jump, the nearer of its two bounds.
+func (w Window) startOn(y int, m time.Month, d int, loc *time.Location) time.Time {
+	start := time.Date(y, m, d, w.start/60, w.start%60, 0, 0, loc)
+	if h, mi, _ := start.Clock(); h*60+mi == w.start {
+		return start
+	}
+	began, ends := start.ZoneBounds()
+	switch {
+	case ends.IsZero():
+		return began
+	case began.IsZero(), ends.Sub(start) < start.Sub(began):
+		return ends
+	default:
+		return began
+	}
+}
+
 // Next gives the first instant inside the window at or after t, in t's location: t itself when it is inside,
 // otherwise the window's start that day, or the next day if that start has gone by. A start that a
-// spring-forward night skips is the first instant after it, as time.Date normalizes it. The zero window has
-// none, and gives t.
+// spring-forward night skips is the instant the clock jumps to, when the window still holds it. The zero window
+// has none, and gives t.
 func (w Window) Next(t time.Time) time.Time {
 	if w.start == w.end || w.Contains(t) {
 		return t
 	}
 	y, m, d := t.Date()
 	for day := 0; day < 3; day++ {
-		start := time.Date(y, m, d+day, w.start/60, w.start%60, 0, 0, t.Location())
+		start := w.startOn(y, m, d+day, t.Location())
 		if !start.Before(t) && w.Contains(start) {
 			return start
 		}
@@ -87,7 +108,7 @@ func (w Window) Next(t time.Time) time.Time {
 // Opened gives when the stretch of the window that holds t began, in t's location: its start that day, or the day
 // before for a window that wraps past midnight and t after midnight. Two instants of one stretch give the same
 // answer, which tells a budget spent in it from the next night's. A start that a spring-forward night skips is
-// normalized as Next does. Outside the window it gives the zero time.
+// the instant the clock jumps to, as for Next. Outside the window it gives the zero time.
 func (w Window) Opened(t time.Time) time.Time {
 	if !w.Contains(t) {
 		return time.Time{}
@@ -97,7 +118,7 @@ func (w Window) Opened(t time.Time) time.Time {
 	if h*60+m < w.start {
 		d--
 	}
-	return time.Date(y, mo, d, w.start/60, w.start%60, 0, 0, t.Location())
+	return w.startOn(y, mo, d, t.Location())
 }
 
 // String returns the window as hh:mm-hh:mm.

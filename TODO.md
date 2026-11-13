@@ -89,7 +89,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 - **A path counts as free while another file's copy sits there under its old path** (`internal/solver/plan.go`, `pathFree`): the copy sent there ends `conflict`, and is planned there again at each pass.
 - **A `replaced` copy is judged by the change time of the file that replaced it**, and a guard's answer never expires (`internal/watch/verdict.go`, `internal/catalog/modguard.go`): files staged before a confirm pass under it.
 - **A run reads the clock once**: `not_before_ns` after `changed`, `verified_ns` and the window of a scheduled copy are judged at the start of the pass or the command (`internal/jobs/replicate.go`, `passcopies.go`, `balance.go`).
-- **`Window.Next` on a night the clock springs forward**, west of UTC (`internal/value/window.go`): the start skipped is taken an hour early, the window is not entered, and the daemon sleeps through it. Europe/Paris with the sample window is not concerned.
 - **`atoll capacity` does not take the pending copies off the free space** (`internal/watch/capacity.go`), against §13.3.
 - **`reached` counts a pending copy the plan just canceled** (`internal/solver/plan.go`), so a file is not `degraded` until the next plan.
 - **A command does not find a daemon whose binary was replaced on disk** (`cmd/atoll/reload.go`), says that none runs and exits 0, and the daemon keeps the old configuration; and a `SIGHUP` that comes before the daemon has set its handler stops it.

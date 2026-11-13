@@ -129,6 +129,7 @@ func TestPercentVectors(t *testing.T) {
 func TestWindowVectors(t *testing.T) {
 	type vector struct {
 		Input  string  `json:"input"`
+		Zone   *string `json:"zone"`
 		At     *string `json:"at"`
 		Inside *bool   `json:"inside"`
 		Next   *string `json:"next"`
@@ -150,6 +151,17 @@ func TestWindowVectors(t *testing.T) {
 			if err != nil {
 				t.Errorf("vector %q: at: %v", v.Input, err)
 				continue
+			}
+			if v.Zone != nil {
+				zone, err := time.LoadLocation(*v.Zone)
+				if err != nil {
+					t.Errorf("vector %q: zone: %v", v.Input, err)
+					continue
+				}
+				// The case writes each instant with the offset it has in its zone.
+				if at = at.In(zone); at.Format(time.RFC3339Nano) != *v.At {
+					t.Errorf("vector %q: %s is %s in %s", v.Input, *v.At, at.Format(time.RFC3339Nano), *v.Zone)
+				}
 			}
 			if got := w.Contains(at); got != *v.Inside {
 				t.Errorf("ParseWindow(%q).Contains(%s) = %v, want %v", v.Input, *v.At, got, *v.Inside)

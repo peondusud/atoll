@@ -76,6 +76,7 @@ A percentage is checked through its use: the share of a total, such as `min_free
 |---|---|---|
 | `input` | string | the window as written in the configuration |
 | `at` | string | an instant, in RFC 3339 with an offset; the offset gives the wall-clock time in the configured `timezone` |
+| `zone` | string | the configured `timezone`, by its name in the time zone database, where a case is about a change of offset: `at`, `next` and `opened` are then instants of that zone, each written with the offset it has there. Left out, the zone is the fixed offset of `at` |
 | `inside` | boolean | whether `at` falls inside the window |
 | `next` | string | the first instant inside the window at or after `at`, in `at`'s offset; left out where a case does not ask |
 | `opened` | string | for an `at` inside the window, when the stretch of it that holds `at` began: its start that day, or the day before for a window wrapping past midnight, in `at`'s offset; left out where a case does not ask. Outside, there is none |
