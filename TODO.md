@@ -86,7 +86,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Data and conformance
 
-- **A repair that fails otherwise than for want of room leaves the corrupt copy in `media/`** (`internal/jobs/scrub.go`), where §16 sends it to the trash; a corrupt copy is never due again, and mergerfs serves it when its branch comes first.
 - **`balance` sends to the trash a misplaced copy marked `surplus` with nothing made to stand in for it** (`internal/jobs/balance.go`, `finish`, `replaced`, `retire`): a job that ends `no-room` leaves a pending copy, which the plan counts. `retire` asks neither that the copies that stay are verified nor that the file is not in `conflict`.
 - **A stale copy can lose its `overwritten` job**, and then nothing ever sends it to the trash or makes it again: a rename with a moved copy, a guard rejected and a deletion each remove every queued trash job of the file (`internal/catalog/propagate.go`), not only those of a deletion. The old version stays in `media/`, and mergerfs serves it when its branch comes first.
 - **The copy that replaces a stale one waits for the window of a `scheduled` file** (`internal/jobs/passcopies.go`), against §12.3, "Refreshing stale copies ignores the mode".
@@ -122,6 +121,7 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Decisions
 
+- **A corrupt copy whose times moved is for nobody** (§15.4, §16.1), found while fixing the repair that fails, and measured in a test since removed. A repair, and the scrub's, leave a copy whose size or times are no longer its row's to the next pass, as a change; and a pass leaves a file in `corrupt` alone, "nothing changes until that is resolved". So a corrupt copy that anyone touches, with `chmod`, `touch`, or by writing the good content back over it by hand, stays `corrupt` for good, in `media/`, where mergerfs serves it when its branch comes first: every `atoll repair` answers `changed`, no scrub reads a corrupt copy again, and the edit, if it is one, is never propagated nor called a conflict. Nothing is lost on the disks. The same after a crash in a chunk repair on a disk that dropped the write, where the reprise takes the moved change time for someone else's. To decide: what a repair does with a corrupt copy that changed. Read whole, it holds the file's content, and is then `ok` and verified, or it does not, and is then either still corrupt, with new times, or another version, which nothing tells apart. Until then the way out is to remove that copy by hand.
 - **A pending copy kept is taken off a disk's room with no check** (`internal/solver/plan.go`), so a copy queued while there was room is written into the reserve of `min_free`: §13.4 is silent on it, and §12.4 lists `min_free` among what is never violated.
 - **`depending_first` gives its paths as plain strings**, in `disk show`, `disk remove`, `disk fail` and `/v1/disks/{id}`, and in their schemas, where §29.3 asks for `path` or `path_b64`.
 - **An alert that cannot be sent brings a whole pass every 5 minutes** (§23): 288 passes a day while a server is down.

@@ -516,6 +516,19 @@ func PlannedOps(ctx context.Context, db *sql.DB) ([]Op, error) {
 	return list, nil
 }
 
+// plannedAtSQL looks among the operations left planned only, which their index holds.
+const plannedAtSQL = "SELECT EXISTS(SELECT 1 FROM ops WHERE state = 'planned' AND disk_id = ?1 AND path = ?2)"
+
+// PlannedAt says whether an operation on a path of a disk is still planned: one that stopped where nothing could
+// resolve it, which waits for the reprise (specs.md §17.2).
+func PlannedAt(ctx context.Context, db *sql.DB, disk, path string) (bool, error) {
+	var planned bool
+	if err := db.QueryRowContext(ctx, plannedAtSQL, disk, []byte(path)).Scan(&planned); err != nil {
+		return false, fmt.Errorf("journal: %w", err)
+	}
+	return planned, nil
+}
+
 // TrashEntry is what a disk's trash holds at one location.
 type TrashEntry struct {
 	Path      string

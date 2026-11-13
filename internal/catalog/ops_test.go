@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -250,6 +251,34 @@ func TestATrashQueryReadsOnlyItsEntries(t *testing.T) {
 	plan := queryPlan(t, b, trashWeightsSQL)
 	if len(plan) != 2 || plan[0] != "SCAN t" || plan[1] != "SEARCH o USING INTEGER PRIMARY KEY (rowid=?)" {
 		t.Errorf("TrashWeights: %q", plan)
+	}
+}
+
+// An operation still planned on a path of a disk is found among the operations left planned, which are few, never
+// by a walk of the journal: a scrub asks for each copy a repair left corrupt.
+func TestPlannedAt(t *testing.T) {
+	b := openForOps(t)
+	b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u1', 'x', 'ntfs', '/u', 'media', 'Atoll', 'data', 0, '[]', 'online')")
+	b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u2', 'y', 'ntfs', '/v', 'media', 'Atoll', 'data', 1, '[]', 'online')")
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (1, 'u1', 'repair', CAST('a/b' AS BLOB), 1, 'planned')")
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (2, 'u1', 'repair', CAST('a/c' AS BLOB), 1, 'done')")
+	for _, tc := range []struct {
+		disk, path string
+		want       bool
+	}{
+		{"u1", "a/b", true},
+		{"u2", "a/b", false}, // another disk's
+		{"u1", "a/c", false}, // done
+		{"u1", "a", false},
+	} {
+		got, err := PlannedAt(t.Context(), b.db, tc.disk, tc.path)
+		if err != nil || got != tc.want {
+			t.Errorf("%s %s: %v, %v", tc.disk, tc.path, got, err)
+		}
+	}
+	// The planned operations are walked through their own index, and nothing else of the journal is read.
+	if plan := queryPlan(t, b, plannedAtSQL, "u1", []byte("a/b")); !slices.Contains(plan, "SCAN ops USING INDEX ops_planned") {
+		t.Errorf("%q", plan)
 	}
 }
 

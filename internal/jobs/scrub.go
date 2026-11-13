@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
 )
@@ -369,34 +371,41 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 		}
 		return nil
 	}
-	for i := range f.Copies {
-		c := &f.Copies[i]
-		if c.Disk != d.ID {
-			continue
+	at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == d.ID })
+	if at < 0 {
+		return nil
+	}
+	c := &f.Copies[at]
+	if s.repair {
+		settled, err := s.repairOrNot(ctx, f, c, healthy, cp, sd)
+		if err != nil || settled {
+			return err
 		}
-		if s.repair {
-			repaired, err := s.repairOrNot(ctx, f, c, healthy, cp, sd)
-			if err != nil || repaired {
-				return err
-			}
+		if f, c, err = s.leftCorrupt(ctx, cp.FileID, d.ID, healthy); err != nil {
+			return err
 		}
-		outcome, err := s.session.Send(ctx, f, c, catalog.ReasonQuarantined)
-		if err != nil {
-			return fmt.Errorf("%w", err)
-		}
-		if outcome == trash.OutcomeTrashed {
-			sd.Quarantined = append(sd.Quarantined, cp.Path)
-		} else {
-			slog.Warn("a corrupt copy stays where it is", "disk", d.ID, "path", cp.Path, "outcome", outcome)
+		if c == nil {
+			slog.Warn("a corrupt copy a repair could not mend stays where it is", "disk", d.ID, "path", cp.Path)
 			sd.Kept = append(sd.Kept, cp.Path)
+			return nil
 		}
+	}
+	outcome, err := s.session.Send(ctx, f, c, catalog.ReasonQuarantined)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	if outcome == trash.OutcomeTrashed {
+		sd.Quarantined = append(sd.Quarantined, cp.Path)
+	} else {
+		slog.Warn("a corrupt copy stays where it is", "disk", d.ID, "path", cp.Path, "outcome", outcome)
+		sd.Kept = append(sd.Kept, cp.Path)
 	}
 	return nil
 }
 
 // repairOrNot repairs a corrupt copy from a healthy one (specs.md §16.1), and says whether that settled it: repaired,
-// or left where it is. A repair that found no room leaves it to quarantine, as a move to the trash takes no room but
-// its folders'.
+// or left where it is. A repair that failed leaves it to quarantine (specs.md §16): for want of room, as a move to the
+// trash takes no room but its folders', or for anything else that stopped it.
 func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, healthy *trash.Healthy, cp *catalog.ScrubCopy, sd *ScrubDisk) (bool, error) {
 	mode := modeFor(c, s.mode)
 	outcome, _, err := repairCopy(ctx, s.db, s.session, f, c, healthy, cp.Chunks, mode, true, true, s.now)
@@ -410,13 +419,46 @@ func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catal
 			s.remake = append(s.remake, f.Path)
 		}
 		return true, nil
-	case trash.OutcomeNoRoom:
+	case trash.OutcomeNoRoom, trash.OutcomeIOError:
 		return false, nil
 	default:
+		// It reads right after all, or changed, which is for the next pass; or nothing can be moved either, on a disk
+		// that cannot be reached, or under a name its trash refuses.
 		slog.Warn("a corrupt copy stays where it is", "disk", c.Disk, "path", cp.Path, "outcome", outcome)
 		sd.Kept = append(sd.Kept, cp.Path)
 		return true, nil
 	}
+}
+
+// leftCorrupt gives the copy a repair could not mend, with its file, as the catalog has them now, for the scrub to
+// send it to the trash (specs.md §16): what a repair wrote before it stopped gave the copy another change time, which
+// its row took (specs.md §16.1), and a move is told of the copy its row says. It gives none for a copy that is to stay
+// where it is: no longer corrupt, on a disk that cannot be written to any more, with no healthy copy that can still be
+// read, or with an operation on it still planned, which the reprise resolves first (specs.md §17.2).
+func (s *scrubber) leftCorrupt(ctx context.Context, fileID int64, disk string, healthy *trash.Healthy) (*catalog.FileRow, *catalog.CopyRow, error) {
+	if !s.session.Writable(disk) || !s.session.Readable(healthy.Disk) {
+		return nil, nil, nil
+	}
+	f, err := catalog.FileByID(ctx, s.db, fileID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	if f == nil {
+		return nil, nil, nil
+	}
+	at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == disk && c.State == string(solver.CopyCorrupt) })
+	if at < 0 {
+		return nil, nil, nil
+	}
+	c := &f.Copies[at]
+	planned, err := catalog.PlannedAt(ctx, s.db, disk, c.Place(f))
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	if planned {
+		return nil, nil, nil
+	}
+	return f, c, nil
 }
 
 // lost says that a disk failed while read: the scrub of it stops there.

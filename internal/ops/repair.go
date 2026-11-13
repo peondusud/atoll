@@ -350,18 +350,20 @@ const (
 // corrupt; not begun, or the copy someone else's since, nothing is written. A repair that does not finish ends done
 // when a chunk reached the trash, and undone when none did.
 func (d *Disk) recoverRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64) error {
-	_, err := d.ResolveRepair(ctx, db, op, nowNS, "")
+	_, err := d.ResolveRepair(ctx, db, op, nowNS, "", false)
 	return err
 }
 
 // ResolveRepair resolves a repair at once, as its reprise would, after it stopped for why, which its event says when
-// it does not finish; a reprise gives none. It says whether the repair finished after all.
-func (d *Disk) ResolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string) (bool, error) {
-	finished, err := d.resolveRepair(ctx, db, op, nowNS, why)
+// it does not finish; a reprise gives none. wrote says that the run that asks wrote to the copy itself, which a
+// reprise never knows: a change time that moved is then its own doing, and no change of anyone else's. It says whether
+// the repair finished after all.
+func (d *Disk) ResolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
+	finished, err := d.resolveRepair(ctx, db, op, nowNS, why, wrote)
 	return finished, err
 }
 
-func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string) (bool, error) {
+func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
 	saved, err := d.SavedChunks(op)
 	if err != nil {
 		return false, err
@@ -408,10 +410,18 @@ func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	}
 	ctime := TimeOf(st.Ctime)
 	action, err := integrity.RepairReprise(seen, ctime.Valid && ctime.Int64 == row.CtimeNS)
-	if err != nil {
+	switch {
+	case err != nil:
 		// What the trash holds is not what this repair saves: someone else's, as the copy is.
 		slog.Warn("a repair's chunks are not what it saves", "disk", d.config.ID, "op", op.ID, "error", err)
 		action = integrity.RepairForeign
+	case wrote && action == integrity.RepairForeign:
+		// A copy that holds what the repair found, with a change time that moved, is someone else's to a reprise. To
+		// the run that wrote to it, the change time is its own doing: a write that left what was there began all the
+		// same, so the time is set back, and the row takes the change time (specs.md §16.1).
+		if own, err := integrity.RepairReprise(seen, true); err == nil && own == integrity.RepairUntouched {
+			action = integrity.RepairKeep
+		}
 	}
 	switch action {
 	case integrity.RepairFinish:
