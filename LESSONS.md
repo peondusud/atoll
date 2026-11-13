@@ -77,6 +77,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 - A commit that changes one column rewrites the whole row, so a large BLOB in a row taxes every state change: 780 KB of WAL instead of 5 KB. Keep large BLOBs out of rows that change.
 - To measure what a commit writes, turn `wal_autocheckpoint` off. Otherwise the WAL is recycled, and its size says far less than what was written: the first run showed 117 KB for what was really 780 KB.
 - In a table that is not `STRICT`, a Go string written to a `BLOB` column is stored as `TEXT` with no error, which Rust cannot read back when the bytes are not UTF-8.
+- **A lookup that seems rare can be every operation once a feature is on.** The copies of a disk were looked up by inode, which no index held, only for a file with more than one name: rare, until the link guard gave every copy a second name. Then each link it made read every copy of the disk, and its first pass on 200,000 files a disk had not ended after 8 hours. Measure each feature at scale, not only the passes without it, and pin the plan of every query a pass makes per file.
 - With no statistics, SQLite leads a join by an equality on an indexed column, even where a range on another table's unique index reads a thousandth as much. `copies_by_disk` read every copy of a disk, once for each folder that disk lost, and a pass on 200,000 files went from 8 s to two minutes, with its memory unchanged. `CROSS JOIN` keeps the order, and a test of `EXPLAIN QUERY PLAN` pins it.
 
 ## TOML

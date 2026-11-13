@@ -145,13 +145,20 @@ type Links struct {
 	PriorNS sql.NullInt64
 }
 
+// What the names of a file on a disk record when one of them changes, and what they are: each finds the copies of a
+// disk by their inode. An operation on a file with more than one name asks once, and with the link guard on every copy
+// has two: each trash, purge, restore and rename, and each link the guard makes or removes, the first pass with the
+// guard on making one for each copy of the disk (specs.md §26).
+const (
+	writeLinksSQL  = "UPDATE copies SET nlink = ?1, ctime_ns = CASE WHEN ?2 IS NULL OR ctime_ns = ?2 THEN ?3 ELSE ctime_ns END WHERE disk_id = ?4 AND file_key = ?5"
+	linkedPathsSQL = "SELECT COALESCE(c.old_lpath, f.lpath) AS place FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? AND c.file_key = ? ORDER BY place"
+)
+
 func writeLinks(ctx context.Context, tx *sql.Tx, disk string, links *Links) error {
 	if links == nil {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx,
-		"UPDATE copies SET nlink = ?1, ctime_ns = CASE WHEN ?2 IS NULL OR ctime_ns = ?2 THEN ?3 ELSE ctime_ns END WHERE disk_id = ?4 AND file_key = ?5",
-		links.Nlink, links.PriorNS, links.CtimeNS, disk, links.FileKey)
+	_, err := tx.ExecContext(ctx, writeLinksSQL, links.Nlink, links.PriorNS, links.CtimeNS, disk, links.FileKey)
 	if err != nil {
 		return fmt.Errorf("links: %w", err)
 	}
@@ -354,7 +361,7 @@ func TakenByRename(ctx context.Context, db *sql.DB, disk, path string) (bool, er
 
 // LinkedPaths gives the paths whose copy on a disk is that file, by what the catalog knows.
 func LinkedPaths(ctx context.Context, db *sql.DB, disk, fileKey string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, "SELECT COALESCE(c.old_lpath, f.lpath) AS place FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? AND c.file_key = ? ORDER BY place", disk, fileKey)
+	rows, err := db.QueryContext(ctx, linkedPathsSQL, disk, fileKey)
 	if err != nil {
 		return nil, fmt.Errorf("links: %w", err)
 	}

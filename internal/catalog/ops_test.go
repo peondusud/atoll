@@ -178,6 +178,32 @@ func TestAQueryByPlaceReadsOnlyThatPlace(t *testing.T) {
 	}
 }
 
+// What finds the copies of a disk by their inode reads that inode, never every copy of the disk: an operation on a file
+// with more than one name asks once, as every copy has with the link guard on. The first pass with the guard on, which
+// makes a link for each copy, had not ended after 8 hours on 200,000 files a disk (specs.md §26).
+func TestAQueryByInodeReadsOnlyThatInode(t *testing.T) {
+	b := openForOps(t)
+	for _, q := range []struct {
+		name, sql string
+		args      []any
+	}{
+		{"writeLinks", writeLinksSQL, []any{1, nil, 2, "u1", "7"}},
+		{"LinkedPaths", linkedPathsSQL, []any{"u1", "7"}},
+	} {
+		plan := queryPlan(t, b, q.sql, q.args...)
+		inode := false
+		for _, line := range plan {
+			inode = inode || strings.HasSuffix(line, "(disk_id=? AND file_key=?)")
+			if strings.HasPrefix(line, "SCAN") || strings.HasSuffix(line, "(disk_id=?)") {
+				t.Errorf("%s: %q in %q", q.name, line, plan)
+			}
+		}
+		if !inode {
+			t.Errorf("%s: no search by inode in %q", q.name, plan)
+		}
+	}
+}
+
 func TestKeyTaken(t *testing.T) {
 	b := openForOps(t)
 	b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u1', 'x', 'ntfs', '/u', 'media', 'Atoll', 'data', 0, '[]', 'online')")
