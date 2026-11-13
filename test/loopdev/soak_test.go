@@ -4,6 +4,7 @@ package loopdev
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -11,10 +12,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"runtime/metrics"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,12 +70,46 @@ const soakGuards = "[deletes]\ndebounce = \"1s\"\n" +
 	"[deletes.mass_guard]\nfiles = 1000000000\npercent = \"100%\"\nwindow = \"1m\"\n" +
 	"[modifies.mass_guard]\nfiles = 1000000000\npercent = \"100%\"\nwindow = \"1m\"\n"
 
-// memorySample is the memory of the process at one moment, after a collection, and the size of the catalog.
+// memorySample is the memory of the process at one moment, after a collection, and the size of the catalog. live and
+// held are what a goMemory saw at most since it was last asked.
 type memorySample struct {
 	at                time.Duration
 	heap, rss, hwm    uint64
+	live, held        uint64
 	goroutines, files int
 	catalog           int64
+}
+
+// goMemory watches what the Go runtime holds: the most the heap held live after a collection, and the most the runtime
+// held of the system's memory, which is what the soft limit bounds (specs.md §26). What is resident beyond the second
+// is outside the runtime, as SQLite's own memory and the binary are. The first says whether a peak is what a step
+// needs, and no limit can lower it, or what the collector had not yet freed.
+type goMemory struct {
+	live, held atomic.Uint64
+}
+
+// watch samples ten times a second until ctx is done.
+func (g *goMemory) watch(ctx context.Context) {
+	read := []metrics.Sample{{Name: "/gc/heap/live:bytes"}, {Name: "/memory/classes/total:bytes"}, {Name: "/memory/classes/heap/released:bytes"}}
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		metrics.Read(read)
+		if read[0].Value.Kind() == metrics.KindUint64 && read[1].Value.Kind() == metrics.KindUint64 && read[2].Value.Kind() == metrics.KindUint64 {
+			g.live.Store(max(g.live.Load(), read[0].Value.Uint64()))
+			g.held.Store(max(g.held.Load(), read[1].Value.Uint64()-read[2].Value.Uint64()))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// take gives the two peaks, which start again.
+func (g *goMemory) take() (live, held uint64) {
+	return g.live.Swap(0), g.held.Swap(0)
 }
 
 // sampleMemory collects, then reads the heap in use, what the kernel says of the process, and the catalog's size
@@ -179,10 +216,14 @@ func TestDaemonSoak(t *testing.T) {
 	asked := make(chan chan memorySample, 1)
 	firstPass := make(chan memorySample, 1)
 	asked <- firstPass
+	var mem goMemory
+	go mem.watch(t.Context())
 	passes, stop := runDaemonAfter(t, b, filepath.Join(t.TempDir(), "fstab"), func() {
 		select {
 		case reply := <-asked:
-			reply <- sampleMemory(t, start, b.catalog)
+			s := sampleMemory(t, start, b.catalog)
+			s.live, s.held = mem.take()
+			reply <- s
 			// Each sample's peak is its own: what the pass that just ended left resident goes back to the system, and
 			// the peak starts again from what the daemon keeps.
 			debug.FreeOSMemory()
@@ -201,8 +242,8 @@ func TestDaemonSoak(t *testing.T) {
 	}
 	// The hook answers before the pass is sent.
 	s := <-firstPass
-	t.Logf("the first pass: heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, %d goroutines, %d open files, catalog %.1f MiB",
-		float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20))
+	t.Logf("the first pass: heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, %d goroutines, %d open files, catalog %.1f MiB",
+		float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(s.held)/(1<<20), float64(s.live)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20))
 	most := s.hwm
 	var mu sync.Mutex
 	count, held := 0, 0
@@ -248,8 +289,8 @@ func TestDaemonSoak(t *testing.T) {
 			before += n
 		}
 		tenths = append(tenths, passed-before)
-		t.Logf("after %v: %d passes, %d this tenth, heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, %d goroutines, %d open files, catalog %.1f MiB",
-			s.at, passed, passed-before, float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20))
+		t.Logf("after %v: %d passes, %d this tenth, heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, %d goroutines, %d open files, catalog %.1f MiB",
+			s.at, passed, passed-before, float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(s.held)/(1<<20), float64(s.live)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20))
 		samples = append(samples, s)
 		most = max(most, s.hwm)
 	}

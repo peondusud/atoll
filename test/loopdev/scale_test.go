@@ -24,8 +24,10 @@ var scaleFiles = flag.Int("atoll.scale", 0, "run TestScale with this many files 
 // scan after it; reading the hash of every copy, and a pass then, with nothing left to do; atoll status, with no strict
 // setting and with a strict rule, for which it plans the whole pool to give bytes_placed; and with the link guard, the
 // first pass, which makes a link for each copy, a pass after it, and the pass that removes them once the guard is off.
-// Each is logged with the memory the process holds then, and the most it held during that step. In qemu without KVM
-// every instruction is emulated: the times say how each grows, not what a machine takes.
+// Each is logged with the memory the process holds then, and the most it held during that step: resident, of which
+// what the Go runtime held, which the soft limit bounds, and what the heap held live after a collection, which no
+// limit can lower. In qemu without KVM every instruction is emulated: the times say how each grows, not what a machine
+// takes.
 func TestScale(t *testing.T) {
 	needRoot(t)
 	if *scaleFiles <= 0 {
@@ -44,18 +46,22 @@ func TestScale(t *testing.T) {
 		}
 	}
 	t.Logf("%d files written on each disk in %v", n, time.Since(start).Round(time.Second))
+	var mem goMemory
+	go mem.watch(t.Context())
 	measure := func(what string, do func()) {
 		t.Helper()
 		// Each step logs its own peak. What the step before left resident goes back to the system first: the peak
 		// starts from what the process holds, and a step that holds less would log the one before it.
 		debug.FreeOSMemory()
 		resetPeak(t)
+		mem.take()
 		began := time.Now()
 		do()
 		took := time.Since(began).Round(time.Millisecond)
+		live, held := mem.take()
 		s := sampleMemory(t, start, b.catalog)
-		t.Logf("%s: %v; heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, catalog %.1f MiB", what, took,
-			float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(s.catalog)/(1<<20))
+		t.Logf("%s: %v; heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, catalog %.1f MiB",
+			what, took, float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(held)/(1<<20), float64(live)/(1<<20), float64(s.catalog)/(1<<20))
 	}
 	measure("the first pass, which finds every copy", func() { b.pass() })
 	measure("a scan with every copy known", func() { b.scan(false) })
