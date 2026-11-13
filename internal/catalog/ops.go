@@ -178,7 +178,7 @@ func FinishTrash(ctx context.Context, db *sql.DB, op *Op, restart *Restart, link
 			}
 		}
 		if restart != nil {
-			if _, err := tx.ExecContext(ctx, "UPDATE trash SET deleted_ns = ?, expires_ns = ? WHERE op_id = ?", restart.DeletedNS, restart.ExpiresNS, op.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, restartTrashSQL, restart.DeletedNS, restart.ExpiresNS, []byte(op.Path), op.ID); err != nil {
 				return fmt.Errorf("trash: %w", err)
 			}
 		}
@@ -479,7 +479,7 @@ func Undo(ctx context.Context, db *sql.DB, op *Op, warn bool, nowNS int64) error
 		}
 		// Only a trash operation has a row of its own: the row of a restore or a purge is the
 		// entry's, whose operation was done long ago, and it stays.
-		if _, err := tx.ExecContext(ctx, "DELETE FROM trash WHERE op_id = ?", op.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, undoTrashSQL, []byte(op.Path), op.ID); err != nil {
 			return fmt.Errorf("trash: %w", err)
 		}
 		if warn {
@@ -530,6 +530,32 @@ type TrashEntry struct {
 	FileKey   string
 }
 
+// What finds an entry of the trash names its path, with its operation or its place: trash_by_path holds the entries by
+// path, then by operation, and no index holds them by operation or by place alone. An entry is written with the path of
+// the operation that sends it to the trash, and a restore or a purge is journaled with the path of its entry, so each
+// operation knows the path. Each purge, restore and undone operation asks once, and with no index each read the whole
+// trash (specs.md §26).
+const (
+	undoTrashSQL    = "DELETE FROM trash WHERE lpath = ?1 AND op_id = ?2"
+	restartTrashSQL = "UPDATE trash SET deleted_ns = ?1, expires_ns = ?2 WHERE lpath = ?3 AND op_id = ?4"
+	staleTrashSQL   = "SELECT reason, deleted_ns FROM trash WHERE lpath = ?1 AND op_id = ?2"
+	repairedSizeSQL = "UPDATE trash SET size = ?1 WHERE lpath = ?2 AND op_id = ?3"
+	dropTrashRowSQL = "DELETE FROM trash WHERE lpath = ?1 AND disk_id = ?2 AND trash_path = ?3"
+	// A page of the list, in the index's own order: no sort, and nothing read before the page.
+	trashPageSQL = `
+		SELECT t.lpath, t.disk_id, t.trash_path, t.op_id, t.size, t.blake3, t.reason, t.deleted_ns, t.expires_ns, COALESCE(o.file_key, '')
+		FROM trash t JOIN ops o ON o.id = t.op_id
+		WHERE o.state = 'done' AND (t.lpath, t.op_id) > (?, ?)
+		ORDER BY t.lpath, t.op_id
+		LIMIT ?`
+	// Every entry once, in the order the table holds them, which costs no sort.
+	trashWeightsSQL = `
+		SELECT t.disk_id, t.op_id, t.reason, t.size, t.deleted_ns, t.expires_ns
+		FROM trash t JOIN ops o ON o.id = t.op_id
+		WHERE o.state = 'done'
+		ORDER BY t.id`
+)
+
 // trashPageSize is how many entries EachTrashEntry reads at a time.
 const trashPageSize = 1000
 
@@ -556,12 +582,7 @@ func EachTrashEntry(ctx context.Context, db *sql.DB, fn func(*TrashEntry) error)
 }
 
 func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]TrashEntry, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT t.lpath, t.disk_id, t.trash_path, t.op_id, t.size, t.blake3, t.reason, t.deleted_ns, t.expires_ns, COALESCE(o.file_key, '')
-		FROM trash t JOIN ops o ON o.id = t.op_id
-		WHERE o.state = 'done' AND (t.lpath, t.op_id) > (?, ?)
-		ORDER BY t.lpath, t.op_id
-		LIMIT ?`, after, afterOp, trashPageSize)
+	rows, err := db.QueryContext(ctx, trashPageSQL, after, afterOp, trashPageSize)
 	if err != nil {
 		return nil, fmt.Errorf("trash: %w", err)
 	}
@@ -621,6 +642,40 @@ func TrashEntries(ctx context.Context, db *sql.DB) ([]TrashEntry, error) {
 	return list, err
 }
 
+// TrashWeight is what choosing what a purge reaches needs of an entry of the trash: its disk, its operation, why and
+// when it came, and its size. No path.
+type TrashWeight struct {
+	Disk      string
+	OpID      int64
+	Reason    string
+	Size      sql.NullInt64
+	DeletedNS int64
+	ExpiresNS int64
+}
+
+// TrashWeights gives that for every entry whose operation is done, in the order they reached the trash. The daemon asks
+// after each pass whether a purge is due: the paths of a large trash, in their order, are not for that (specs.md
+// §15.13, §26).
+func TrashWeights(ctx context.Context, db *sql.DB) ([]TrashWeight, error) {
+	rows, err := db.QueryContext(ctx, trashWeightsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	list := []TrashWeight{}
+	for rows.Next() {
+		var w TrashWeight
+		if err := rows.Scan(&w.Disk, &w.OpID, &w.Reason, &w.Size, &w.DeletedNS, &w.ExpiresNS); err != nil {
+			return nil, fmt.Errorf("trash: %w", err)
+		}
+		list = append(list, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	return list, nil
+}
+
 // BeginFromTrash journals an operation on an entry of the trash: a restore, or a purge.
 func BeginFromTrash(ctx context.Context, db *sql.DB, kind string, e *TrashEntry, nowNS int64) (*Op, error) {
 	op := &Op{Disk: e.Disk, Kind: kind, Path: e.Path, Path2: e.TrashPath, FileKey: e.FileKey}
@@ -646,7 +701,7 @@ func BeginFromTrash(ctx context.Context, db *sql.DB, kind string, e *TrashEntry,
 }
 
 func dropTrashRow(ctx context.Context, tx *sql.Tx, op *Op) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM trash WHERE disk_id = ? AND trash_path = ?", op.Disk, []byte(op.Path2)); err != nil {
+	if _, err := tx.ExecContext(ctx, dropTrashRowSQL, []byte(op.Path), op.Disk, []byte(op.Path2)); err != nil {
 		return fmt.Errorf("trash: %w", err)
 	}
 	return nil

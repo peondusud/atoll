@@ -213,7 +213,7 @@ func setChunks(ctx context.Context, tx *sql.Tx, fileID int64, chunks []byte) err
 func refreshStale(ctx context.Context, tx *sql.Tx, op *Op, fileID int64) (bool, error) {
 	var reason string
 	var deletedNS int64
-	err := tx.QueryRowContext(ctx, "SELECT reason, deleted_ns FROM trash WHERE op_id = ?", op.ID).Scan(&reason, &deletedNS)
+	err := tx.QueryRowContext(ctx, staleTrashSQL, []byte(op.Path), op.ID).Scan(&reason, &deletedNS)
 	switch {
 	case isNoRows(err):
 		return false, nil

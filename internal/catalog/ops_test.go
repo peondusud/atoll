@@ -146,6 +146,19 @@ func TestTrashEntriesAcrossPages(t *testing.T) {
 	if len(list) != total {
 		t.Fatalf("%d entries, want %d: a planned one is not in the trash yet", len(list), total)
 	}
+	// What a purge chooses from is the same entries, without their paths.
+	weights, err := TrashWeights(b.t.Context(), b.sql())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(weights) != total {
+		t.Fatalf("%d weights, want %d", len(weights), total)
+	}
+	for i := range weights {
+		if w := &weights[i]; w.OpID != int64(i+1) || w.Disk != "t1" || w.Reason != "surplus" || w.Size.Valid || w.DeletedNS != 1 || w.ExpiresNS != 2 {
+			t.Fatalf("weight %d: %+v", i, *w)
+		}
+	}
 	for i := 1; i < len(list); i++ {
 		if list[i-1].Path > list[i].Path || (list[i-1].Path == list[i].Path && list[i-1].OpID >= list[i].OpID) {
 			t.Fatalf("out of order at %d: %+v, %+v", i, list[i-1], list[i])
@@ -201,6 +214,42 @@ func TestAQueryByInodeReadsOnlyThatInode(t *testing.T) {
 		if !inode {
 			t.Errorf("%s: no search by inode in %q", q.name, plan)
 		}
+	}
+}
+
+// What finds an entry of the trash reads that entry, never the whole trash: each purge, restore and undone operation
+// asks once, and with no index each read every entry to find its own. The list reads a page in the index's order,
+// where it sorted the whole trash for each page; and what a purge chooses from is read once, with no sort, the journal
+// reached by its key (specs.md §26). SQLite has no statistics here, so the plan is what every catalog gets.
+func TestATrashQueryReadsOnlyItsEntries(t *testing.T) {
+	b := openForOps(t)
+	path := []byte("a/b")
+	for _, q := range []struct {
+		name, sql, want string
+		args            []any
+	}{
+		{"Undo", undoTrashSQL, "trash_by_path (lpath=? AND op_id=?)", []any{path, 7}},
+		{"FinishTrash", restartTrashSQL, "trash_by_path (lpath=? AND op_id=?)", []any{1, 2, path, 7}},
+		{"refreshStale", staleTrashSQL, "trash_by_path (lpath=? AND op_id=?)", []any{path, 7}},
+		{"StopRepair", repairedSizeSQL, "trash_by_path (lpath=? AND op_id=?)", []any{1, path, 7}},
+		{"dropTrashRow", dropTrashRowSQL, "trash_by_path (lpath=?)", []any{path, "u1", []byte("2026-01-01/7/a/b")}},
+		{"trashPage", trashPageSQL, "trash_by_path ((lpath,op_id)>(?,?))", []any{path, 7, trashPageSize}},
+	} {
+		plan := queryPlan(t, b, q.sql, q.args...)
+		found := false
+		for _, line := range plan {
+			found = found || strings.HasSuffix(line, q.want)
+			if strings.HasPrefix(line, "SCAN") || strings.Contains(line, "TEMP B-TREE") {
+				t.Errorf("%s: %q in %q", q.name, line, plan)
+			}
+		}
+		if !found {
+			t.Errorf("%s: no %q in %q", q.name, q.want, plan)
+		}
+	}
+	plan := queryPlan(t, b, trashWeightsSQL)
+	if len(plan) != 2 || plan[0] != "SCAN t" || plan[1] != "SEARCH o USING INTEGER PRIMARY KEY (rowid=?)" {
+		t.Errorf("TrashWeights: %q", plan)
 	}
 }
 

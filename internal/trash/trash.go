@@ -916,6 +916,16 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 // PurgeInput reads what the choice of what a purge reaches needs, besides the age and the entries a reprise held:
 // trash.max_size, each disk's capacity as the catalog last recorded it, and the entries.
 func PurgeInput(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, entries []catalog.TrashEntry) (*solver.PurgeInput, error) {
+	weights := make([]catalog.TrashWeight, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		weights[i] = catalog.TrashWeight{Disk: e.Disk, OpID: e.OpID, Reason: e.Reason, Size: e.Size, DeletedNS: e.DeletedNS, ExpiresNS: e.ExpiresNS}
+	}
+	return purgeInput(ctx, db, c, nowNS, weights)
+}
+
+// purgeInput is PurgeInput from what the choice needs of each entry.
+func purgeInput(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, entries []catalog.TrashWeight) (*solver.PurgeInput, error) {
 	text, _ := c.Effective()["trash.max_size"].(string)
 	maxSize, err := value.ParsePercent(text)
 	if err != nil {
@@ -947,16 +957,16 @@ func PurgeInput(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, 
 }
 
 // PurgeDue says whether a purge would reach anything now, reading the catalog only: the daemon looks before it checks
-// a disk (specs.md §15.13).
+// a disk (specs.md §15.13). It reads no path: it is asked after each pass, whatever the trash holds.
 func PurgeDue(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64) (bool, error) {
-	entries, err := catalog.TrashEntries(ctx, db)
+	entries, err := catalog.TrashWeights(ctx, db)
 	if err != nil {
 		return false, fmt.Errorf("catalog: %w", err)
 	}
 	if len(entries) == 0 {
 		return false, nil
 	}
-	in, err := PurgeInput(ctx, db, c, nowNS, entries)
+	in, err := purgeInput(ctx, db, c, nowNS, entries)
 	if err != nil {
 		return false, err
 	}

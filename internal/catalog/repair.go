@@ -132,7 +132,7 @@ func StopRepair(ctx context.Context, db *sql.DB, op *Op, savedBytes int64, saved
 		state := "undone"
 		if saved {
 			state = "done"
-			if _, err := tx.ExecContext(ctx, "UPDATE trash SET size = ? WHERE op_id = ?", savedBytes, op.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, repairedSizeSQL, savedBytes, []byte(op.Path), op.ID); err != nil {
 				return fmt.Errorf("trash: %w", err)
 			}
 		} else if err := dropTrashRow(ctx, tx, op); err != nil {
