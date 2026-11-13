@@ -173,15 +173,27 @@ func (s *scrubber) scrubDisk(ctx context.Context, d *config.Disk, sd *ScrubDisk)
 	if !s.session.Readable(d.ID) {
 		return false, nil
 	}
+	cursor, resume, err := catalog.ReadScrubCursor(ctx, s.db, d.ID)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if !resume {
+		// The catalog first: a disk with nothing due is not opened, which would confirm it, a read of its head past
+		// the cache that wakes it (specs.md §10, §16). The daemon scrubs by slices all night, each from the first disk on.
+		first, err := catalog.ScrubDue(ctx, s.db, d.ID, s.due, catalog.ScrubKey{VerifiedNS: -2}, 1, s.opts.Under)
+		if err != nil {
+			return false, fmt.Errorf("catalog: %w", err)
+		}
+		if len(first) == 0 {
+			sd.Scrubbed = true
+			return false, nil
+		}
+	}
 	handle, err := s.session.Handle(ctx, d.ID)
 	if err != nil || handle == nil {
 		return false, err
 	}
 	sd.Scrubbed = true
-	cursor, resume, err := catalog.ReadScrubCursor(ctx, s.db, d.ID)
-	if err != nil {
-		return false, fmt.Errorf("catalog: %w", err)
-	}
 	if resume {
 		cp, found, err := catalog.ScrubCopyOf(ctx, s.db, d.ID, cursor.FileID)
 		if err != nil {

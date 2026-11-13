@@ -30,6 +30,8 @@ type bench struct {
 	fail   map[string]func(call, name string) error
 	// walkFail makes a call fail in a walk, which goes through its own handle.
 	walkFail map[string]func(call, name string) error
+	// pastCache counts, by mount, the reads of a disk's head past the cache: what confirms a disk, and wakes it.
+	pastCache map[string]int
 	// bare gives, by mount, the folder a walk finds at the root's path in place of the disk's: what its mount point
 	// holds while the disk is away, until the walk has opened it.
 	bare   map[string]string
@@ -81,6 +83,7 @@ func (b *bench) Device(_ names.Filesystem, entry *disks.MountEntry) disks.Device
 }
 
 func (b *bench) ReadPastCache(_ names.Filesystem, entry *disks.MountEntry) disks.DeviceSeen {
+	b.pastCache[entry.MountPoint]++
 	if b.unread[entry.MountPoint] {
 		return disks.DeviceSeen{Device: disks.DeviceUnreadable, Note: "EIO"}
 	}
@@ -144,7 +147,7 @@ func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 	top := t.TempDir()
 	var text strings.Builder
 	fmt.Fprintf(&text, "pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(top, "catalog.db"), filepath.Join(top, "pool"))
-	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, walkFail: map[string]func(string, string) error{}, bare: map[string]string{}, unread: map[string]bool{}, ro: map[string]bool{},
+	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, walkFail: map[string]func(string, string) error{}, bare: map[string]string{}, pastCache: map[string]int{}, unread: map[string]bool{}, ro: map[string]bool{},
 		gone: map[string]bool{}, at: map[string]func(){}, precision: map[string]int64{}, tops: map[string]func(fsx.Dir) fsx.Dir{}, now: 1767225600000000000}
 	for i, id := range ids {
 		dir := filepath.Join(top, id)

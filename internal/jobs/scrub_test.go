@@ -318,3 +318,46 @@ func TestScrubUnder(t *testing.T) {
 		t.Error("underPath")
 	}
 }
+
+// A scrub asks the catalog what is due on a disk before it opens the disk: a disk with nothing due is left asleep
+// (specs.md §16, "one disk at a time to limit wake-ups", §22). Each scrub confirmed every disk first, which reads its
+// head past the cache and so wakes it: the daemon's slices, 30 s each all night, kept every disk awake for a scrub of
+// one, and woke them all on a night with nothing due.
+func TestScrubLeavesADiskWithNothingDueAsleep(t *testing.T) {
+	b := pool(t)
+	for _, tc := range []struct {
+		name string
+		opts ScrubOptions
+	}{
+		{"told --yes", ScrubOptions{Apply: true, Quarantine: true}},
+		{"not told --yes", ScrubOptions{Apply: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Every copy was verified a minute ago: nothing is due.
+			clear(b.pastCache)
+			out := b.scrub(tc.opts)
+			if out.Partial || len(out.Disks) != 2 {
+				t.Fatalf("%+v", out)
+			}
+			if len(b.pastCache) != 0 {
+				t.Errorf("with nothing due, disks were read past the cache: %v", b.pastCache)
+			}
+			// A month on, one disk's copy alone is due: that disk alone is opened.
+			b.exec("UPDATE copies SET verified_ns = 1 WHERE disk_id = 't2'")
+			clear(b.pastCache)
+			out = b.scrub(tc.opts)
+			if t2 := diskOf(out, "t2"); out.Partial || t2 == nil || t2.Read != 1 {
+				t.Fatalf("%+v", out)
+			}
+			if b.pastCache[b.dirs["t1"]] != 0 || b.pastCache[b.dirs["t2"]] == 0 {
+				t.Errorf("with one disk due, read past the cache: %v", b.pastCache)
+			}
+		})
+	}
+	// A disk that is away is still one the scrub could not read, as the mount check says without waking anything.
+	b.gone[b.dirs["t1"]] = true
+	b.pass()
+	if out := b.scrub(ScrubOptions{Apply: true, Quarantine: true}); !out.Partial {
+		t.Errorf("a scrub with one disk away: %+v", out)
+	}
+}
