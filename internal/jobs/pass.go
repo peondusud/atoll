@@ -142,6 +142,9 @@ type pass struct {
 	guards      map[string]*guardState
 	plans       map[string]*diskPlan
 	jobsDropped map[int64]bool // of a dry run: the files whose queued trash jobs a decision drops
+	// of a dry run: the files whose jobs a decision dropped before anything ran, whose stale copies a real pass gives
+	// their overwrite again at once (specs.md §15.4)
+	requeued map[int64]bool
 	// of a dry run: the files in conflict that a decision ends the conflict of
 	conflictCleared map[int64]bool
 	pulled          map[int64]bool // the files decided on an earlier page, with what wanted their name
@@ -226,7 +229,7 @@ func newPass(db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sin
 	return &pass{
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink, closed: closed,
 		rows: map[string]int64{}, walked: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
-		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
+		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, requeued: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
 		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
 }

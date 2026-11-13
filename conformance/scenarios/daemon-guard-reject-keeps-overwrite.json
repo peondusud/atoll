@@ -1,0 +1,186 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.4, \u00a715.6",
+  "description": "A guard rejected takes back the deletions it asked about, and only those. A file deleted on a disk trips its mass-deletion guard, and a file modified there in the same pass has its other copy made stale, whose trash job waits for the guard, as every trash job from that disk does. The reject removes the deletion's row and leaves that job, from the copy that changed: the overwrite of a stale copy is no deletion, and the next pass runs it and makes the copy again. The file whose deletion was rejected keeps its other copy.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\nfiles = 0\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/b"
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/a",
+      "text": "longer"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "exit": 3
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT src_disk, dst_disk, reason, state FROM jobs WHERE kind = 'trash' ORDER BY id",
+      "rows": [
+        [
+          "t1",
+          "t2",
+          "overwritten",
+          "queued"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "1"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "guard",
+        "reject",
+        "--disk",
+        "t1",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t1",
+        "kind": "deletions",
+        "done": true,
+        "up_to": "2030-01-01T00:00:00.000000000Z"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT src_disk, dst_disk, reason, state FROM jobs WHERE kind = 'trash' ORDER BY id",
+      "rows": [
+        [
+          "t1",
+          "t2",
+          "overwritten",
+          "queued"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY 1, 2",
+      "rows": [
+        [
+          "a",
+          "t1",
+          "ok"
+        ],
+        [
+          "a",
+          "t2",
+          "stale"
+        ],
+        [
+          "b",
+          "t2",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "longer"
+        },
+        {
+          "path": "media/b",
+          "text": "2"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/a",
+          "text": "1"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT src_disk, dst_disk, reason, state FROM jobs WHERE kind = 'trash' ORDER BY id",
+      "rows": []
+    }
+  ]
+}

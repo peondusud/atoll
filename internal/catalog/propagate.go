@@ -1417,8 +1417,9 @@ type RefusedCopy struct {
 }
 
 // RejectGuard says that what the guard of a disk held stays: its gone rows go with nothing sent to the
-// trash, a file left with no copy goes, its trash jobs go, and a copy that a refused rename would send
-// is told never to go.
+// trash, a file left with no copy goes, its trash jobs for a deletion go, and a copy that a refused rename would
+// send is told never to go. The overwrite of a stale copy that the guard held is no deletion (specs.md §15.6): its
+// job stays, from the copy that changed, and runs once the guard no longer stands.
 func RejectGuard(ctx context.Context, db *sql.DB, disk string, nowNS int64, refused []RefusedCopy) (sql.NullInt64, error) {
 	var upTo sql.NullInt64
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
@@ -1432,7 +1433,7 @@ func RejectGuard(ctx context.Context, db *sql.DB, disk string, nowNS int64, refu
 		if _, err := tx.ExecContext(ctx, "UPDATE jobs SET state = ? WHERE kind = 'trash' AND state = ? AND src_disk = ? AND reason = 'renamed'", JobCanceled, JobQueued, disk); err != nil {
 			return fmt.Errorf("jobs: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE kind = 'trash' AND state = ? AND src_disk = ?", JobQueued, disk); err != nil {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE kind = 'trash' AND state = ? AND src_disk = ? AND reason = 'deleted'", JobQueued, disk); err != nil {
 			return fmt.Errorf("jobs: %w", err)
 		}
 		for _, r := range refused {

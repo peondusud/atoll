@@ -70,7 +70,7 @@ Each point the review left to decide was put to the maintainer as a question, wi
 9. **The 200 MB of §26**: both. The link guard holds less of a disk at once, about 77 MiB, with no contract changed; and the plan asks the catalog whether a key is taken on an NTFS candidate, in place of holding every name, which changes the pure solver's input and `plan.json`.
 10. **The sync of each file `MakeLink` links** (§17.1): measured first on ext4, XFS and btrfs, as it was on ntfs3, a device failing right after the folder's sync; kept on NTFS alone only if the measure allows.
 14. **The guards of §15.6 stay as they are** for a change of metadata alone and for the copies a refused rename sends to the trash: §15.6 is to say that the guards protect content, which neither destroys.
-15. **Two small fixes left of four**: a guard rejected removes its deletions alone, and a dry run of a pass lists the overwrites; the owners of `tmp/`, `links/` and `trash/` are looked at as `<workdir>`'s is, with the same alert and nothing stopped.
+15. **One small fix left of four**: the owners of `tmp/`, `links/` and `trash/` are looked at as `<workdir>`'s is, with the same alert and nothing stopped.
 16. **The soak of 72 hours** started on 2026-11-13 on `c294b35` was stopped the same evening, after 3 passes: several of the above change the loop it measures. It runs again once they are done and verified.
 
 Left as recommended, with no question put: the jobs read whole, the renames by rounds and the bound on a path's depth, the bursts of the watcher, `cannotLeave` and `GonePaths`; `guard list` is to write as it reads when the local API serves large pools.
@@ -85,7 +85,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Data and conformance
 
-- **A guard rejected removes the overwrites it held with its deletions** (`internal/catalog/propagate.go`, `RejectGuard`), where §15.6 says "its queued jobs for a deletion go". The next pass gives each stale copy its job again, so nothing stays stale; the job then names the first copy `ok` by disk position as its source, which may not be the one the first job named. And **a dry run of the pass that decides a rename does not list the overwrite** the real pass then runs for a stale copy of that file: the decision drops the job in its listing, and the job a real pass queues again is not worked out there.
 
 ### Performance, each to decide
 
