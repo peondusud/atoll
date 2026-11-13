@@ -25,7 +25,16 @@
       "description": "The first ten of them by path in byte order.",
       "type": "array",
       "maxItems": 10,
-      "items": { "type": "string" }
+      "items": {
+        "description": "A path of specs.md §29.3: path when it is valid UTF-8, otherwise path_b64.",
+        "type": "object",
+        "additionalProperties": false,
+        "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }],
+        "properties": {
+          "path": { "type": "string" },
+          "path_b64": { "type": "string" }
+        }
+      }
     },
     "only_there": {
       "description": "The files with a copy on the disk and none ok or surplus on another.",

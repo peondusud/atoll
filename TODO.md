@@ -69,7 +69,6 @@ Each point the review left to decide was put to the maintainer as a question, wi
 
 9. **The 200 MB of §26**: both. The link guard holds less of a disk at once, about 77 MiB, with no contract changed; and the plan asks the catalog whether a key is taken on an NTFS candidate, in place of holding every name, which changes the pure solver's input and `plan.json`.
 10. **The sync of each file `MakeLink` links** (§17.1): measured first on ext4, XFS and btrfs, as it was on ntfs3, a device failing right after the folder's sync; kept on NTFS alone only if the measure allows.
-12. **`depending_first`** gives `path` or `path_b64`, as §29.3 asks, in `disk show`, `disk remove`, `disk fail` and `/v1/disks/{id}`.
 14. **The guards of §15.6 stay as they are** for a change of metadata alone and for the copies a refused rename sends to the trash: §15.6 is to say that the guards protect content, which neither destroys.
 15. **Three small fixes left of four**: a copy whose part cannot be made for want of room ends `no-room`; a guard rejected removes its deletions alone, and a dry run of a pass lists the overwrites; the owners of `tmp/`, `links/` and `trash/` are looked at as `<workdir>`'s is, with the same alert and nothing stopped.
 16. **The soak of 72 hours** started on 2026-11-13 on `c294b35` was stopped the same evening, after 3 passes: several of the above change the loop it measures. It runs again once they are done and verified.
@@ -103,7 +102,6 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 
 ### Decisions
 
-- **`depending_first` gives its paths as plain strings**, in `disk show`, `disk remove`, `disk fail` and `/v1/disks/{id}`, and in their schemas, where §29.3 asks for `path` or `path_b64`.
 - **A change of metadata alone makes the other copies stale outside the guard of modifications**, and **the copies a refused rename sends to the trash are in no guard's window**: both follow the letter of §15.6.
 - **No bound on a path's depth**, which §15.8 says does not bind Atoll: the walk holds a handle a level, and its memory grows as the square of the depth.
 

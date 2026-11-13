@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode"
@@ -35,10 +36,10 @@ func TestANameWritesNoLineOfItsOwn(t *testing.T) {
 			return b.String()
 		},
 		"disk fail": func(name string) string {
-			return diskChangeText(&diskChangeOutput{Disk: "t1", DependingFirst: []string{name}})
+			return diskChangeText(&diskChangeOutput{Disk: "t1", DependingFirst: pathItems([]string{name})})
 		},
 		"disk show": func(name string) string {
-			return diskShowText(&diskShowOutput{ID: "t1", DependingFirst: []string{name}})
+			return diskShowText(&diskShowOutput{ID: "t1", DependingFirst: pathItems([]string{name})})
 		},
 		"a server's answer": func(name string) string { return shownText(name) + "\n" },
 	}
@@ -63,5 +64,17 @@ func TestANameWritesNoLineOfItsOwn(t *testing.T) {
 	// A text keeps what can be read of it.
 	if got := shownText("refused: \x1b[31mno\x00"); got != "refused: �[31mno�" {
 		t.Errorf("%q", got)
+	}
+}
+
+// The files a disk's commands name as depending on it are paths of specs.md §29.3: path, or path_b64 for a name that
+// is not UTF-8, which a plain string cannot hold and wrote as U+FFFD.
+func TestDependingFirstIsAPath(t *testing.T) {
+	names := pathItems([]string{"a", "b\xff"})
+	for _, out := range []any{diskShowOutput{DependingFirst: names}, diskChangeOutput{DependingFirst: names}} {
+		text, err := json.Marshal(out)
+		if err != nil || !strings.Contains(string(text), `"depending_first":[{"path":"a"},{"path_b64":"Yv8="}]`) {
+			t.Errorf("%s, %v", text, err)
+		}
 	}
 }
