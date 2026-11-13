@@ -72,7 +72,6 @@ Each point the review left to decide was put to the maintainer as a question, wi
 10. **The sync of each file `MakeLink` links** (§17.1): measured first on ext4, XFS and btrfs, as it was on ntfs3, a device failing right after the folder's sync; kept on NTFS alone only if the measure allows.
 11. **A pending copy** is kept only while `min_free` holds (§12.4, §13.4); otherwise it is placed again, or waits as `no-room`.
 12. **`depending_first`** gives `path` or `path_b64`, as §29.3 asks, in `disk show`, `disk remove`, `disk fail` and `/v1/disks/{id}`.
-13. **An alert that cannot be sent** (§23) is sent again alone, with no pass: every 5 minutes, then less and less often, up to once an hour.
 14. **The guards of §15.6 stay as they are** for a change of metadata alone and for the copies a refused rename sends to the trash: §15.6 is to say that the guards protect content, which neither destroys.
 15. **Four small fixes**: a copy whose part cannot be made for want of room ends `no-room`; a guard rejected removes its deletions alone, and a dry run of a pass lists the overwrites; the owners of `tmp/`, `links/` and `trash/` are looked at as `<workdir>`'s is, with the same alert and nothing stopped; a slice of the scrub works the states out again only when it changed one.
 16. **The soak of 72 hours** started on 2026-11-13 on `c294b35` was stopped the same evening, after 3 passes: several of the above change the loop it measures. It runs again once they are done and verified.
@@ -110,7 +109,6 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 
 - **A pending copy kept is taken off a disk's room with no check** (`internal/solver/plan.go`), so a copy queued while there was room is written into the reserve of `min_free`: §13.4 is silent on it, and §12.4 lists `min_free` among what is never violated.
 - **`depending_first` gives its paths as plain strings**, in `disk show`, `disk remove`, `disk fail` and `/v1/disks/{id}`, and in their schemas, where §29.3 asks for `path` or `path_b64`.
-- **An alert that cannot be sent brings a whole pass every 5 minutes** (§23): 288 passes a day while a server is down.
 - **A change of metadata alone makes the other copies stale outside the guard of modifications**, and **the copies a refused rename sends to the trash are in no guard's window**: both follow the letter of §15.6.
 - **No bound on a path's depth**, which §15.8 says does not bind Atoll: the walk holds a handle a level, and its memory grows as the square of the depth.
 

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
@@ -338,4 +339,20 @@ func mustDescribe(t *testing.T, db *sql.DB, f *Facts, key string, count int64) *
 		t.Fatal(err)
 	}
 	return m
+}
+
+// What did not go of what a pass left to send is kept for another try, and the wait before it doubles from 5 minutes
+// to an hour (specs.md §23).
+func TestUnsentAndRetryAfter(t *testing.T) {
+	due := &Due{Messages: []*Message{{Key: "a"}, {Key: "b"}, {Key: "c"}}, RemindNS: 7}
+	left := due.Unsent([]string{"b"})
+	if len(left.Messages) != 2 || left.Messages[0].Key != "a" || left.Messages[1].Key != "c" || left.RemindNS != 7 || len(due.Messages) != 3 {
+		t.Errorf("%+v", left)
+	}
+	for tries, want := range map[int]time.Duration{0: 5 * time.Minute, 1: 5 * time.Minute, 2: 10 * time.Minute, 3: 20 * time.Minute, 4: 40 * time.Minute,
+		5: time.Hour, 6: time.Hour, 1000: time.Hour} {
+		if got := RetryAfter(tries); got != want {
+			t.Errorf("after %d tries: %v, want %v", tries, got, want)
+		}
+	}
 }

@@ -423,11 +423,13 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `backup_pending` | boolean | the stretch of the window that holds now, or the next one, has no catalog backup yet |
 | `smart_due_ns` | integer | when the disks' SMART is next to be read; left out when it never is |
 | `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
+| `alert_retry_due_ns` | integer | when the alerts that could not be sent are next tried again, alone (§23); left out when none waits |
 | `balance_due_ns` | integer | when the daemon next balances; left out when it never does |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is, or when `after_pass` makes it wait |
 | `read_changed` | boolean | `true` when the changed copies are to be read now: `changed_pending`, inside the window or not, before every other step |
 | `purge` | boolean | `true` when the purge of the trash is to go on now: `purge_pending`, inside the window or not, after the changed copies |
+| `send_alerts` | boolean | `true` when the alerts that could not be sent are to be tried again now, with no pass: `alert_retry_due_ns` has come |
 | `notify` | boolean | `true` when the media servers are to be told now: `notify_due_ns` has come |
 | `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
 | `balance` | boolean | `true` when the daemon is to balance now: `balance_due_ns` has come |

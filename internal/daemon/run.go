@@ -32,10 +32,6 @@ const checkEvery = 30 * time.Second
 // asked again and again.
 const retryAfter = time.Minute
 
-// alertRetry is when a pass comes again after an alert could not be sent, so that it is tried again soon
-// (specs.md §23).
-const alertRetry = 5 * time.Minute
-
 // remountTimeout is how long umount, then mount, may each take at a remount, which is what systemd gives a mount: a
 // disk that died halfway can hold one for good, and the loop does nothing else meanwhile. remountLinger is how long
 // one that was killed is then waited for: a helper it started may keep its output open.
@@ -193,6 +189,11 @@ type loop struct {
 	readDecided bool
 	// purgePending says that the purge of the trash stopped at its slice with entries left (specs.md §17).
 	purgePending bool
+	// unsent holds what the last pass left to send that did not go, alertDue when it is tried again, alone, and
+	// alertTries how many tries in a row left some unsent (specs.md §23).
+	unsent     *alerts.Due
+	alertDue   *int64
+	alertTries int
 	// unopened holds, by disk, the files a read could not open for a reason that says nothing of their disk, in byte
 	// order, until one opens: the alerts after a pass count those that still refuse (specs.md §15.10, §23).
 	unopened map[string][]string
@@ -319,7 +320,7 @@ func (l *loop) run(ctx context.Context) error {
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
 			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
-			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending,
+			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending, AlertRetryDueNS: l.alertDue,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
@@ -341,7 +342,7 @@ func (l *loop) run(ctx context.Context) error {
 			l.afterPass = true
 			continue
 		}
-		if out.Read || out.Purge || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+		if out.Read || out.Purge || out.Alerts || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
 			// The turn another step has after a pass.
 			l.afterPass = false
 		}
@@ -351,6 +352,10 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if out.Purge {
 			l.purgeMore(ctx)
+			continue
+		}
+		if out.Alerts {
+			l.resendAlerts(ctx)
 			continue
 		}
 		if out.Notify {
@@ -735,15 +740,34 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 	return nil
 }
 
-// sendAlerts sends what a pass left to send, outside the catalog's lock, then records what went under it. An
-// alert that did not go brings a pass sooner, which tries it again.
+// sendAlerts sends what a pass left to send, outside the catalog's lock, then records what went under it. What an
+// earlier pass left unsent is this pass's to say again, or not: its conditions were worked out again.
 func (l *loop) sendAlerts(ctx context.Context, due *alerts.Due) {
+	l.unsent, l.alertDue = nil, nil
 	if due == nil || len(due.Messages) == 0 {
+		l.alertTries = 0
 		return
 	}
+	l.trySend(ctx, due)
+}
+
+// resendAlerts tries again, alone, the alerts that did not go (specs.md §23): no pass, which would walk every disk
+// for a server that is down, and their text is the last pass's.
+func (l *loop) resendAlerts(ctx context.Context) {
+	due := l.unsent
+	l.unsent, l.alertDue = nil, nil
+	if due != nil && len(due.Messages) > 0 {
+		l.trySend(ctx, due)
+	}
+}
+
+// trySend sends alerts, records those that went, and keeps the others for another try: 5 minutes later, then twice as
+// long after each try that leaves some unsent, up to an hour, so that a server down for days is not asked 288 times
+// a day.
+func (l *loop) trySend(ctx context.Context, due *alerts.Due) {
 	sent := alerts.SendAll(ctx, l.set.channels, due.Messages, func(m *alerts.Message, c alerts.Channel, err error) {
 		if ctx.Err() == nil {
-			l.log.Warn("an alert could not be sent: a pass tries again", "key", m.Key, "channel", c.Name(), "error", err)
+			l.log.Warn("an alert could not be sent: it is tried again alone", "key", m.Key, "channel", c.Name(), "error", err)
 		}
 	})
 	for _, key := range sent {
@@ -754,12 +778,14 @@ func (l *loop) sendAlerts(ctx context.Context, due *alerts.Due) {
 			l.log.Warn("the alerts sent could not be recorded: they may be sent again", "error", err)
 		}
 	}
-	if len(sent) < len(due.Messages) {
-		retry := l.opt.Machine.Now() + alertRetry.Nanoseconds()
-		if l.passDue == nil || *l.passDue > retry {
-			l.passDue = &retry
-		}
+	if len(sent) == len(due.Messages) {
+		l.alertTries = 0
+		return
 	}
+	l.alertTries++
+	l.unsent = due.Unsent(sent)
+	again := l.opt.Machine.Now() + alerts.RetryAfter(l.alertTries).Nanoseconds()
+	l.alertDue = &again
 }
 
 // remindAt brings a pass when the next reminder of an alert is due, 24 h after it was last sent (specs.md §23): on a
