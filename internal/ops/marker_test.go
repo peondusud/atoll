@@ -3,8 +3,10 @@ package ops
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -14,6 +16,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/names"
 )
 
@@ -394,5 +397,49 @@ func TestHighestOpIDOfATrashItCannotRead(t *testing.T) {
 	}
 	if got, err := d.HighestOpID(); err == nil {
 		t.Errorf("%d, with a date of the trash that cannot be read", got)
+	}
+}
+
+// What a repair saved is looked at one chunk at a time, by its size and its hash, never held whole: a chunk is 4 MiB,
+// and the chunks of a copy with many bad ones, read at once at each reprise, are gigabytes in a daemon that is to stay
+// under 200 MB (specs.md §16.1, §26).
+func TestSavedChunksAreNotHeldAtOnce(t *testing.T) {
+	mount := t.TempDir()
+	op := &Op{ID: 7, Disk: "t1", Path: "a.mkv", Path2: "2026-01-01/7.chunks/a.mkv"}
+	folder := filepath.Join(mount, "Atoll", "trash", filepath.FromSlash(op.Path2))
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const chunks = 6
+	want := map[int64]SavedChunk{}
+	for i := range int64(chunks) {
+		data := bytes.Repeat([]byte{byte(i + 1)}, 4<<20)
+		if i == chunks-1 {
+			data = data[:1000]
+		}
+		name := "0000000" + string(rune('0'+i))
+		if err := os.WriteFile(filepath.Join(folder, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want[i] = SavedChunk{Size: int64(len(data)), Sum: integrity.ChunkSum(data)}
+	}
+	// What is no chunk of this repair is none.
+	if err := os.WriteFile(filepath.Join(folder, "notes"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := Open(&onDisk{}, &config.Disk{ID: "t1", Mount: mount, Workdir: "Atoll"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, err := d.SavedChunks(op)
+	runtime.ReadMemStats(&after)
+	if err != nil || !maps.Equal(got, want) {
+		t.Fatalf("%v, %v", got, err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 8<<20 {
+		t.Errorf("%d MiB allocated to look at %d chunks of 4 MiB: they were held at once", allocated>>20, chunks)
 	}
 }
