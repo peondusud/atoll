@@ -175,7 +175,25 @@ func repairCopy(ctx context.Context, db *sql.DB, session *trash.Session, f *cata
 		return trash.OutcomeDiskUnavailable, 0, nil
 	}
 	place := c.Place(f)
-	bad, err := badChunks(handle, &catalog.KnownCopy{Path: place, FileID: f.ID, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey}, chunks)
+	// A chunk that cannot be read is a bad chunk, when the disk still confirms, which is asked once (specs.md §16.1).
+	var unreadable []int64
+	confirmed := false
+	bad, err := badChunks(handle, &catalog.KnownCopy{Path: place, FileID: f.ID, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey}, chunks,
+		func(chunk int64, cause error) (bool, error) {
+			if !confirmed {
+				ok, err := session.Confirms(ctx, c.Disk, cause)
+				if err != nil {
+					return false, fmt.Errorf("%w", err)
+				}
+				if !ok {
+					return false, fmt.Errorf("%w: %w", ops.ErrDiskLost, cause)
+				}
+				confirmed = true
+			}
+			slog.Warn("a chunk of a corrupt copy cannot be read, on a disk that confirms", "disk", c.Disk, "path", place, "chunk", chunk, "error", cause)
+			unreadable = append(unreadable, chunk)
+			return true, nil
+		})
 	switch {
 	case errors.Is(err, ops.ErrGone):
 		return trash.OutcomeChanged, 0, nil
@@ -204,13 +222,15 @@ func repairCopy(ctx context.Context, db *sql.DB, session *trash.Session, f *cata
 		}
 		return outcome, len(bad), err //nolint:wrapcheck // the session's own
 	}
-	outcome, err := session.RepairChunks(ctx, f, c, bad, healthy, chunks)
+	outcome, err := session.RepairChunks(ctx, f, c, bad, unreadable, healthy, chunks)
 	return outcome, len(bad), err //nolint:wrapcheck // the session's own
 }
 
 // badChunks reads a copy whole, through its disk's confirmed handle, and gives the chunks whose hash is not the
-// file's. ops.ErrGone means that its name no longer holds what its row says, before or after the read.
-func badChunks(handle *ops.Disk, known *catalog.KnownCopy, chunks []byte) ([]int64, error) {
+// file's. ops.ErrGone means that its name no longer holds what its row says, before or after the read. A chunk that
+// cannot be read is an error, unless unreadable, when given, says that it is a bad chunk like another: it is asked for
+// each, with the error of the read.
+func badChunks(handle *ops.Disk, known *catalog.KnownCopy, chunks []byte, unreadable func(chunk int64, cause error) (bool, error)) ([]int64, error) {
 	f, st, err := handle.OpenSource(known.Path, known)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
@@ -229,7 +249,15 @@ func badChunks(handle *ops.Disk, known *catalog.KnownCopy, chunks []byte) ([]int
 			if err == nil || errors.Is(err, io.EOF) {
 				return nil, ops.ErrGone
 			}
-			return nil, fmt.Errorf("%w", err)
+			if unreadable == nil {
+				return nil, fmt.Errorf("%w", err)
+			}
+			isBad, askErr := unreadable(i, err)
+			if askErr != nil || !isBad {
+				return nil, errors.Join(askErr, fmt.Errorf("chunk %d: %w", i, err))
+			}
+			bad = append(bad, i)
+			continue
 		}
 		sum := integrity.ChunkSum(buf[:length])
 		if !bytes.Equal(sum[:], chunks[i*integrity.HashSize:(i+1)*integrity.HashSize]) {
@@ -263,7 +291,8 @@ func findHealthy(ctx context.Context, session *trash.Session, f *catalog.FileRow
 		}
 		place := c.Place(f)
 		known := catalog.KnownCopy{Path: place, FileID: f.ID, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey}
-		bad, err := badChunks(handle, &known, chunks)
+		// A copy that cannot be read whole is no healthy copy, whatever its disk says.
+		bad, err := badChunks(handle, &known, chunks, nil)
 		if err != nil {
 			slog.Warn("a copy cannot be read to check it", "disk", c.Disk, "path", place, "error", err)
 			continue

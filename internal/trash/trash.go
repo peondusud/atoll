@@ -161,6 +161,25 @@ func (s *Session) Handle(ctx context.Context, id string) (*ops.Disk, error) {
 	return s.open(ctx, id)
 }
 
+// Confirms says whether a disk still confirms, once a read of one of its copies failed: a mount check, a read of its
+// head past the page cache, and the mount path still leading to the handle the session reads through (specs.md §10).
+// A disk that does is there, and the read that failed is its copy's fault (§16). One that does not is lost, as a
+// disk that fails always was, and Confirms records it.
+func (s *Session) Confirms(ctx context.Context, id string, why error) (bool, error) {
+	sl := s.slots[id]
+	if sl == nil || sl.config == nil || sl.handle == nil {
+		return false, nil
+	}
+	verdict := disks.Confirm(s.machine, sl.config)
+	if verdict.State == disks.Missing {
+		return false, s.lose(ctx, id, fmt.Errorf("%w: after a read that failed, %s: %s", why, verdict.Reason, verdict.Message))
+	}
+	if err := sl.handle.Verify(); err != nil {
+		return false, s.lose(ctx, id, err)
+	}
+	return true, nil
+}
+
 // Lose records that a disk cannot be relied on any more.
 func (s *Session) Lose(ctx context.Context, id string, why error) error {
 	return s.lose(ctx, id, why)

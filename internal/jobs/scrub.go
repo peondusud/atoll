@@ -275,7 +275,11 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 		want := cp.Chunks[i*integrity.HashSize : (i+1)*integrity.HashSize]
 		match, err := s.readChunk(f, cp.Size, i, want)
 		if err != nil {
-			return false, s.lost(ctx, d.ID, err)
+			// A chunk that cannot be read is one that does not match, when its disk still confirms.
+			if err := s.unreadable(ctx, d, cp.Path, i, err); err != nil {
+				return false, err
+			}
+			match = false
 		}
 		if !match {
 			// A chunk that does not match is read again past the cache, the copy's name and times looked at first: a
@@ -292,7 +296,10 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 				return false, s.lost(ctx, d.ID, err)
 			}
 			if match, err = s.readChunk(f, cp.Size, i, want); err != nil {
-				return false, s.lost(ctx, d.ID, err)
+				if err := s.unreadable(ctx, d, cp.Path, i, err); err != nil {
+					return false, err
+				}
+				match = false
 			}
 			if !match {
 				if !cp.VerifiedNS.Valid {
@@ -471,6 +478,22 @@ func (s *scrubber) leftCorrupt(ctx context.Context, fileID int64, disk string, h
 		return nil, nil, nil
 	}
 	return f, c, nil
+}
+
+// unreadable says whose fault a read of a chunk that failed is (specs.md §16): the disk's when the disk no longer
+// confirms, which loses it and stops its scrub, as an error it gives then; and the chunk's when it does, which is a
+// chunk that does not match. A sector that cannot be read is the commonest fault of an old disk: taken for the
+// disk's, it sent the disk out of the pool at each slice, to come back at the next mount check, the copy never named.
+func (s *scrubber) unreadable(ctx context.Context, d *config.Disk, path string, chunk int64, cause error) error {
+	confirmed, err := s.session.Confirms(ctx, d.ID, cause)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	if !confirmed {
+		return fmt.Errorf("%w: %w", errDiskFailed, cause)
+	}
+	slog.Warn("a chunk cannot be read, on a disk that confirms", "disk", d.ID, "path", path, "chunk", chunk, "error", cause)
+	return nil
 }
 
 // lost says that a disk failed while read: the scrub of it stops there.

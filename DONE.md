@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The review's sixteen decisions, made by the maintainer on 2026-11-13 (specs.md §16, §16.1)
+
+Each point the review left to decide was put to the maintainer as a question, with its options and what each costs; TODO.md lists his sixteen answers. What follows is done, each after a test that fails without it.
+
+- **A chunk that cannot be read is its copy's fault, on a disk that confirms** ("Call a chunk that cannot be read corrupt, on a disk that confirms"). His answer: confirm the disk, then repair. A sector the disk no longer reads answers `EIO` to the scrub. The scrub took it for the disk's: the disk went `missing`, came back at the next mount check, and the next slice read the same copy first, without end, its branch out of mergerfs and back each time, the copy never named nor mended. The disk is now confirmed after a read that fails (§10): lost when it does not confirm, as before; and when it does, the chunk is one that does not match, read again past the cache, then `corrupt`, with its alert. The repair takes a chunk that cannot be read for a bad chunk, saves an empty file in its place in the trash, as nothing can be read of it, and writes the healthy copy's bytes over it, which is what makes a disk give the sector another place. A chunk that cannot be read back after it is written, on a disk with no spare sector left, stops the repair, and the scrub sends the copy to the trash, which takes no read. A repair interrupted there is resolved as any other: a chunk saved as nothing that still cannot be read is what the repair found.
+
+### Decided without the maintainer, to confirm
+
+- **A copy never verified with a chunk that cannot be read is a `conflict`**, as one whose chunk does not match (§16): nothing says that it ever held its file's content, and a repair by chunk would write over whatever else it holds.
+- **A copy that cannot be opened at all still loses its disk in a scrub**, as before: the decision is about the read of a chunk. **The healthy copy is never read with that tolerance**: one that cannot be read whole is no healthy copy.
+- **An empty file stands for a chunk that could not be saved** (§16.1), in `<op-id>.chunks/<path>/<index>`: no chunk is empty otherwise, so the reprise tells it by its size, and the event `repair` is unchanged.
+
 ## Two decisions of the review, made by the maintainer (specs.md §10, §15.10, §23, §25)
 
 Commit "Take a name that refuses Atoll for a name, and a work folder of another account for what it is", on `beta`. The review left both as decisions; the maintainer made them on 2026-11-13, each from options set out with what it costs in security, data, performance, function and product.
