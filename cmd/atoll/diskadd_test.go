@@ -107,3 +107,57 @@ func TestDiskAddRefusesNameRules(t *testing.T) {
 		}
 	}
 }
+
+// A disk whose work folder is there already, and belongs to an account that is neither root's, the one that runs
+// the command nor the one that owns the catalog, is refused: whoever made that folder first reads what Atoll copies
+// through it, and removes what its trash holds. Given back, the disk is taken (specs.md §10). It was taken as it was.
+func TestDiskAddRefusesAWorkFolderOfAnotherAccount(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("giving a folder to another account takes root")
+	}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "catalog.db")
+	text := []byte("pool_id = \"p\"\ncatalog = " + strconv.Quote(file) + "\n[view]\nmount = " + strconv.Quote(filepath.Join(dir, "pool")) + "\n")
+	c, err := config.Parse(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
+		t.Fatal(err)
+	}
+	mount := filepath.Join(dir, "u2")
+	work := filepath.Join(mount, "Atoll")
+	for _, folder := range []string{filepath.Join(mount, "media"), work} {
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func() error {
+		t.Helper()
+		var stderr bytes.Buffer
+		_, err := checkDiskAdd(t.Context(), c, &fakeDisk{mount: mount, fsType: "ext4", options: []string{"rw"}}, text, &diskAddArgs{mount: mount}, &stderr)
+		return err
+	}
+	if err := os.Chown(work, 1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	err = add()
+	if err == nil || !strings.Contains(err.Error(), "the account 1000") || !strings.Contains(err.Error(), "chown -R 0 "+work) {
+		t.Errorf("a work folder of another account: %v", err)
+	}
+	if err := os.Chown(work, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := add(); err != nil {
+		t.Errorf("given back: %v", err)
+	}
+	// The account that owns the catalog is the daemon's: its work folder is Atoll's.
+	for _, path := range []string{file, work} {
+		if err := os.Chown(path, 997, 997); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := add(); err != nil {
+		t.Errorf("the catalog's owner: %v", err)
+	}
+}

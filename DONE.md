@@ -2,6 +2,16 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Two decisions of the review, made by the maintainer (specs.md §10, §15.10, §23, §25)
+
+Commit "Take a name that refuses Atoll for a name, and a work folder of another account for what it is", on `beta`. The review left both as decisions; the maintainer made them on 2026-11-13, each from options set out with what it costs in security, data, performance, function and product.
+
+- **A name that refuses the account that asks is a name the walk could not reach.** `EACCES` from the `lstat`, the `openat`, the `readlink` or the listing of a name below the root stopped the walk as a disk that fails does: the mount of another user below `media/`, which answers so whatever the rights of who asks, took its whole disk out of the view at every pass, and whoever can write under `media/` can make one. Such a name is now reported in `unreadable`, as `ENOENT` and `ELOOP` are: nothing is concluded of it or of what is below it, and the rest of the disk is walked. The listing of `<root>` itself refusing is still the disk's. A test pinned the old answer.
+- **And an alert tells of those names**, `no-access:<id>`, with their count and the first ten: what is below them is no longer copied nor verified, and a rights problem must not stay silent. Only the names that refuse the account count, not every unreadable one: one that went during the walk is there again at the next, and would be an alert for nothing.
+- **`disk add` refuses a work folder that another account owns**, on ext4, XFS and btrfs: neither root's, the command's nor the catalog's owner's. Whoever makes `<workdir>` first makes its `tmp/`, `links/` and `trash/`, reads what Atoll copies through them and removes what the trash holds. It says the `chown` that gives the folder back, as for a disk that comes from a machine where Atoll's account has another number (`conformance/scenarios/disk-add-foreign-workdir.json`).
+- **After that the daemon tells of it and goes on**: `workdir-owner:<id>`, an alert once a pass finds a mounted disk's work folder to be another account's. Nothing becomes read-only by itself: the option that did was set aside, as a disk moved between two machines would stop taking copies with nothing but an alert to say so. NTFS is never asked, as its names have the owner their mount gives.
+- Two new kinds of alert, one more refusal of `disk add`, and no change to any `--json` output: a pass's line of a disk holds the count and the first names for the alert only.
+
 ## What a review of the code found (specs.md §9, §15.1, §15.13, §21.5, §23, §25.1)
 
 Commits "Find an entry of the trash through an index", "Give the remount its time, and a check its time before the next", "Give up an answer of the local API nobody waits for", "Follow no redirect with a token", "Keep what a process is for 10 s, not for good", "Close the catalog's folder to other accounts" and "Start each measured peak from what the process keeps, and hold a long soak's window", on `beta`, after a review of the code for performance, security and conformance to the spec. Each fix came after a test that fails without it.

@@ -262,6 +262,9 @@ func checkDiskAdd(ctx context.Context, c *config.Config, m disks.Machine, text [
 	if err := a.checkTopology(c, seen.Entry); err != nil {
 		return nil, err
 	}
+	if err := a.checkWorkdir(c); err != nil {
+		return nil, err
+	}
 	if err := a.checkMarker(c); err != nil {
 		return nil, err
 	}
@@ -339,6 +342,25 @@ func (a *diskAdding) checkTopology(c *config.Config, entry *disks.MountEntry) er
 		a.warn(warnImmutableUnchecked, fmt.Sprintf(T("whether the folder under %s is immutable: %v"), a.disk.Mount, err))
 	case !immutable:
 		a.warn(warnNotImmutable, fmt.Sprintf(T("the folder under %s is not immutable: unmount the disk and run chattr +i %s, so that nothing writes there while it is away"), a.disk.Mount, a.disk.Mount))
+	}
+	return nil
+}
+
+// checkWorkdir refuses a disk whose work folder is there already and belongs to an account that is none of Atoll's:
+// neither root's, the one that runs this command, nor the one that owns the catalog (specs.md §10). Whoever made it
+// first makes its tmp/, links/ and trash/ too, reads what Atoll copies through them whatever the folders of the root
+// forbid, and removes what the trash holds. It says how to give the folder back, when it is Atoll's all the same, as
+// on a disk that comes from a machine where Atoll's account has another number.
+func (a *diskAdding) checkWorkdir(c *config.Config) error {
+	trusted := ops.TrustedOwners(catalogPath(c))
+	uid, foreign, err := ops.ForeignWorkdir(a.disk, trusted)
+	switch {
+	case err != nil:
+		return fmt.Errorf(T("its work folder: %w"), err)
+	case foreign:
+		path := filepath.Join(a.disk.Mount, a.disk.Workdir)
+		return fmt.Errorf(T("its work folder %s belongs to the account %d, which is neither root's, this command's nor the catalog's: that account could read what Atoll copies there and remove what its trash holds. If the folder is Atoll's, give it back: chown -R %d %s"),
+			path, uid, ops.WorkdirOwner(trusted), path)
 	}
 	return nil
 }

@@ -33,6 +33,8 @@ const (
 	KeySmartFailing = "smart-failing:"
 	KeySmartSectors = "smart-sectors:"
 	KeyNTFSDirty    = "ntfs-dirty:"
+	KeyNoAccess     = "no-access:"
+	KeyWorkdirOwner = "workdir-owner:"
 )
 
 // FirstN is how many paths an alert names, at most.
@@ -89,6 +91,17 @@ type Facts struct {
 	Smart []SmartLine
 	// Dirty holds the missing disks whose NTFS volume the daemon found marked dirty (specs.md §22).
 	Dirty []string
+	// Foreign holds the disks whose work folder belongs to an account that is neither root's nor Atoll's, in the
+	// configuration's order (specs.md §10).
+	Foreign []ForeignWorkdir
+}
+
+// ForeignWorkdir is a disk's work folder that another account owns: where it is, whose it is, and whose it should be.
+type ForeignWorkdir struct {
+	ID   string
+	Path string
+	UID  uint32
+	Want uint32
 }
 
 // SmartLine is a disk's last reading of SMART.
@@ -170,6 +183,13 @@ func Holdings(f *Facts) []Holding {
 			counts[KeyDiskReadonly+d.ID] = 1
 		case disks.Online:
 		}
+		// Only a walk that ended says what it could not reach.
+		if d.Walked && d.Refused > 0 {
+			counts[KeyNoAccess+d.ID] = d.Refused
+		}
+	}
+	for i := range f.Foreign {
+		counts[KeyWorkdirOwner+f.Foreign[i].ID] = 1
 	}
 	for _, g := range f.Guards {
 		counts[KeyGuard+g.Kind+":"+g.Disk] = 1
@@ -272,6 +292,31 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s is marked dirty", id)
 		m.Body = fmt.Sprintf("The disk %s is missing: its NTFS volume is marked dirty, as an unclean unplugging leaves it, and Linux "+
 			"mounts it only by force, which Atoll never does. Repair it with chkdsk /f on Windows, then plug it back.", id)
+	case strings.HasPrefix(h.Key, KeyNoAccess):
+		id := strings.TrimPrefix(h.Key, KeyNoAccess)
+		var first []string
+		for _, d := range f.Disks {
+			if d.ID == id {
+				first = d.RefusedFirst
+			}
+		}
+		m.Title = fmt.Sprintf("Atoll: %d %s of disk %s %s the account Atoll runs as", h.Count, plural(h.Count, "name", "names"), id,
+			plural(h.Count, "refuses", "refuse"))
+		m.Body = list(fmt.Sprintf("A walk of the disk %s could not reach these names: each refuses the account Atoll runs as, as the "+
+			"mount of another user does, a rule of the system's, or a folder when Atoll lacks its rights. Nothing is concluded of them "+
+			"or of what is below them, and nothing there is copied or verified until they can be read.", id), first, h.Count)
+	case strings.HasPrefix(h.Key, KeyWorkdirOwner):
+		id := strings.TrimPrefix(h.Key, KeyWorkdirOwner)
+		var w ForeignWorkdir
+		for i := range f.Foreign {
+			if f.Foreign[i].ID == id {
+				w = f.Foreign[i]
+			}
+		}
+		m.Title = fmt.Sprintf("Atoll: the work folder of disk %s belongs to another account", id)
+		m.Body = fmt.Sprintf("The work folder %s of disk %s belongs to the account %d, which is neither root's nor the one Atoll "+
+			"runs as. That account can read what Atoll copies, through the folders of its parts and of its links, and remove what its "+
+			"trash holds. Atoll goes on writing there. Give the folder back: chown -R %d %s", Shown(w.Path), id, w.UID, w.Want, Shown(w.Path))
 	case strings.HasPrefix(h.Key, KeySmartFailing):
 		id := strings.TrimPrefix(h.Key, KeySmartFailing)
 		m.Priority = priorityHigh

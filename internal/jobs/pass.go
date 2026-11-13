@@ -61,7 +61,15 @@ type DiskLine struct {
 	ID      string
 	Verdict disks.Verdict
 	Walked  bool
+	// Refused counts the names its walk could not reach as they refuse the account that asks, and RefusedFirst holds
+	// the first RefusedShown of them in byte order: what an alert says (specs.md §15.10, §23). They are no part of the
+	// pass's output.
+	Refused      int64
+	RefusedFirst []string
 }
+
+// RefusedShown is how many of the names that refused it a disk's line keeps: as many as an alert names.
+const RefusedShown = 10
 
 // GuardLine is a guard tripped: the mass-deletion guard of a disk, or its mass-modification guard (specs.md §15.6).
 type GuardLine struct {
@@ -306,12 +314,26 @@ func (p *pass) look(ctx context.Context) error {
 			p.moves[d.ID] = topMoves(report.FolderMoves)
 			p.unfound[d.ID] = report.UnfoundFolders
 		}
-		p.out.Disks = append(p.out.Disks, DiskLine{ID: d.ID, Verdict: report.Verdict, Walked: report.Walked})
+		line := DiskLine{ID: d.ID, Verdict: report.Verdict, Walked: report.Walked}
+		if report.Walked {
+			line.Refused, line.RefusedFirst = firstRefused(report.Refused)
+		}
+		p.out.Disks = append(p.out.Disks, line)
 	}
 	if p.sink != nil {
 		p.sinkErr = p.sink.Disks(p.out.Disks)
 	}
 	return nil
+}
+
+// firstRefused counts the names that refused a walk, and gives the first RefusedShown of them in byte order.
+func firstRefused(names []string) (int64, []string) {
+	if len(names) == 0 {
+		return 0, nil
+	}
+	first := slices.Clone(names)
+	slices.Sort(first)
+	return int64(len(names)), first[:min(len(first), RefusedShown)]
 }
 
 // plannedOn gives the logical paths of the operations left planned on a disk, which are only left on a

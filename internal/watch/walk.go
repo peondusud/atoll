@@ -54,14 +54,32 @@ type Walked struct {
 	Entries     []FoundEntry
 	Unreadable  []string
 	OtherMounts []string
+	// Refused holds the names of Unreadable that refused the account that asked.
+	Refused []string
+}
+
+// unreachable says whether an answer about a listed name says only that the walk cannot reach it by that name: gone
+// or replaced since it was listed, a name the driver cannot read, or one that refuses the account that asks. None
+// says anything about the disk (specs.md §15.10).
+func unreachable(err error) bool {
+	return fsx.IsUnreadableName(err) || fsx.IsAccessRefused(err)
+}
+
+// skip reports a name the walk could not reach, and tells one that refused the account apart: that one lasts.
+func (w *Walked) skip(path string, err error) {
+	w.Unreadable = append(w.Unreadable, path)
+	if fsx.IsAccessRefused(err) {
+		w.Refused = append(w.Refused, path)
+	}
 }
 
 // ErrInterrupted says that a walk stopped because the disk did not answer: nothing can be
 // concluded from what it found (invariant 4).
 var ErrInterrupted = errors.New("the disk did not answer")
 
-// errFolderGone says that a folder went between its opening and its listing: walkBelow reports it.
-var errFolderGone = errors.New("the folder went once it was opened")
+// errFolderGone says that a folder went between its opening and its listing, or refused to be listed: walkBelow
+// reports it. It wraps what the listing answered.
+var errFolderGone = errors.New("the folder cannot be listed")
 
 // Walk reads everything below a root, through handles, never following a symlink. A listed name
 // that can no longer be reached is reported, and any other error stops the walk.
@@ -85,10 +103,10 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, top *fsx.Stat, 
 	}
 	names, err := dir.Names()
 	switch {
-	case prefix != "" && fsx.IsUnreadableName(err):
-		// Removed once it was opened: it can no longer be reached by its name, which says nothing of the disk. The
-		// root is no such folder: one that is gone is the disk's.
-		return errFolderGone
+	case prefix != "" && unreachable(err):
+		// Removed once it was opened, or refusing to be listed: it can no longer be reached by its name, which says
+		// nothing of the disk. The root is no such folder: one that is gone, or cannot be listed, is the disk's.
+		return fmt.Errorf("%w: %w", errFolderGone, err)
 	case err != nil:
 		return fmt.Errorf("%w: %q: %w", ErrInterrupted, prefix, err)
 	}
@@ -96,8 +114,8 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, top *fsx.Stat, 
 		path := prefix + name
 		st, err := dir.Stat(name)
 		switch {
-		case fsx.IsUnreadableName(err):
-			w.Unreadable = append(w.Unreadable, path)
+		case unreachable(err):
+			w.skip(path, err)
 			continue
 		case err != nil:
 			return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
@@ -129,8 +147,8 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, top *fsx.Stat, 
 		case fsx.KindSymlink:
 			target, err := dir.ReadLink(name)
 			switch {
-			case fsx.IsUnreadableName(err):
-				w.Unreadable = append(w.Unreadable, path)
+			case unreachable(err):
+				w.skip(path, err)
 				continue
 			case err != nil:
 				return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
@@ -146,10 +164,10 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, top *fsx.Stat, 
 func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, top *fsx.Stat, w *Walked) error {
 	below, err := dir.OpenDir(name)
 	switch {
-	case fsx.IsUnreadableName(err):
+	case unreachable(err):
 		// Reported, with no row: its entry was the last one added.
 		w.Entries = w.Entries[:len(w.Entries)-1]
-		w.Unreadable = append(w.Unreadable, path)
+		w.skip(path, err)
 		return nil
 	case err != nil:
 		return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
@@ -161,7 +179,7 @@ func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, top *fsx.Sta
 		// As one that could not be opened: reported, with no row, its entry being the last one added, as nothing of
 		// it was listed.
 		w.Entries = w.Entries[:len(w.Entries)-1]
-		w.Unreadable = append(w.Unreadable, path)
+		w.skip(path, walkErr)
 		return nil
 	}
 	return walkErr

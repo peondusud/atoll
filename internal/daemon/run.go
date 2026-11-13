@@ -665,6 +665,7 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 	facts, err := alerts.Gather(ctx, db, l.opt.Config, now, outcome, refused)
 	if err == nil {
 		facts.Dirty = l.dirtyDisks()
+		facts.Foreign = l.foreignWorkdirs(outcome)
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {

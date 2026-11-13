@@ -245,7 +245,7 @@ func TestAnErrorConcludesNothing(t *testing.T) {
 		{"stat", "c", syscall.ENODEV},
 		{"opendir", "sub", syscall.EIO},
 		{"readlink", "link", syscall.EIO},
-		{"stat", "b", syscall.EACCES},
+		{"names", "", syscall.EACCES},
 	} {
 		t.Run(tc.call+"/"+tc.name+"/"+tc.err.Error(), func(t *testing.T) {
 			b := newBench(t, "t1")
@@ -292,7 +292,10 @@ func TestAnErrorConcludesNothing(t *testing.T) {
 }
 
 // TestAnUnreachableNameIsNoAbsence: a listed name that cannot be reached is reported as such, not
-// absent, and the rest of the disk is still read.
+// absent, and the rest of the disk is still read. So is one that refuses the account that asks, EACCES, as the
+// mount of another user below the root does, or a folder when a command runs without Atoll's rights: it says
+// nothing of the disk, which went missing for it at every pass, and it is told apart, for the alert that says so
+// (specs.md §15.10, §23).
 func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 	for _, tc := range []struct {
 		call, name string
@@ -306,6 +309,10 @@ func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 		{"opendir", "sub", syscall.ELOOP, "sub"},
 		{"opendir", "sub", syscall.ENOTDIR, "sub"},
 		{"readlink", "link", syscall.ENOENT, "link"},
+		{"stat", "b", syscall.EACCES, "b"},
+		{"opendir", "sub", syscall.EACCES, "sub"},
+		{"readlink", "link", syscall.EACCES, "link"},
+		{"names", "sub", syscall.EACCES, "sub"},
 	} {
 		t.Run(tc.call+"/"+tc.err.Error(), func(t *testing.T) {
 			b := newBench(t, "t1")
@@ -322,6 +329,13 @@ func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 			}
 			if !slices.Equal(r.Unreadable, []string{tc.want}) {
 				t.Errorf("unreadable: %v, want %s", r.Unreadable, tc.want)
+			}
+			var refused []string
+			if errors.Is(tc.err, syscall.EACCES) {
+				refused = []string{tc.want}
+			}
+			if !slices.Equal(r.Refused, refused) {
+				t.Errorf("refused: %v, want %v", r.Refused, refused)
 			}
 			if got := b.count("SELECT count(*) FROM files WHERE lpath = ?", []byte("a")); got != 1 {
 				t.Error("the rest of the disk was not read")

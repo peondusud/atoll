@@ -702,6 +702,13 @@ func IsUnreadableName(err error) bool {
 		errors.Is(err, ErrNotARegularFile) || errors.Is(err, ErrNotALink)
 }
 
+// IsAccessRefused says whether an error means that a name refuses the account that asks: the mount of another user
+// below a root, which answers so whatever the rights of who asks, a rule of the system's, or a command run without
+// Atoll's rights. It says nothing about the disk (specs.md §15.10).
+func IsAccessRefused(err error) bool {
+	return errors.Is(err, unix.EACCES)
+}
+
 // IsDiskLost says whether an error means that the disk cannot be relied on any more (invariant 4).
 // EROFS is here because ext4 gives it once a device has failed, and ESTALE because ntfs3 gives it for a
 // name and a record that writes lost with the device left disagreeing (measured). What it gives for a

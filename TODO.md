@@ -77,7 +77,7 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 ### Security
 
 - **The watcher opens a folder that arrived by its path** (`arrive`, `internal/watch/watcher.go` and `inotify.go`), with no check of its mount: a parent traded for a link puts the mark on a folder outside the root. Events are hints, so no decision is wrong, but a media server is told the wrong folder.
-- **A work folder that someone else owns is used as it is**: `links/` and `tmp/` are closed to other accounts when found open, but not taken from an owner who is not the daemon's account, who can open them again, and nothing looks at who owns `trash/`. Whoever can write at a disk's top before Atoll makes `<workdir>` there can make it first; `disk add` could refuse a `<workdir>` it does not own.
+- **A work folder that becomes another account's after `disk add` is told of, and still written to** (§10), as the maintainer decided on 2026-11-13: an alert, and nothing stops unattended. What that leaves: the owner of a disk's top can rename `<workdir>` and make another, at any time, and reads what Atoll copies there until someone acts on the alert; and nothing looks at the owner of `tmp/`, `links/` and `trash/` themselves, only at `<workdir>`'s. `links/` and `tmp/` are closed to other accounts when found open.
 - **`init` makes the configuration 0644** whatever the mask, while the spec's own example keeps an ntfy topic in it, which is a secret on a public server; and a schema error quotes the offending string, so a URL mistyped with a password reaches the log.
 
 ### Data and conformance
@@ -120,7 +120,7 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 - **`depending_first` gives its paths as plain strings**, in `disk show`, `disk remove`, `disk fail` and `/v1/disks/{id}`, and in their schemas, where §29.3 asks for `path` or `path_b64`.
 - **An alert that cannot be sent brings a whole pass every 5 minutes** (§23): 288 passes a day while a server is down.
 - **A change of metadata alone makes the other copies stale outside the guard of modifications**, and **the copies a refused rename sends to the trash are in no guard's window**: both follow the letter of §15.6.
-- **A mount below the root that refuses the daemon's account stops the disk's walk** (`EACCES`), which a test pins; and **no bound on a path's depth**, which §15.8 says does not bind Atoll.
+- **No bound on a path's depth**, which §15.8 says does not bind Atoll: the walk holds a handle a level, and its memory grows as the square of the depth.
 
 ## Phase 1a, the alpha, not started (specs.md §28)
 

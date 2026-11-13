@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/names"
 )
 
 // A disk's marker is read as a marker and nothing else: whoever can write at the top of a disk that is being added,
@@ -112,4 +115,72 @@ func TestReadMarkerAt(t *testing.T) {
 			t.Errorf("%d bytes read as a marker", len(got))
 		}
 	})
+}
+
+// The work folder of a disk is Atoll's when root, the account that runs, or the account that owns the catalog owns it:
+// any other could read what Atoll copies through it, and remove what its trash holds. A filesystem that holds no owner
+// of its own, NTFS, says nothing of that, and a disk with no work folder yet has nothing to say (specs.md §10).
+func TestForeignWorkdir(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("giving a folder to another account takes root")
+	}
+	mount := t.TempDir()
+	d := &config.Disk{ID: "t1", Mount: mount, Workdir: "Atoll", FS: names.Ext4}
+	trusted := []uint32{0, 4242}
+	if uid, foreign, err := ForeignWorkdir(d, trusted); err != nil || foreign {
+		t.Fatalf("no work folder: %d, %v, %v", uid, foreign, err)
+	}
+	work := filepath.Join(mount, "Atoll")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		uid     int
+		fs      names.Filesystem
+		foreign bool
+	}{
+		{0, names.Ext4, false},
+		{4242, names.Ext4, false},
+		{1000, names.Ext4, true},
+		{1000, names.XFS, true},
+		{1000, names.Btrfs, true},
+		{1000, names.NTFS, false},
+	} {
+		if err := os.Chown(work, tc.uid, tc.uid); err != nil {
+			t.Fatal(err)
+		}
+		d.FS = tc.fs
+		uid, foreign, err := ForeignWorkdir(d, trusted)
+		if err != nil || foreign != tc.foreign || (foreign && uid != uint32(tc.uid)) { //nolint:gosec // a test's own uid
+			t.Errorf("%d on %s: %d, %v, %v", tc.uid, tc.fs, uid, foreign, err)
+		}
+	}
+	// A link at its name is looked at itself, never followed: what it leads to is not the disk's.
+	if err := os.Remove(work); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), work); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Lchown(work, 1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	d.FS = names.Ext4
+	if uid, foreign, err := ForeignWorkdir(d, trusted); err != nil || !foreign || uid != 1000 {
+		t.Errorf("a link: %d, %v, %v", uid, foreign, err)
+	}
+	// The accounts trusted: root's, this one's, and the catalog's owner's.
+	file := filepath.Join(t.TempDir(), "catalog.db")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(file, 997, 997); err != nil {
+		t.Fatal(err)
+	}
+	if got := TrustedOwners(file); !slices.Equal(got, []uint32{0, 997}) {
+		t.Errorf("trusted: %v", got)
+	}
+	if got := TrustedOwners(filepath.Join(t.TempDir(), "none.db")); !slices.Equal(got, []uint32{0}) {
+		t.Errorf("with no catalog: %v", got)
+	}
 }

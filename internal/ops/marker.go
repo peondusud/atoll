@@ -5,11 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/names"
 )
 
 // ErrOtherMarker says that a disk holds a marker other than the one to write.
@@ -48,6 +53,63 @@ func ReadMarkerAt(mount, workdir string) (text []byte, found bool, err error) {
 		return nil, false, fmt.Errorf("%q: %w", layout.MarkerName, ErrNoMarker)
 	}
 	return data, true, nil
+}
+
+// ownerAt gives the account that owns what a folder holds at a name, itself and not what a link there leads to, and
+// whether there is anything.
+func ownerAt(folder, name string) (uid uint32, found bool, err error) {
+	dir, err := fsx.OpenDir(folder)
+	if fsx.IsAbsent(err) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("%w", err)
+	}
+	defer func() { _ = dir.Close() }()
+	st, err := dir.Stat(name)
+	if fsx.IsAbsent(err) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("%w", err)
+	}
+	return st.Uid, true, nil
+}
+
+// TrustedOwners gives the accounts whose work folder Atoll takes as its own (specs.md §10): root's, the one this
+// process runs as, and the one that owns the catalog, which is the daemon's when a command is run by someone else.
+// Each once, in order.
+func TrustedOwners(catalogPath string) []uint32 {
+	trusted := []uint32{0}
+	if uid := os.Geteuid(); uid > 0 {
+		trusted = append(trusted, uint32(uid)) //nolint:gosec // an account's number, never negative here
+	}
+	if uid, found, err := ownerAt(filepath.Dir(catalogPath), filepath.Base(catalogPath)); err == nil && found && !slices.Contains(trusted, uid) {
+		trusted = append(trusted, uid)
+	}
+	return trusted
+}
+
+// WorkdirOwner gives, of the accounts trusted, the one a work folder is given back to: the last of them, which is
+// the catalog's owner when it is neither root nor the account that runs, and the account that runs otherwise.
+func WorkdirOwner(trusted []uint32) uint32 {
+	return trusted[len(trusted)-1]
+}
+
+// ForeignWorkdir says whether the work folder of a disk belongs to an account that is none of those trusted, and to
+// which (specs.md §10). That account can make a tmp/, a links/ or a trash/ of its own there: it reads what Atoll
+// copies, whatever the folders of the root forbid, and removes what the trash holds. A filesystem that holds no owner
+// of its own says nothing of it: on NTFS every name has the owner its mount gives. Nor does a disk with no work folder
+// yet. The folder is looked at through a handle on the mount point, itself and not what a link there leads to.
+func ForeignWorkdir(d *config.Disk, trusted []uint32) (uid uint32, foreign bool, err error) {
+	if d.FS == names.NTFS {
+		return 0, false, nil
+	}
+	uid, found, err := ownerAt(d.Mount, d.Workdir)
+	if err != nil || !found {
+		return 0, false, err
+	}
+	return uid, !slices.Contains(trusted, uid), nil
 }
 
 // ReadMarker reads the disk's Atoll/disk.toml, and says whether there is one.

@@ -50,6 +50,10 @@ type Report struct {
 	PathTaken   []string
 	Unreadable  []string
 	OtherMounts []string
+	// Refused holds the names of Unreadable that refused the account that asked, EACCES, in the walk's order: what
+	// lasts until someone gives the right, where a name that went during the walk is there again at the next
+	// (specs.md §15.10). An alert says so (§23); the output of a scan lists them with the others.
+	Refused []string
 	// Seen holds the verdict about each copy that is not as its row says, by file id, and FolderMoves
 	// the folders renamed: what a pass decides on (specs.md §15.12).
 	Seen        []CopySeen
@@ -342,7 +346,7 @@ func withoutOwnLinks(m disks.Machine, d *config.Disk, w *Walked) error {
 // sides are in the byte order of paths, so it is a merge. Only what is not where its row says is looked
 // up, and only what no row claims is indexed for that.
 func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Disk, w *Walked, r *Report, look *Look, now int64) (*catalog.Walk, error) {
-	r.Unreadable = w.Unreadable
+	r.Unreadable, r.Refused = w.Unreadable, w.Refused
 	r.OtherMounts = w.OtherMounts
 	slices.SortFunc(w.Files, func(a, b FoundFile) int { return cmp.Compare(a.Path, b.Path) })
 	found := func(f *FoundFile) {

@@ -3647,3 +3647,35 @@ func reconfigured(t *testing.T, b *bench, guard string) *config.Config {
 	}
 	return c
 }
+
+// A pass counts the names its walk could not reach as they refuse the account that asks, and keeps the first of them
+// in byte order, for the alert that says so: the disk is walked all the same, and nothing is decided of what is below
+// such a name (specs.md §15.10, §23).
+func TestAPassCountsTheNamesThatRefuseIt(t *testing.T) {
+	b := pool(t)
+	for _, name := range []string{"z/x", "m/x", "b/x"} {
+		b.write("t1", name, "x")
+		b.write("t2", name, "x")
+	}
+	b.scan(true)
+	b.walkFail[b.dirs["t1"]] = func(call, name string) error {
+		if call == "opendir" && (name == "z" || name == "b") {
+			return syscall.EACCES
+		}
+		return nil
+	}
+	out := b.pass()
+	if out.Partial || len(out.Decisions) != 0 || len(out.Operations) != 0 {
+		t.Fatalf("%+v", out)
+	}
+	t1 := out.Disks[0]
+	if !t1.Walked || t1.Verdict.State != disks.Online || t1.Refused != 2 || !slices.Equal(t1.RefusedFirst, []string{"b", "z"}) {
+		t.Errorf("%+v", t1)
+	}
+	if t2 := out.Disks[1]; t2.Refused != 0 || len(t2.RefusedFirst) != 0 {
+		t.Errorf("%+v", t2)
+	}
+	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't1' AND gone_ns IS NOT NULL"); got != 0 {
+		t.Errorf("%d copies below a name that refused the walk are taken for gone", got)
+	}
+}
