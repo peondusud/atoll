@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"testing"
 	"time"
 
@@ -45,7 +46,9 @@ func TestScale(t *testing.T) {
 	t.Logf("%d files written on each disk in %v", n, time.Since(start).Round(time.Second))
 	measure := func(what string, do func()) {
 		t.Helper()
-		// Each step logs its own peak.
+		// Each step logs its own peak. What the step before left resident goes back to the system first: the peak
+		// starts from what the process holds, and a step that holds less would log the one before it.
+		debug.FreeOSMemory()
 		resetPeak(t)
 		began := time.Now()
 		do()

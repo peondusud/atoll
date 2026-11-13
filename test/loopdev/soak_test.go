@@ -111,6 +111,31 @@ func sampleMemory(t *testing.T, since time.Time, catalog string) memorySample {
 	return s
 }
 
+// soakWindow gives the maintenance window of a soak that starts at a time and lasts for one: it holds for the whole
+// run, so that the hashes, the backup, the scrub and the rescans take their turns all along, from an hour before the
+// start to two hours past the end. A run that fills the day has all of the day but a minute, the most a window holds
+// (specs.md §29.5): written from its two ends alone, the window of a 72-hour run was 3 hours a day.
+func soakWindow(start time.Time, lasts time.Duration) string {
+	from, to := start.Add(-time.Hour), start.Add(2*time.Hour+lasts)
+	if to.Sub(from) >= 24*time.Hour {
+		to = from.Add(24*time.Hour - time.Minute)
+	}
+	return from.Format("15:04") + "-" + to.Format("15:04")
+}
+
+// A soak's window holds its whole run, whatever it lasts.
+func TestSoakWindow(t *testing.T) {
+	start := time.Date(2026, 11, 13, 3, 26, 45, 0, time.UTC)
+	for lasts, want := range map[time.Duration]string{
+		4 * time.Minute: "02:26-05:30", 4 * time.Hour: "02:26-09:26", 20 * time.Hour: "02:26-01:26",
+		21 * time.Hour: "02:26-02:25", 72 * time.Hour: "02:26-02:25",
+	} {
+		if got := soakWindow(start, lasts); got != want {
+			t.Errorf("%v: %s, want %s", lasts, got, want)
+		}
+	}
+}
+
 // resetPeak makes the most the kernel records the process held start again from what it holds now (VmHWM). It may run
 // in any goroutine.
 func resetPeak(t *testing.T) {
@@ -137,7 +162,7 @@ func TestDaemonSoak(t *testing.T) {
 	v := sizedVolume(t, *soakFiles)
 	at := mountPoint(t)
 	mountVolume(t, v, "", at)
-	window := time.Now().Add(-time.Hour).Format("15:04") + "-" + time.Now().Add(2*time.Hour+*soakFor).Format("15:04")
+	window := soakWindow(time.Now(), *soakFor)
 	// The trash turns over every ten minutes: the writer sends about two copies a second there, each with its own
 	// folders, and a retention of 30 days would fill the inodes of these small disks within the hour.
 	b := newPassBenchKept(t, sizedVolume(t, *soakFiles), v, at, soakGuards, "[defaults]\nsettle = \"0s\"\n[maintenance]\nwindow = \""+window+"\"\n[trash]\nretention = \"10m\"\n")
@@ -158,7 +183,9 @@ func TestDaemonSoak(t *testing.T) {
 		select {
 		case reply := <-asked:
 			reply <- sampleMemory(t, start, b.catalog)
-			// Each sample's peak is its own: what one pass holds says nothing of the next.
+			// Each sample's peak is its own: what the pass that just ended left resident goes back to the system, and
+			// the peak starts again from what the daemon keeps.
+			debug.FreeOSMemory()
 			resetPeak(t)
 		default:
 		}
