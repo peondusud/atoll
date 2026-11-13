@@ -846,7 +846,9 @@ func WriteNew(path string, data []byte) (err error) {
 	if _, err := temp.Write(data); err != nil {
 		return errors.Join(fmt.Errorf("write: %w", err), temp.Close())
 	}
-	if err := temp.Chmod(0o644); err != nil {
+	// For its owner and its group, whatever the mask: the configuration may hold what others must not read, as the
+	// topic of a ntfy server, and the catalog's folder is closed to them as well.
+	if err := temp.Chmod(0o640); err != nil {
 		return errors.Join(fmt.Errorf("write: %w", err), temp.Close())
 	}
 	if err := temp.Sync(); err != nil {

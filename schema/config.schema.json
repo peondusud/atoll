@@ -411,8 +411,9 @@
       "additionalProperties": { "$ref": "#/$defs/absolute_path" }
     },
     "http_url": {
-      "description": "An http or https URL, or an empty string for not set.",
+      "description": "An http or https URL, or an empty string for not set. writeOnly: it may hold a secret, as the topic of a ntfy server, so no message shows it.",
       "type": "string",
+      "writeOnly": true,
       "pattern": "^(https?://[^ \\t\\r\\n]+)?$"
     },
     "folder_name": {

@@ -140,6 +140,11 @@ func checkScalar(s map[string]any, v any) error {
 			return fmt.Errorf("configuration schema: %w", err)
 		}
 		if !re.MatchString(text) {
+			// What the schema marks writeOnly may hold a secret, as the URL of a topic or one typed with a password:
+			// it is not written where a log keeps it.
+			if hidden, _ := s["writeOnly"].(bool); hidden {
+				return errors.New("the value, not shown as it may hold a secret, does not have the right form")
+			}
 			return fmt.Errorf("%q does not have the right form", text)
 		}
 	}

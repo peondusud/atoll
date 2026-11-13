@@ -149,7 +149,7 @@ func TestSchemaKeywords(t *testing.T) {
 	known := []string{
 		"$ref", "additionalProperties", "default", "description", "enum", "format", "items",
 		"maximum", "minItems", "minLength", "minimum", "pattern", "properties", "propertyNames",
-		"required", "type",
+		"required", "type", "writeOnly",
 	}
 	annotations := []string{"$ref", "default", "description"}
 	var walk func(path string, node map[string]any)
@@ -447,5 +447,32 @@ path_map = { "/srv/pool" = "/data", "/srv/pool/tv" = "/tv" }
 	}
 	if c, err := Parse([]byte("pool_id = \"p\"\ncatalog = \"/srv/catalog.db\"\n[view]\nmount = \"/srv/pool\"\n")); err != nil || len(c.MediaServers) != 0 {
 		t.Errorf("none set: %+v, %v", c, err)
+	}
+}
+
+// A value that may hold a secret is never written in an error: the URL of a ntfy topic, or one typed with a user and
+// a password, reached the log with the message that refused it (specs.md §23, §24.3). A value that holds none is
+// still shown, as that is what tells a typo.
+func TestAnErrorShowsNoURL(t *testing.T) {
+	const head = "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n"
+	for _, text := range []string{
+		head + "[alerts]\nntfy = \"htps://ntfy.sh/s3cret-topic\"\n",
+		head + "[alerts]\nntfy = \"https://user:s3cret@ntfy.example/t opic\"\n",
+		head + "[alerts]\ngotify = \"ftp://s3cret@host\"\n",
+	} {
+		_, err := Parse([]byte(text))
+		if err == nil {
+			t.Fatalf("loaded: %q", text)
+		}
+		if strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("the error shows the value: %v", err)
+		}
+		if !strings.Contains(err.Error(), "alerts.") {
+			t.Errorf("the error does not name the key: %v", err)
+		}
+	}
+	_, err := Parse([]byte("pool_id = \"Not An Id\"\n[view]\nmount = \"/srv/pool\"\n"))
+	if err == nil || !strings.Contains(err.Error(), "Not An Id") {
+		t.Errorf("a value that holds no secret is not shown: %v", err)
 	}
 }
