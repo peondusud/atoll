@@ -15,12 +15,34 @@ import (
 // ErrChangedMeanwhile says that a file no longer holds what was read of it.
 var ErrChangedMeanwhile = errors.New("the file changed since it was read")
 
+// ErrNotSynced says that a file was replaced, and that its folder could not be synced after: the new file is there
+// for every reader, and a power cut may still bring the one before back.
+var ErrNotSynced = errors.New("the file is replaced, but its folder could not be synced")
+
+// syncFolder makes what a folder lists durable.
+func syncFolder(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	defer func() { _ = dir.Close() }()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
 // ReplaceFile writes data over the file at path, all or nothing: a file beside it, made for this alone under a name
 // nobody can tell beforehand, with the mode and owner of the old one, synced, renamed over it, then the folder synced.
 // A name anyone could tell, as <name>.new, would be written through whatever was put there: a draft, or a link to
 // another file. It refuses with ErrChangedMeanwhile when the file no longer holds was, so that an edit made meanwhile
-// is never lost (specs.md §10). A symbolic link at path is followed, and the file it leads to replaced.
+// is never lost (specs.md §10). A symbolic link at path is followed, and the file it leads to replaced. Any error
+// leaves the file as it was, but ErrNotSynced: the file is replaced then, and its folder could not be synced.
 func ReplaceFile(path string, was, data []byte) error {
+	return replaceFile(path, was, data, syncFolder)
+}
+
+func replaceFile(path string, was, data []byte, sync func(string) error) error {
 	path, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return fmt.Errorf("%s: %w", path, err)
@@ -44,13 +66,9 @@ func ReplaceFile(path string, was, data []byte) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("%s: %w", path, err)
 	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return fmt.Errorf("%s: %w", filepath.Dir(path), err)
-	}
-	defer func() { _ = dir.Close() }()
-	if err := dir.Sync(); err != nil {
-		return fmt.Errorf("%s: %w", filepath.Dir(path), err)
+	// The file has its name: what fails from here on has not left it as it was.
+	if err := sync(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("%w: %w", ErrNotSynced, err)
 	}
 	return nil
 }

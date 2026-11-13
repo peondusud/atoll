@@ -29,6 +29,7 @@ const (
 	warnCatalogNotUpdated  = "catalog-not-updated"
 	warnMarkerNotWritten   = "marker-not-written"
 	warnDaemonNotTold      = "daemon-not-told"
+	warnConfigNotSynced    = "config-not-synced"
 )
 
 // nameRuleReasons are the read-only reasons disk add refuses, as they change the rules of names (specs.md §10,
@@ -84,11 +85,7 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return usage(stderr, "disk add: "+err.Error())
 	}
-	text, err := fsx.ReadFile(configPath)
-	if err != nil {
-		return failure(stderr, fmt.Errorf("configuration: %w", err))
-	}
-	c, err := load(configPath)
+	text, c, err := readConfig(configPath)
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -98,8 +95,8 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	}
 	ctx := context.Background()
 	if !parsed.dryRun {
-		release, err := lockCatalog(ctx, c, stderr)
-		if err != nil {
+		var release func()
+		if text, c, release, err = lockedConfig(ctx, configPath, c, stderr); err != nil {
 			return failure(stderr, err)
 		}
 		defer release()
@@ -110,10 +107,13 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	}
 	code := exitOK
 	if !parsed.dryRun {
-		if err := fsx.ReplaceFile(configPath, text, a.text); err != nil {
+		partial, err := configInPlace(fsx.ReplaceFile(configPath, text, a.text), a.warn)
+		if err != nil {
 			return failure(stderr, fmt.Errorf(T("disk add: the configuration is unchanged: %w"), err))
 		}
-		code = a.finish(ctx)
+		if code = a.finish(ctx); partial {
+			code = exitPartial
+		}
 	}
 	if parsed.asJSON {
 		err = writeJSON(stdout, a.out)

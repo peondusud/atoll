@@ -36,19 +36,26 @@ func runRules(configPath string, args []string, stdout, stderr io.Writer) int {
 // load reads the configuration, then does what config.Parse leaves to the shell, as it
 // depends on the machine: look the time zone up (specs.md §24.3).
 func load(path string) (*config.Config, error) {
+	_, c, err := readConfig(path)
+	return c, err
+}
+
+// readConfig reads a configuration file once, and gives its text with what that text says: a command that edits the
+// file edits the text it loaded.
+func readConfig(path string) ([]byte, *config.Config, error) {
 	data, err := fsx.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("configuration: %w", err)
+		return nil, nil, fmt.Errorf("configuration: %w", err)
 	}
 	c, err := config.Parse(data)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, nil, fmt.Errorf("%w", err)
 	}
 	zone, _ := c.Effective()["timezone"].(string)
 	if err := lookUpZone(zone); err != nil {
-		return nil, &config.Error{Problems: []config.Problem{{Key: "timezone", Message: err.Error()}}}
+		return nil, nil, &config.Error{Problems: []config.Problem{{Key: "timezone", Message: err.Error()}}}
 	}
-	return c, nil
+	return data, c, nil
 }
 
 func lookUpZone(zone string) error {

@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -136,6 +137,38 @@ func lockCatalog(ctx context.Context, c *config.Config, stderr io.Writer) (func(
 	return fsx.WaitLockFile(ctx, catalogPath(c), func() {
 		report(stderr, T("waiting for the catalog: another command, or a pass of the daemon, holds it"))
 	})
+}
+
+// lockedConfig takes the catalog's lock for a command that edits the configuration, then reads the configuration
+// again: the command that held the lock may have written it, and this one edits what that one left (specs.md §10,
+// §25). first is the configuration as the command read it to find the catalog. Read only before the wait, the text
+// was that of before the other command: the second of two disk commands run at once failed for a file "changed since
+// it was read", having changed nothing. A configuration that names another catalog by then is one this lock does
+// not cover: the command gives up.
+func lockedConfig(ctx context.Context, configPath string, first *config.Config, stderr io.Writer) (text []byte, c *config.Config, release func(), err error) {
+	release, err = lockCatalog(ctx, first, stderr)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	text, c, err = readConfig(configPath)
+	if err == nil && catalogPath(c) != catalogPath(first) {
+		err = errors.New(T("the configuration names another catalog since this command started: nothing is changed, run it again"))
+	}
+	if err != nil {
+		release()
+		return nil, nil, nil, err
+	}
+	return text, c, release, nil
+}
+
+// configInPlace says what a replacement of the configuration left (fsx.ReplaceFile): the new one in place, with a
+// warning when its folder could not be synced after, or an error, the file then as it was.
+func configInPlace(err error, warn func(kind, message string)) (partial bool, failed error) {
+	if errors.Is(err, fsx.ErrNotSynced) {
+		warn(warnConfigNotSynced, fmt.Sprintf(T("the configuration is written, but a power cut now could bring the one before back: %v"), err))
+		return true, nil
+	}
+	return false, err
 }
 
 func usage(stderr io.Writer, message string) int {

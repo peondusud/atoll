@@ -133,3 +133,30 @@ func TestDisksBelow(t *testing.T) {
 		}
 	}
 }
+
+// Once the new file has the name, the file is replaced, whatever comes after: a folder that cannot be synced then is
+// ErrNotSynced, which says so, and never an error like those that leave the file as it was (specs.md §10). The
+// commands said "the configuration is unchanged" of a configuration they had just changed.
+func TestReplaceFileSaysWhenTheFileIsInPlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "atoll.toml")
+	if err := os.WriteFile(path, []byte("old\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	failed := errors.New("input/output error")
+	err := replaceFile(path, []byte("old\n"), []byte("new\n"), func(string) error { return failed })
+	if !errors.Is(err, ErrNotSynced) || !errors.Is(err, failed) {
+		t.Errorf("a folder that could not be synced: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "new\n" {
+		t.Errorf("the file holds %q", got)
+	}
+	// What fails before leaves the file, and is no ErrNotSynced.
+	err = replaceFile(path, []byte("old\n"), []byte("newer\n"), func(string) error { return failed })
+	if !errors.Is(err, ErrChangedMeanwhile) || errors.Is(err, ErrNotSynced) {
+		t.Errorf("a file that changed meanwhile: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "new\n" {
+		t.Errorf("the file holds %q", got)
+	}
+}
