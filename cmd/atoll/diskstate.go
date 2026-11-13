@@ -253,7 +253,7 @@ func diskChangeText(out *diskChangeOutput) string {
 	fmt.Fprintf(&b, T("disk %s, %s: %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n"),
 		out.Disk, out.StateWas, out.Depending, out.OnlyThere, out.PlannedOperations)
 	for _, p := range out.DependingFirst {
-		fmt.Fprintf(&b, "  %s\n", p)
+		fmt.Fprintf(&b, "  %s\n", shownPath(p))
 	}
 	switch {
 	case out.Done && out.Change == changeDrain:
@@ -413,7 +413,7 @@ func diskShowText(out *diskShowOutput) string {
 	fmt.Fprintf(&b, T("\n  copies: %s\n  %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n"),
 		strings.Join(states, ", "), out.Depending, out.OnlyThere, out.Planned)
 	for _, p := range out.DependingFirst {
-		fmt.Fprintf(&b, "    %s\n", p)
+		fmt.Fprintf(&b, "    %s\n", shownPath(p))
 	}
 	return b.String()
 }

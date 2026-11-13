@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
@@ -109,8 +111,12 @@ func encodePath(p string) (path, pathB64 string) {
 	return "", base64.StdEncoding.EncodeToString([]byte(p))
 }
 
+// shownPath gives a path as a line of human output shows it: as it is when it is UTF-8 with no control character,
+// in base64 otherwise, as an alert shows it (specs.md §23). A name may hold a line feed or an escape sequence, which
+// written as it is writes lines of its own on a terminal, or clears it. Every path the human output writes goes
+// through here, or through shownB64 or pathText, which do.
 func shownPath(p string) string {
-	if isUTF8(p) {
+	if isUTF8(p) && !strings.ContainsFunc(p, unicode.IsControl) {
 		return p
 	}
 	return "(base64) " + base64.StdEncoding.EncodeToString([]byte(p))
@@ -473,4 +479,15 @@ func trashPurge(configPath string, args []string, stdout, stderr io.Writer) int 
 		return failure(stderr, err)
 	}
 	return code
+}
+
+// shownText gives a text that is not Atoll's own, as an answer of a server, as a line of human output shows it: each
+// control character, and each byte that is no UTF-8, replaced, so that it writes nothing of its own on a terminal.
+func shownText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return utf8.RuneError
+		}
+		return r
+	}, s)
 }

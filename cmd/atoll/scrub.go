@@ -225,8 +225,5 @@ func scrubText(out *scrubOutput, yes bool) string {
 }
 
 func pathText(p pathItem) string {
-	if p.PathB64 != "" {
-		return "(base64) " + p.PathB64
-	}
-	return p.Path
+	return shownB64(p.Path, p.PathB64)
 }

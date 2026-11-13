@@ -394,11 +394,12 @@ func (t *textDaemon) end(o *jobs.Outcome) error {
 	return writeText(t.w, text.String())
 }
 
+// shownB64 is shownPath for a path as an output holds it: in path, or in base64 when it is not UTF-8.
 func shownB64(path, b64 string) string {
 	if b64 != "" {
 		return "(base64) " + b64
 	}
-	return path
+	return shownPath(path)
 }
 
 // guardItem is one disk of api/schemas/guard-list.schema.json.

@@ -243,10 +243,6 @@ func printScan(w io.Writer, out scanOutput) error {
 
 func printPaths(text *strings.Builder, label string, list []pathItem) {
 	for _, p := range list {
-		if p.Path != "" {
-			fmt.Fprintf(text, "%s: %s\n", label, p.Path)
-		} else {
-			fmt.Fprintf(text, "%s: (base64) %s\n", label, p.PathB64)
-		}
+		fmt.Fprintf(text, "%s: %s\n", label, pathText(p))
 	}
 }

@@ -382,11 +382,7 @@ func share(part, total int64) string {
 }
 
 func printStatusFile(text *strings.Builder, f *statusFile) {
-	name := f.Path
-	if name == "" {
-		name = "(base64) " + f.PathB64
-	}
-	fmt.Fprintf(text, T("%s: %s, %d bytes, modified %s, wants %d copies\n"), name, f.State, f.Size, f.Mtime, f.Replicas+1)
+	fmt.Fprintf(text, T("%s: %s, %d bytes, modified %s, wants %d copies\n"), shownB64(f.Path, f.PathB64), f.State, f.Size, f.Mtime, f.Replicas+1)
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		fmt.Fprintf(text, "  %s: %s", c.Disk, c.State)

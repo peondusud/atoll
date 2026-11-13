@@ -61,7 +61,7 @@ func runNotify(configPath string, args []string, stdout, stderr io.Writer) int {
 		if err := ch.Send(context.Background(), m); err != nil {
 			line.Sent, line.Error = false, err.Error()
 			code = exitPartial
-			fmt.Fprintf(&text, T("%s: not sent: %s\n"), line.Channel, line.Error)
+			fmt.Fprintf(&text, T("%s: not sent: %s\n"), line.Channel, shownText(line.Error))
 		} else {
 			fmt.Fprintf(&text, T("%s: sent\n"), line.Channel)
 		}
@@ -72,7 +72,7 @@ func runNotify(configPath string, args []string, stdout, stderr io.Writer) int {
 		if err := s.Check(context.Background()); err != nil {
 			line.Sent, line.Error = false, err.Error()
 			code = exitPartial
-			fmt.Fprintf(&text, T("%s: not reached: %s\n"), line.Channel, line.Error)
+			fmt.Fprintf(&text, T("%s: not reached: %s\n"), line.Channel, shownText(line.Error))
 		} else {
 			fmt.Fprintf(&text, T("%s: reached\n"), line.Channel)
 		}
