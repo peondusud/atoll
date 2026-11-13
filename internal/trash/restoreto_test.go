@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // restoredTo restores what is at or below a path to a disk, and gives the outcomes.
@@ -76,6 +78,41 @@ func TestARestoreToCopies(t *testing.T) {
 	}
 	if got := b.text("SELECT state FROM ops WHERE kind = 'create'"); got != "done" {
 		t.Errorf("the operation is %s", got)
+	}
+}
+
+// The disk whose trash an entry is copied from is the one lost when it fails, late as it may: the folder the copy goes
+// in is made like the one in that trash, looked at once the copy is read and verified (specs.md §17.4, invariant 4).
+// The disk the copy went to was lost in its place.
+func TestARestoreToFromATrashThatFailsLate(t *testing.T) {
+	b := newBench(t)
+	for _, id := range []string{"t1", "t2", "t3"} {
+		b.write(id, "Films/b", "y")
+	}
+	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	b.prune()
+	if err := os.RemoveAll(filepath.Join(b.dirs["t1"], "media", "Films")); err != nil {
+		t.Fatal(err)
+	}
+	late := false
+	b.at["verified"] = func() { late = true }
+	b.fail[b.dirs["t3"]] = func(call, name string) error {
+		if late && call == "stat" && name == "Films" {
+			return syscall.EIO
+		}
+		return nil
+	}
+	outcomes, _ := b.restoredTo("Films/b", "t1", true)
+	if len(outcomes) != 1 || outcomes[0] != OutcomeIOError {
+		t.Fatalf("%v", outcomes)
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't1'"); got == "missing" {
+		t.Error("the disk the copy goes to is lost for an error of the trash it comes from")
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't3'"); got != "missing" {
+		t.Errorf("the disk whose trash failed is %s", got)
 	}
 }
 

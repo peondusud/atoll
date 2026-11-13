@@ -668,9 +668,11 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 		return nil, c.drop(ctx, obstacleOutcome(target), false)
 	}
 	for _, folder := range missing {
+		// The source's folder: an error there is the source's, as one while it was read, never the target's, which
+		// would be lost in its place with every job left for it.
 		like, err := c.src.FolderInfo(folder)
 		if err != nil {
-			return nil, err
+			return nil, c.sourceFailed(ctx, err)
 		}
 		op, err := catalog.BeginMkdir(ctx, c.r.db, c.op.Disk, folder, c.r.now)
 		if err != nil {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -78,6 +79,36 @@ func only(t *testing.T, items []ReplicateItem, outcome string) {
 	t.Helper()
 	if len(items) != 1 || items[0].Path != "a" || items[0].Disk != "t2" || items[0].Source != "t1" || items[0].Outcome != outcome {
 		t.Fatalf("%+v, want %s", items, outcome)
+	}
+}
+
+// A source that fails once the copy is read and verified is the disk that is lost, not the target: the folder a copy
+// goes in is made like the source's, which is looked at then (specs.md §14.2, invariant 4). The healthy target was
+// lost in its place, every other job of the run with it, and the failing source stayed in service.
+func TestASourceThatFailsLateIsTheOneLost(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "Films/a", "content")
+	b.scan(false)
+	late := false
+	b.at["verified"] = func() { late = true }
+	b.fail[b.dirs["t1"]] = func(call, name string) error {
+		if late && call == "stat" && name == "Films" {
+			return syscall.EIO
+		}
+		return nil
+	}
+	items, _ := b.replicate("Films/a", ReplicateOptions{Now: true})
+	if len(items) != 1 || items[0].Outcome != trash.OutcomeIOError {
+		t.Fatalf("%+v", items)
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't2'"); got == "missing" {
+		t.Error("the target is lost for an error of the source")
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't1'"); got != "missing" {
+		t.Errorf("the source that failed is %s", got)
+	}
+	if got := b.count("SELECT count(*) FROM ops WHERE state = 'planned'"); got != 0 {
+		t.Errorf("%d operations left planned on a target that did not fail", got)
 	}
 }
 

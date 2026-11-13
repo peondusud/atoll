@@ -165,6 +165,11 @@ func (s *Session) copyFromTrash(ctx context.Context, dst, src *ops.Disk, op *cat
 			if errors.As(err, new(catalogError)) {
 				return "", err
 			}
+			// The trash the entry comes from, looked at for the folder to make: a disk lost there is that one, never
+			// the one the copy goes to.
+			if errors.As(err, new(sourceError)) && (errors.Is(err, ops.ErrDiskLost) || fsx.IsDiskLost(err)) {
+				return OutcomeIOError, s.dropAndLose(ctx, dst, op, e.Disk, err)
+			}
 			return s.copyFailed(ctx, dst, op, true, err)
 		}
 	}
@@ -351,7 +356,7 @@ func (s *Session) makeFolderOn(ctx context.Context, to string, dst, src *ops.Dis
 		if undo := catalog.Undo(ctx, s.db, op, false, s.now); undo != nil {
 			return catalogError{fmt.Errorf("catalog: %w", undo)}
 		}
-		return err
+		return sourceError{err}
 	}
 	st, err := dst.MakeRootFolder(folder, like)
 	switch {
