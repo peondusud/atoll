@@ -253,10 +253,18 @@ func (s *Session) recoverAll(ctx context.Context) error {
 			if err := s.lose(ctx, id, err); err != nil {
 				return err
 			}
+			continue
 		case errors.Is(err, context.Canceled):
 			return fmt.Errorf("%w", err)
 		case err != nil:
 			s.lost = true
+		}
+		// What the reprise resolved keeps its parts no more: tmp/ is cleaned after it, as it was when the disk was
+		// opened for what earlier runs had resolved (specs.md §14.2).
+		if s.writable(id) {
+			if err := s.cleanTmp(ctx, id, handle); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

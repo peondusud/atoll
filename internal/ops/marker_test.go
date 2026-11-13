@@ -315,3 +315,84 @@ func TestWriteMarkerOnNTFS3G(t *testing.T) {
 		})
 	}
 }
+
+// A new catalog starts its operations past every id the disk's work folder names, so that a new operation never meets
+// an old one's folder or part (specs.md §9, §17): a folder of the trash, a folder of chunks, a copy in progress, and a
+// chunk a repair was saving. The names of a repair, <op-id>.chunks and <op-id>.<index>.part, counted for nothing:
+// after catalog rebuild, a repair could take the id of one whose chunks the trash still held.
+func TestHighestOpID(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files []string
+		want  int64
+	}{
+		{"nothing", nil, 0},
+		{"a folder of the trash", []string{"trash/2026-01-01/7/a"}, 7},
+		{"a copy in progress", []string{"tmp/9.part", "trash/2026-01-01/7/a"}, 9},
+		{"a folder of chunks", []string{"trash/2026-01-02/12.chunks/a/00000000", "trash/2026-01-01/7/a", "tmp/9.part"}, 12},
+		{"a chunk on its way", []string{"tmp/15.3.part", "trash/2026-01-02/12.chunks/a/00000000", "tmp/9.part"}, 15},
+		{"what Atoll never wrote", []string{"tmp/+20.part", "tmp/021.part", "tmp/22.1.2.part", "tmp/23.01.part", "tmp/24.part.old", "tmp/x.part",
+			"trash/2026-01-01/025/a", "trash/2026-01-01/26.chunk/a", "trash/2026-01-01/27.chunks.old/a", "trash/2026-01-01/+28/a", "tmp/3.part"}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mount := t.TempDir()
+			if err := os.Mkdir(filepath.Join(mount, "Atoll"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range tc.files {
+				path := filepath.Join(mount, "Atoll", filepath.FromSlash(file))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			d, err := Open(&onDisk{}, &config.Disk{ID: "t1", Mount: mount, Workdir: "Atoll"}, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			if got, err := d.HighestOpID(); err != nil || got != tc.want {
+				t.Errorf("%d, %v, want %d", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// A date of the trash that cannot be read says nothing of the operations it holds: the id is not known, which the
+// command that asks says, rather than one too low, which nothing would say (specs.md §9). What is no folder there
+// holds none.
+func TestHighestOpIDOfATrashItCannotRead(t *testing.T) {
+	mount := t.TempDir()
+	for _, file := range []string{"trash/2026-01-01/7/a", "trash/2026-01-02/31/a", "tmp/9.part"} {
+		path := filepath.Join(mount, "Atoll", filepath.FromSlash(file))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(mount, "Atoll", "trash", "40"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &onDisk{}
+	d, err := Open(m, &config.Disk{ID: "t1", Mount: mount, Workdir: "Atoll"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if got, err := d.HighestOpID(); err != nil || got != 31 {
+		t.Fatalf("%d, %v, want 31", got, err)
+	}
+	m.fail = func(call, name string) error {
+		if call == "opendir" && name == "2026-01-02" {
+			return syscall.EIO
+		}
+		return nil
+	}
+	if got, err := d.HighestOpID(); err == nil {
+		t.Errorf("%d, with a date of the trash that cannot be read", got)
+	}
+}

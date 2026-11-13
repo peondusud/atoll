@@ -1,0 +1,221 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a716.1, \u00a717, \u00a725",
+  "description": "A new catalog starts its operations past every id the disks' work folders name, the names of a repair included: the chunks it overwrote, trash/<date>/<op-id>.chunks/, and a chunk it was saving, tmp/<op-id>.<index>.part. init does so over a catalog that went missing, and catalog rebuild does. A name written otherwise than Atoll writes it, with a sign, a leading zero or anything after its suffix, names no operation and counts for nothing. What those folders hold is left as it is.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/tmp/9.part",
+          "text": "half"
+        },
+        {
+          "path": "Atoll/tmp/12.3.part",
+          "text": "chunk"
+        },
+        {
+          "path": "Atoll/tmp/+40.part",
+          "text": "signed"
+        },
+        {
+          "path": "Atoll/tmp/041.part",
+          "text": "padded"
+        },
+        {
+          "path": "Atoll/tmp/42.03.part",
+          "text": "padded"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/old.mkv",
+          "text": "gone"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/15.chunks/Films/x.mkv/00000000",
+          "text": "chunk"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/050/old.mkv",
+          "text": "padded"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/51.chunks.old/x.mkv/00000000",
+          "text": "renamed"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init",
+        "--json"
+      ],
+      "stdout_json": {
+        "configuration": "kept",
+        "catalog": "created"
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT seq FROM sqlite_sequence WHERE name = 'ops'",
+      "rows": [
+        [
+          15
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "catalog": "${SANDBOX}/catalog.db",
+        "set_aside": "${SANDBOX}/catalog.db.old-20260101T000000Z",
+        "ops_after": 15,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 4,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 1,
+            "known": 0,
+            "hashed": 1,
+            "changed": [],
+            "moved": [],
+            "absent": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true,
+            "files": 1,
+            "bytes": 4,
+            "folders": 0,
+            "symlinks": 0,
+            "ignored": 0,
+            "new": 1,
+            "known": 0,
+            "hashed": 1,
+            "changed": [],
+            "moved": [],
+            "absent": [],
+            "path_taken": [],
+            "unreadable": [],
+            "other_mounts": []
+          }
+        ],
+        "conflicts": [],
+        "done": true
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT seq FROM sqlite_sequence WHERE name = 'ops'",
+      "rows": [
+        [
+          15
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/tmp/9.part",
+          "text": "half"
+        },
+        {
+          "path": "Atoll/tmp/12.3.part",
+          "text": "chunk"
+        },
+        {
+          "path": "Atoll/tmp/+40.part",
+          "text": "signed"
+        },
+        {
+          "path": "Atoll/tmp/041.part",
+          "text": "padded"
+        },
+        {
+          "path": "Atoll/tmp/42.03.part",
+          "text": "padded"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/old.mkv",
+          "text": "gone"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/15.chunks/Films/x.mkv/00000000",
+          "text": "chunk"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/050/old.mkv",
+          "text": "padded"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/51.chunks.old/x.mkv/00000000",
+          "text": "renamed"
+        }
+      ]
+    }
+  ]
+}

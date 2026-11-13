@@ -92,7 +92,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 - **The disk commands read the configuration before they wait for the catalog's lock** (`cmd/atoll/diskadd.go`, `diskstate.go`): the second of two fails with "the file changed since it was read". A failure after the rename of the configuration says "unchanged" (`internal/fsx/replace.go`).
 - **The walk's handle is never compared with the mount that was confirmed** (`internal/watch/scan.go`), against §10.
 - **A partition's parent is not followed down** (`internal/fsx/topology.go`, `disksBelow`): a filesystem on `md0p1` is not seen to share a disk with one on `sda3`, against R-06.
-- **The names a chunk repair makes are unknown to what cleans `tmp/` and to what counts operation ids** (`internal/catalog/replicate.go`, `internal/ops/marker.go`).
 
 ### Performance
 

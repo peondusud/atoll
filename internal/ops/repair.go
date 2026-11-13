@@ -67,11 +67,6 @@ func (d *Disk) openWritable(logical string, is func(*fsx.Stat) bool) (fsx.Writab
 	return f, st, nil
 }
 
-// chunkPart is the name in <workdir>/tmp/ of a chunk a repair is saving (specs.md §16.1, step 3).
-func chunkPart(opID, index int64) string {
-	return strconv.FormatInt(opID, 10) + "." + strconv.FormatInt(index, 10) + ".part"
-}
-
 // SaveChunk saves the bytes of a bad chunk to the trash, before anything overwrites them (specs.md §16.1, step 3):
 // written to <workdir>/tmp/<op-id>.<index>.part with the copy's permission bits and owner, synced, then moved without
 // replacing anything to the operation's folder of chunks. Its folders take the mode and owner of those they stand
@@ -85,7 +80,7 @@ func (d *Disk) SaveChunk(op *Op, index int64, data []byte, copyStat *fsx.Stat) e
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
-	part := d.tmpPlace(chunkPart(op.ID, index))
+	part := d.tmpPlace(layout.ChunkPartName(op.ID, index))
 	tmp, err := d.makeFolders(part[:len(part)-1], nil)
 	if err != nil {
 		return err

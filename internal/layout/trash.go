@@ -61,14 +61,14 @@ func ChunksPath(startedNS, opID int64, logical string) (string, error) {
 	if _, err := names.CheckPath(logical, names.Ext4); err != nil {
 		return "", fmt.Errorf("chunks path: %w", err)
 	}
-	return time.Unix(0, startedNS).UTC().Format("2006-01-02") + "/" + strconv.FormatInt(opID, 10) + ".chunks/" + logical, nil
+	return time.Unix(0, startedNS).UTC().Format("2006-01-02") + "/" + strconv.FormatInt(opID, 10) + chunksSuffix + "/" + logical, nil
 }
 
 // IsChunks says whether a location of the trash holds the chunks a repair overwrote: its operation's folder has the
 // suffix .chunks (specs.md §17). Such an entry is never restored.
 func IsChunks(trashPath string) bool {
 	parts := strings.SplitN(trashPath, "/", 3)
-	return len(parts) == 3 && strings.HasSuffix(parts[1], ".chunks")
+	return len(parts) == 3 && strings.HasSuffix(parts[1], chunksSuffix)
 }
 
 // ChunkName gives the name of a chunk in its folder: its index in decimal, from 0, with at least 8 digits

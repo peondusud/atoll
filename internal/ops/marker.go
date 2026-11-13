@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
@@ -239,9 +237,11 @@ func (d *Disk) PutCatalog(src io.Reader) error {
 	return nil
 }
 
-// HighestOpID gives the highest operation id the disk's work folder names: a folder of its trash,
-// trash/<date>/<op id>/, or a copy in progress, tmp/<op id>.part; 0 when there is none. A new catalog starts its
-// operations past it, so that a new one never meets an old one's folder or part (specs.md §9, §17).
+// HighestOpID gives the highest operation id the disk's work folder names, 0 when it names none: a folder of its
+// trash, trash/<date>/<op id>/, the chunks a repair overwrote, trash/<date>/<op id>.chunks/, a copy in progress,
+// tmp/<op id>.part, or a chunk a repair was saving, tmp/<op id>.<index>.part, each read as Atoll writes it. A new
+// catalog starts its operations past it, so that a new one never meets an old one's folder or part (specs.md §9,
+// §17). A date of the trash that cannot be read says nothing of what it holds: that is an error, never a lower id.
 func (d *Disk) HighestOpID() (int64, error) {
 	highest := int64(0)
 	trash, err := d.open(components(d.config.Workdir, layout.TrashFolder))
@@ -257,18 +257,23 @@ func (d *Disk) HighestOpID() (int64, error) {
 		}
 		for _, day := range days {
 			below, err := trash.OpenDir(day)
-			if err != nil {
+			switch {
+			case fsx.IsUnreadableName(err):
+				// Not a folder, or gone since it was listed: it holds no operation's.
 				continue
+			case err != nil:
+				trash.close()
+				return 0, classify(fmt.Errorf("list the trash: %w", err))
 			}
-			ids, err := below.Names()
+			folders, err := below.Names()
 			_ = below.Close()
 			if err != nil {
 				trash.close()
 				return 0, classify(fmt.Errorf("list the trash: %w", err))
 			}
-			for _, id := range ids {
-				if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > highest {
-					highest = n
+			for _, name := range folders {
+				if id, _, ok := layout.TrashOp(name); ok {
+					highest = max(highest, id)
 				}
 			}
 		}
@@ -287,10 +292,8 @@ func (d *Disk) HighestOpID() (int64, error) {
 		return 0, classify(fmt.Errorf("list tmp: %w", err))
 	}
 	for _, name := range parts {
-		if id, ok := strings.CutSuffix(name, ".part"); ok {
-			if n, err := strconv.ParseInt(id, 10, 64); err == nil && n > highest {
-				highest = n
-			}
+		if id, _, _, ok := layout.PartOp(name); ok {
+			highest = max(highest, id)
 		}
 	}
 	return highest, nil

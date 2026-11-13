@@ -723,3 +723,83 @@ func TestARepairChecksWhatItWrites(t *testing.T) {
 		t.Errorf("stopped for %q", got)
 	}
 }
+
+// What a repair leaves in tmp/ goes like any other part: the chunk it was saving when it stopped,
+// <op-id>.<index>.part, is removed when a command that writes next opens the disk, once the repair is done or undone,
+// and nothing else there is touched (specs.md §14.2, §16.1). Nothing knew those names: each repair that failed on a
+// disk with no room, which every scrub tries again, left up to 4 MiB there for good.
+func TestTheChunkARepairWasSavingGoesFromTmp(t *testing.T) {
+	t.Run("after a failure", func(t *testing.T) {
+		b, data := repairBench(t, "")
+		b.rotChunks("t2", "a.mkv", data, 1)
+		b.scrub(ScrubOptions{Apply: true})
+		b.fail[b.dirs["t2"]] = func(call, name string) error {
+			if call == "write" && strings.HasSuffix(name, ".part") {
+				return syscall.ENOSPC
+			}
+			return nil
+		}
+		if failed := b.repair(RepairOptions{Apply: true}); len(failed.Items) != 1 || failed.Items[0].Outcome == trash.OutcomeRepaired {
+			t.Fatalf("%+v", failed)
+		}
+		op := b.text("SELECT id FROM ops WHERE kind = 'repair' AND state = 'undone'")
+		left := op + ".1.part"
+		if got := b.parts("t2"); !slices.Equal(got, []string{left}) {
+			t.Fatalf("the repair that failed left %q in tmp/, want %q", got, left)
+		}
+		// What no repair of this disk names stays, however like a repair's its name is.
+		others := []string{op + ".01.part", op + ".1.part.old", "999.1.part"}
+		for _, name := range others {
+			if err := os.WriteFile(filepath.Join(b.dirs["t2"], "Atoll", "tmp", name), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		delete(b.fail, b.dirs["t2"])
+		if done := b.repair(RepairOptions{Apply: true}); len(done.Items) != 1 || done.Items[0].Outcome != trash.OutcomeRepaired {
+			t.Fatalf("%+v", done)
+		}
+		slices.Sort(others)
+		if got := b.parts("t2"); !slices.Equal(got, others) {
+			t.Errorf("tmp/ holds %q, want %q", got, others)
+		}
+	})
+	t.Run("after a crash", func(t *testing.T) {
+		b, data := repairBench(t, "")
+		b.rotChunks("t2", "a.mkv", data, 1)
+		b.scrub(ScrubOptions{Apply: true})
+		stop := errors.New("stopped")
+		b.fail[b.dirs["t2"]] = func(call, name string) error {
+			// The chunk is written and synced in tmp/, and the machine stops as it is moved to the trash.
+			if (call == "rename" || call == "link") && name == "00000001" {
+				panic(stop) //nolint:forbidigo // what stands for kill -9
+			}
+			return nil
+		}
+		func() {
+			defer func() {
+				if err, ok := recover().(error); !ok || !errors.Is(err, stop) {
+					t.Fatalf("it did not stop as the chunk was moved: %v", err)
+				}
+			}()
+			_, _ = Repair(t.Context(), b.db, b.config, b, RepairOptions{Apply: true})
+		}()
+		op := b.text("SELECT id FROM ops WHERE kind = 'repair' AND state = 'planned'")
+		if got := b.parts("t2"); !slices.Equal(got, []string{op + ".1.part"}) {
+			t.Fatalf("the crash left %q in tmp/", got)
+		}
+		delete(b.fail, b.dirs["t2"])
+		// The next command that writes resolves the repair, then cleans tmp/: the part goes with it.
+		if done := b.repair(RepairOptions{Apply: true}); len(done.Items) != 1 || done.Items[0].Outcome != trash.OutcomeRepaired {
+			t.Fatalf("%+v", done)
+		}
+		if got := b.text("SELECT state FROM ops WHERE id = ?", op); got != "undone" {
+			t.Errorf("the repair the crash left is %s", got)
+		}
+		if got := b.parts("t2"); len(got) != 0 {
+			t.Errorf("tmp/ holds %q", got)
+		}
+		if b.read("t2", "a.mkv") != string(data) {
+			t.Error("not repaired")
+		}
+	})
+}

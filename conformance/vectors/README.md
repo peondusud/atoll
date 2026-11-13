@@ -216,6 +216,16 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `chunk_name` | string | the name of that chunk in its folder |
 | `error` | boolean | `true` when the id is not positive, the path is not well-formed, or the index is negative |
 
+### `work_names.json` — the names of the work folder that hold an operation's id (§9, §14.2, §16.1, §17)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `folder` | string | `tmp` for a name of `<workdir>/tmp/`, `trash` for the name of a folder of `<workdir>/trash/<date>/` |
+| `name` | string | the name |
+| `op_id` | integer | the operation it names; absent when it names none, as any name Atoll does not write |
+| `index` | integer | in `tmp`, the index of the chunk a repair saves there, `<op-id>.<index>.part`; absent for a copy's part, `<op-id>.part` |
+| `chunks` | boolean | in `trash`, `true` for a folder of chunks, `<op-id>.chunks` |
+
 ### `prune.json` — what `atoll prune` does with each surplus copy (§17.3)
 
 | Field | Type | Meaning |
