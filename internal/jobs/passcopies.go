@@ -209,7 +209,9 @@ func (p *pass) waitsForWindow(job *catalog.ReplicateJob, s schedule) bool {
 	if job.Refresh || p.config.Policy(job.Path, &size).Mode != "scheduled" {
 		return false
 	}
-	now := time.Unix(0, p.now).In(s.location)
+	// The time as this copy is about to start, not as the pass began: a pass begun inside the window can run for
+	// hours past it, and only the copy under way then ends outside it.
+	now := time.Unix(0, p.machine.Now()).In(s.location)
 	if s.window.Contains(now) {
 		return false
 	}

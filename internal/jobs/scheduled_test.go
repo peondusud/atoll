@@ -81,3 +81,56 @@ func TestARefreshOfAScheduledFileWaitsForNoWindow(t *testing.T) {
 		t.Errorf("%d copies waiting", out.Waiting)
 	}
 }
+
+// A run reads the time as it goes (specs.md §12.3, §14, §14.1). It read it once, as it began: a pass begun a minute
+// before replication.window closed then made every scheduled copy queued, hours past the window; a copy made hours
+// into a pass was recorded as verified when the pass began; and a copy dropped as changed was to be tried again
+// settle after the pass began, a time already past, so that the next pass read the file again at once.
+func TestARunReadsTheClockAsItGoes(t *testing.T) {
+	t.Run("the window", func(t *testing.T) {
+		b := newBenchWith(t, "[defaults]\nmode = \"scheduled\"\nsettle = \"0s\"\n[replication]\nwindow = \"02:00-04:00\"\n", "t1", "t2")
+		b.write("t1", "a", "x")
+		b.write("t1", "b", "y")
+		b.scan(true)
+		// A minute before the window closes, in the local time zone, timezone being left out.
+		began := time.Date(2026, 1, 1, 3, 59, 0, 0, time.Local).UnixNano()
+		b.now = began
+		// The first copy takes two hours: it began inside the window, and ends past it.
+		b.at["copied"] = func() { b.now += 2 * time.Hour.Nanoseconds() }
+		out := b.pass()
+		made := 0
+		for _, name := range []string{"a", "b"} {
+			if outcomeOf(out, KindReplicate, name) == OutcomeReplicated {
+				made++
+			}
+		}
+		if made != 1 {
+			t.Fatalf("%d copies made by a pass whose window closed during the first: %+v, waiting %d, next %v", made, out.Operations, out.Waiting, out.NextDue)
+		}
+		opens := time.Date(2026, 1, 2, 2, 0, 0, 0, time.Local).UnixNano()
+		if out.Waiting != 1 || !out.NextDue.Valid || out.NextDue.Int64 != opens {
+			t.Errorf("waiting %d, next due %v, want 1 and the next window's start %d", out.Waiting, out.NextDue, opens)
+		}
+		// The copy is verified when it was made, not when its pass began.
+		if got := b.count("SELECT verified_ns FROM copies WHERE disk_id = 't2' AND state = 'ok'"); int64(got) != began+2*time.Hour.Nanoseconds() {
+			t.Errorf("verified at %d, want %d, two hours into the pass", got, began+2*time.Hour.Nanoseconds())
+		}
+	})
+	t.Run("a copy to try again", func(t *testing.T) {
+		b := replicatePool(t)
+		b.now += settleNS
+		began := b.now
+		// Two hours into the run, the source changes under the copy.
+		b.at["copied"] = func() {
+			b.now += 2 * time.Hour.Nanoseconds()
+			b.write("t1", "a", "changed!")
+		}
+		out := b.pass()
+		if got := outcomeOf(out, KindReplicate, "a"); got != "changed" {
+			t.Fatalf("outcome %q", got)
+		}
+		if got := b.count("SELECT not_before_ns FROM jobs WHERE kind = 'replicate'"); int64(got) != began+2*time.Hour.Nanoseconds()+settleNS {
+			t.Errorf("to try again at %d, want settle after it was dropped, %d", got, began+2*time.Hour.Nanoseconds()+settleNS)
+		}
+	})
+}

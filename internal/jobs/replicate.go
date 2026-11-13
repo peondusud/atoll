@@ -321,7 +321,7 @@ func (r *replicator) lookAtSource(ctx context.Context, job *catalog.ReplicateJob
 		_ = f.Close()
 		return "", nil
 	case errors.Is(err, ops.ErrGone):
-		if err := catalog.RetryJob(ctx, r.db, job, sql.NullInt64{Int64: r.now + settleOf(r.config, job).Nanoseconds(), Valid: true}, false); err != nil {
+		if err := catalog.RetryJob(ctx, r.db, job, sql.NullInt64{Int64: r.machine.Now() + settleOf(r.config, job).Nanoseconds(), Valid: true}, false); err != nil {
 			return "", fmt.Errorf("catalog: %w", err)
 		}
 		return trash.OutcomeChanged, nil
@@ -378,7 +378,8 @@ func (r *replicator) commit(ctx context.Context, job *catalog.ReplicateJob, op *
 	if err != nil {
 		return "", fmt.Errorf("replicate: %w", err)
 	}
-	if err := catalog.FinishCreate(ctx, r.db, op, job, ops.NewCopyOf(&found), r.now); err != nil {
+	// The time it is now, not when the run began: a run can last hours, and the copy is seen and verified as it ends.
+	if err := catalog.FinishCreate(ctx, r.db, op, job, ops.NewCopyOf(&found), r.machine.Now()); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	r.session.MarkChanged()
@@ -742,7 +743,7 @@ func (c *copier) drop(ctx context.Context, outcome string, retry bool) error {
 	case !retry:
 		err = catalog.EndJob(ctx, c.r.db, c.job)
 	case outcome == trash.OutcomeChanged:
-		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{Int64: c.r.now + settleOf(c.r.config, c.job).Nanoseconds(), Valid: true}, false)
+		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{Int64: c.r.machine.Now() + settleOf(c.r.config, c.job).Nanoseconds(), Valid: true}, false)
 	default:
 		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{}, false)
 	}
