@@ -2,14 +2,17 @@ package ops
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/names"
 )
@@ -182,5 +185,133 @@ func TestForeignWorkdir(t *testing.T) {
 	}
 	if got := TrustedOwners(filepath.Join(t.TempDir(), "none.db")); !slices.Equal(got, []uint32{0}) {
 		t.Errorf("with no catalog: %v", got)
+	}
+}
+
+// onDisk is a machine with nothing but disks to open, each call of which a test may make fail.
+type onDisk struct {
+	fail func(call, name string) error
+}
+
+func (m *onDisk) Mount(string) disks.MountSeen { return disks.MountSeen{} }
+func (m *onDisk) Device(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
+	return disks.DeviceSeen{}
+}
+func (m *onDisk) Root(string, string) disks.RootSeen { return disks.RootSeen{} }
+func (m *onDisk) Now() int64                         { return 0 }
+func (m *onDisk) Space(string) (int64, int64, error) { return 0, 0, nil }
+func (m *onDisk) Checkpoint(string)                  {}
+func (m *onDisk) OpenRoot(mount, root string) (fsx.Dir, error) {
+	return fsx.OpenDir(filepath.Join(mount, root)) //nolint:wrapcheck // a test double
+}
+
+func (m *onDisk) ReadPastCache(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
+	return disks.DeviceSeen{}
+}
+
+func (m *onDisk) OpenTop(mount string) (fsx.Dir, error) {
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return fsx.Fault(top, func(call, name string) error {
+		if m.fail != nil {
+			return m.fail(call, name)
+		}
+		return nil
+	}), nil
+}
+
+// asNTFS3G refuses a rename that must replace nothing, as ntfs-3g and lowntfs-3g do whatever the names (specs.md
+// §17.1): only a link can tell whether a name is free there.
+func asNTFS3G(call, _ string) error {
+	if call == "rename" {
+		return syscall.EINVAL
+	}
+	return nil
+}
+
+// A disk's copy of the catalog is written beside the one before, then put in its place in one step: at any moment
+// the disk holds the one before or the new one (specs.md §9). The one before was removed first, then the new one
+// renamed without replacing anything: on ntfs-3g, which refuses that rename, every backup left the disk with no copy
+// at all, and on any filesystem a failure between the two did.
+func TestPutCatalogReplacesInOneStep(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fail func(call, name string) error
+	}{
+		{"ext4", nil},
+		{"ntfs-3g", asNTFS3G},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mount := t.TempDir()
+			m := &onDisk{fail: tc.fail}
+			d, err := Open(m, &config.Disk{ID: "t1", Mount: mount, Workdir: "Atoll"}, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			file := filepath.Join(mount, "Atoll", CatalogFolder, CatalogName)
+			for _, text := range []string{"one", "two"} {
+				if err := d.PutCatalog(strings.NewReader(text)); err != nil {
+					t.Fatalf("%s: %v", text, err)
+				}
+				if got, err := os.ReadFile(file); err != nil || string(got) != text {
+					t.Fatalf("the disk's copy is %q, %v, want %q", got, err, text)
+				}
+			}
+			// A backup that cannot be put in place leaves the one before.
+			m.fail = func(call, _ string) error {
+				if call == "rename" || call == "plainrename" || call == "link" {
+					return syscall.EACCES
+				}
+				return nil
+			}
+			if err := d.PutCatalog(strings.NewReader("three")); err == nil {
+				t.Error("a backup that could not be put in place is said to be")
+			}
+			if got, err := os.ReadFile(file); err != nil || string(got) != "two" {
+				t.Errorf("after a backup that failed, the disk's copy is %q, %v", got, err)
+			}
+		})
+	}
+}
+
+// A disk's marker is written where nothing is, also on a driver that refuses a rename that must replace nothing:
+// there a link tells whether the name is free, as for every move (specs.md §10, §17.1). On ntfs-3g no marker was
+// ever written.
+func TestWriteMarkerOnNTFS3G(t *testing.T) {
+	const text = "format_version = 1\npool_id = \"p\"\ndisk_id = \"t1\"\nfs_uuid = \"x\"\n"
+	for _, tc := range []struct {
+		name string
+		fail func(call, name string) error
+	}{
+		{"ext4", nil},
+		{"ntfs-3g", asNTFS3G},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mount := t.TempDir()
+			d, err := Open(&onDisk{fail: tc.fail}, &config.Disk{ID: "t1", Mount: mount, Workdir: "Atoll"}, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			for range 2 {
+				// Written, then found as it is.
+				if err := d.WriteMarker(text); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got, err := os.ReadFile(filepath.Join(mount, "Atoll", "disk.toml")); err != nil || string(got) != text {
+				t.Errorf("the marker is %q, %v", got, err)
+			}
+			if err := d.WriteMarker("another"); !errors.Is(err, ErrOtherMarker) {
+				t.Errorf("another marker: %v", err)
+			}
+			left, err := os.ReadDir(filepath.Join(mount, "Atoll"))
+			if err != nil || len(left) != 1 {
+				t.Errorf("the work folder holds %v, %v", left, err)
+			}
+		})
 	}
 }

@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -52,5 +53,44 @@ func TestBackup(t *testing.T) {
 	}
 	if problems, err := Integrity(ctx, db); err != nil || len(problems) != 0 {
 		t.Errorf("the catalog: %q, %v", problems, err)
+	}
+}
+
+// A part a backup left, as one that stopped for want of room or a crash leaves it, goes at the next backup: only one
+// of the very same second did, so a system disk nearly full gave its last room to parts nothing ever removed. And a
+// backup that fails leaves none of its own (specs.md §9).
+func TestABackupLeavesNoPart(t *testing.T) {
+	db, file := newPool(t)
+	ctx := t.Context()
+	dir := filepath.Join(filepath.Dir(file), BackupFolder)
+	if err := fsx.MkdirAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(dir, "catalog-20200101T000000Z.db.part")
+	other := filepath.Join(dir, "notes.txt")
+	for _, name := range []string{old, other} {
+		if err := os.WriteFile(name, []byte("left"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 11, 12, 3, 0, 0, 0, time.UTC).UnixNano()
+	if _, _, err := Backup(ctx, db, file, "p", now); err != nil {
+		t.Fatal(err)
+	}
+	names, err := fsx.ListNames(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(names)
+	// What is no part of a backup stays: the folder is not Atoll's alone.
+	if want := []string{"catalog-20261112T030000Z.db", "notes.txt"}; !slices.Equal(names, want) {
+		t.Errorf("the folder holds %q", names)
+	}
+	// A backup that is not this pool's is refused, and its part goes with it.
+	if _, _, err := Backup(ctx, db, file, "another", now+int64(time.Hour)); err == nil {
+		t.Fatal("a backup checked against another pool passed")
+	}
+	if names, err = fsx.ListNames(dir); err != nil || len(names) != 2 {
+		t.Errorf("after a backup that failed, the folder holds %q, %v", names, err)
 	}
 }

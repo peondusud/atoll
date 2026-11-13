@@ -138,8 +138,9 @@ func (d *Disk) ReadMarker() (text []byte, found bool, err error) {
 }
 
 // WriteMarker writes the disk's Atoll/disk.toml (specs.md §10): the work folder made when it is missing, then the
-// text in <name>.new, synced, renamed to its name without replacing anything, and the folder synced. A marker
-// already there with the same text is left as it is; one with another is ErrOtherMarker.
+// text in <name>.new, synced, moved to its name without replacing anything, as every move is, by a link where the
+// driver refuses such a rename (specs.md §17.1), and the folder synced. A marker already there with the same text is
+// left as it is; one with another is ErrOtherMarker.
 func (d *Disk) WriteMarker(text string) error {
 	old, found, err := d.ReadMarker()
 	switch {
@@ -167,6 +168,10 @@ func (d *Disk) WriteMarker(text string) error {
 	if err == nil {
 		err = w.Sync()
 	}
+	var written fsx.Stat
+	if err == nil {
+		written, err = w.Info()
+	}
 	if closeErr := w.Close(); err == nil {
 		err = closeErr
 	}
@@ -174,9 +179,9 @@ func (d *Disk) WriteMarker(text string) error {
 		_ = f.Unlink(part)
 		return classify(fmt.Errorf("write %q: %w", part, err))
 	}
-	if err := f.Rename(part, f.Dir, layout.MarkerName); err != nil {
+	if err := d.moveNoReplace(f.Dir, part, f.Dir, layout.MarkerName, byKey(keyOf(&written))); err != nil {
 		_ = f.Unlink(part)
-		return classify(fmt.Errorf("rename %q: %w", part, err))
+		return fmt.Errorf("rename %q: %w", part, err)
 	}
 	if err := f.Sync(); err != nil {
 		return classify(fmt.Errorf("sync: %w", err))
@@ -192,8 +197,10 @@ const CatalogFolder = "catalog"
 const CatalogName = "catalog.db"
 
 // PutCatalog writes a catalog backup in the disk's Atoll/catalog/: the folders made when missing, then the copy in
-// <name>.new, synced, then in place of the one before, and the folder synced. A crash leaves the one before, or the
-// new one, and at worst a <name>.new the next backup replaces.
+// <name>.new, synced, then put in place of the one before in one step, a rename that replaces, which every driver
+// gives, and the folder synced (specs.md §9). At any moment the disk holds the one before or the new one, and at
+// worst a <name>.new the next backup replaces. Removing the one before first, to rename without replacing, left the
+// disk with none after a crash in between, and after every backup on a driver that refuses such a rename.
 func (d *Disk) PutCatalog(src io.Reader) error {
 	f, err := d.makeFolders(components(d.config.Workdir, CatalogFolder), nil)
 	if err != nil {
@@ -219,11 +226,12 @@ func (d *Disk) PutCatalog(src io.Reader) error {
 		_ = f.Unlink(part)
 		return classify(fmt.Errorf("write %q: %w", part, err))
 	}
-	if err := f.Unlink(CatalogName); err != nil && !fsx.IsAbsent(err) {
-		return classify(fmt.Errorf("unlink %q: %w", CatalogName, err))
-	}
-	if err := f.Rename(part, f.Dir, CatalogName); err != nil {
+	if err := f.RenamePlain(part, f.Dir, CatalogName); err != nil {
 		return classify(fmt.Errorf("rename %q: %w", part, err))
+	}
+	// The file first, whose own record holds its name on NTFS, then its folder (specs.md §17.1).
+	if err := syncEntry(f.Dir, CatalogName); err != nil {
+		return err
 	}
 	if err := f.Sync(); err != nil {
 		return classify(fmt.Errorf("sync: %w", err))
