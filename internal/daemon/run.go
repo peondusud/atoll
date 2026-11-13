@@ -183,7 +183,11 @@ type loop struct {
 	checkDue     int64
 	passDue      *int64
 	// closed holds what ripe groups said was closed after a write, until a pass takes it (specs.md §14.1).
-	closed  jobs.Closed
+	closed jobs.Closed
+	// origins holds who the ripe groups say made their changes, until a pass takes them: a group is out of the grouping
+	// once ripe, so a turn of the loop that does something else first, as a check, must not lose what it asks for
+	// (specs.md §15.13).
+	origins []string
 	lastEnd *int64
 	// smartDue is when the disks' SMART is next read: nil when it is not (specs.md §23).
 	smartDue *int64
@@ -248,6 +252,29 @@ func (l *loop) notify(state string) {
 	}
 }
 
+// takeRipe takes the groups ripe now out of the grouping, and keeps what they say until a pass takes it: the files closed
+// after a write, the folders that changed, and who made the changes. It gives when the next group is due, and whether
+// one waits.
+func (l *loop) takeRipe(now int64) (groupNext int64, waiting bool) {
+	ripe, _, groupNext, waiting := l.grouping.Ripe(now)
+	for _, path := range ClosedPaths(ripe) {
+		l.closed[path] = true
+	}
+	if len(l.queues) > 0 {
+		for _, folder := range ChangedFolders(ripe) {
+			l.changed[folder] = true
+		}
+	}
+	for _, g := range ripe {
+		for _, o := range g.Origins {
+			if !slices.Contains(l.origins, o) {
+				l.origins = append(l.origins, o)
+			}
+		}
+	}
+	return groupNext, waiting
+}
+
 // run is the loop of §15.13: what Wake says is due, then a sleep until it says to look again.
 func (l *loop) run(ctx context.Context) error {
 	for {
@@ -258,23 +285,7 @@ func (l *loop) run(ctx context.Context) error {
 		default:
 		}
 		now := l.opt.Machine.Now()
-		ripe, _, groupNext, waiting := l.grouping.Ripe(now)
-		for _, path := range ClosedPaths(ripe) {
-			l.closed[path] = true
-		}
-		if len(l.queues) > 0 {
-			for _, folder := range ChangedFolders(ripe) {
-				l.changed[folder] = true
-			}
-		}
-		var origins []string
-		for _, g := range ripe {
-			for _, o := range g.Origins {
-				if !slices.Contains(origins, o) {
-					origins = append(origins, o)
-				}
-			}
-		}
+		groupNext, waiting := l.takeRipe(now)
 		// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
 		nowLocal := time.Unix(0, now).In(l.set.location)
 		opened := l.set.scrubWindow.Opened(nowLocal)
@@ -283,7 +294,7 @@ func (l *loop) run(ctx context.Context) error {
 		window := l.set.window.Opened(nowLocal)
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
-			RipeOrigins: origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
+			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
 			HashPending: l.hashPending && l.opt.Apply,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
@@ -487,6 +498,8 @@ func (l *loop) unwatch(id string) {
 func (l *loop) pass(ctx context.Context, because []string) {
 	start := l.opt.Machine.Now()
 	l.first, l.reloaded, l.gone, l.back = false, false, false, false
+	// The pass walks every disk, which takes in every change the ripe groups told of.
+	l.origins = nil
 	l.log.Info("a pass begins", "because", because)
 	// The sink counts what the pass did instead of keeping each line: a pass over a whole pool would not fit in the
 	// memory of specs.md §26.

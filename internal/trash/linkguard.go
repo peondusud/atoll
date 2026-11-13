@@ -37,6 +37,16 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 	if !s.apply || !s.writable(id) {
 		return nil
 	}
+	if !on {
+		// Off on a disk the guard never wrote to, there is nothing to remove, and no reason to open the disk.
+		used, err := catalog.GuardUsed(ctx, s.db, id)
+		if err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+		if !used {
+			return nil
+		}
+	}
 	handle, err := s.open(ctx, id)
 	if err != nil || handle == nil || !s.writable(id) {
 		return err

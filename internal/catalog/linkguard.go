@@ -44,6 +44,16 @@ func LinkCopies(ctx context.Context, db *sql.DB, disk string) ([]LinkCopy, error
 	return list, nil
 }
 
+// GuardUsed says whether the link guard ever journaled an operation on a disk: only then can its links folder hold
+// anything of Atoll's (specs.md §17).
+func GuardUsed(ctx context.Context, db *sql.DB, disk string) (bool, error) {
+	var used bool
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM ops WHERE disk_id = ? AND link IS NOT NULL)", disk).Scan(&used); err != nil {
+		return false, fmt.Errorf("journal: %w", err)
+	}
+	return used, nil
+}
+
 // TrashKeys gives the inodes of what a disk's trash holds: the entries whose operation is done.
 func TrashKeys(ctx context.Context, db *sql.DB, disk string) (map[string]bool, error) {
 	rows, err := db.QueryContext(ctx, `

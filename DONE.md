@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## What the local CI found on the beta (specs.md §15.13, §16)
+
+Commit "Keep what ripe events ask for until a pass", on `beta`, after `test/ci/run.sh` on `8c3facf` failed two tests of `test/loopdev`, on both kernels.
+
+- **A pass lost to a check.** A group of the watcher leaves the grouping once ripe. When the same turn of the daemon's loop also had a mount check due, the check ran first and the turn ended: what the group asked for was gone, and no pass followed. A file closed then waited for its `settle` rather than being copied at once, and its folder was told to no media server. `TestNotifyMediaServer` failed so 4 runs in 5 on `b5cc156`, the commit that brought it, and 2 in 3 on `8c3facf`, as each pass grew a little longer. The loop now keeps the groups' origins until a pass takes them (`TestRipeGroupsWaitForAPass`, which fails without the change); in qemu the test then passed 5 runs in 5.
+- **`TestScrubFindsRot`** expected a quarantine, which the scrub no longer does by default since `integrity.auto_repair` came with the repair: it now runs without it, as `TestRepairOnEachDriver` covers the repair.
+- **The link guard off** opens a disk only when its journal says the guard wrote to it, through a partial index added to `0008_link_guard.sql` (`ops_by_link`): a pool that never used the guard opens no disk for it at each pass.
+
 ## `balance --move-originals`, and the bytes correctly placed in `atoll status` (specs.md §13.3, §15.11)
 
 Commit "Move user copies with balance --move-originals, and count the bytes correctly placed", on `beta`.

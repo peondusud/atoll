@@ -4,3 +4,7 @@
 -- would go. NULL for every other operation, whose names are below the root or in the trash. A column added rather
 -- than the table made again: link and unlink were in the list of kinds from the start.
 ALTER TABLE ops ADD COLUMN link INTEGER CHECK (link > 0);
+
+-- Whether the guard ever made a link on a disk: with the guard off, a pass looks at a disk's links folder only then,
+-- so that a pool that never used it opens no disk for it. Partial, as nearly no operation has a link.
+CREATE INDEX ops_by_link ON ops(disk_id) WHERE link IS NOT NULL;
