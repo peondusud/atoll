@@ -3733,3 +3733,45 @@ func TestAWalkOfAnotherFolderSaysNothingOfTheDisk(t *testing.T) {
 		t.Errorf("the file is %s", got)
 	}
 }
+
+// A copy yet to make is no copy of its disk (specs.md §14.1): it sits nowhere there. A folder renamed on that disk
+// did not wait any less for it to leave the old name, which it never does: the rename reached no other disk, and the
+// copy, once made, brought the old folder back beside the new one (specs.md §15.12).
+func TestAFolderRenameDoesNotWaitForACopyYetToMake(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "F/x", "x")
+	b.write("t1", "F/y", "y")
+	b.write("t2", "F/y", "y")
+	b.scan(true)
+	b.now += settleNS
+	mount := b.dirs["t2"]
+	b.fail[mount] = func(call, name string) error {
+		if call == "create" && strings.HasSuffix(name, ".part") {
+			return syscall.EACCES
+		}
+		return nil
+	}
+	b.pass()
+	if got := b.count("SELECT count(*) FROM copies WHERE state = 'pending' AND disk_id = 't2'"); got != 1 {
+		t.Fatalf("%d copies yet to make on t2", got)
+	}
+	b.rename("t2", "F", "G")
+	b.settle()
+	b.settle()
+	if !b.exists("t1", "media/G/y") || !b.exists("t1", "media/G/x") || b.exists("t1", "media/F") {
+		t.Fatalf("the rename did not reach the other disk: files %s, entries %s, jobs %s",
+			b.text("SELECT group_concat(CAST(lpath AS TEXT), ' ') FROM (SELECT lpath FROM files ORDER BY lpath)"),
+			b.text("SELECT group_concat(disk_id || ':' || CAST(lpath AS TEXT), ' ') FROM (SELECT disk_id, lpath FROM entries ORDER BY disk_id, lpath)"),
+			b.text("SELECT group_concat(kind || ':' || state, ' ') FROM jobs"))
+	}
+	// The copy is made where its file is now.
+	delete(b.fail, mount)
+	b.now += 24 * 3600_000_000_000
+	b.settle()
+	if !b.exists("t2", "media/G/x") || b.exists("t2", "media/F") {
+		t.Errorf("the copy made later: at G/x %v, a folder F %v", b.exists("t2", "media/G/x"), b.exists("t2", "media/F"))
+	}
+	if got := b.text("SELECT group_concat(state, ' ') FROM files"); got != "ok ok" {
+		t.Errorf("files %s", got)
+	}
+}

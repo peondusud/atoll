@@ -1097,7 +1097,8 @@ func isBelowAnother(list []watch.FolderMove, move watch.FolderMove) bool {
 }
 
 func (p *pass) decideFolder(ctx context.Context, disk string, move watch.FolderMove, positions map[string]int) error {
-	waiting, err := catalog.CopiesBelow(ctx, p.db, disk, move.From)
+	// The copies that are there: one yet to make was never below the old name, and would hold the folder for good.
+	waiting, err := catalog.MadeBelow(ctx, p.db, disk, move.From)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}

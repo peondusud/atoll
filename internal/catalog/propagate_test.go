@@ -162,6 +162,7 @@ func TestQueriesBelowAFolderReadOnlyWhatIsBelowIt(t *testing.T) {
 		args      []any
 	}{
 		{"CopiesBelow", copiesBelowSQL, []any{"u1", lo, hi}},
+		{"MadeBelow", madeBelowSQL, []any{"u1", lo, hi}},
 		{"SettledBelow", settledBelowSQL, []any{"u1", lo, hi}},
 		{"AtOwnPathBelow", atOwnPathBelowSQL, []any{"u1", lo, hi}},
 		{"DisksBelow", disksBelowSQL, []any{lo, hi, "u1"}},
