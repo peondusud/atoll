@@ -60,6 +60,9 @@ type Walked struct {
 // concluded from what it found (invariant 4).
 var ErrInterrupted = errors.New("the disk did not answer")
 
+// errFolderGone says that a folder went between its opening and its listing: walkBelow reports it.
+var errFolderGone = errors.New("the folder went once it was opened")
+
 // Walk reads everything below a root, through handles, never following a symlink. A listed name
 // that can no longer be reached is reported, and any other error stops the walk.
 func Walk(ctx context.Context, root fsx.Dir) (*Walked, error) {
@@ -81,7 +84,12 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, top *fsx.Stat, 
 		return fmt.Errorf("walk: %w", err)
 	}
 	names, err := dir.Names()
-	if err != nil {
+	switch {
+	case prefix != "" && fsx.IsUnreadableName(err):
+		// Removed once it was opened: it can no longer be reached by its name, which says nothing of the disk. The
+		// root is no such folder: one that is gone is the disk's.
+		return errFolderGone
+	case err != nil:
 		return fmt.Errorf("%w: %q: %w", ErrInterrupted, prefix, err)
 	}
 	for _, name := range names {
@@ -149,6 +157,13 @@ func walkBelow(ctx context.Context, dir fsx.Dir, name, path string, top *fsx.Sta
 	walkErr := walkFolder(ctx, below, path+"/", top, w)
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = below.Close()
+	if errors.Is(walkErr, errFolderGone) {
+		// As one that could not be opened: reported, with no row, its entry being the last one added, as nothing of
+		// it was listed.
+		w.Entries = w.Entries[:len(w.Entries)-1]
+		w.Unreadable = append(w.Unreadable, path)
+		return nil
+	}
 	return walkErr
 }
 

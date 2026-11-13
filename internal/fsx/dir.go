@@ -17,6 +17,9 @@ import (
 // ErrNotARegularFile says that a name no longer leads to a regular file.
 var ErrNotARegularFile = errors.New("not a regular file")
 
+// ErrNotALink says that a name no longer leads to a symbolic link.
+var ErrNotALink = errors.New("not a symbolic link")
+
 // ErrNotOpened says that SyncEntry could not open what a name leads to, and so synced nothing: why is in
 // the error it wraps beside it.
 var ErrNotOpened = errors.New("not opened")
@@ -262,6 +265,10 @@ func (d *realDir) ReadLink(name string) (string, error) {
 	for size := 4096; ; size *= 2 {
 		buf := make([]byte, size)
 		n, err := unix.Readlinkat(d.fd(), name, buf)
+		if errors.Is(err, unix.EINVAL) {
+			// What readlink says of a name that is no symbolic link: it was one when it was looked at.
+			return "", fmt.Errorf("read link %q: %w: %w", name, ErrNotALink, err)
+		}
 		if err != nil {
 			return "", fmt.Errorf("read link %q: %w", name, err)
 		}
@@ -691,7 +698,8 @@ func splitPath(path string) (folders []string, name string) {
 // that name: gone since it was listed, a name the driver cannot read, or no longer what it was.
 // It says nothing about the disk (specs.md §15.10).
 func IsUnreadableName(err error) bool {
-	return errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, ErrNotARegularFile)
+	return errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) ||
+		errors.Is(err, ErrNotARegularFile) || errors.Is(err, ErrNotALink)
 }
 
 // IsDiskLost says whether an error means that the disk cannot be relied on any more (invariant 4).

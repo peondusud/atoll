@@ -17,7 +17,7 @@ type faultDir struct {
 func (d *faultDir) Unwrap() Dir { return d.Dir }
 
 func (d *faultDir) Names() ([]string, error) {
-	if err := d.fail("names", ""); err != nil {
+	if err := d.fail("names", d.name); err != nil {
 		return nil, err
 	}
 	return d.Dir.Names()
