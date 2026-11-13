@@ -1212,6 +1212,12 @@ func readCopy(ctx context.Context, reader *diskReader, path string, cp *catalog.
 		reader.fail(err)
 		return copyHash{}, false, nil
 	}
+	// Before a byte of it is read: a copy that is no longer what its row says is the next pass's to look at, and a
+	// file still being written would otherwise be read from end to end, each time, to be left aside.
+	if !matchesRow(&before, cp) {
+		reader.report.Changed = append(reader.report.Changed, path)
+		return copyHash{}, false, nil
+	}
 	sum, chunks, err := integrity.HashReader(ctx, file)
 	switch {
 	case ctx.Err() != nil:
@@ -1226,7 +1232,7 @@ func readCopy(ctx context.Context, reader *diskReader, path string, cp *catalog.
 		return copyHash{}, false, nil
 	}
 	reader.report.Hashed++
-	if !sameVersion(&before, &after) || !matchesRow(&before, cp) {
+	if !sameVersion(&before, &after) {
 		reader.report.Changed = append(reader.report.Changed, path)
 		return copyHash{}, false, nil
 	}
