@@ -80,10 +80,14 @@ func readSecret(file string) (string, error) {
 	return secret, nil
 }
 
+// direct is the client of a request that carries a token or a key: it follows no redirect, as the secret would go to
+// whatever host the answer names. The address in the configuration is the server's own.
+var direct = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
 // do sends a request and reads the answer, which must be 2xx; the body read is at most limit bytes.
 func do(client *http.Client, req *http.Request, limit int64) ([]byte, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = direct
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -94,6 +98,9 @@ func do(client *http.Client, req *http.Request, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode/100 == 3 {
+		return nil, fmt.Errorf("%s: a redirect, which is not followed: write the address it leads to in the configuration", resp.Status)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("%s: %s", resp.Status, bytes.TrimSpace(body[:min(len(body), 512)]))

@@ -27,6 +27,24 @@ type AnswerError struct {
 
 func (e *AnswerError) Error() string { return e.Status + ": " + e.Text }
 
+// direct is the client of a request that carries a token: it follows no redirect, as the token, and the alert with
+// it, would go to whatever host the answer names, and a POST redirected with 301 or 302 becomes a GET that sends
+// nothing. The address in the configuration is the server's own.
+var direct = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// notFollowed is what an answer that redirects says in place of its text, which names where it leads: on a public
+// ntfy server that address holds the topic, which is the secret.
+const notFollowed = "a redirect, which is not followed: write the address it leads to in the configuration"
+
+// answerText gives what an answer that is not 2xx says, from at most 512 bytes of it.
+func answerText(resp *http.Response) string {
+	if resp.StatusCode/100 == 3 {
+		return notFollowed
+	}
+	text, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return string(bytes.TrimSpace(text))
+}
+
 // Channel sends alerts somewhere.
 type Channel interface {
 	// Name is the configuration key that sets the channel.
@@ -70,7 +88,7 @@ func readToken(file string) (string, error) {
 type Ntfy struct {
 	URL       string
 	TokenFile string
-	Client    *http.Client // http.DefaultClient when nil
+	Client    *http.Client // one that follows no redirect when nil
 }
 
 // Name is the key of the channel.
@@ -97,7 +115,7 @@ func (n *Ntfy) Send(ctx context.Context, m *Message) error {
 	}
 	client := n.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = direct
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -109,9 +127,8 @@ func (n *Ntfy) Send(ctx context.Context, m *Message) error {
 		return fmt.Errorf("ntfy: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	text, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("ntfy: %w", &AnswerError{Status: resp.Status, Text: string(bytes.TrimSpace(text))})
+		return fmt.Errorf("ntfy: %w", &AnswerError{Status: resp.Status, Text: answerText(resp)})
 	}
 	return nil
 }
