@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/peondusud/atoll/internal/alerts"
@@ -34,6 +35,14 @@ const retryAfter = time.Minute
 // alertRetry is when a pass comes again after an alert could not be sent, so that it is tried again soon
 // (specs.md §23).
 const alertRetry = 5 * time.Minute
+
+// remountTimeout is how long umount, then mount, may each take at a remount, which is what systemd gives a mount: a
+// disk that died halfway can hold one for good, and the loop does nothing else meanwhile. remountLinger is how long
+// one that was killed is then waited for: a helper it started may keep its output open.
+const (
+	remountTimeout = 90 * time.Second
+	remountLinger  = time.Second
+)
 
 // hashSlice is how long the daemon reads new files' hashes under the catalog's lock at a time, so that a command
 // never waits long for it, and events and checks come in between.
@@ -62,17 +71,19 @@ var ErrStartup = errors.New("the daemon cannot start")
 
 // settings is what the loop reads of the configuration.
 type settings struct {
-	catalog      string
-	viewMount    string
-	debounce     time.Duration
-	rescanEvery  time.Duration
-	window       value.Window
-	location     *time.Location
-	remount      bool
-	minFree      value.MinFree
-	disksByID    map[string]*config.Disk
-	checkEvery   time.Duration
-	fstab        string
+	catalog     string
+	viewMount   string
+	debounce    time.Duration
+	rescanEvery time.Duration
+	window      value.Window
+	location    *time.Location
+	remount     bool
+	minFree     value.MinFree
+	disksByID   map[string]*config.Disk
+	checkEvery  time.Duration
+	fstab       string
+	// remountWait is for tests: remountTimeout.
+	remountWait  time.Duration
 	resetReasons []disks.Reason
 	channels     []alerts.Channel
 	servers      []notify.Server
@@ -431,7 +442,9 @@ func (l *loop) add(e watch.Event) {
 // check runs the mount check of every disk, follows what changed, and tries the remount of a disk a USB reset
 // took (specs.md §15.13).
 func (l *loop) check(ctx context.Context) {
-	l.checkDue = l.opt.Machine.Now() + l.set.checkEvery.Nanoseconds()
+	// From its end: a check that took longer than the time between two, as one that waited for a remount, would
+	// otherwise be due again at once, and it comes before every pass.
+	defer func() { l.checkDue = l.opt.Machine.Now() + l.set.checkEvery.Nanoseconds() }()
 	verdicts, err := disks.CheckAll(ctx, l.opt.Machine, l.opt.Config.Disks)
 	if err != nil {
 		l.log.Warn("the mount check stopped", "error", err)
@@ -485,18 +498,39 @@ func (l *loop) remount(ctx context.Context, d *config.Disk) {
 	if err != nil || !fstabHas(table, d.Mount) {
 		return
 	}
-	if out, err := exec.CommandContext(ctx, "umount", "-l", d.Mount).CombinedOutput(); err != nil {
+	if out, err := l.command(ctx, "umount", "-l", d.Mount); err != nil {
 		l.log.Info("umount before the remount", "disk", d.ID, "error", err, "output", string(out))
 	}
 	args := []string{d.Mount}
 	if l.set.fstab != "/etc/fstab" {
 		args = []string{"-T", l.set.fstab, d.Mount}
 	}
-	if out, err := exec.CommandContext(ctx, "mount", args...).CombinedOutput(); err != nil {
+	if out, err := l.command(ctx, "mount", args...); err != nil {
 		l.log.Warn("the remount failed", "disk", d.ID, "error", err, "output", string(out))
 		return
 	}
 	l.log.Info("remounted after a reset", "disk", d.ID, "mount", d.Mount)
+}
+
+// command runs a command of the remount and gives what it wrote. Past remountTimeout it is killed, with what it
+// started, and is waited for no longer than remountLinger: the next check tries again (specs.md §15.13).
+func (l *loop) command(ctx context.Context, name string, args ...string) ([]byte, error) {
+	wait := l.set.remountWait
+	if wait <= 0 {
+		wait = remountTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// A group of its own, so that the kill reaches the helpers mount starts, as mount.ntfs-3g.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = remountLinger
+	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() != nil {
+		return out, fmt.Errorf("no answer within %v: %w", wait, err)
+	}
+	return out, err //nolint:wrapcheck // the command's own error, which the caller logs
 }
 
 func (l *loop) watch(ctx context.Context, id string) {
