@@ -212,6 +212,11 @@ func (s *Session) MarkChanged() {
 	s.changed = true
 }
 
+// Changed says that something this session did, or was told of, may have changed the state of a file.
+func (s *Session) Changed() bool {
+	return s.changed
+}
+
 // Lost says that a disk could not be relied on, or an operation stayed planned, in this run.
 func (s *Session) Lost() bool {
 	return s.lost

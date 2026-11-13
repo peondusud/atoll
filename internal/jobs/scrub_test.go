@@ -403,3 +403,35 @@ func TestAScrubLeavesACopyItCannotOpen(t *testing.T) {
 		}
 	}
 }
+
+// A scrub that only verified copies changed no state, and works none out (specs.md §16). It ended by a plan of the
+// whole pool whatever it had done, and the daemon scrubs by slices of 30 s: a night of plans for nothing. One that
+// found a corrupt copy, as one that repaired or moved a copy, called a conflict or lost a disk, works them out.
+func TestAScrubThatOnlyVerifiedWorksNoStateOut(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	data := film()
+	for _, id := range []string{"t1", "t2"} {
+		b.write(id, "a.mkv", string(data))
+		b.write(id, "b.mkv", "another")
+	}
+	b.scan(true)
+	b.now += int64(month)
+	// A state that only working the states out puts right.
+	b.exec("UPDATE files SET state = 'degraded'")
+	out := b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+	if t1 := diskOf(out, "t1"); t1.Read != 2 || len(t1.Corrupt) != 0 || out.Partial {
+		t.Fatalf("%+v", out)
+	}
+	if got := b.count("SELECT count(*) FROM files WHERE state = 'degraded'"); got != 2 {
+		t.Errorf("%d files left as they were: a scrub that verified worked the states out", got)
+	}
+	b.now += int64(month)
+	b.rotChunks("t2", "a.mkv", data, 1)
+	out = b.scrub(ScrubOptions{Apply: true})
+	if t2 := diskOf(out, "t2"); !slices.Equal(t2.Corrupt, []string{"a.mkv"}) {
+		t.Fatalf("%+v", out)
+	}
+	if got := b.text("SELECT group_concat(state, ',') FROM (SELECT state FROM files ORDER BY lpath)"); got != "corrupt,ok" {
+		t.Errorf("the files are %s: a scrub that found a corrupt copy works the states out", got)
+	}
+}

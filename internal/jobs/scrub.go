@@ -88,7 +88,9 @@ type scrubber struct {
 	// remake holds the files a copy of which was repaired whole: replication makes it again once the scrub is over.
 	remake []string
 	// run is what the repair of a copy takes from this scrub (specs.md §16.1).
-	run      *repairRun
+	run *repairRun
+	// changed says that this scrub found a copy corrupt, or in conflict: a state changed.
+	changed  bool
 	now      int64
 	due      int64 // a copy verified at or before it is due
 	deadline int64
@@ -159,8 +161,13 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 			return nil, fmt.Errorf("%w", err)
 		}
 		out.Partial = out.Partial || session.Lost()
-		if err := session.Settle(ctx); err != nil {
-			return nil, fmt.Errorf("%w", err)
+		// A scrub that only verified copies changed no state. The plan of the whole pool is for one that found a copy
+		// corrupt or in conflict, repaired or moved one, or lost a disk: the daemon scrubs by slices of 30 s, and each
+		// ended by that plan, a night of them for nothing (specs.md §16).
+		if s.changed || session.Changed() || session.Lost() {
+			if err := session.Settle(ctx); err != nil {
+				return nil, fmt.Errorf("%w", err)
+			}
 		}
 		if err := s.run.callConflicts(ctx); err != nil {
 			return nil, err
@@ -371,6 +378,7 @@ func (s *scrubber) readChunk(f fsx.File, size, i int64, want []byte) (bool, erro
 func (s *scrubber) conflict(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
 	sd.Conflict = append(sd.Conflict, cp.Path)
 	slog.Warn("a copy never verified holds another version of its file: a conflict", "disk", d.ID, "path", cp.Path)
+	s.changed = true
 	if s.opts.Apply {
 		if err := catalog.WriteHashes(ctx, s.db, s.now, &catalog.HashWrite{FileID: cp.FileID, Conflict: true}); err != nil {
 			return fmt.Errorf("catalog: %w", err)
@@ -382,6 +390,7 @@ func (s *scrubber) conflict(ctx context.Context, d *config.Disk, cp *catalog.Scr
 func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
 	sd.Corrupt = append(sd.Corrupt, cp.Path)
 	slog.Warn("a corrupt copy", "disk", d.ID, "path", cp.Path)
+	s.changed = true
 	if s.opts.Apply {
 		if err := catalog.MarkCopyCorrupt(ctx, s.db, cp.FileID, d.ID, cp.Path, s.now); err != nil {
 			return fmt.Errorf("catalog: %w", err)
