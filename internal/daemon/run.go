@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/peondusud/atoll/internal/alerts"
@@ -34,6 +35,14 @@ const retryAfter = time.Minute
 // alertRetry is when a pass comes again after an alert could not be sent, so that it is tried again soon
 // (specs.md §23).
 const alertRetry = 5 * time.Minute
+
+// remountTimeout is how long umount, then mount, may each take at a remount, which is what systemd gives a mount: a
+// disk that died halfway can hold one for good, and the loop does nothing else meanwhile. remountLinger is how long
+// one that was killed is then waited for: a helper it started may keep its output open.
+const (
+	remountTimeout = 90 * time.Second
+	remountLinger  = time.Second
+)
 
 // hashSlice is how long the daemon reads new files' hashes under the catalog's lock at a time, so that a command
 // never waits long for it, and events and checks come in between.
@@ -62,17 +71,19 @@ var ErrStartup = errors.New("the daemon cannot start")
 
 // settings is what the loop reads of the configuration.
 type settings struct {
-	catalog      string
-	viewMount    string
-	debounce     time.Duration
-	rescanEvery  time.Duration
-	window       value.Window
-	location     *time.Location
-	remount      bool
-	minFree      value.MinFree
-	disksByID    map[string]*config.Disk
-	checkEvery   time.Duration
-	fstab        string
+	catalog     string
+	viewMount   string
+	debounce    time.Duration
+	rescanEvery time.Duration
+	window      value.Window
+	location    *time.Location
+	remount     bool
+	minFree     value.MinFree
+	disksByID   map[string]*config.Disk
+	checkEvery  time.Duration
+	fstab       string
+	// remountWait is for tests: remountTimeout.
+	remountWait  time.Duration
 	resetReasons []disks.Reason
 	channels     []alerts.Channel
 	servers      []notify.Server
@@ -171,6 +182,9 @@ type loop struct {
 	disks    map[string]*diskState
 
 	first, reloaded, gone, back bool
+	// afterPass says that the last step the loop took was a pass, a check aside: another step due then runs before a
+	// pass for events or next_due alone (specs.md §15.13).
+	afterPass bool
 	// hashPending says that files may be waiting for their hash: set by each pass, cleared once none is left.
 	hashPending bool
 	// scrubSpent is what the scrub spent in the stretch of its window that began at scrubOpened, and scrubIdle the
@@ -284,6 +298,7 @@ func (l *loop) run(ctx context.Context) error {
 			return nil
 		default:
 		}
+		l.listen()
 		now := l.opt.Machine.Now()
 		groupNext, waiting := l.takeRipe(now)
 		// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
@@ -293,7 +308,7 @@ func (l *loop) run(ctx context.Context) error {
 		// One catalog backup a stretch of maintenance.window.
 		window := l.set.window.Opened(nowLocal)
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
-		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, PassDueNS: l.passDue,
+		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
 			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
 			HashPending: l.hashPending && l.opt.Apply,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
@@ -314,7 +329,12 @@ func (l *loop) run(ctx context.Context) error {
 		}
 		if len(out.Because) > 0 {
 			l.pass(ctx, out.Because)
+			l.afterPass = true
 			continue
+		}
+		if out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+			// The turn another step has after a pass.
+			l.afterPass = false
 		}
 		if out.Notify {
 			l.tell(ctx)
@@ -374,6 +394,12 @@ func (l *loop) reload() {
 	}
 	l.opt.Config, l.set = c, set
 	l.queues = newQueues(set.servers, l.queues)
+	// What was made from the configuration read before takes the new one too: the groups that wait are ripe by the
+	// new debounce, and the view's process is told by the new mount (specs.md §15.1).
+	if err := l.grouping.SetDebounce(set.debounce.Nanoseconds()); err != nil {
+		l.log.Warn("the debounce read before stays", "error", err)
+	}
+	l.watcher.SetViewMount(set.viewMount)
 	for id := range l.disks {
 		if set.disksByID[id] == nil {
 			l.unwatch(id)
@@ -386,6 +412,23 @@ func (l *loop) reload() {
 		l.smartDue = smartFirst(l.opt.Machine)
 	}
 	l.log.Info("the configuration was read again", "disks", len(c.Disks))
+}
+
+// listen takes, without waiting, what the watcher and SIGHUP said since the last turn. The sleep is not the only time
+// they are heard: a step due turn after turn, as the hashes of a large pool's new files are slice after slice, would
+// keep every change and every reload waiting until it is over, the watcher's queue filling meanwhile (specs.md
+// §15.13).
+func (l *loop) listen() {
+	for {
+		select {
+		case e := <-l.watcher.Events():
+			l.add(e)
+		case <-l.opt.Reload:
+			l.reload()
+		default:
+			return
+		}
+	}
 }
 
 // add puts an event, and every other already waiting, in its group.
@@ -405,7 +448,9 @@ func (l *loop) add(e watch.Event) {
 // check runs the mount check of every disk, follows what changed, and tries the remount of a disk a USB reset
 // took (specs.md §15.13).
 func (l *loop) check(ctx context.Context) {
-	l.checkDue = l.opt.Machine.Now() + l.set.checkEvery.Nanoseconds()
+	// From its end: a check that took longer than the time between two, as one that waited for a remount, would
+	// otherwise be due again at once, and it comes before every pass.
+	defer func() { l.checkDue = l.opt.Machine.Now() + l.set.checkEvery.Nanoseconds() }()
 	verdicts, err := disks.CheckAll(ctx, l.opt.Machine, l.opt.Config.Disks)
 	if err != nil {
 		l.log.Warn("the mount check stopped", "error", err)
@@ -441,7 +486,21 @@ func (l *loop) check(ctx context.Context) {
 		if remountWanted(d, st) {
 			l.remount(ctx, d)
 		}
+		if st.watched && st.state != disks.Missing && d.State != config.DiskFailed && !l.watcher.Alive(d.ID) {
+			l.rearm(ctx, d.ID)
+		}
 	}
+}
+
+// rearm watches again a disk whose watch ended while the disk stayed there: its reader stopped on an error, or the
+// disk was unmounted and mounted again between two checks, which found it mounted both times, while the kernel's
+// marks went with the filesystem that was unmounted (specs.md §15.1). What changed meanwhile was heard by nobody: the
+// disk is looked at whole, as after an overflow, once it is watched again.
+func (l *loop) rearm(ctx context.Context, id string) {
+	l.log.Warn("the watch of a disk ended: it is watched again, and the disk looked at whole", "disk", id)
+	l.unwatch(id)
+	l.watch(ctx, id)
+	l.add(watch.Event{Disk: id, Kind: watch.KindOverflow, Origin: watch.OriginUnknown, AtNS: l.opt.Machine.Now()})
 }
 
 // remountWanted says whether to try the remount of a disk: missing for a reason a USB reset gives, not failed, and
@@ -459,18 +518,39 @@ func (l *loop) remount(ctx context.Context, d *config.Disk) {
 	if err != nil || !fstabHas(table, d.Mount) {
 		return
 	}
-	if out, err := exec.CommandContext(ctx, "umount", "-l", d.Mount).CombinedOutput(); err != nil {
+	if out, err := l.command(ctx, "umount", "-l", d.Mount); err != nil {
 		l.log.Info("umount before the remount", "disk", d.ID, "error", err, "output", string(out))
 	}
 	args := []string{d.Mount}
 	if l.set.fstab != "/etc/fstab" {
 		args = []string{"-T", l.set.fstab, d.Mount}
 	}
-	if out, err := exec.CommandContext(ctx, "mount", args...).CombinedOutput(); err != nil {
+	if out, err := l.command(ctx, "mount", args...); err != nil {
 		l.log.Warn("the remount failed", "disk", d.ID, "error", err, "output", string(out))
 		return
 	}
 	l.log.Info("remounted after a reset", "disk", d.ID, "mount", d.Mount)
+}
+
+// command runs a command of the remount and gives what it wrote. Past remountTimeout it is killed, with what it
+// started, and is waited for no longer than remountLinger: the next check tries again (specs.md §15.13).
+func (l *loop) command(ctx context.Context, name string, args ...string) ([]byte, error) {
+	wait := l.set.remountWait
+	if wait <= 0 {
+		wait = remountTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// A group of its own, so that the kill reaches the helpers mount starts, as mount.ntfs-3g.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = remountLinger
+	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() != nil {
+		return out, fmt.Errorf("no answer within %v: %w", wait, err)
+	}
+	return out, err //nolint:wrapcheck // the command's own error, which the caller logs
 }
 
 func (l *loop) watch(ctx context.Context, id string) {
@@ -557,6 +637,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	l.log.Info("a pass ended", "because", because, "seconds", float64(end-start)/1e9, "decisions", sink.decisions,
 		"operations", sink.operations, "waiting", outcome.Waiting, "partial", outcome.Partial, "held", outcome.Held)
 	l.sendAlerts(ctx, due)
+	l.remindAt(due)
 	if l.opt.OnPass != nil {
 		l.opt.OnPass(because, outcome)
 	}
@@ -605,6 +686,7 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 	facts, err := alerts.Gather(ctx, db, l.opt.Config, now, outcome, refused)
 	if err == nil {
 		facts.Dirty = l.dirtyDisks()
+		facts.Foreign = l.foreignWorkdirs(outcome)
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {
@@ -646,6 +728,18 @@ func (l *loop) sendAlerts(ctx context.Context, due *alerts.Due) {
 		if l.passDue == nil || *l.passDue > retry {
 			l.passDue = &retry
 		}
+	}
+}
+
+// remindAt brings a pass when the next reminder of an alert is due, 24 h after it was last sent (specs.md §23): on a
+// pool where nothing changes, nothing else brings one before the next rescan, and a disk away was told of once.
+func (l *loop) remindAt(due *alerts.Due) {
+	if due == nil || due.RemindNS == 0 {
+		return
+	}
+	if l.passDue == nil || *l.passDue > due.RemindNS {
+		at := due.RemindNS
+		l.passDue = &at
 	}
 }
 

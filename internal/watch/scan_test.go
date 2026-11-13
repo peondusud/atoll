@@ -245,7 +245,7 @@ func TestAnErrorConcludesNothing(t *testing.T) {
 		{"stat", "c", syscall.ENODEV},
 		{"opendir", "sub", syscall.EIO},
 		{"readlink", "link", syscall.EIO},
-		{"stat", "b", syscall.EACCES},
+		{"names", "", syscall.EACCES},
 	} {
 		t.Run(tc.call+"/"+tc.name+"/"+tc.err.Error(), func(t *testing.T) {
 			b := newBench(t, "t1")
@@ -292,7 +292,10 @@ func TestAnErrorConcludesNothing(t *testing.T) {
 }
 
 // TestAnUnreachableNameIsNoAbsence: a listed name that cannot be reached is reported as such, not
-// absent, and the rest of the disk is still read.
+// absent, and the rest of the disk is still read. So is one that refuses the account that asks, EACCES, as the
+// mount of another user below the root does, or a folder when a command runs without Atoll's rights: it says
+// nothing of the disk, which went missing for it at every pass, and it is told apart, for the alert that says so
+// (specs.md §15.10, §23).
 func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 	for _, tc := range []struct {
 		call, name string
@@ -306,6 +309,10 @@ func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 		{"opendir", "sub", syscall.ELOOP, "sub"},
 		{"opendir", "sub", syscall.ENOTDIR, "sub"},
 		{"readlink", "link", syscall.ENOENT, "link"},
+		{"stat", "b", syscall.EACCES, "b"},
+		{"opendir", "sub", syscall.EACCES, "sub"},
+		{"readlink", "link", syscall.EACCES, "link"},
+		{"names", "sub", syscall.EACCES, "sub"},
 	} {
 		t.Run(tc.call+"/"+tc.err.Error(), func(t *testing.T) {
 			b := newBench(t, "t1")
@@ -323,6 +330,13 @@ func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 			if !slices.Equal(r.Unreadable, []string{tc.want}) {
 				t.Errorf("unreadable: %v, want %s", r.Unreadable, tc.want)
 			}
+			var refused []string
+			if errors.Is(tc.err, syscall.EACCES) {
+				refused = []string{tc.want}
+			}
+			if !slices.Equal(r.Refused, refused) {
+				t.Errorf("refused: %v, want %v", r.Refused, refused)
+			}
 			if got := b.count("SELECT count(*) FROM files WHERE lpath = ?", []byte("a")); got != 1 {
 				t.Error("the rest of the disk was not read")
 			}
@@ -331,6 +345,69 @@ func TestAnUnreachableNameIsNoAbsence(t *testing.T) {
 			}
 			if tc.call == "opendir" && r.Folders != 0 {
 				t.Errorf("%d folders counted", r.Folders)
+			}
+		})
+	}
+}
+
+// What is removed or replaced while a walk goes on says nothing of the disk, at whichever call the walk learns it
+// (specs.md §15.10): a folder removed once it was opened, whose listing then answers ENOENT, and a symbolic link
+// replaced by a file once it was looked at, which no longer reads as a link, EINVAL. Each stopped the walk as a disk
+// that fails does: the disk went missing, its branch left the view, and whoever writes under media/ could do it again
+// at every pass. Nothing is injected here: the folder and the link are really removed, at that moment.
+func TestWhatGoesDuringAWalkSaysNothingOfTheDisk(t *testing.T) {
+	for _, tc := range []struct {
+		name, call, at string
+		change         func(media string) error
+	}{
+		{"a folder removed once opened", "names", "sub", func(media string) error { return os.RemoveAll(filepath.Join(media, "sub")) }},
+		{"a link replaced by a file", "readlink", "link", func(media string) error {
+			if err := os.Remove(filepath.Join(media, "link")); err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(media, "link"), []byte("no link"), 0o644)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t, "t1")
+			b.write("t1", "a", "x")
+			b.write("t1", "sub/c", "z")
+			media := filepath.Join(b.dirs["t1"], "media")
+			if err := os.Symlink("a", filepath.Join(media, "link")); err != nil {
+				t.Fatal(err)
+			}
+			if first := b.scan(Options{}); first.Partial() {
+				t.Fatalf("the first scan: %+v", first.Disks[0])
+			}
+			b.write("t1", "new", "w")
+			b.wrap = func(_ string, d fsx.Dir) fsx.Dir {
+				return fsx.Fault(d, func(call, name string) error {
+					if call == tc.call && name == tc.at {
+						if err := tc.change(media); err != nil {
+							t.Error(err)
+						}
+					}
+					return nil
+				})
+			}
+			out := b.scan(Options{})
+			r := out.Disks[0]
+			if out.Partial() || !r.Walked || r.Verdict.State != disks.Online {
+				t.Fatalf("the disk is taken for one that fails: %+v", r)
+			}
+			if !slices.Equal(r.Unreadable, []string{tc.at}) {
+				t.Errorf("unreadable: %v, want %s", r.Unreadable, tc.at)
+			}
+			if got := b.count("SELECT count(*) FROM files WHERE lpath = ?", []byte("new")); got != 1 {
+				t.Error("the rest of the disk was not read")
+			}
+			if got := b.count("SELECT count(*) FROM disks WHERE state = 'missing'"); got != 0 {
+				t.Error("the disk is recorded as missing")
+			}
+			// The walk after it finds what is there now.
+			b.wrap = nil
+			if next := b.scan(Options{}); next.Partial() || len(next.Disks[0].Unreadable) != 0 {
+				t.Errorf("the next scan: %+v", next.Disks[0])
 			}
 		})
 	}

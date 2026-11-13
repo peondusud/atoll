@@ -1,0 +1,107 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §10, §25",
+  "description": "A disk whose work folder is there already and belongs to an account that is neither root's, the command's nor the catalog's owner's is refused with exit 1, and nothing is written: whoever made that folder first reads what Atoll copies through it. Given back, the disk is taken.",
+  "root": true,
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f6b8d1e-3a5c-4e9d-bf4a-6c8d1e3f5a7b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "chown",
+      "disk": "t3",
+      "path": "Atoll",
+      "uid": 1000,
+      "gid": 1000
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t3"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id FROM disks ORDER BY id",
+      "rows": []
+    },
+    {
+      "do": "chown",
+      "disk": "t3",
+      "path": "Atoll",
+      "uid": 0,
+      "gid": 0
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t3"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id FROM disks ORDER BY id",
+      "rows": [
+        [
+          "t1"
+        ],
+        [
+          "t3"
+        ]
+      ]
+    }
+  ]
+}

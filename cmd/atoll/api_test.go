@@ -15,7 +15,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
@@ -235,6 +237,90 @@ func TestTheAPIOverTCP(t *testing.T) {
 	if code := getHealth(t, client, "http://"+listen+"/v1/health", "s3cret"); code != http.StatusOK {
 		t.Errorf("the token: %d", code)
 	}
+}
+
+// A request whose client is gone is given up, not answered for nobody: its context reaches what reads the catalog
+// (specs.md §25.1).
+func TestTheAPIGivesUpARequestThatIsGone(t *testing.T) {
+	_, c := apiPool(t, "")
+	h := newTestAPI(t, c).routes()
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, path := range []string{"/v1/status", "/v1/trash", "/v1/guards"} {
+		if code := serve(gone, h, path); code != http.StatusServiceUnavailable {
+			t.Errorf("%s: %d", path, code)
+		}
+	}
+}
+
+// The answers that read the catalog are made one at a time, as each is made in the daemon's own process and one may
+// plan the whole pool: another waits for it, and gives up with its request (specs.md §25.1).
+func TestTheAPIReadsTheCatalogOneAnswerAtATime(t *testing.T) {
+	_, c := apiPool(t, "")
+	a := newTestAPI(t, c)
+	var running, most atomic.Int32
+	entered, release := make(chan struct{}, 3), make(chan struct{})
+	slow := a.get(a.one(func(*http.Request, *config.Config, io.Writer) (int, error) {
+		most.Store(max(most.Load(), running.Add(1)))
+		defer running.Add(-1)
+		entered <- struct{}{}
+		<-release
+		return http.StatusOK, nil
+	}))
+	codes := make(chan int, 3)
+	for range 3 {
+		go func() { codes <- serve(t.Context(), slow, "/v1/status") }()
+	}
+	<-entered
+	// One whose client gives up while another answer is made never starts.
+	gone, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if code := serve(gone, slow, "/v1/status"); code != http.StatusServiceUnavailable {
+		t.Errorf("a request that gave up while waiting: %d", code)
+	}
+	if n := len(entered); n != 0 {
+		t.Errorf("%d more answers started while one was made", n)
+	}
+	close(release)
+	for range 3 {
+		if code := <-codes; code != http.StatusOK {
+			t.Errorf("%d", code)
+		}
+	}
+	if most.Load() != 1 {
+		t.Errorf("%d answers read the catalog at once", most.Load())
+	}
+}
+
+// The limits of a request (specs.md §25.1). A connection that asks nothing more is closed after a minute: one left
+// open for good holds a descriptor of the daemon, which needs them for its disks.
+func TestTheAPIServerLimits(t *testing.T) {
+	s := httpServer(nil)
+	if s.ReadHeaderTimeout != 10*time.Second || s.WriteTimeout != time.Minute || s.IdleTimeout != time.Minute || s.MaxHeaderBytes != 16<<10 {
+		t.Errorf("headers %v, answer %v, idle %v, %d bytes of headers", s.ReadHeaderTimeout, s.WriteTimeout, s.IdleTimeout, s.MaxHeaderBytes)
+	}
+}
+
+// The unit closes the catalog's folder to other accounts. The catalog lists every path of the library, its trash and
+// its history: what the local API gives only through its socket, of mode 0660, or with its token (specs.md §25.1).
+func TestTheUnitClosesTheCatalogsFolder(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "deploy", "atoll.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, want := range []string{"StateDirectory=atoll", "StateDirectoryMode=0750"} {
+		if !slices.Contains(lines, want) {
+			t.Errorf("deploy/atoll.service has no line %q", want)
+		}
+	}
+}
+
+// serve asks a handler for a path, with a request of that context, and gives the status of its answer.
+func serve(ctx context.Context, h http.Handler, path string) int {
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodGet, path, nil))
+	return w.Code
 }
 
 // api/openapi.yaml lists exactly the paths the server answers, and each schema it names is there (specs.md §29.3).

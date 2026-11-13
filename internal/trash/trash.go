@@ -60,10 +60,13 @@ type slot struct {
 // writes it, and resolves what a crash left (specs.md §10, §17.2). Without apply it writes nothing
 // to a disk, and looks at them through what a mount check found.
 type Session struct {
-	db        *sql.DB
-	config    *config.Config
-	machine   disks.Machine
-	apply     bool
+	db      *sql.DB
+	config  *config.Config
+	machine disks.Machine
+	apply   bool
+	// writes says that the session may write to the disks: false for one that only confirms them to read through
+	// them, which then resolves nothing a crash left and cleans no tmp/ (specs.md §17.2).
+	writes    bool
 	now       int64
 	retention time.Duration
 	slots     map[string]*slot
@@ -83,8 +86,20 @@ type Session struct {
 
 // Open checks every disk and, when it is going to write, resolves what a crash left.
 func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool) (*Session, error) {
+	return openSession(ctx, db, c, m, apply, apply)
+}
+
+// OpenToRead opens a session that confirms each disk it reads through, as one that writes does, and writes to none: it
+// resolves nothing of what a crash left, and cleans no tmp/ (specs.md §17.2). A scrub that was not told --yes is one:
+// it reads copies through confirmed handles, and records what it finds.
+func OpenToRead(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine) (*Session, error) {
+	return openSession(ctx, db, c, m, true, false)
+}
+
+// openSession is Open, with whether the session may write to the disks: only one that may runs the reprise.
+func openSession(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply, writes bool) (*Session, error) {
 	s := &Session{
-		db: db, config: c, machine: m, apply: apply, now: m.Now(), slots: map[string]*slot{},
+		db: db, config: c, machine: m, apply: apply, writes: writes, now: m.Now(), slots: map[string]*slot{},
 		reprised: map[string]int64{}, repriseTrashed: map[int64]bool{}, emptied: map[string]map[string]bool{}, full: map[string]bool{},
 	}
 	text, _ := c.Effective()["trash.retention"].(string)
@@ -108,7 +123,7 @@ func Open(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, ap
 			sl.config = &c.Disks[i]
 		}
 	}
-	if apply {
+	if writes {
 		if err := s.recoverAll(ctx); err != nil {
 			s.Close()
 			return nil, err
@@ -238,10 +253,18 @@ func (s *Session) recoverAll(ctx context.Context) error {
 			if err := s.lose(ctx, id, err); err != nil {
 				return err
 			}
+			continue
 		case errors.Is(err, context.Canceled):
 			return fmt.Errorf("%w", err)
 		case err != nil:
 			s.lost = true
+		}
+		// What the reprise resolved keeps its parts no more: tmp/ is cleaned after it, as it was when the disk was
+		// opened for what earlier runs had resolved (specs.md §14.2).
+		if s.writable(id) {
+			if err := s.cleanTmp(ctx, id, handle); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -283,7 +306,7 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 				return nil, fmt.Errorf("catalog: %w", err)
 			}
 		}
-		if s.writable(id) {
+		if s.writes && s.writable(id) {
 			if err := s.cleanTmp(ctx, id, handle); err != nil {
 				handle.Close()
 				return nil, err
@@ -464,20 +487,19 @@ func (s *Session) wantedReplicas(f *catalog.FileRow) int {
 	return f.ReplicasTarget
 }
 
-func (s *Session) pruneFile(ctx context.Context, f *catalog.FileRow, position map[string]int, summary *Summary, each func(*PruneItem) error) error {
-	if !hasSurplus(f) {
-		return nil
-	}
+// decidePrune says what becomes of each surplus copy of a file, by position, from a look at each of its copies now
+// (specs.md §17.3). It puts the file's copies in the order of their disks.
+func (s *Session) decidePrune(ctx context.Context, f *catalog.FileRow, position map[string]int) ([]solver.PruneResult, error) {
 	slices.SortFunc(f.Copies, func(a, b catalog.CopyRow) int { return cmp.Compare(position[a.Disk], position[b.Disk]) })
 	if err := s.refreshCtimes(ctx, f); err != nil {
-		return err
+		return nil, err
 	}
 	input := solver.PruneInput{State: solver.State(f.State), Replicas: s.wantedReplicas(f), HasHash: f.Hash != nil}
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		unchanged, err := s.unchanged(ctx, f.Path, c)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		state := solver.DiskMissing
 		if sl := s.slots[c.Disk]; sl != nil {
@@ -490,7 +512,44 @@ func (s *Session) pruneFile(ctx context.Context, f *catalog.FileRow, position ma
 	}
 	results, err := solver.DecidePrune(input)
 	if err != nil {
-		return fmt.Errorf("%q: %w", f.Path, err)
+		return nil, fmt.Errorf("%q: %w", f.Path, err)
+	}
+	return results, nil
+}
+
+// Retire sends the surplus copy a file has on one disk to the trash, for a reason of the caller's, when atoll prune
+// would send it and only then (specs.md §13.3, §17.3): the copies that stay, ok, unchanged and on a disk that can be
+// read, reach the file's level without it, each verified, and the file is neither in conflict nor corrupt. A copy still
+// to make is none of those, whatever the plan keeps it for. It says what became of the copy: trashed; to-trash in a
+// run that may not write; why it stays; and nothing when the file has no surplus copy there.
+func (s *Session) Retire(ctx context.Context, f *catalog.FileRow, disk, reason string) (string, error) {
+	position, err := s.positions(ctx)
+	if err != nil {
+		return "", err
+	}
+	results, err := s.decidePrune(ctx, f, position)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range results {
+		if r.Disk != disk {
+			continue
+		}
+		if r.Outcome == solver.PruneToTrash && s.apply {
+			return s.Send(ctx, f, copyOn(f, disk), reason)
+		}
+		return string(r.Outcome), nil
+	}
+	return "", nil
+}
+
+func (s *Session) pruneFile(ctx context.Context, f *catalog.FileRow, position map[string]int, summary *Summary, each func(*PruneItem) error) error {
+	if !hasSurplus(f) {
+		return nil
+	}
+	results, err := s.decidePrune(ctx, f, position)
+	if err != nil {
+		return err
 	}
 	for _, r := range results {
 		c := copyOn(f, r.Disk)
@@ -573,6 +632,10 @@ func (s *Session) unchanged(ctx context.Context, path string, c *catalog.CopyRow
 // Send sends one copy to the trash, and says what became of it (specs.md §17.1).
 func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, error) {
 	place := c.Place(f)
+	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
+	if !s.writable(c.Disk) {
+		return outcomeUnavailable, nil
+	}
 	handle, err := s.open(ctx, c.Disk)
 	if err != nil {
 		return "", err
@@ -818,19 +881,17 @@ func (s *Session) collides(ctx context.Context, e *catalog.TrashEntry) (bool, er
 // makeFolder makes one missing folder for a restore, as an operation of its own, with the mode and
 // owner of the same folder in the trash. One made by someone else meanwhile is theirs, and fine.
 func (s *Session) makeFolder(ctx context.Context, handle *ops.Disk, e *catalog.TrashEntry, folder string) error {
-	op, err := catalog.BeginMkdir(ctx, s.db, e.Disk, folder, s.now)
-	if err != nil {
-		return catalogError{fmt.Errorf("catalog: %w", err)}
-	}
 	trashFolder := strings.TrimSuffix(e.TrashPath, e.Path) + folder
 	like, err := handle.TrashFolderInfo(trashFolder)
 	if err != nil {
 		// Nothing can be said of the mode it should have, and a private folder must not come back open.
-		// Nothing was made, whatever the error says of the disk.
-		if undo := catalog.Undo(ctx, s.db, op, false, s.now); undo != nil {
-			return catalogError{fmt.Errorf("catalog: %w", undo)}
-		}
+		// Nothing is journaled, and nothing made, whatever the error says of the disk.
 		return err
+	}
+	// The look first: the operation holds what the folder is to take, for its reprise.
+	op, err := catalog.BeginMkdir(ctx, s.db, e.Disk, folder, ops.LikeOf(like), s.now)
+	if err != nil {
+		return catalogError{fmt.Errorf("catalog: %w", err)}
 	}
 	st, err := handle.MakeRootFolder(folder, like)
 	switch {
@@ -916,6 +977,16 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 // PurgeInput reads what the choice of what a purge reaches needs, besides the age and the entries a reprise held:
 // trash.max_size, each disk's capacity as the catalog last recorded it, and the entries.
 func PurgeInput(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, entries []catalog.TrashEntry) (*solver.PurgeInput, error) {
+	weights := make([]catalog.TrashWeight, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		weights[i] = catalog.TrashWeight{Disk: e.Disk, OpID: e.OpID, Reason: e.Reason, Size: e.Size, DeletedNS: e.DeletedNS, ExpiresNS: e.ExpiresNS}
+	}
+	return purgeInput(ctx, db, c, nowNS, weights)
+}
+
+// purgeInput is PurgeInput from what the choice needs of each entry.
+func purgeInput(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, entries []catalog.TrashWeight) (*solver.PurgeInput, error) {
 	text, _ := c.Effective()["trash.max_size"].(string)
 	maxSize, err := value.ParsePercent(text)
 	if err != nil {
@@ -947,16 +1018,16 @@ func PurgeInput(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, 
 }
 
 // PurgeDue says whether a purge would reach anything now, reading the catalog only: the daemon looks before it checks
-// a disk (specs.md §15.13).
+// a disk (specs.md §15.13). It reads no path: it is asked after each pass, whatever the trash holds.
 func PurgeDue(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64) (bool, error) {
-	entries, err := catalog.TrashEntries(ctx, db)
+	entries, err := catalog.TrashWeights(ctx, db)
 	if err != nil {
 		return false, fmt.Errorf("catalog: %w", err)
 	}
 	if len(entries) == 0 {
 		return false, nil
 	}
-	in, err := PurgeInput(ctx, db, c, nowNS, entries)
+	in, err := purgeInput(ctx, db, c, nowNS, entries)
 	if err != nil {
 		return false, err
 	}

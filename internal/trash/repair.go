@@ -23,6 +23,10 @@ const (
 // errHealthyChanged says that the healthy copy no longer held what its hashes say while a repair read it.
 var errHealthyChanged = errors.New("the healthy copy changed while read")
 
+// errHealthyLost says that the healthy copy's disk failed when a repair went to read from it: that disk is lost, and
+// the repair stops on a disk that did not fail.
+var errHealthyLost = errors.New("the healthy copy's disk failed")
+
 // Healthy is the copy a repair reads from: another copy of the file, read whole and found to hold what its hashes
 // say (specs.md §16.1).
 type Healthy struct {
@@ -40,6 +44,10 @@ func chunkLength(size, i int64) int64 {
 // hashes. It says what became of the copy, which stays corrupt unless repaired.
 func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, bad []int64, healthy *Healthy, chunks []byte) (string, error) {
 	place := c.Place(f)
+	// A disk that may only be read is never written to, its corrupt copies included (specs.md §10).
+	if !s.writable(c.Disk) {
+		return outcomeUnavailable, nil
+	}
 	handle, err := s.open(ctx, c.Disk)
 	if err != nil {
 		return "", err
@@ -83,21 +91,30 @@ func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catal
 	}
 	s.machine.Checkpoint("journaled")
 	if err := s.saveChunks(handle, op, w, &st, bad, size); err != nil {
-		return s.stopRepair(ctx, handle, op, err)
+		return s.stopRepair(ctx, handle, op, err, false)
 	}
 	// Right before the first write, as saving can be long: an edit in place is never overwritten.
 	if still, err := handle.SourceStill(place, &st); err != nil || !still {
 		if err == nil {
 			err = ops.ErrGone
 		}
-		return s.stopRepair(ctx, handle, op, err)
+		return s.stopRepair(ctx, handle, op, err, false)
 	}
-	if err := s.writeChunks(source, healthy, handle, w, bad, size, chunks); err != nil {
-		return s.stopRepair(ctx, handle, op, err)
+	wrote, err := s.writeChunks(source, healthy, handle, w, bad, size, chunks)
+	if err != nil {
+		// The healthy copy's disk failing is no failure of the disk repaired (invariant 4): that one is lost, and the
+		// repair, which wrote nothing from it, is resolved at once on its own disk, which can still be looked at.
+		if errors.As(err, new(sourceError)) {
+			if lose := s.lose(ctx, healthy.Disk, err); lose != nil {
+				return "", lose
+			}
+			err = errHealthyLost
+		}
+		return s.stopRepair(ctx, handle, op, err, wrote)
 	}
 	after, err := handle.SetTimeBack(w, fsx.TimeOf(c.MtimeNS.Int64))
 	if err != nil {
-		return s.stopRepair(ctx, handle, op, err)
+		return s.stopRepair(ctx, handle, op, err, true)
 	}
 	if err := catalog.FinishRepair(ctx, s.db, op, ops.TimeOf(after.Ctime).Int64, s.now); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
@@ -122,34 +139,41 @@ func (s *Session) saveChunks(handle *ops.Disk, op *ops.Op, w fsx.WritableFile, s
 }
 
 // writeChunks writes each bad chunk in place from the healthy copy, each read there and checked against its hash
-// first, then read back past the page cache.
-func (s *Session) writeChunks(source *ops.Disk, healthy *Healthy, handle *ops.Disk, w fsx.WritableFile, bad []int64, size int64, chunks []byte) error {
+// first, then read back past the page cache. It says whether it wrote to the copy at all, done or not.
+func (s *Session) writeChunks(source *ops.Disk, healthy *Healthy, handle *ops.Disk, w fsx.WritableFile, bad []int64, size int64, chunks []byte) (bool, error) {
 	r, _, err := source.OpenSource(healthy.Known.Path, &healthy.Known)
-	if err != nil {
-		if errors.Is(err, ops.ErrGone) {
-			return errHealthyChanged
-		}
-		return fmt.Errorf("%w", err)
+	switch {
+	case errors.Is(err, ops.ErrGone):
+		return false, errHealthyChanged
+	case errors.Is(err, ops.ErrDiskLost):
+		// An error of the disk read from, which is not the one written to.
+		return false, sourceError{err}
+	case err != nil:
+		// Nothing can be read from it, and nothing says its disk is gone: no healthy copy, as one that changed.
+		slog.Warn("the healthy copy cannot be opened", "disk", healthy.Disk, "path", healthy.Known.Path, "error", err)
+		return false, errHealthyChanged
 	}
 	defer func() { _ = r.Close() }()
 	buf := make([]byte, integrity.ChunkSize)
+	wrote := false
 	for _, i := range bad {
 		data := buf[:chunkLength(size, i)]
 		if n, err := r.ReadAt(data, i*integrity.ChunkSize); n < len(data) {
 			if err != nil && !errors.Is(err, io.EOF) {
 				slog.Warn("the healthy copy cannot be read", "disk", healthy.Disk, "path", healthy.Known.Path, "error", err)
 			}
-			return errHealthyChanged
+			return wrote, errHealthyChanged
 		}
 		want := chunks[i*integrity.HashSize : (i+1)*integrity.HashSize]
 		if sum := integrity.ChunkSum(data); !bytes.Equal(sum[:], want) {
-			return errHealthyChanged
+			return wrote, errHealthyChanged
 		}
+		wrote = true
 		if err := handle.WriteChunk(w, i, data, want); err != nil {
-			return fmt.Errorf("%w", err)
+			return wrote, fmt.Errorf("%w", err)
 		}
 	}
-	return nil
+	return wrote, nil
 }
 
 // readError gives what a short read says: an error, or the file ending sooner than its row.
@@ -161,8 +185,9 @@ func readError(err error) error {
 }
 
 // stopRepair resolves a repair that could not go on, as its reprise would, and says what to report: a disk that
-// fails keeps its operation planned for the reprise (specs.md §16.1).
-func (s *Session) stopRepair(ctx context.Context, handle *ops.Disk, op *ops.Op, cause error) (string, error) {
+// fails keeps its operation planned for the reprise (specs.md §16.1). wrote says that the repair wrote to the copy
+// before it stopped, which a reprise could only work out from what the copy holds.
+func (s *Session) stopRepair(ctx context.Context, handle *ops.Disk, op *ops.Op, cause error, wrote bool) (string, error) {
 	slog.Warn("a repair stopped", "disk", op.Disk, "op", op.ID, "error", cause)
 	if errors.Is(cause, ops.ErrDiskLost) {
 		return OutcomeIOError, s.lose(ctx, op.Disk, cause)
@@ -175,7 +200,7 @@ func (s *Session) stopRepair(ctx context.Context, handle *ops.Disk, op *ops.Op, 
 	case errors.Is(cause, ops.ErrGone), errors.Is(cause, errHealthyChanged):
 		outcome = OutcomeChanged
 	}
-	finished, err := handle.ResolveRepair(ctx, s.db, op, s.now, outcome)
+	finished, err := handle.ResolveRepair(ctx, s.db, op, s.now, outcome, wrote)
 	if err != nil {
 		if errors.Is(err, ops.ErrDiskLost) {
 			return OutcomeIOError, s.lose(ctx, op.Disk, err)

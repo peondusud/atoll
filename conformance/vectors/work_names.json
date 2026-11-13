@@ -1,0 +1,293 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a714.2, \u00a716.1, \u00a717",
+  "description": "The names of a disk's work folder that hold an operation's id, read back. In <workdir>/tmp/: the copy an operation makes, <op-id>.part, and a chunk a repair saves on its way to the trash, <op-id>.<index>.part. In <workdir>/trash/<date>/: an operation's folder, <op-id>, and its folder of chunks, <op-id>.chunks. A name is read only as Atoll writes it: decimal digits 0 to 9, no sign, no leading zero, an id from 1 and an index from 0, each within 63 bits. Any other name names no operation: it is neither removed from tmp/ nor counted when a new catalog starts its operations past those the disks name.",
+  "cases": [
+    {
+      "folder": "tmp",
+      "name": "1.part",
+      "op_id": 1,
+      "note": "the copy the first operation makes"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.part",
+      "op_id": 4813,
+      "note": "a copy in progress (specs.md \u00a714.2)"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.0.part",
+      "op_id": 4813,
+      "index": 0,
+      "note": "the first chunk a repair saves (specs.md \u00a716.1)"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.12.part",
+      "op_id": 4813,
+      "index": 12,
+      "note": "a later chunk: its index is written as it is, not as its name in the trash"
+    },
+    {
+      "folder": "tmp",
+      "name": "9223372036854775807.part",
+      "op_id": 9223372036854775807,
+      "note": "the largest id"
+    },
+    {
+      "folder": "tmp",
+      "name": "9223372036854775807.9223372036854775807.part",
+      "op_id": 9223372036854775807,
+      "index": 9223372036854775807,
+      "note": "the largest id and index"
+    },
+    {
+      "folder": "tmp",
+      "name": "9223372036854775808.part",
+      "note": "an id past 63 bits"
+    },
+    {
+      "folder": "tmp",
+      "name": "1.9223372036854775808.part",
+      "note": "an index past 63 bits"
+    },
+    {
+      "folder": "tmp",
+      "name": "0.part",
+      "note": "no operation has the id 0"
+    },
+    {
+      "folder": "tmp",
+      "name": "0.0.part",
+      "note": "nor a repair"
+    },
+    {
+      "folder": "tmp",
+      "name": "04813.part",
+      "note": "a leading zero: not as Atoll writes it"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.012.part",
+      "note": "an index with a leading zero"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.00.part",
+      "note": "the index 0 is written 0"
+    },
+    {
+      "folder": "tmp",
+      "name": "+4813.part",
+      "note": "a sign"
+    },
+    {
+      "folder": "tmp",
+      "name": "-4813.part",
+      "note": "a negative id"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.-1.part",
+      "note": "a negative index"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.+1.part",
+      "note": "a signed index"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813..part",
+      "note": "no index between the dots"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.1.2.part",
+      "note": "one index at most"
+    },
+    {
+      "folder": "tmp",
+      "name": ".part",
+      "note": "no id"
+    },
+    {
+      "folder": "tmp",
+      "name": ".1.part",
+      "note": "no id before the index"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813",
+      "note": "no suffix"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.",
+      "note": "a dot alone"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.PART",
+      "note": "the suffix is in lower case"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.part.old",
+      "note": "nothing after the suffix"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.part ",
+      "note": "not even a space"
+    },
+    {
+      "folder": "tmp",
+      "name": " 4813.part",
+      "note": "nor one before"
+    },
+    {
+      "folder": "tmp",
+      "name": "4813.chunks",
+      "note": "the name of a folder of the trash"
+    },
+    {
+      "folder": "tmp",
+      "name": "x.part",
+      "note": "no number"
+    },
+    {
+      "folder": "tmp",
+      "name": "0x12.part",
+      "note": "decimal only"
+    },
+    {
+      "folder": "tmp",
+      "name": "1e3.part",
+      "note": "no exponent"
+    },
+    {
+      "folder": "tmp",
+      "name": "4_813.part",
+      "note": "no separator"
+    },
+    {
+      "folder": "tmp",
+      "name": "\uff14\uff18\uff11\uff13.part",
+      "note": "digits other than 0 to 9"
+    },
+    {
+      "folder": "tmp",
+      "name": "catalog-20260101T000000Z.db.part",
+      "note": "another program's part"
+    },
+    {
+      "folder": "trash",
+      "name": "1",
+      "op_id": 1,
+      "note": "the first operation's folder"
+    },
+    {
+      "folder": "trash",
+      "name": "4812",
+      "op_id": 4812,
+      "note": "the example of specs.md \u00a76"
+    },
+    {
+      "folder": "trash",
+      "name": "4813.chunks",
+      "op_id": 4813,
+      "chunks": true,
+      "note": "the chunks a repair overwrote (specs.md \u00a717)"
+    },
+    {
+      "folder": "trash",
+      "name": "9223372036854775807",
+      "op_id": 9223372036854775807,
+      "note": "the largest id"
+    },
+    {
+      "folder": "trash",
+      "name": "9223372036854775807.chunks",
+      "op_id": 9223372036854775807,
+      "chunks": true,
+      "note": "and its chunks"
+    },
+    {
+      "folder": "trash",
+      "name": "9223372036854775808",
+      "note": "an id past 63 bits"
+    },
+    {
+      "folder": "trash",
+      "name": "0",
+      "note": "no operation has the id 0"
+    },
+    {
+      "folder": "trash",
+      "name": "0.chunks",
+      "note": "nor a repair"
+    },
+    {
+      "folder": "trash",
+      "name": "007",
+      "note": "a leading zero"
+    },
+    {
+      "folder": "trash",
+      "name": "007.chunks",
+      "note": "there too"
+    },
+    {
+      "folder": "trash",
+      "name": "+7",
+      "note": "a sign"
+    },
+    {
+      "folder": "trash",
+      "name": "-7",
+      "note": "a negative id"
+    },
+    {
+      "folder": "trash",
+      "name": "4813.chunk",
+      "note": "another suffix"
+    },
+    {
+      "folder": "trash",
+      "name": "4813.CHUNKS",
+      "note": "the suffix is in lower case"
+    },
+    {
+      "folder": "trash",
+      "name": "4813.chunks.old",
+      "note": "nothing after the suffix"
+    },
+    {
+      "folder": "trash",
+      "name": ".chunks",
+      "note": "no id"
+    },
+    {
+      "folder": "trash",
+      "name": "4813.part",
+      "note": "the name of a part of tmp/"
+    },
+    {
+      "folder": "trash",
+      "name": "4813.1",
+      "note": "a chunk has no folder of its own here"
+    },
+    {
+      "folder": "trash",
+      "name": "lost+found",
+      "note": "no number"
+    },
+    {
+      "folder": "trash",
+      "name": "",
+      "note": "no name"
+    }
+  ]
+}

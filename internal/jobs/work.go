@@ -448,7 +448,7 @@ func (p *pass) makeParents(ctx context.Context, d *config.Disk, handle *ops.Disk
 		if err != nil {
 			return err
 		}
-		op, err := catalog.BeginMkdir(ctx, p.db, d.ID, folder, p.now)
+		op, err := catalog.BeginMkdir(ctx, p.db, d.ID, folder, ops.LikeOf(like), p.now)
 		if err != nil {
 			return fmt.Errorf("catalog: %w", err)
 		}
@@ -1320,6 +1320,14 @@ func (p *pass) queuedTrashes(ctx context.Context, d *config.Disk, writable bool)
 	jobs, err := catalog.TrashJobs(ctx, p.db, d.ID)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	// What a real pass queues before it runs anything: the overwrite of a stale copy that lost its job.
+	lost, err := p.staleWithoutJob(ctx, d.ID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range lost {
+		jobs = append(jobs, catalog.TrashJob{FileID: lost[i].FileID, Src: lost[i].Src, Dst: d.ID, Reason: catalog.ReasonOverwritten, State: catalog.JobQueued})
 	}
 	plan := p.planOf(d.ID)
 	var list []Operation

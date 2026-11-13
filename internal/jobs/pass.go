@@ -61,7 +61,15 @@ type DiskLine struct {
 	ID      string
 	Verdict disks.Verdict
 	Walked  bool
+	// Refused counts the names its walk could not reach as they refuse the account that asks, and RefusedFirst holds
+	// the first RefusedShown of them in byte order: what an alert says (specs.md §15.10, §23). They are no part of the
+	// pass's output.
+	Refused      int64
+	RefusedFirst []string
 }
+
+// RefusedShown is how many of the names that refused it a disk's line keeps: as many as an alert names.
+const RefusedShown = 10
 
 // GuardLine is a guard tripped: the mass-deletion guard of a disk, or its mass-modification guard (specs.md §15.6).
 type GuardLine struct {
@@ -202,7 +210,7 @@ func RunClosed(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 	}
 	defer session.Close()
 	p.session = session
-	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.work, p.cleanJobs, p.copies, p.finish} {
+	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.queueStale, p.work, p.cleanJobs, p.copies, p.finish} {
 		if err := step(ctx); err != nil {
 			return nil, err
 		}
@@ -306,12 +314,26 @@ func (p *pass) look(ctx context.Context) error {
 			p.moves[d.ID] = topMoves(report.FolderMoves)
 			p.unfound[d.ID] = report.UnfoundFolders
 		}
-		p.out.Disks = append(p.out.Disks, DiskLine{ID: d.ID, Verdict: report.Verdict, Walked: report.Walked})
+		line := DiskLine{ID: d.ID, Verdict: report.Verdict, Walked: report.Walked}
+		if report.Walked {
+			line.Refused, line.RefusedFirst = firstRefused(report.Refused)
+		}
+		p.out.Disks = append(p.out.Disks, line)
 	}
 	if p.sink != nil {
 		p.sinkErr = p.sink.Disks(p.out.Disks)
 	}
 	return nil
+}
+
+// firstRefused counts the names that refused a walk, and gives the first RefusedShown of them in byte order.
+func firstRefused(names []string) (int64, []string) {
+	if len(names) == 0 {
+		return 0, nil
+	}
+	first := slices.Clone(names)
+	slices.Sort(first)
+	return int64(len(names)), first[:min(len(first), RefusedShown)]
 }
 
 // plannedOn gives the logical paths of the operations left planned on a disk, which are only left on a
@@ -345,6 +367,57 @@ func (p *pass) cleanJobs(ctx context.Context) error {
 		return fmt.Errorf("catalog: %w", err)
 	}
 	return nil
+}
+
+// queueStale gives its trash job again to each stale copy that lost it, once the decisions are made and before
+// anything runs (specs.md §15.4). A decision that drops every trash job of a file drops a stale copy's too: a rename
+// seen after a deletion, a guard rejected, a deletion that no longer stands. Nothing else queues it, so the copy
+// stayed in media/ with the version that came before, where mergerfs serves it when its branch comes first, and no
+// replica of the current version was ever made. A dry run lists them with the jobs that are queued.
+func (p *pass) queueStale(ctx context.Context) error {
+	if !p.apply {
+		return nil
+	}
+	list, err := p.staleWithoutJob(ctx, "")
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		s := &list[i]
+		size := s.Size
+		priority := int64(p.config.Policy(s.Path, &size).Priority)
+		if err := catalog.QueueOverwrite(ctx, p.db, s.FileID, s.Src, s.Disk, priority); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+	}
+	return nil
+}
+
+// staleWithoutJob gives the stale copies with no trash job queued whose overwrite would stand, on one disk or on all,
+// leaving out a copy this pass's look did not find as its row says: that one is a change, which a decision is made
+// of first (specs.md §15.4).
+func (p *pass) staleWithoutJob(ctx context.Context, disk string) ([]catalog.StaleCopy, error) {
+	list, err := catalog.StaleWithoutJob(ctx, p.db, disk)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	kept := list[:0]
+	for i := range list {
+		s := &list[i]
+		f, err := catalog.FileByID(ctx, p.db, s.FileID)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		if f == nil {
+			continue
+		}
+		at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == s.Disk })
+		if at < 0 || !isAsItsRow(p.verdictOf(f, &f.Copies[at])) && p.walked[s.Disk] {
+			continue
+		}
+		kept = append(kept, *s)
+	}
+	return kept, nil
 }
 
 func (p *pass) confirm(ctx context.Context, d *config.Disk) (bool, error) {
@@ -1024,7 +1097,8 @@ func isBelowAnother(list []watch.FolderMove, move watch.FolderMove) bool {
 }
 
 func (p *pass) decideFolder(ctx context.Context, disk string, move watch.FolderMove, positions map[string]int) error {
-	waiting, err := catalog.CopiesBelow(ctx, p.db, disk, move.From)
+	// The copies that are there: one yet to make was never below the old name, and would hold the folder for good.
+	waiting, err := catalog.MadeBelow(ctx, p.db, disk, move.From)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}

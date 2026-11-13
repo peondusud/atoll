@@ -153,6 +153,18 @@ func TestHelp(t *testing.T) {
 			t.Errorf("%v: %d %q", args, code, got)
 		}
 	}
+	// An unknown subcommand is a usage error there too: its command's help was written, with exit 0.
+	for _, args := range [][]string{{"trash", "bogus", "--help"}, {"disk", "bogus", "-h"}, {"catalog", "verifi", "--help", "--json"}} {
+		if code, got, errs := runHelp(args...); code != exitUsage || got != "" || !strings.Contains(errs, args[1]) {
+			t.Errorf("%v: %d %q %q", args, code, got, errs)
+		}
+	}
+	// A command with no subcommand takes whatever its arguments hold.
+	for _, args := range [][]string{{"scan", "bogus", "--help"}, {"daemon", "--help"}, {"status", "x", "y", "-h"}} {
+		if code, got, errs := runHelp(args...); code != exitOK || !strings.HasPrefix(got, "atoll "+args[0]+" ") || errs != "" {
+			t.Errorf("%v: %d %q %q", args, code, got, errs)
+		}
+	}
 	// After "--", --help is a path.
 	if code, got, _ := runHelp("--config", "/nowhere", "trash", "restore", "--", "--help"); code == exitOK || got != "" {
 		t.Errorf("a path named --help: %d %q", code, got)

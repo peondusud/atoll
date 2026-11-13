@@ -14,6 +14,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/trash"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // settleNS is the settle of the bench's configuration: the default, 10m (specs.md §12.3).
@@ -358,5 +359,40 @@ func TestAPassWithReplicationOff(t *testing.T) {
 	}
 	if got := b.count("SELECT count(*) FROM jobs"); got != 0 {
 		t.Errorf("%d queued", got)
+	}
+}
+
+// A copy that is no longer what its row says is not read: it is for the next pass to look at (specs.md §15.10,
+// §15.13). It was compared with its row only once read whole, so that a file still being written, a download of
+// tens of gigabytes, was read from end to end at each slice of the hashes, every 30 s, under the catalog's lock, to
+// be left aside each time.
+func TestACopyThatChangedSinceItsRowIsNotRead(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "x")
+	b.write("t1", "same", "y")
+	b.scan(false)
+	if got := b.count("SELECT count(*) FROM files WHERE blake3 IS NOT NULL"); got != 0 {
+		t.Fatalf("%d files hashed by a scan that reads none", got)
+	}
+	// Still being written: larger than its row says.
+	b.write("t1", "a", "more than the row says")
+	read := map[string]int{}
+	b.walkFail[b.dirs["t1"]] = func(call, name string) error {
+		if call == "read" {
+			read[name]++
+		}
+		return nil
+	}
+	if _, err := watch.HashNew(t.Context(), b.db, b.config, b, b.now+30_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if read["a"] != 0 {
+		t.Errorf("the copy that changed since its row was read %d times", read["a"])
+	}
+	if read["same"] == 0 {
+		t.Error("the copy that is what its row says was not read")
+	}
+	if got := b.text("SELECT group_concat(CAST(lpath AS TEXT), ' ') FROM files WHERE blake3 IS NOT NULL"); got != "same" {
+		t.Errorf("hashed: %q", got)
 	}
 }

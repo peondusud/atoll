@@ -131,3 +131,30 @@ func TestARipeGroupLeaves(t *testing.T) {
 		t.Errorf("again: %+v", ripe)
 	}
 }
+
+// A grouping takes another debounce while it runs, as a configuration read again gives it: the groups that wait are
+// ripe by the new one from then on (specs.md §15.1, §15.13). A negative one is refused, and the one before stays.
+func TestGroupingSetDebounce(t *testing.T) {
+	g, err := NewGrouping(30_000_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Add(Event{Disk: "t1", Path: "a", Kind: KindWritten, Origin: OriginUser, AtNS: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if ripe, waiting, next, ok := g.Ripe(10_000_000_000); len(ripe) != 0 || waiting != 1 || !ok || next != 30_000_000_000 {
+		t.Fatalf("under 30 s: %v, %d, %d, %v", ripe, waiting, next, ok)
+	}
+	if err := g.SetDebounce(-1); err == nil {
+		t.Error("a negative debounce was taken")
+	}
+	if _, _, next, _ := g.Ripe(10_000_000_000); next != 30_000_000_000 {
+		t.Errorf("after a debounce refused, the group is due at %d", next)
+	}
+	if err := g.SetDebounce(5_000_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if ripe, waiting, _, _ := g.Ripe(10_000_000_000); len(ripe) != 1 || waiting != 0 {
+		t.Errorf("under 5 s, ten seconds on: %v, %d waiting", ripe, waiting)
+	}
+}

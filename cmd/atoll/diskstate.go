@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/ops"
 )
 
 // The changes atoll disk remove and atoll disk fail make (api/schemas/disk-change.schema.json).
@@ -125,14 +125,11 @@ func diskFail(configPath string, args []string, stdout, stderr io.Writer) int {
 
 // diskStateChange works out, then with --yes, or for a drain, makes a change of a disk's place in the pool.
 func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout, stderr io.Writer) int {
-	text, err := fsx.ReadFile(configPath)
-	if err != nil {
-		return failure(stderr, fmt.Errorf("configuration: %w", err))
-	}
-	c, err := load(configPath)
+	text, c, err := readConfig(configPath)
 	if err != nil {
 		return failure(stderr, err)
 	}
+	// Before any wait: a disk the configuration does not have is said at once.
 	d, err := diskOfConfig(c, parsed.id)
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk %s: %w", change, err))
@@ -144,11 +141,15 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 	ctx := context.Background()
 	dryRun := parsed.flags["--dry-run"]
 	if !dryRun {
-		release, err := lockCatalog(ctx, c, stderr)
-		if err != nil {
+		var release func()
+		if text, c, release, err = lockedConfig(ctx, configPath, c, stderr); err != nil {
 			return failure(stderr, err)
 		}
 		defer release()
+		// The disk as the configuration has it now.
+		if d, err = diskOfConfig(c, parsed.id); err != nil {
+			return failure(stderr, fmt.Errorf("disk %s: %w", change, err))
+		}
 	}
 	out := diskChangeOutput{Disk: d.ID, Change: change, StateWas: stateName(d), DependingFirst: []string{}, Warnings: []string{}}
 	warn := func(kind, message string) {
@@ -174,11 +175,14 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 		if err != nil {
 			return failure(stderr, fmt.Errorf(T("disk %s: the configuration would not load: %w"), verbOf(change), err))
 		}
-		if err := fsx.ReplaceFile(configPath, text, newText); err != nil {
+		partial, err := configInPlace(fsx.ReplaceFile(configPath, text, newText), warn)
+		if err != nil {
 			return failure(stderr, fmt.Errorf(T("disk %s: the configuration is unchanged: %w"), verbOf(change), err))
 		}
 		out.Done = true
-		code = recordAndTell(ctx, edited, m, warn, stderr, "the next scan or pass takes it in")
+		if code = recordAndTell(ctx, edited, m, warn, stderr, "the next scan or pass takes it in"); partial {
+			code = exitPartial
+		}
 	}
 	if parsed.flags["--json"] {
 		err = writeJSON(stdout, out)
@@ -253,7 +257,7 @@ func diskChangeText(out *diskChangeOutput) string {
 	fmt.Fprintf(&b, T("disk %s, %s: %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n"),
 		out.Disk, out.StateWas, out.Depending, out.OnlyThere, out.PlannedOperations)
 	for _, p := range out.DependingFirst {
-		fmt.Fprintf(&b, "  %s\n", p)
+		fmt.Fprintf(&b, "  %s\n", shownPath(p))
 	}
 	switch {
 	case out.Done && out.Change == changeDrain:
@@ -380,8 +384,7 @@ func showDisk(ctx context.Context, c *config.Config, m disks.Machine, d *config.
 	}
 	// The marker is read only from a disk its check finds there: a missing disk's folder may be its mount point.
 	if verdict.State != disks.Missing && d.State != config.DiskFailed {
-		data, err := fsx.ReadFile(filepath.Join(d.Mount, d.Workdir, layout.MarkerName))
-		if err == nil {
+		if data, found, err := ops.ReadMarkerAt(d.Mount, d.Workdir); err == nil && found {
 			if mark, err := layout.ParseMarker(data); err == nil {
 				out.Marker = &diskShowMarker{PoolID: mark.PoolID, DiskID: mark.DiskID, FSUUID: mark.FSUUID}
 			}
@@ -414,7 +417,7 @@ func diskShowText(out *diskShowOutput) string {
 	fmt.Fprintf(&b, T("\n  copies: %s\n  %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n"),
 		strings.Join(states, ", "), out.Depending, out.OnlyThere, out.Planned)
 	for _, p := range out.DependingFirst {
-		fmt.Fprintf(&b, "    %s\n", p)
+		fmt.Fprintf(&b, "    %s\n", shownPath(p))
 	}
 	return b.String()
 }
@@ -445,31 +448,32 @@ func diskReplace(configPath string, args []string, stdout, stderr io.Writer) int
 	if parsed.domain != "" || parsed.tags != nil {
 		return usage(stderr, T("disk replace: the new disk takes the domain and tags of the old one"))
 	}
-	text, err := fsx.ReadFile(configPath)
-	if err != nil {
-		return failure(stderr, fmt.Errorf("configuration: %w", err))
-	}
-	c, err := load(configPath)
+	text, c, err := readConfig(configPath)
 	if err != nil {
 		return failure(stderr, err)
 	}
+	// Before any wait: a disk the configuration does not have is said at once.
 	d, err := diskOfConfig(c, old)
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk replace: %w", err))
 	}
-	parsed.domain, parsed.tags = d.Domain, d.Tags
 	m, err := disks.NewMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
 	ctx := context.Background()
 	if !parsed.dryRun {
-		release, err := lockCatalog(ctx, c, stderr)
-		if err != nil {
+		var release func()
+		if text, c, release, err = lockedConfig(ctx, configPath, c, stderr); err != nil {
 			return failure(stderr, err)
 		}
 		defer release()
+		// The disk as the configuration has it now.
+		if d, err = diskOfConfig(c, old); err != nil {
+			return failure(stderr, fmt.Errorf("disk replace: %w", err))
+		}
 	}
+	parsed.domain, parsed.tags = d.Domain, d.Tags
 	a, err := checkDiskAdd(ctx, c, m, text, &parsed, stderr)
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk replace: %w", err))
@@ -486,10 +490,13 @@ func diskReplace(configPath string, args []string, stdout, stderr io.Writer) int
 	}
 	code := exitOK
 	if !parsed.dryRun {
-		if err := fsx.ReplaceFile(configPath, text, a.text); err != nil {
+		partial, err := configInPlace(fsx.ReplaceFile(configPath, text, a.text), a.warn)
+		if err != nil {
 			return failure(stderr, fmt.Errorf(T("disk replace: the configuration is unchanged: %w"), err))
 		}
-		code = a.finish(ctx)
+		if code = a.finish(ctx); partial {
+			code = exitPartial
+		}
 	}
 	out.diskAddOutput = a.out
 	if parsed.asJSON {

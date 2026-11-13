@@ -26,6 +26,7 @@ import (
 const (
 	apiHeaderTimeout = 10 * time.Second
 	apiWriteTimeout  = 60 * time.Second
+	apiIdleTimeout   = 60 * time.Second
 	apiMaxHeader     = 16 << 10
 	apiMaxToken      = 4 << 10
 )
@@ -36,10 +37,13 @@ type apiServer struct {
 	current atomic.Pointer[config.Config]
 	machine disks.Machine
 	log     *slog.Logger
+	// reading lets one answer at a time read the catalog: each is made in the daemon's own process, beside its passes,
+	// and one may plan the whole pool.
+	reading chan struct{}
 }
 
 func newAPIServer(c *config.Config, m disks.Machine, log *slog.Logger) *apiServer {
-	a := &apiServer{machine: m, log: log}
+	a := &apiServer{machine: m, log: log, reading: make(chan struct{}, 1)}
 	a.current.Store(c)
 	return a
 }
@@ -56,9 +60,9 @@ func (a *apiServer) answers() map[string]apiAnswer {
 				Version string `json:"version"`
 			}{atollVersion()})
 		},
-		"/v1/status": func(_ *http.Request, c *config.Config, w io.Writer) (int, error) {
-			return http.StatusOK, writeStatus(c, statusArgs{asJSON: true}, w)
-		},
+		"/v1/status": a.one(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
+			return http.StatusOK, writeStatus(r.Context(), c, statusArgs{asJSON: true}, w)
+		}),
 		"/v1/disks": func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			verdicts, err := disks.CheckAll(r.Context(), a.machine, c.Disks)
 			if err != nil {
@@ -77,18 +81,32 @@ func (a *apiServer) answers() map[string]apiAnswer {
 			}
 			return http.StatusOK, writeJSON(w, out)
 		},
-		"/v1/trash": func(_ *http.Request, c *config.Config, w io.Writer) (int, error) {
-			return http.StatusOK, writeTrash(c, true, w)
-		},
-		"/v1/guards": func(_ *http.Request, c *config.Config, w io.Writer) (int, error) {
-			items, err := readGuards(c)
+		"/v1/trash": a.one(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
+			return http.StatusOK, writeTrash(r.Context(), c, true, w)
+		}),
+		"/v1/guards": a.one(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
+			items, err := readGuards(r.Context(), c)
 			if err != nil {
 				return 0, err
 			}
 			return http.StatusOK, writeJSON(w, struct {
 				Disks []guardItem `json:"disks"`
 			}{items})
-		},
+		}),
+	}
+}
+
+// one makes an answer that reads the catalog wait for the one before it, and give up with its request: a client that
+// asks again before its answer came adds no work to the daemon (specs.md §25.1).
+func (a *apiServer) one(answer apiAnswer) apiAnswer {
+	return func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
+		select {
+		case a.reading <- struct{}{}:
+			defer func() { <-a.reading }()
+		case <-r.Context().Done():
+			return 0, fmt.Errorf("waiting for another answer: %w", r.Context().Err())
+		}
+		return answer(r, c, w)
 	}
 }
 
@@ -118,8 +136,11 @@ func (a *apiServer) get(answer apiAnswer) http.HandlerFunc {
 			send(w, http.StatusMethodNotAllowed, apiError{"only GET"})
 			return
 		}
+		// An answer has its 60 s: past them it could not be sent, and it is given up, as it is when its client is gone.
+		ctx, cancel := context.WithTimeout(r.Context(), apiWriteTimeout)
+		defer cancel()
 		var body bytes.Buffer
-		status, err := answer(r, a.current.Load(), &body)
+		status, err := answer(r.WithContext(ctx), a.current.Load(), &body)
 		if err != nil {
 			a.log.Warn("the local API could not answer", "path", r.URL.Path, "error", err)
 			send(w, http.StatusServiceUnavailable, apiError{err.Error()})
@@ -173,7 +194,7 @@ func readToken(file string) (string, error) {
 // httpServer is a server with the limits of specs.md §25.1.
 func httpServer(h http.Handler) *http.Server {
 	return &http.Server{
-		Handler: h, ReadHeaderTimeout: apiHeaderTimeout, WriteTimeout: apiWriteTimeout, MaxHeaderBytes: apiMaxHeader,
+		Handler: h, ReadHeaderTimeout: apiHeaderTimeout, WriteTimeout: apiWriteTimeout, IdleTimeout: apiIdleTimeout, MaxHeaderBytes: apiMaxHeader,
 	}
 }
 

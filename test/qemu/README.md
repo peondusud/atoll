@@ -38,7 +38,8 @@ Environment variables of the second command, passed with `-e NAME=value` (`make 
 | `QEMU_TIMEOUT` | `3600` | seconds before a guest is stopped |
 | `QEMU_MEMORY` | `6144` | the guest's memory in MiB; the loop images take up to 2 GiB of it |
 | `SOAK` | none | runs `TestDaemonSoak` for that long, such as `4h`: the daemon that runs for good under a writer, its memory logged every tenth of the run. Raise `TIMEOUT` and `QEMU_TIMEOUT` past it, by 20 minutes for the first pass |
-| `SOAK_FILES` | `2000` | the files each disk of the soak starts with |
+| `SOAK_FILES` | `2000` | the files each disk of the soak starts with; past 2,000, its volumes are sized for them, and its first pass has 10 ms a file more |
+| `SCALE` | none | runs `TestScale` with that many files a disk, such as `200000`: the first scan, `atoll status` with a strict rule, and the passes of the link guard, each timed with its memory. Raise `TIMEOUT` and `QEMU_TIMEOUT` as for a soak |
 
 For example, the tests of a device that fails during an operation, twice, on Debian's kernel only:
 

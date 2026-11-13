@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -146,6 +147,19 @@ func TestTrashEntriesAcrossPages(t *testing.T) {
 	if len(list) != total {
 		t.Fatalf("%d entries, want %d: a planned one is not in the trash yet", len(list), total)
 	}
+	// What a purge chooses from is the same entries, without their paths.
+	weights, err := TrashWeights(b.t.Context(), b.sql())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(weights) != total {
+		t.Fatalf("%d weights, want %d", len(weights), total)
+	}
+	for i := range weights {
+		if w := &weights[i]; w.OpID != int64(i+1) || w.Disk != "t1" || w.Reason != "surplus" || w.Size.Valid || w.DeletedNS != 1 || w.ExpiresNS != 2 {
+			t.Fatalf("weight %d: %+v", i, *w)
+		}
+	}
 	for i := 1; i < len(list); i++ {
 		if list[i-1].Path > list[i].Path || (list[i-1].Path == list[i].Path && list[i-1].OpID >= list[i].OpID) {
 			t.Fatalf("out of order at %d: %+v, %+v", i, list[i-1], list[i])
@@ -175,6 +189,96 @@ func TestAQueryByPlaceReadsOnlyThatPlace(t *testing.T) {
 				t.Errorf("%s: %q in %q", q.name, line, plan)
 			}
 		}
+	}
+}
+
+// What finds the copies of a disk by their inode reads that inode, never every copy of the disk: an operation on a file
+// with more than one name asks once, as every copy has with the link guard on. The first pass with the guard on, which
+// makes a link for each copy, had not ended after 8 hours on 200,000 files a disk (specs.md §26).
+func TestAQueryByInodeReadsOnlyThatInode(t *testing.T) {
+	b := openForOps(t)
+	for _, q := range []struct {
+		name, sql string
+		args      []any
+	}{
+		{"writeLinks", writeLinksSQL, []any{1, nil, 2, "u1", "7"}},
+		{"LinkedPaths", linkedPathsSQL, []any{"u1", "7"}},
+	} {
+		plan := queryPlan(t, b, q.sql, q.args...)
+		inode := false
+		for _, line := range plan {
+			inode = inode || strings.HasSuffix(line, "(disk_id=? AND file_key=?)")
+			if strings.HasPrefix(line, "SCAN") || strings.HasSuffix(line, "(disk_id=?)") {
+				t.Errorf("%s: %q in %q", q.name, line, plan)
+			}
+		}
+		if !inode {
+			t.Errorf("%s: no search by inode in %q", q.name, plan)
+		}
+	}
+}
+
+// What finds an entry of the trash reads that entry, never the whole trash: each purge, restore and undone operation
+// asks once, and with no index each read every entry to find its own. The list reads a page in the index's order,
+// where it sorted the whole trash for each page; and what a purge chooses from is read once, with no sort, the journal
+// reached by its key (specs.md §26). SQLite has no statistics here, so the plan is what every catalog gets.
+func TestATrashQueryReadsOnlyItsEntries(t *testing.T) {
+	b := openForOps(t)
+	path := []byte("a/b")
+	for _, q := range []struct {
+		name, sql, want string
+		args            []any
+	}{
+		{"Undo", undoTrashSQL, "trash_by_path (lpath=? AND op_id=?)", []any{path, 7}},
+		{"FinishTrash", restartTrashSQL, "trash_by_path (lpath=? AND op_id=?)", []any{1, 2, path, 7}},
+		{"refreshStale", staleTrashSQL, "trash_by_path (lpath=? AND op_id=?)", []any{path, 7}},
+		{"StopRepair", repairedSizeSQL, "trash_by_path (lpath=? AND op_id=?)", []any{1, path, 7}},
+		{"dropTrashRow", dropTrashRowSQL, "trash_by_path (lpath=?)", []any{path, "u1", []byte("2026-01-01/7/a/b")}},
+		{"trashPage", trashPageSQL, "trash_by_path ((lpath,op_id)>(?,?))", []any{path, 7, trashPageSize}},
+	} {
+		plan := queryPlan(t, b, q.sql, q.args...)
+		found := false
+		for _, line := range plan {
+			found = found || strings.HasSuffix(line, q.want)
+			if strings.HasPrefix(line, "SCAN") || strings.Contains(line, "TEMP B-TREE") {
+				t.Errorf("%s: %q in %q", q.name, line, plan)
+			}
+		}
+		if !found {
+			t.Errorf("%s: no %q in %q", q.name, q.want, plan)
+		}
+	}
+	plan := queryPlan(t, b, trashWeightsSQL)
+	if len(plan) != 2 || plan[0] != "SCAN t" || plan[1] != "SEARCH o USING INTEGER PRIMARY KEY (rowid=?)" {
+		t.Errorf("TrashWeights: %q", plan)
+	}
+}
+
+// An operation still planned on a path of a disk is found among the operations left planned, which are few, never
+// by a walk of the journal: a scrub asks for each copy a repair left corrupt.
+func TestPlannedAt(t *testing.T) {
+	b := openForOps(t)
+	b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u1', 'x', 'ntfs', '/u', 'media', 'Atoll', 'data', 0, '[]', 'online')")
+	b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u2', 'y', 'ntfs', '/v', 'media', 'Atoll', 'data', 1, '[]', 'online')")
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (1, 'u1', 'repair', CAST('a/b' AS BLOB), 1, 'planned')")
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (2, 'u1', 'repair', CAST('a/c' AS BLOB), 1, 'done')")
+	for _, tc := range []struct {
+		disk, path string
+		want       bool
+	}{
+		{"u1", "a/b", true},
+		{"u2", "a/b", false}, // another disk's
+		{"u1", "a/c", false}, // done
+		{"u1", "a", false},
+	} {
+		got, err := PlannedAt(t.Context(), b.db, tc.disk, tc.path)
+		if err != nil || got != tc.want {
+			t.Errorf("%s %s: %v, %v", tc.disk, tc.path, got, err)
+		}
+	}
+	// The planned operations are walked through their own index, and nothing else of the journal is read.
+	if plan := queryPlan(t, b, plannedAtSQL, "u1", []byte("a/b")); !slices.Contains(plan, "SCAN ops USING INDEX ops_planned") {
+		t.Errorf("%q", plan)
 	}
 }
 

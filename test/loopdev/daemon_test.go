@@ -35,6 +35,19 @@ type passSeen struct {
 // runDaemon runs the daemon on a bench until the test ends, and gives its passes.
 func runDaemon(t *testing.T, b *passBench, fstab string) (<-chan passSeen, func()) {
 	t.Helper()
+	return runDaemonAfter(t, b, fstab, nil)
+}
+
+// runDaemonAfter is runDaemon that also calls after at the end of each pass, unless it is nil: in the daemon's own
+// goroutine, before its next step, when what the pass held is let go.
+func runDaemonAfter(t *testing.T, b *passBench, fstab string, after func()) (<-chan passSeen, func()) {
+	t.Helper()
+	return runDaemonEvery(t, b, fstab, 300*time.Millisecond, after)
+}
+
+// runDaemonEvery is runDaemonAfter with the time between two mount checks.
+func runDaemonEvery(t *testing.T, b *passBench, fstab string, every time.Duration, after func()) (<-chan passSeen, func()) {
+	t.Helper()
 	// The bench's connection goes: the daemon opens the catalog for each pass, and its lock must not be shared
 	// with a connection of this process.
 	mustDo(t, b.db.Close())
@@ -44,8 +57,13 @@ func runDaemon(t *testing.T, b *passBench, fstab string) (<-chan passSeen, func(
 	go func() {
 		done <- daemon.Run(ctx, daemon.Options{
 			Config: b.config, Machine: b.machine, Apply: true, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
-			CheckEvery: 300 * time.Millisecond, Fstab: fstab,
-			OnPass: func(because []string, o *jobs.Outcome) { passes <- passSeen{because, o} },
+			CheckEvery: every, Fstab: fstab,
+			OnPass: func(because []string, o *jobs.Outcome) {
+				if after != nil {
+					after()
+				}
+				passes <- passSeen{because, o}
+			},
 		})
 	}()
 	var once sync.Once
@@ -286,5 +304,60 @@ func TestDaemonRemountsAfterAReset(t *testing.T) {
 	}
 	if got := branchesOf(t, pool); !slices.Equal(got, []string{filepath.Join(b.keep, "media"), filepath.Join(at, "media")}) {
 		t.Errorf("branches once back: %v", got)
+	}
+}
+
+// TestDaemonHearsADiskMountedAgain: a disk unmounted and mounted again between two mount checks, which find it
+// mounted both times, is watched again at the next check and looked at whole. A file put on it while nobody listened
+// gets its copy, and one put after is heard (specs.md §15.1, §15.13). The kernel's marks went with the filesystem
+// that was unmounted, without a word: the daemon kept the disk for watched, and heard nothing more of it until it
+// started again. On a driver watched by a filesystem mark, and on one watched folder by folder.
+func TestDaemonHearsADiskMountedAgain(t *testing.T) {
+	needRoot(t)
+	for _, tc := range []struct {
+		name   string
+		fs     names.Filesystem
+		driver string
+	}{{"xfs", names.XFS, ""}, {"ntfs-3g", names.NTFS, "ntfs-3g"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, v, tc.driver, at, options...)
+			b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n")
+			keep := filepath.Join(b.keep, "media")
+			// Checks far enough apart for the disk to go and come back between two. Should one fall in between, the
+			// daemon sees the disk go and come back, which watches it again too.
+			passes, _ := runDaemonEvery(t, b, filepath.Join(t.TempDir(), "fstab"), 5*time.Second, nil)
+			waitPass(t, passes, daemon.BecauseStart)
+			copied := func(name, text string) func() bool {
+				return func() bool {
+					data, err := os.ReadFile(filepath.Join(keep, name))
+					return err == nil && string(data) == text
+				}
+			}
+
+			unmountWhenFree(t, at)
+			mountVolume(t, v, tc.driver, at, options...)
+			// Put while nobody listens: only a look at the whole disk finds it.
+			write(t, at, "unheard.mkv", "a film")
+			waitFor(t, "a copy of the file put while nobody listened", copied("unheard.mkv", "a film"))
+
+			// Once nothing moves any more, a file put on the disk is heard: a pass comes for its event.
+			for quiet := false; !quiet; {
+				select {
+				case <-passes:
+				case <-time.After(3 * time.Second):
+					quiet = true
+				}
+			}
+			// By another process: what this one writes is Atoll's own to the watcher, and brings no pass.
+			cmd := exec.CommandContext(t.Context(), "sh", "-c", "printf 'another' > '"+filepath.Join(at, "media", "heard.mkv")+"'")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			waitPass(t, passes, daemon.BecauseEvents)
+			waitFor(t, "a copy of the file put once the disk is watched again", copied("heard.mkv", "another"))
+		})
 	}
 }

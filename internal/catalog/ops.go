@@ -145,13 +145,20 @@ type Links struct {
 	PriorNS sql.NullInt64
 }
 
+// What the names of a file on a disk record when one of them changes, and what they are: each finds the copies of a
+// disk by their inode. An operation on a file with more than one name asks once, and with the link guard on every copy
+// has two: each trash, purge, restore and rename, and each link the guard makes or removes, the first pass with the
+// guard on making one for each copy of the disk (specs.md §26).
+const (
+	writeLinksSQL  = "UPDATE copies SET nlink = ?1, ctime_ns = CASE WHEN ?2 IS NULL OR ctime_ns = ?2 THEN ?3 ELSE ctime_ns END WHERE disk_id = ?4 AND file_key = ?5"
+	linkedPathsSQL = "SELECT COALESCE(c.old_lpath, f.lpath) AS place FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? AND c.file_key = ? ORDER BY place"
+)
+
 func writeLinks(ctx context.Context, tx *sql.Tx, disk string, links *Links) error {
 	if links == nil {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx,
-		"UPDATE copies SET nlink = ?1, ctime_ns = CASE WHEN ?2 IS NULL OR ctime_ns = ?2 THEN ?3 ELSE ctime_ns END WHERE disk_id = ?4 AND file_key = ?5",
-		links.Nlink, links.PriorNS, links.CtimeNS, disk, links.FileKey)
+	_, err := tx.ExecContext(ctx, writeLinksSQL, links.Nlink, links.PriorNS, links.CtimeNS, disk, links.FileKey)
 	if err != nil {
 		return fmt.Errorf("links: %w", err)
 	}
@@ -171,7 +178,7 @@ func FinishTrash(ctx context.Context, db *sql.DB, op *Op, restart *Restart, link
 			}
 		}
 		if restart != nil {
-			if _, err := tx.ExecContext(ctx, "UPDATE trash SET deleted_ns = ?, expires_ns = ? WHERE op_id = ?", restart.DeletedNS, restart.ExpiresNS, op.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, restartTrashSQL, restart.DeletedNS, restart.ExpiresNS, []byte(op.Path), op.ID); err != nil {
 				return fmt.Errorf("trash: %w", err)
 			}
 		}
@@ -354,7 +361,7 @@ func TakenByRename(ctx context.Context, db *sql.DB, disk, path string) (bool, er
 
 // LinkedPaths gives the paths whose copy on a disk is that file, by what the catalog knows.
 func LinkedPaths(ctx context.Context, db *sql.DB, disk, fileKey string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, "SELECT COALESCE(c.old_lpath, f.lpath) AS place FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? AND c.file_key = ? ORDER BY place", disk, fileKey)
+	rows, err := db.QueryContext(ctx, linkedPathsSQL, disk, fileKey)
 	if err != nil {
 		return nil, fmt.Errorf("links: %w", err)
 	}
@@ -395,17 +402,52 @@ func CopyCtimes(ctx context.Context, db *sql.DB, fileID int64) (map[string]sql.N
 	return out, nil
 }
 
-// BeginMkdir journals a folder made below the root (specs.md §6.1, §17.4).
-func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, nowNS int64) (*Op, error) {
-	result, err := db.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES (?, 'mkdir', ?, ?, 'planned')", disk, []byte(path), nowNS)
+// MkdirLike is the mode and owner a folder made below the root is to take: those of the folder it stands for
+// (specs.md §17.4).
+type MkdirLike struct {
+	Mode, UID, GID int64
+}
+
+// BeginMkdir journals a folder made below the root (specs.md §6.1, §17.4). With like, its event holds the mode and
+// owner the folder is to take: it is made, then given them, and a reprise that finds it made and not yet given them
+// has nothing else to say whose it is (§17.2).
+func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, like *MkdirLike, nowNS int64) (*Op, error) {
+	op := &Op{Disk: disk, Kind: OpMkdir, Path: path}
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES (?, 'mkdir', ?, ?, 'planned')", disk, []byte(path), nowNS)
+		if err != nil {
+			return fmt.Errorf("journal: %w", err)
+		}
+		if op.ID, err = result.LastInsertId(); err != nil {
+			return fmt.Errorf("journal: %w", err)
+		}
+		if like == nil {
+			return nil
+		}
+		return writeEventData(ctx, tx, nowNS, "info", OpMkdir, op, eventData{Mode: &like.Mode, UID: &like.UID, GID: &like.GID})
+	})
 	if err != nil {
-		return nil, fmt.Errorf("journal: %w", err)
+		return nil, fmt.Errorf("%q: %w", path, err)
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("journal: %w", err)
+	return op, nil
+}
+
+// MkdirLikeOf gives the mode and owner the event of a folder's operation holds, and nil when it holds none: a folder
+// that stood for none, or one journaled before its event held them.
+func MkdirLikeOf(ctx context.Context, db *sql.DB, opID int64) (*MkdirLike, error) {
+	var mode, uid, gid sql.NullInt64
+	err := db.QueryRowContext(ctx, `
+		SELECT json_extract(data, '$.mode'), json_extract(data, '$.uid'), json_extract(data, '$.gid')
+		FROM events WHERE kind = ? AND json_extract(data, '$.op') = ?`, OpMkdir, opID).Scan(&mode, &uid, &gid)
+	switch {
+	case isNoRows(err):
+		return nil, nil //nolint:nilnil // no event is an answer
+	case err != nil:
+		return nil, fmt.Errorf("event: %w", err)
+	case !mode.Valid || !uid.Valid || !gid.Valid:
+		return nil, nil //nolint:nilnil // likewise
 	}
-	return &Op{ID: id, Disk: disk, Kind: OpMkdir, Path: path}, nil
+	return &MkdirLike{Mode: mode.Int64, UID: uid.Int64, GID: gid.Int64}, nil
 }
 
 // FinishMkdir says that a folder is there, and Atoll's own.
@@ -472,7 +514,7 @@ func Undo(ctx context.Context, db *sql.DB, op *Op, warn bool, nowNS int64) error
 		}
 		// Only a trash operation has a row of its own: the row of a restore or a purge is the
 		// entry's, whose operation was done long ago, and it stays.
-		if _, err := tx.ExecContext(ctx, "DELETE FROM trash WHERE op_id = ?", op.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, undoTrashSQL, []byte(op.Path), op.ID); err != nil {
 			return fmt.Errorf("trash: %w", err)
 		}
 		if warn {
@@ -509,6 +551,19 @@ func PlannedOps(ctx context.Context, db *sql.DB) ([]Op, error) {
 	return list, nil
 }
 
+// plannedAtSQL looks among the operations left planned only, which their index holds.
+const plannedAtSQL = "SELECT EXISTS(SELECT 1 FROM ops WHERE state = 'planned' AND disk_id = ?1 AND path = ?2)"
+
+// PlannedAt says whether an operation on a path of a disk is still planned: one that stopped where nothing could
+// resolve it, which waits for the reprise (specs.md §17.2).
+func PlannedAt(ctx context.Context, db *sql.DB, disk, path string) (bool, error) {
+	var planned bool
+	if err := db.QueryRowContext(ctx, plannedAtSQL, disk, []byte(path)).Scan(&planned); err != nil {
+		return false, fmt.Errorf("journal: %w", err)
+	}
+	return planned, nil
+}
+
 // TrashEntry is what a disk's trash holds at one location.
 type TrashEntry struct {
 	Path      string
@@ -522,6 +577,32 @@ type TrashEntry struct {
 	ExpiresNS int64
 	FileKey   string
 }
+
+// What finds an entry of the trash names its path, with its operation or its place: trash_by_path holds the entries by
+// path, then by operation, and no index holds them by operation or by place alone. An entry is written with the path of
+// the operation that sends it to the trash, and a restore or a purge is journaled with the path of its entry, so each
+// operation knows the path. Each purge, restore and undone operation asks once, and with no index each read the whole
+// trash (specs.md §26).
+const (
+	undoTrashSQL    = "DELETE FROM trash WHERE lpath = ?1 AND op_id = ?2"
+	restartTrashSQL = "UPDATE trash SET deleted_ns = ?1, expires_ns = ?2 WHERE lpath = ?3 AND op_id = ?4"
+	staleTrashSQL   = "SELECT reason, deleted_ns FROM trash WHERE lpath = ?1 AND op_id = ?2"
+	repairedSizeSQL = "UPDATE trash SET size = ?1 WHERE lpath = ?2 AND op_id = ?3"
+	dropTrashRowSQL = "DELETE FROM trash WHERE lpath = ?1 AND disk_id = ?2 AND trash_path = ?3"
+	// A page of the list, in the index's own order: no sort, and nothing read before the page.
+	trashPageSQL = `
+		SELECT t.lpath, t.disk_id, t.trash_path, t.op_id, t.size, t.blake3, t.reason, t.deleted_ns, t.expires_ns, COALESCE(o.file_key, '')
+		FROM trash t JOIN ops o ON o.id = t.op_id
+		WHERE o.state = 'done' AND (t.lpath, t.op_id) > (?, ?)
+		ORDER BY t.lpath, t.op_id
+		LIMIT ?`
+	// Every entry once, in the order the table holds them, which costs no sort.
+	trashWeightsSQL = `
+		SELECT t.disk_id, t.op_id, t.reason, t.size, t.deleted_ns, t.expires_ns
+		FROM trash t JOIN ops o ON o.id = t.op_id
+		WHERE o.state = 'done'
+		ORDER BY t.id`
+)
 
 // trashPageSize is how many entries EachTrashEntry reads at a time.
 const trashPageSize = 1000
@@ -549,12 +630,7 @@ func EachTrashEntry(ctx context.Context, db *sql.DB, fn func(*TrashEntry) error)
 }
 
 func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]TrashEntry, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT t.lpath, t.disk_id, t.trash_path, t.op_id, t.size, t.blake3, t.reason, t.deleted_ns, t.expires_ns, COALESCE(o.file_key, '')
-		FROM trash t JOIN ops o ON o.id = t.op_id
-		WHERE o.state = 'done' AND (t.lpath, t.op_id) > (?, ?)
-		ORDER BY t.lpath, t.op_id
-		LIMIT ?`, after, afterOp, trashPageSize)
+	rows, err := db.QueryContext(ctx, trashPageSQL, after, afterOp, trashPageSize)
 	if err != nil {
 		return nil, fmt.Errorf("trash: %w", err)
 	}
@@ -614,6 +690,40 @@ func TrashEntries(ctx context.Context, db *sql.DB) ([]TrashEntry, error) {
 	return list, err
 }
 
+// TrashWeight is what choosing what a purge reaches needs of an entry of the trash: its disk, its operation, why and
+// when it came, and its size. No path.
+type TrashWeight struct {
+	Disk      string
+	OpID      int64
+	Reason    string
+	Size      sql.NullInt64
+	DeletedNS int64
+	ExpiresNS int64
+}
+
+// TrashWeights gives that for every entry whose operation is done, in the order they reached the trash. The daemon asks
+// after each pass whether a purge is due: the paths of a large trash, in their order, are not for that (specs.md
+// §15.13, §26).
+func TrashWeights(ctx context.Context, db *sql.DB) ([]TrashWeight, error) {
+	rows, err := db.QueryContext(ctx, trashWeightsSQL)
+	if err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	list := []TrashWeight{}
+	for rows.Next() {
+		var w TrashWeight
+		if err := rows.Scan(&w.Disk, &w.OpID, &w.Reason, &w.Size, &w.DeletedNS, &w.ExpiresNS); err != nil {
+			return nil, fmt.Errorf("trash: %w", err)
+		}
+		list = append(list, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	return list, nil
+}
+
 // BeginFromTrash journals an operation on an entry of the trash: a restore, or a purge.
 func BeginFromTrash(ctx context.Context, db *sql.DB, kind string, e *TrashEntry, nowNS int64) (*Op, error) {
 	op := &Op{Disk: e.Disk, Kind: kind, Path: e.Path, Path2: e.TrashPath, FileKey: e.FileKey}
@@ -639,7 +749,7 @@ func BeginFromTrash(ctx context.Context, db *sql.DB, kind string, e *TrashEntry,
 }
 
 func dropTrashRow(ctx context.Context, tx *sql.Tx, op *Op) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM trash WHERE disk_id = ? AND trash_path = ?", op.Disk, []byte(op.Path2)); err != nil {
+	if _, err := tx.ExecContext(ctx, dropTrashRowSQL, []byte(op.Path), op.Disk, []byte(op.Path2)); err != nil {
 		return fmt.Errorf("trash: %w", err)
 	}
 	return nil

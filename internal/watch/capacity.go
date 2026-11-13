@@ -97,11 +97,15 @@ func levelOf(input *solver.Input, minFree value.MinFree, strict bool, k int) (Le
 		return Level{}, fmt.Errorf("plan: %w", err)
 	}
 	short := map[string]bool{}
+	canceled := map[string][]string{}
 	for _, r := range results {
 		if slices.ContainsFunc(r.States, func(s solver.State) bool {
 			return s == solver.StateDegraded || s == solver.StateUnavailable || s == solver.StateNameIncompatible || s == solver.StateNameCollision
 		}) {
 			short[r.Path] = true
+		}
+		if len(r.Cancel) > 0 {
+			canceled[r.Path] = r.Cancel
 		}
 	}
 	for i := range files {
@@ -109,6 +113,13 @@ func levelOf(input *solver.Input, minFree value.MinFree, strict bool, k int) (Le
 			level.Short++
 		} else {
 			level.Stored += files[i].Size
+		}
+		// A pending copy the plan keeps is not on its disk yet: its size comes off that disk's free space, as that of
+		// a copy the plan makes does (specs.md §13.4). Left out, a copy waiting in the queue counted for no room.
+		for _, c := range files[i].Copies {
+			if c.State == solver.CopyPending && !slices.Contains(canceled[files[i].Path], c.Disk) {
+				planned[c.Disk] += files[i].Size
+			}
 		}
 	}
 	whole, left := map[string]int64{}, map[string]int64{}

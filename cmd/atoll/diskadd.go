@@ -29,6 +29,7 @@ const (
 	warnCatalogNotUpdated  = "catalog-not-updated"
 	warnMarkerNotWritten   = "marker-not-written"
 	warnDaemonNotTold      = "daemon-not-told"
+	warnConfigNotSynced    = "config-not-synced"
 )
 
 // nameRuleReasons are the read-only reasons disk add refuses, as they change the rules of names (specs.md §10,
@@ -84,11 +85,7 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return usage(stderr, "disk add: "+err.Error())
 	}
-	text, err := fsx.ReadFile(configPath)
-	if err != nil {
-		return failure(stderr, fmt.Errorf("configuration: %w", err))
-	}
-	c, err := load(configPath)
+	text, c, err := readConfig(configPath)
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -98,8 +95,8 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	}
 	ctx := context.Background()
 	if !parsed.dryRun {
-		release, err := lockCatalog(ctx, c, stderr)
-		if err != nil {
+		var release func()
+		if text, c, release, err = lockedConfig(ctx, configPath, c, stderr); err != nil {
 			return failure(stderr, err)
 		}
 		defer release()
@@ -110,10 +107,13 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	}
 	code := exitOK
 	if !parsed.dryRun {
-		if err := fsx.ReplaceFile(configPath, text, a.text); err != nil {
+		partial, err := configInPlace(fsx.ReplaceFile(configPath, text, a.text), a.warn)
+		if err != nil {
 			return failure(stderr, fmt.Errorf(T("disk add: the configuration is unchanged: %w"), err))
 		}
-		code = a.finish(ctx)
+		if code = a.finish(ctx); partial {
+			code = exitPartial
+		}
 	}
 	if parsed.asJSON {
 		err = writeJSON(stdout, a.out)
@@ -262,6 +262,9 @@ func checkDiskAdd(ctx context.Context, c *config.Config, m disks.Machine, text [
 	if err := a.checkTopology(c, seen.Entry); err != nil {
 		return nil, err
 	}
+	if err := a.checkWorkdir(c); err != nil {
+		return nil, err
+	}
 	if err := a.checkMarker(c); err != nil {
 		return nil, err
 	}
@@ -343,15 +346,33 @@ func (a *diskAdding) checkTopology(c *config.Config, entry *disks.MountEntry) er
 	return nil
 }
 
+// checkWorkdir refuses a disk whose work folder is there already and belongs to an account that is none of Atoll's:
+// neither root's, the one that runs this command, nor the one that owns the catalog (specs.md §10). Whoever made it
+// first makes its tmp/, links/ and trash/ too, reads what Atoll copies through them whatever the folders of the root
+// forbid, and removes what the trash holds. It says how to give the folder back, when it is Atoll's all the same, as
+// on a disk that comes from a machine where Atoll's account has another number.
+func (a *diskAdding) checkWorkdir(c *config.Config) error {
+	trusted := ops.TrustedOwners(catalogPath(c))
+	uid, foreign, err := ops.ForeignWorkdir(a.disk, trusted)
+	switch {
+	case err != nil:
+		return fmt.Errorf(T("its work folder: %w"), err)
+	case foreign:
+		path := filepath.Join(a.disk.Mount, a.disk.Workdir)
+		return fmt.Errorf(T("its work folder %s belongs to the account %d, which is neither root's, this command's nor the catalog's: that account could read what Atoll copies there and remove what its trash holds. If the folder is Atoll's, give it back: chown -R %d %s"),
+			path, uid, ops.WorkdirOwner(trusted), path)
+	}
+	return nil
+}
+
 // checkMarker refuses a disk whose marker says it is of another pool, another disk or another filesystem, and
 // says what to write when the configuration asks for a marker.
 func (a *diskAdding) checkMarker(c *config.Config) error {
-	data, err := fsx.ReadFile(filepath.Join(a.disk.Mount, a.disk.Workdir, layout.MarkerName))
+	data, found, err := ops.ReadMarkerAt(a.disk.Mount, a.disk.Workdir)
 	switch {
-	case fsx.IsAbsent(err):
 	case err != nil:
 		return fmt.Errorf("its marker: %w", err)
-	default:
+	case found:
 		mark, err := layout.ParseMarker(data)
 		if err != nil {
 			return fmt.Errorf(T("its marker %s: %w"), layout.MarkerName, err)
@@ -364,6 +385,8 @@ func (a *diskAdding) checkMarker(c *config.Config) error {
 		case mark.FSUUID != a.disk.UUID:
 			return fmt.Errorf(T("its marker names the filesystem %s, and this one is %s: a marker copied from another disk"), mark.FSUUID, a.disk.UUID)
 		}
+		// It says the same, and is left as it is, however it is written (specs.md §10).
+		return nil
 	}
 	if on, _ := c.Effective()["layout.marker"].(bool); on && a.out.Disk.State == string(disks.Online) {
 		text, err := layout.MarkerText(layout.Marker{PoolID: c.PoolID, DiskID: a.disk.ID, FSUUID: a.disk.UUID})

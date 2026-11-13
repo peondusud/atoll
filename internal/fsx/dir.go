@@ -17,6 +17,9 @@ import (
 // ErrNotARegularFile says that a name no longer leads to a regular file.
 var ErrNotARegularFile = errors.New("not a regular file")
 
+// ErrNotALink says that a name no longer leads to a symbolic link.
+var ErrNotALink = errors.New("not a symbolic link")
+
 // ErrNotOpened says that SyncEntry could not open what a name leads to, and so synced nothing: why is in
 // the error it wraps beside it.
 var ErrNotOpened = errors.New("not opened")
@@ -104,15 +107,16 @@ type Dir interface {
 	// SyncEntry makes durable what the file or folder a name leads to records of itself, its own names
 	// included: on NTFS each keeps them in its own record, which ntfs3 does not write when only the folder
 	// is synced, so that a device failing then leaves neither name (measured). A name it cannot open gives
-	// ErrNotOpened.
+	// ErrNotOpened, and so does one that leads to neither a file nor a folder, which has nothing to sync.
 	SyncEntry(name string) error
 	// CreateFile makes a regular file with a mode, less the umask, and fails on a name that exists: a
 	// copy in progress (specs.md §14.2). Nothing else on a pool disk is ever opened for writing.
 	CreateFile(name string, mode uint32) (WritableFile, error)
 	// OpenWritable opens a regular file for reading and writing, to resume a copy in progress.
 	OpenWritable(name string) (WritableFile, error)
-	// SetMtime sets the modification time of the folder itself.
+	// SetMtime sets the modification time of the folder itself, and SetMode its permission bits, as fchmod does.
 	SetMtime(t Time) error
+	SetMode(mode uint32) error
 	Close() error
 }
 
@@ -261,6 +265,10 @@ func (d *realDir) ReadLink(name string) (string, error) {
 	for size := 4096; ; size *= 2 {
 		buf := make([]byte, size)
 		n, err := unix.Readlinkat(d.fd(), name, buf)
+		if errors.Is(err, unix.EINVAL) {
+			// What readlink says of a name that is no symbolic link: it was one when it was looked at.
+			return "", fmt.Errorf("read link %q: %w: %w", name, ErrNotALink, err)
+		}
 		if err != nil {
 			return "", fmt.Errorf("read link %q: %w", name, err)
 		}
@@ -277,10 +285,30 @@ func (d *realDir) Mkdir(name string, mode uint32) error {
 	return nil
 }
 
+// ErrNotNew says that a name no longer holds the folder that was just made there.
+var ErrNotNew = errors.New("not the folder just made")
+
+// Adopt sets the owner, then the mode, on the folder itself, opened by its name without following a link. Whoever owns
+// its parent can trade the new name for something else between the making and this call: a mode set by name would go
+// to whatever a symbolic link names, with its setuid bits, and so give a user of the library any file of the machine;
+// and a folder put there in its place would change owner. A folder just made holds nothing, so one that does is not
+// it.
 func (d *realDir) Adopt(name string, like *Stat) error {
-	mode := unix.Fchmodat(d.fd(), name, like.Mode, 0)
-	owner := unix.Fchownat(d.fd(), name, int(like.Uid), int(like.Gid), unix.AT_SYMLINK_NOFOLLOW)
-	if err := errors.Join(mode, owner); err != nil {
+	fd, err := unix.Openat(d.fd(), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("adopt %q: %w", name, err)
+	}
+	folder := os.NewFile(uintptr(fd), name)
+	defer func() { _ = folder.Close() }()
+	switch held, err := folder.Readdirnames(1); {
+	case len(held) > 0:
+		return fmt.Errorf("adopt %q: %w", name, ErrNotNew)
+	case err != nil && !errors.Is(err, io.EOF):
+		return fmt.Errorf("adopt %q: %w", name, err)
+	}
+	owner := unix.Fchown(fd, int(like.Uid), int(like.Gid))
+	mode := unix.Fchmod(fd, like.Mode)
+	if err := errors.Join(owner, mode); err != nil {
 		return fmt.Errorf("adopt %q: %w", name, err)
 	}
 	return nil
@@ -351,11 +379,32 @@ func (d *realDir) Sync() error {
 	return nil
 }
 
+func (d *realDir) SetMode(mode uint32) error {
+	if err := unix.Fchmod(d.fd(), mode); err != nil {
+		return fmt.Errorf("chmod %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
 func (d *realDir) SyncEntry(name string) error {
 	// O_NONBLOCK: a name that has become a FIFO must not hang this. A folder opens as a file does.
 	fd, err := unix.Openat(d.fd(), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
+	switch {
+	case errors.Is(err, unix.ENXIO):
+		// A socket, or a device node with no device behind it: not what was moved there. Its own error is left
+		// out, as a disk that fails answers the same.
+		return fmt.Errorf("open %q: %w: %w", name, ErrNotOpened, ErrNotARegularFile)
+	case err != nil:
 		return fmt.Errorf("open %q: %w: %w", name, ErrNotOpened, err)
+	}
+	// Only a file or a folder has anything to sync. The fsync of a FIFO fails, as that of a failing disk does:
+	// whoever can write in this folder would lose the disk at will by putting one at the name.
+	if st, err := statx(fd, "", unix.AT_EMPTY_PATH); err != nil || (st.Kind != KindFile && st.Kind != KindDir) {
+		closed := unix.Close(fd)
+		if err != nil {
+			return errors.Join(err, closed)
+		}
+		return fmt.Errorf("open %q: %w: %w", name, ErrNotOpened, ErrNotARegularFile)
 	}
 	synced := unix.Fsync(fd)
 	closed := unix.Close(fd)
@@ -649,7 +698,15 @@ func splitPath(path string) (folders []string, name string) {
 // that name: gone since it was listed, a name the driver cannot read, or no longer what it was.
 // It says nothing about the disk (specs.md §15.10).
 func IsUnreadableName(err error) bool {
-	return errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, ErrNotARegularFile)
+	return errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) ||
+		errors.Is(err, ErrNotARegularFile) || errors.Is(err, ErrNotALink)
+}
+
+// IsAccessRefused says whether an error means that a name refuses the account that asks: the mount of another user
+// below a root, which answers so whatever the rights of who asks, a rule of the system's, or a command run without
+// Atoll's rights. It says nothing about the disk (specs.md §15.10).
+func IsAccessRefused(err error) bool {
+	return errors.Is(err, unix.EACCES)
 }
 
 // IsDiskLost says whether an error means that the disk cannot be relied on any more (invariant 4).
@@ -789,7 +846,9 @@ func WriteNew(path string, data []byte) (err error) {
 	if _, err := temp.Write(data); err != nil {
 		return errors.Join(fmt.Errorf("write: %w", err), temp.Close())
 	}
-	if err := temp.Chmod(0o644); err != nil {
+	// For its owner and its group, whatever the mask: the configuration may hold what others must not read, as the
+	// topic of a ntfy server, and the catalog's folder is closed to them as well.
+	if err := temp.Chmod(0o640); err != nil {
 		return errors.Join(fmt.Errorf("write: %w", err), temp.Close())
 	}
 	if err := temp.Sync(); err != nil {

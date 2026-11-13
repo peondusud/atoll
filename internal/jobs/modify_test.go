@@ -540,3 +540,93 @@ func TestStaleCopiesWithNothingToRefreshThemFrom(t *testing.T) {
 		t.Error("what was left of the file went")
 	}
 }
+
+// staleState says what the catalog holds of the copies and of the trash jobs, for the tests of a stale copy.
+func (b *bench) staleState() string {
+	b.t.Helper()
+	return b.text("SELECT group_concat(line, ', ') FROM (SELECT disk_id || ' ' || state AS line FROM copies ORDER BY disk_id)") + " | " +
+		b.text("SELECT COALESCE(group_concat(line, ', '), '') FROM (SELECT dst_disk || ' ' || reason || ' ' || state AS line FROM jobs WHERE kind = 'trash' ORDER BY id)")
+}
+
+// A stale copy whose file is renamed while its disk is away still reaches the trash, and is made again: the rename
+// drops every trash job of the file, as a deletion no longer stands, and the stale copy's with them (specs.md §15.4,
+// §15.12). Nothing queued it again: the copy followed the rename and stayed in media/ with the version that came
+// before, for good, and no replica of the current version was made.
+func TestAStaleCopyRenamedWhileAwayIsMadeAgain(t *testing.T) {
+	for _, how := range []string{"away", "read-only"} {
+		t.Run(how, func(t *testing.T) {
+			b := pool(t)
+			if how == "away" {
+				b.awayWhileModified("t2")
+			} else {
+				b.ro[b.dirs["t2"]] = true
+				b.awayWhileModified()
+			}
+			b.rename("t1", "a", "b")
+			b.settle()
+			delete(b.gone, b.dirs["t2"])
+			b.ro[b.dirs["t2"]] = false
+			b.settle()
+			b.settle()
+			if b.exists("t2", "media/a") || !b.exists("t2", "media/b") || b.read("t2", "b") != "longer" {
+				t.Errorf("the stale copy is not made again: %s", b.staleState())
+			}
+			if got := b.staleState(); got != "t1 ok, t2 ok | " {
+				t.Errorf("%s", got)
+			}
+			if got := b.text("SELECT group_concat(disk_id || ' ' || reason, ', ') FROM trash"); got != "t2 overwritten" {
+				t.Errorf("the trash: %s", got)
+			}
+		})
+	}
+}
+
+// A guard rejected takes the deletions it asked about back, and only those (specs.md §15.6): the overwrite of a stale
+// copy it held is no deletion, and runs once the guard no longer stands. It went with them, and the copy stayed stale.
+func TestAGuardRejectedLeavesAnOverwrite(t *testing.T) {
+	b := newBenchWith(t, "files = 0\n", "t1", "t2")
+	for _, id := range []string{"t1", "t2"} {
+		b.write(id, "a", "x")
+		b.write(id, "b", "y")
+	}
+	b.scan(true)
+	b.remove("t1", "b")
+	b.changeAgain("t1", "a", "z")
+	b.now = b.ctimeOf("t1", "a") + settleNS
+	held := Operation{Disk: "t2", Kind: KindTrash, Path: "a", Reason: catalog.ReasonOverwritten, Outcome: OutcomeHeld}
+	if out := b.pass(); !slices.Contains(out.Operations, held) {
+		t.Fatalf("%+v", out)
+	}
+	if _, err := catalog.RejectGuard(t.Context(), b.db, "t1", b.now, nil); err != nil {
+		t.Fatal(err)
+	}
+	b.settle()
+	if b.read("t2", "a") != "z" {
+		t.Errorf("the stale copy is not made again: %s", b.staleState())
+	}
+	if !b.exists("t2", "media/b") {
+		t.Error("a deletion the guard was told to take back went through")
+	}
+}
+
+// A stale copy that someone changed has lost its trash job to that change, and gets none again while it is not what
+// its row says: what becomes of it is for a decision, and no pass tries the move again meanwhile (specs.md §15.4).
+func TestAStaleCopyThatChangedGetsNoJobAgain(t *testing.T) {
+	b := pool(t)
+	b.awayWhileModified("t2")
+	delete(b.gone, b.dirs["t2"])
+	b.changeAgain("t2", "a", "mine")
+	b.exec("DELETE FROM jobs")
+	before := b.count("SELECT count(*) FROM ops")
+	b.pass()
+	b.pass()
+	if got := b.count("SELECT count(*) FROM ops"); got != before {
+		t.Errorf("%d operations for a copy that changed", got-before)
+	}
+	if got := b.count("SELECT count(*) FROM jobs WHERE kind = 'trash'"); got != 0 {
+		t.Errorf("%d trash jobs for a copy that changed", got)
+	}
+	if b.read("t2", "a") != "mine" {
+		t.Error("an edit went")
+	}
+}

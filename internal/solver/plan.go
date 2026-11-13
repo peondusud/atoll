@@ -231,6 +231,7 @@ type planDisk struct {
 	room    int64  // what can still be filled: free space, minus min_free, pending and planned
 	folders map[string]bool
 	others  map[string]bool    // symlinks and ignored files
+	old     map[string]bool    // the names copies that have not followed a rename still sit at, made when there is one
 	names   *names.TargetNames // built when a file first looks there, on NTFS only
 }
 
@@ -433,6 +434,15 @@ func (p *planner) addCopies(f *planFile) error {
 		d := p.byID[c.Disk]
 		f.holding = append(f.holding, d)
 		addParents(d, f.Path)
+		if c.OldPath != "" {
+			// It sits at that name on its disk, whatever its file is called (specs.md §15.12): the name is taken
+			// there for any other file. Taken for free, another file's copy was sent there, ended in conflict, and
+			// was sent there again at each plan, with room on another disk.
+			if d.old == nil {
+				d.old = map[string]bool{}
+			}
+			d.old[c.OldPath] = true
+		}
 		if slices.Contains(f.misplaced, d) {
 			// It counts for nothing, so that one is made where the setting wants it; it is no loss.
 		} else if counts(c, d) && (!f.Leaving || c.State != CopyPending) {
@@ -560,7 +570,9 @@ func (f *planFile) keep(counted []countedCopy) {
 			f.pending++
 			c.disk.room = subtract(c.disk.room, f.Size)
 		}
-		if c.disk.State != DiskMissing {
+		// A pending copy the plan has just canceled is no copy the file reaches: counted, a file left with one copy
+		// that can be read, beside one on a disk away, was not degraded until the next plan.
+		if c.disk.State != DiskMissing && (kept || c.copy.State != CopyPending) {
 			f.reached++
 		}
 	}
@@ -919,13 +931,13 @@ func (p *planner) checkName(f *planFile, d *planDisk) (nameRefusal, error) {
 
 // pathFree reports whether nothing on the disk stands in the way of a path.
 func (p *planner) pathFree(f *planFile, d *planDisk) bool {
-	if d.folders[f.Path] || d.others[f.Path] {
+	if d.folders[f.Path] || d.others[f.Path] || d.old[f.Path] {
 		return false
 	}
 	free := true
 	parents(f.Path, func(parent string) bool {
 		other := p.byPath[parent]
-		free = !d.others[parent] && (other == nil || !slices.Contains(other.holding, d))
+		free = !d.others[parent] && !d.old[parent] && (other == nil || !slices.Contains(other.holding, d))
 		return free
 	})
 	return free

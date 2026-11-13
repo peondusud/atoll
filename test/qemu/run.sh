@@ -74,6 +74,8 @@ args=(-test.count="${COUNT:-1}" -test.timeout="${TIMEOUT:-3000s}")
 [ "${VERBOSE:-0}" = 1 ] && args+=(-test.v)
 # The soak of the daemon that runs for good (test/loopdev/soak_test.go): SOAK=30m, SOAK_FILES=2000.
 [ -n "${SOAK:-}" ] && args+=(-atoll.soak="$SOAK" -atoll.soak-files="${SOAK_FILES:-2000}")
+# What grows with the pool and no other test reaches (test/loopdev/scale_test.go): SCALE=200000 files a disk.
+[ -n "${SCALE:-}" ] && args+=(-atoll.scale="$SCALE")
 printf '%s\n' "${args[@]}" >/opt/atoll/args
 
 initramfs() {

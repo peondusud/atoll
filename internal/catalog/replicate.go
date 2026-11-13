@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
+
+	"github.com/peondusud/atoll/internal/layout"
 )
 
 // The states of a replicate job (specs.md §14.1). queued is JobQueued.
@@ -29,6 +29,9 @@ type ReplicateJob struct {
 	// Replaces is the disk whose user copy this copy stands in for, as atoll balance --move-originals makes it: the
 	// copy becomes a user copy, and that one an Atoll copy, when it is recorded (specs.md §13.3).
 	Replaces string
+	// Refresh says that this copy takes the place of a stale one that went to the trash: it waits for no window,
+	// whatever its file's mode (specs.md §12.3, §15.4).
+	Refresh bool
 }
 
 // jobPayload is what a replicate job holds beyond its columns (specs.md §9).
@@ -36,10 +39,11 @@ type jobPayload struct {
 	Part     string `json:"part,omitempty"`
 	Blake3   string `json:"blake3,omitempty"`
 	Replaces string `json:"replaces,omitempty"`
+	Refresh  bool   `json:"refresh,omitempty"`
 }
 
 func (j *ReplicateJob) payload() (string, error) {
-	data := jobPayload{Part: j.Part, Replaces: j.Replaces}
+	data := jobPayload{Part: j.Part, Replaces: j.Replaces, Refresh: j.Refresh}
 	if j.Hash != nil {
 		data.Blake3 = hex.EncodeToString(j.Hash)
 	}
@@ -58,7 +62,7 @@ func (j *ReplicateJob) readPayload(text sql.NullString) error {
 	if err := json.Unmarshal([]byte(text.String), &data); err != nil {
 		return fmt.Errorf("job %d: payload: %w", j.ID, err)
 	}
-	j.Part, j.Replaces = data.Part, data.Replaces
+	j.Part, j.Replaces, j.Refresh = data.Part, data.Replaces, data.Refresh
 	if data.Blake3 != "" {
 		hash, err := hex.DecodeString(data.Blake3)
 		if err != nil || len(hash) != 32 {
@@ -273,10 +277,13 @@ func PartsInUse(ctx context.Context, db *sql.DB, disk string) (map[string]bool, 
 	return out, nil
 }
 
-// PartStates gives, of the names a disk's tmp/ holds, those an operation create names, each with the state of those
-// operations: tmp/ loses only the parts of operations done or undone (specs.md §14.2). A part is named by the id of
-// the operation that made it, and only that one and those that resume it, later, name it: each is looked for from that
-// id on, never over the whole journal, which only grows. Read at each pass, that took 0.35 s over a million copies.
+// PartStates gives, of the names a disk's tmp/ holds, those an operation names, each with the state of those
+// operations: tmp/ loses only the parts of operations done or undone (specs.md §14.2). A copy's part, <op-id>.part,
+// is named by the operation create that made it, and only that one and those that resume it, later, name it: each is
+// looked for from that id on, never over the whole journal, which only grows. Read at each pass, that took 0.35 s
+// over a million copies. A chunk a repair saves on its way to the trash, <op-id>.<index>.part, is named by that
+// repair alone, whatever its index: no column holds its name, and no operation resumes it (specs.md §16.1). A name
+// written otherwise than Atoll writes it is named by none.
 func PartStates(ctx context.Context, db *sql.DB, disk string, names []string) (map[string]string, error) {
 	out := map[string]string{}
 	stmt, err := db.PrepareContext(ctx, partStatesQuery)
@@ -285,19 +292,31 @@ func PartStates(ctx context.Context, db *sql.DB, disk string, names []string) (m
 	}
 	defer func() { _ = stmt.Close() }()
 	for _, name := range names {
-		digits, ok := strings.CutSuffix(name, ".part")
-		id, err := strconv.ParseInt(digits, 10, 64)
-		if !ok || err != nil || id < 1 {
-			continue
-		}
-		if err := partState(ctx, stmt, id, disk, name, out); err != nil {
-			return nil, err
+		id, _, chunk, ok := layout.PartOp(name)
+		switch {
+		case !ok:
+		case chunk:
+			var state string
+			switch err := db.QueryRowContext(ctx, repairStateQuery, id, disk).Scan(&state); {
+			case isNoRows(err):
+			case err != nil:
+				return nil, fmt.Errorf("parts: %w", err)
+			default:
+				out[name] = state
+			}
+		default:
+			if err := partState(ctx, stmt, id, disk, name, out); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return out, nil
 }
 
 const partStatesQuery = "SELECT state FROM ops WHERE id >= ? AND kind = 'create' AND disk_id = ? AND path2 = ? ORDER BY id"
+
+// repairStateQuery reads the state of the repair of an id, on a disk.
+const repairStateQuery = "SELECT state FROM ops WHERE id = ? AND kind = 'repair' AND disk_id = ?"
 
 func partState(ctx context.Context, stmt *sql.Stmt, id int64, disk, name string, out map[string]string) error {
 	rows, err := stmt.QueryContext(ctx, id, disk, []byte(name))
@@ -336,7 +355,7 @@ func BeginCreate(ctx context.Context, db *sql.DB, job *ReplicateJob, nowNS int64
 			return fmt.Errorf("journal: %w", err)
 		}
 		if job.Part == "" {
-			job.Part, job.Hash = strconv.FormatInt(op.ID, 10)+".part", nil
+			job.Part, job.Hash = layout.PartName(op.ID), nil
 			if _, err := tx.ExecContext(ctx, "DELETE FROM job_chunks WHERE job_id = ?", job.ID); err != nil {
 				return fmt.Errorf("job: %w", err)
 			}

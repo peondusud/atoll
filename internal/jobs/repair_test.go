@@ -278,6 +278,250 @@ func TestARepairWithNoRoomQuarantines(t *testing.T) {
 	}
 }
 
+// badWrites is a disk whose writes in place do not take: a file opened to be written in place holds, after a write,
+// the bytes written with the last one flipped, as a sector that cannot be written again would leave them. That is
+// neither what the write held nor what was there before.
+type badWrites struct{ fsx.Dir }
+
+func (s *badWrites) Unwrap() fsx.Dir { return s.Dir }
+
+func (s *badWrites) OpenDir(name string) (fsx.Dir, error) {
+	d, err := s.Dir.OpenDir(name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return &badWrites{Dir: d}, nil
+}
+
+func (s *badWrites) OpenWritable(name string) (fsx.WritableFile, error) {
+	f, err := s.Dir.OpenWritable(name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return &badWritten{WritableFile: f}, nil
+}
+
+type badWritten struct{ fsx.WritableFile }
+
+func (f *badWritten) WriteAt(p []byte, off int64) (int, error) {
+	wrong := bytes.Clone(p)
+	if len(wrong) > 0 {
+		wrong[len(wrong)-1] ^= 0xff
+	}
+	return f.WritableFile.WriteAt(wrong, off) //nolint:wrapcheck // a test double
+}
+
+// A repair that fails otherwise than for want of room leaves the copy corrupt, and the scrub that found it sends it to
+// the trash, as it does without auto_repair: the view never serves it, and the next pass makes it again from the
+// healthy copy (specs.md §16, §16.1, invariant 14). It stayed in media/, listed as kept, and no scrub read it again.
+func TestARepairThatFailsQuarantines(t *testing.T) {
+	b, data := repairBench(t, "")
+	b.rotChunks("t2", "a.mkv", data, 1)
+	b.tops[b.dirs["t2"]] = func(top fsx.Dir) fsx.Dir { return &badWrites{Dir: top} }
+	out := b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+	if t2 := diskOf(out, "t2"); len(t2.Repaired) != 0 || !slices.Equal(t2.Quarantined, []string{"a.mkv"}) || len(t2.Kept) != 0 {
+		t.Fatalf("%+v", t2)
+	}
+	if got := b.text("SELECT json_extract(data, '$.reason') FROM events WHERE kind = 'repair-stopped'"); got != "io-error" {
+		t.Errorf("stopped for %q", got)
+	}
+	if b.exists("t2", "media/a.mkv") {
+		t.Error("the copy a repair could not mend is still in media/")
+	}
+	if got := b.text("SELECT group_concat(kind || ':' || state) FROM ops ORDER BY id"); got != "repair:done,trash:done" {
+		t.Errorf("ops %s", got)
+	}
+	if got := b.text("SELECT group_concat(reason) FROM trash ORDER BY id"); got != "repaired,quarantined" {
+		t.Errorf("the trash holds %q", got)
+	}
+	if n := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2'"); n != 0 {
+		t.Errorf("%d copies recorded on the disk whose copy went to the trash", n)
+	}
+	// The healthy copy is the one the next pass copies from.
+	delete(b.tops, b.dirs["t2"])
+	b.settle()
+	if b.read("t2", "a.mkv") != string(data) {
+		t.Error("the copy is not made again from the healthy one")
+	}
+	if got := b.text("SELECT state FROM files"); got != "ok" {
+		t.Errorf("the file is %s", got)
+	}
+}
+
+// A repair that stopped where nothing could resolve it stays planned, and only a reprise can tell what its copy holds
+// (specs.md §17.2): the scrub moves nothing that an operation still planned names, and the copy stays where it is.
+func TestARepairLeftPlannedIsNotQuarantined(t *testing.T) {
+	b, data := repairBench(t, "")
+	b.rotChunks("t2", "a.mkv", data, 1)
+	b.tops[b.dirs["t2"]] = func(top fsx.Dir) fsx.Dir { return &badWrites{Dir: top} }
+	written := false
+	b.at["chunk-written"] = func() { written = true }
+	b.fail[b.dirs["t2"]] = func(call, name string) error {
+		// What the repair saved cannot be looked at any more, and nothing says the disk is gone.
+		if written && call == "opendir" && strings.HasSuffix(name, ".chunks") {
+			return syscall.EACCES
+		}
+		return nil
+	}
+	out := b.scrub(ScrubOptions{Apply: true, Quarantine: true, Disk: "t2"})
+	if t2 := diskOf(out, "t2"); len(t2.Repaired) != 0 || len(t2.Quarantined) != 0 || !slices.Equal(t2.Kept, []string{"a.mkv"}) {
+		t.Fatalf("%+v", t2)
+	}
+	if got := b.text("SELECT group_concat(kind || ':' || state) FROM ops ORDER BY id"); got != "repair:planned" {
+		t.Errorf("ops %s", got)
+	}
+	if !b.exists("t2", "media/a.mkv") {
+		t.Error("a copy an operation still planned names was moved")
+	}
+	if !out.Partial {
+		t.Error("an operation stays planned, and the scrub does not say so")
+	}
+}
+
+// droppedWrites is a disk that drops a write in place, as a bridge that says a write is done and did none: the file
+// holds what it held, and its times have moved.
+type droppedWrites struct{ fsx.Dir }
+
+func (s *droppedWrites) Unwrap() fsx.Dir { return s.Dir }
+
+func (s *droppedWrites) OpenDir(name string) (fsx.Dir, error) {
+	d, err := s.Dir.OpenDir(name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return &droppedWrites{Dir: d}, nil
+}
+
+func (s *droppedWrites) OpenWritable(name string) (fsx.WritableFile, error) {
+	f, err := s.Dir.OpenWritable(name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return &droppedWrite{WritableFile: f}, nil
+}
+
+type droppedWrite struct{ fsx.WritableFile }
+
+// WriteAt writes what was there, until the change time has moved, which it may not do within a clock tick.
+func (f *droppedWrite) WriteAt(p []byte, off int64) (int, error) {
+	was := make([]byte, len(p))
+	if _, err := f.ReadAt(was, off); err != nil {
+		return 0, err //nolint:wrapcheck // a test double
+	}
+	before, err := f.Info()
+	if err != nil {
+		return 0, err //nolint:wrapcheck // a test double
+	}
+	for range 2000 {
+		if _, err := f.WritableFile.WriteAt(was, off); err != nil {
+			return 0, err //nolint:wrapcheck // a test double
+		}
+		after, err := f.Info()
+		if err != nil {
+			return 0, err //nolint:wrapcheck // a test double
+		}
+		if after.Ctime != before.Ctime {
+			return len(p), nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return 0, errors.New("the change time did not move")
+}
+
+// A write that the disk drops leaves the copy as the repair found it, but for its times, which the repair's own write
+// moved: that is no change of anyone else's. The repair stops, the copy's row says again what its disk holds, and the
+// next repair begins again (specs.md §16.1). Its row kept the times from before the write, so that every repair
+// after it found a changed copy, which it left to the next pass, and a pass leaves a corrupt file to a repair: the
+// copy stayed corrupt in media/ for good.
+func TestARepairWhoseWriteIsDroppedBeginsAgain(t *testing.T) {
+	b, data := repairBench(t, "")
+	rotten := b.rotChunks("t2", "a.mkv", data, 1)
+	b.scrub(ScrubOptions{Apply: true})
+	mtime := b.mtimeOf("t2", "a.mkv")
+	b.tops[b.dirs["t2"]] = func(top fsx.Dir) fsx.Dir { return &droppedWrites{Dir: top} }
+	if done := b.repair(RepairOptions{Apply: true}); len(done.Items) != 1 || done.Items[0].Outcome != trash.OutcomeIOError {
+		t.Fatalf("%+v", done)
+	}
+	if b.read("t2", "a.mkv") != string(rotten) {
+		t.Fatal("the double wrote something")
+	}
+	if got := b.mtimeOf("t2", "a.mkv"); got != mtime {
+		t.Errorf("the modification time is not set back: %d, was %d", got, mtime)
+	}
+	if got := b.text("SELECT ctime_ns FROM copies WHERE disk_id = 't2'"); got != strconv.FormatInt(b.ctimeOf("t2", "a.mkv"), 10) {
+		t.Error("the row of the copy does not say the change time the repair's own write left")
+	}
+	if got := b.text("SELECT group_concat(kind || ':' || state) FROM ops ORDER BY id"); got != "repair:done" {
+		t.Errorf("ops %s", got)
+	}
+	// On a disk that writes again, the next repair finds the copy its row says, and repairs it.
+	delete(b.tops, b.dirs["t2"])
+	if done := b.repair(RepairOptions{Apply: true}); len(done.Items) != 1 || done.Items[0].Outcome != trash.OutcomeRepaired {
+		t.Fatalf("the next repair: %+v", done)
+	}
+	if b.read("t2", "a.mkv") != string(data) {
+		t.Error("not repaired by the next repair")
+	}
+}
+
+// And the scrub that found the copy sends it to the trash, as after any repair that fails (specs.md §16).
+func TestARepairWhoseWriteIsDroppedQuarantines(t *testing.T) {
+	b, data := repairBench(t, "")
+	b.rotChunks("t2", "a.mkv", data, 1)
+	b.tops[b.dirs["t2"]] = func(top fsx.Dir) fsx.Dir { return &droppedWrites{Dir: top} }
+	out := b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+	if t2 := diskOf(out, "t2"); len(t2.Repaired) != 0 || !slices.Equal(t2.Quarantined, []string{"a.mkv"}) || len(t2.Kept) != 0 {
+		t.Fatalf("%+v", t2)
+	}
+	if b.exists("t2", "media/a.mkv") {
+		t.Error("the copy a repair could not mend is still in media/")
+	}
+	if got := b.text("SELECT group_concat(kind || ':' || state) FROM ops ORDER BY id"); got != "repair:done,trash:done" {
+		t.Errorf("ops %s", got)
+	}
+	delete(b.tops, b.dirs["t2"])
+	b.settle()
+	if b.read("t2", "a.mkv") != string(data) {
+		t.Error("the copy is not made again from the healthy one")
+	}
+}
+
+// The disk of the healthy copy is the one lost when it fails while a repair reads from it, never the disk repaired,
+// whose repair is resolved at once: nothing was written from a copy that could not be read. And the corrupt copy
+// stays where it is, as no healthy copy can be read any more (specs.md §16, §16.1, invariant 4). The disk repaired
+// was lost in its place, its repair left planned, and the disk that failed stayed in service.
+func TestAHealthyDiskThatFailsIsTheOneLost(t *testing.T) {
+	b, data := repairBench(t, "")
+	rotten := b.rotChunks("t2", "a.mkv", data, 1)
+	late := false
+	b.at["chunks-saved"] = func() { late = true }
+	b.fail[b.dirs["t1"]] = func(call, name string) error {
+		if late && call == "openfile" && name == "a.mkv" {
+			return syscall.EIO
+		}
+		return nil
+	}
+	out := b.scrub(ScrubOptions{Apply: true, Quarantine: true, Disk: "t2"})
+	if t2 := diskOf(out, "t2"); len(t2.Repaired) != 0 || len(t2.Quarantined) != 0 || !slices.Equal(t2.Kept, []string{"a.mkv"}) {
+		t.Fatalf("%+v", t2)
+	}
+	if !out.Partial {
+		t.Error("a disk failed, and the scrub does not say so")
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't2'"); got == "missing" {
+		t.Error("the disk repaired is lost for an error of the healthy copy's")
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't1'"); got != "missing" {
+		t.Errorf("the disk of the healthy copy, which failed, is %s", got)
+	}
+	if got := b.text("SELECT group_concat(kind || ':' || state) FROM ops ORDER BY id"); got != "repair:done" {
+		t.Errorf("ops %s", got)
+	}
+	if b.read("t2", "a.mkv") != string(rotten) {
+		t.Error("the corrupt copy is not what it was")
+	}
+}
+
 // With repair_mode = "file", the corrupt copy goes to the trash, repaired, and is made again at once from the
 // healthy one, as a new file (specs.md §16.1).
 func TestScrubRepairsAWholeFile(t *testing.T) {
@@ -478,4 +722,84 @@ func TestARepairChecksWhatItWrites(t *testing.T) {
 	if got := b.text("SELECT json_extract(data, '$.reason') FROM events WHERE kind = 'repair-stopped'"); got != "changed" {
 		t.Errorf("stopped for %q", got)
 	}
+}
+
+// What a repair leaves in tmp/ goes like any other part: the chunk it was saving when it stopped,
+// <op-id>.<index>.part, is removed when a command that writes next opens the disk, once the repair is done or undone,
+// and nothing else there is touched (specs.md §14.2, §16.1). Nothing knew those names: each repair that failed on a
+// disk with no room, which every scrub tries again, left up to 4 MiB there for good.
+func TestTheChunkARepairWasSavingGoesFromTmp(t *testing.T) {
+	t.Run("after a failure", func(t *testing.T) {
+		b, data := repairBench(t, "")
+		b.rotChunks("t2", "a.mkv", data, 1)
+		b.scrub(ScrubOptions{Apply: true})
+		b.fail[b.dirs["t2"]] = func(call, name string) error {
+			if call == "write" && strings.HasSuffix(name, ".part") {
+				return syscall.ENOSPC
+			}
+			return nil
+		}
+		if failed := b.repair(RepairOptions{Apply: true}); len(failed.Items) != 1 || failed.Items[0].Outcome == trash.OutcomeRepaired {
+			t.Fatalf("%+v", failed)
+		}
+		op := b.text("SELECT id FROM ops WHERE kind = 'repair' AND state = 'undone'")
+		left := op + ".1.part"
+		if got := b.parts("t2"); !slices.Equal(got, []string{left}) {
+			t.Fatalf("the repair that failed left %q in tmp/, want %q", got, left)
+		}
+		// What no repair of this disk names stays, however like a repair's its name is.
+		others := []string{op + ".01.part", op + ".1.part.old", "999.1.part"}
+		for _, name := range others {
+			if err := os.WriteFile(filepath.Join(b.dirs["t2"], "Atoll", "tmp", name), []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		delete(b.fail, b.dirs["t2"])
+		if done := b.repair(RepairOptions{Apply: true}); len(done.Items) != 1 || done.Items[0].Outcome != trash.OutcomeRepaired {
+			t.Fatalf("%+v", done)
+		}
+		slices.Sort(others)
+		if got := b.parts("t2"); !slices.Equal(got, others) {
+			t.Errorf("tmp/ holds %q, want %q", got, others)
+		}
+	})
+	t.Run("after a crash", func(t *testing.T) {
+		b, data := repairBench(t, "")
+		b.rotChunks("t2", "a.mkv", data, 1)
+		b.scrub(ScrubOptions{Apply: true})
+		stop := errors.New("stopped")
+		b.fail[b.dirs["t2"]] = func(call, name string) error {
+			// The chunk is written and synced in tmp/, and the machine stops as it is moved to the trash.
+			if (call == "rename" || call == "link") && name == "00000001" {
+				panic(stop) //nolint:forbidigo // what stands for kill -9
+			}
+			return nil
+		}
+		func() {
+			defer func() {
+				if err, ok := recover().(error); !ok || !errors.Is(err, stop) {
+					t.Fatalf("it did not stop as the chunk was moved: %v", err)
+				}
+			}()
+			_, _ = Repair(t.Context(), b.db, b.config, b, RepairOptions{Apply: true})
+		}()
+		op := b.text("SELECT id FROM ops WHERE kind = 'repair' AND state = 'planned'")
+		if got := b.parts("t2"); !slices.Equal(got, []string{op + ".1.part"}) {
+			t.Fatalf("the crash left %q in tmp/", got)
+		}
+		delete(b.fail, b.dirs["t2"])
+		// The next command that writes resolves the repair, then cleans tmp/: the part goes with it.
+		if done := b.repair(RepairOptions{Apply: true}); len(done.Items) != 1 || done.Items[0].Outcome != trash.OutcomeRepaired {
+			t.Fatalf("%+v", done)
+		}
+		if got := b.text("SELECT state FROM ops WHERE id = ?", op); got != "undone" {
+			t.Errorf("the repair the crash left is %s", got)
+		}
+		if got := b.parts("t2"); len(got) != 0 {
+			t.Errorf("tmp/ holds %q", got)
+		}
+		if b.read("t2", "a.mkv") != string(data) {
+			t.Error("not repaired")
+		}
+	})
 }

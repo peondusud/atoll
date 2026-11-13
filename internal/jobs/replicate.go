@@ -321,7 +321,7 @@ func (r *replicator) lookAtSource(ctx context.Context, job *catalog.ReplicateJob
 		_ = f.Close()
 		return "", nil
 	case errors.Is(err, ops.ErrGone):
-		if err := catalog.RetryJob(ctx, r.db, job, sql.NullInt64{Int64: r.now + settleOf(r.config, job).Nanoseconds(), Valid: true}, false); err != nil {
+		if err := catalog.RetryJob(ctx, r.db, job, sql.NullInt64{Int64: r.machine.Now() + settleOf(r.config, job).Nanoseconds(), Valid: true}, false); err != nil {
 			return "", fmt.Errorf("catalog: %w", err)
 		}
 		return trash.OutcomeChanged, nil
@@ -378,7 +378,8 @@ func (r *replicator) commit(ctx context.Context, job *catalog.ReplicateJob, op *
 	if err != nil {
 		return "", fmt.Errorf("replicate: %w", err)
 	}
-	if err := catalog.FinishCreate(ctx, r.db, op, job, ops.NewCopyOf(&found), r.now); err != nil {
+	// The time it is now, not when the run began: a run can last hours, and the copy is seen and verified as it ends.
+	if err := catalog.FinishCreate(ctx, r.db, op, job, ops.NewCopyOf(&found), r.machine.Now()); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	r.session.MarkChanged()
@@ -595,14 +596,19 @@ func (c *copier) restore(part *ops.Part, read *fsx.Stat) error {
 	if err := part.SetTimes(fsx.OmitTime, read.Mtime); err != nil {
 		return classifyDisk(err)
 	}
-	if err := part.SetMode(read.Mode); err != nil {
-		return classifyDisk(err)
-	}
+	// The owner first: a change of owner takes the setuid and setgid bits off a file, so a mode set before it would
+	// lose them. And a copy that could not take its source's owner does not keep the bits that would run it as
+	// another's.
+	mode := read.Mode
 	if err := part.SetOwner(read.Uid, read.Gid); err != nil {
 		if fsx.IsDiskLost(err) {
 			return classifyDisk(err)
 		}
 		slog.Warn("a copy keeps another owner", "disk", c.op.Disk, "path", c.job.Path, "error", err)
+		mode &^= 0o6000
+	}
+	if err := part.SetMode(mode); err != nil {
+		return classifyDisk(err)
 	}
 	if err := part.Sync(); err != nil {
 		return fmt.Errorf("%w: %w", ops.ErrDiskLost, err)
@@ -663,11 +669,13 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 		return nil, c.drop(ctx, obstacleOutcome(target), false)
 	}
 	for _, folder := range missing {
+		// The source's folder: an error there is the source's, as one while it was read, never the target's, which
+		// would be lost in its place with every job left for it.
 		like, err := c.src.FolderInfo(folder)
 		if err != nil {
-			return nil, err
+			return nil, c.sourceFailed(ctx, err)
 		}
-		op, err := catalog.BeginMkdir(ctx, c.r.db, c.op.Disk, folder, c.r.now)
+		op, err := catalog.BeginMkdir(ctx, c.r.db, c.op.Disk, folder, ops.LikeOf(like), c.r.now)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errCatalog, err)
 		}
@@ -735,7 +743,7 @@ func (c *copier) drop(ctx context.Context, outcome string, retry bool) error {
 	case !retry:
 		err = catalog.EndJob(ctx, c.r.db, c.job)
 	case outcome == trash.OutcomeChanged:
-		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{Int64: c.r.now + settleOf(c.r.config, c.job).Nanoseconds(), Valid: true}, false)
+		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{Int64: c.r.machine.Now() + settleOf(c.r.config, c.job).Nanoseconds(), Valid: true}, false)
 	default:
 		err = catalog.RetryJob(ctx, c.r.db, c.job, sql.NullInt64{}, false)
 	}

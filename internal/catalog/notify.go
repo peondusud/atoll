@@ -4,8 +4,28 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 )
+
+// copiesOnBelowSQL says whether a file below a folder has a copy on one of n disks: the disks first, then the bounds
+// of the folder. Every path below a folder lies between "<folder>/" and "<folder>0", '0' being the byte after '/'.
+// CROSS JOIN keeps the files first, read by the range of their paths: led by the disk, as SQLite chooses with no
+// statistics, it read every copy of a missing disk for each folder that holds none of them, and the daemon asks for
+// each folder it has to tell a media server of, at each pass while a disk is away (specs.md §21.4, §26).
+func copiesOnBelowSQL(n int) string {
+	return `SELECT EXISTS (SELECT 1 FROM files f CROSS JOIN copies c ON c.file_id = f.id
+		WHERE f.lpath >= ?` + strconv.Itoa(n+1) + ` AND f.lpath < ?` + strconv.Itoa(n+2) + ` AND c.disk_id IN (` + numbered(n) + `))`
+}
+
+// numbered gives the parameters ?1 to ?n, with commas between them.
+func numbered(n int) string {
+	marks := make([]string, n)
+	for i := range marks {
+		marks[i] = "?" + strconv.Itoa(i+1)
+	}
+	return strings.Join(marks, ", ")
+}
 
 // FoldersWithCopiesOn gives, of these folders, those below which a file has a copy on one of these disks, in the
 // order given: while a disk is missing, a scan of such a folder would find its file gone (specs.md §21.4). A folder
@@ -15,9 +35,7 @@ func FoldersWithCopiesOn(ctx context.Context, db *sql.DB, folders, disks []strin
 		return nil, nil
 	}
 	in := strings.Repeat(", ?", len(disks))[2:]
-	// Every path below a folder lies between "<folder>/" and "<folder>0", '0' being the byte after '/'.
-	below := `SELECT EXISTS (SELECT 1 FROM files f JOIN copies c ON c.file_id = f.id
-		WHERE c.disk_id IN (` + in + `) AND f.lpath >= ? AND f.lpath < ?)`
+	below := copiesOnBelowSQL(len(disks))
 	anywhere := `SELECT EXISTS (SELECT 1 FROM copies WHERE disk_id IN (` + in + `))`
 	var out []string
 	for _, folder := range folders {

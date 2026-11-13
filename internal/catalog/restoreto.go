@@ -4,7 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
+
+	"github.com/peondusud/atoll/internal/layout"
 )
 
 // BeginRestoreTo journals a copy of a trash entry to another disk (specs.md §17.4): an operation create on that disk,
@@ -20,7 +21,7 @@ func BeginRestoreTo(ctx context.Context, db *sql.DB, disk string, e *TrashEntry,
 		if op.ID, err = result.LastInsertId(); err != nil {
 			return fmt.Errorf("journal: %w", err)
 		}
-		op.Path2 = strconv.FormatInt(op.ID, 10) + ".part"
+		op.Path2 = layout.PartName(op.ID)
 		if _, err := tx.ExecContext(ctx, "UPDATE ops SET path2 = ? WHERE id = ?", []byte(op.Path2), op.ID); err != nil {
 			return fmt.Errorf("journal: %w", err)
 		}

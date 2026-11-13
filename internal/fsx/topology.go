@@ -14,8 +14,8 @@ import (
 const sysBlock = "/sys/dev/block"
 
 // PhysicalDisks gives the whole disks a block device lives on, by their kernel names, in byte order: a
-// partition's disk, and the disks below a device-mapper or md device, followed down. A loop device, or any
-// device with nothing below it, is its own (specs.md §10, R-06).
+// partition's disk, and the disks below a device-mapper or md device, followed down, through a partition of such a
+// device too. A loop device, or any device with nothing below it, is its own (specs.md §10, R-06).
 func PhysicalDisks(major, minor uint32) ([]string, error) {
 	dir, err := filepath.EvalSymlinks(fmt.Sprintf("%s/%d:%d", sysBlock, major, minor))
 	if err != nil {
@@ -57,7 +57,9 @@ func disksBelow(dir string, depth int) ([]string, error) {
 		return nil, fmt.Errorf("%s: devices below devices, too deep", dir)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "partition")); err == nil {
-		return []string{filepath.Base(filepath.Dir(dir))}, nil
+		// A partition lives where the device it cuts lives: a disk, or an array, whose own disks are below it. Its
+		// folder is inside that device's.
+		return disksBelow(filepath.Dir(dir), depth+1)
 	}
 	slaves, err := os.ReadDir(filepath.Join(dir, "slaves"))
 	if err != nil || len(slaves) == 0 {

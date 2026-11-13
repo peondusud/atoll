@@ -20,10 +20,9 @@ type Marker struct {
 	PoolID, DiskID, FSUUID string
 }
 
-// identifier is the grammar of a disk's id (specs.md §29.5), and pool is that of a pool_id.
+// identifier is the grammar of a disk's id and of a pool's (specs.md §29.5), as the configuration has them.
 var (
 	identifier = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-	pool       = regexp.MustCompile(`^(local|[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*)$`)
 	uuid       = regexp.MustCompile(`^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9A-F]{16})$`)
 )
 
@@ -35,7 +34,7 @@ func IsIdentifier(s string) bool {
 // MarkerText writes a marker: four keys, in this order, each on its line. Every value is ASCII with no quote, so
 // a basic string holds it as it is.
 func MarkerText(m Marker) (string, error) {
-	if !pool.MatchString(m.PoolID) || !identifier.MatchString(m.DiskID) || !uuid.MatchString(m.FSUUID) {
+	if !identifier.MatchString(m.PoolID) || !identifier.MatchString(m.DiskID) || !uuid.MatchString(m.FSUUID) {
 		return "", fmt.Errorf("a marker of %q, %q, %q", m.PoolID, m.DiskID, m.FSUUID)
 	}
 	return fmt.Sprintf("format_version = %d\npool_id = %q\ndisk_id = %q\nfs_uuid = %q\n", MarkerFormat, m.PoolID, m.DiskID, m.FSUUID), nil
@@ -65,7 +64,7 @@ func ParseMarker(data []byte) (Marker, error) {
 	m.PoolID, _ = tree["pool_id"].(string)
 	m.DiskID, _ = tree["disk_id"].(string)
 	m.FSUUID, _ = tree["fs_uuid"].(string)
-	if !pool.MatchString(m.PoolID) || !identifier.MatchString(m.DiskID) || !uuid.MatchString(m.FSUUID) {
+	if !identifier.MatchString(m.PoolID) || !identifier.MatchString(m.DiskID) || !uuid.MatchString(m.FSUUID) {
 		return Marker{}, fmt.Errorf("%w: a value outside its grammar", ErrNotAMarker)
 	}
 	return m, nil

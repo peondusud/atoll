@@ -47,7 +47,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). Days, and 200,000 files, remain.
+1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 7 hours are, its heap in use at 3.6 MiB: days remain, and bringing the most it holds back under the 200 MB of §26, which a strict `atoll status`, the link guard and the soak go past at that size (TODO.md).
 
 ## Beta: phase 1b, the complete Linux MVP
 
@@ -58,7 +58,7 @@ The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "
 - **Conflicts.** Done: `atoll conflicts list` and `atoll conflicts resolve` (§15.7).
 - **Link guard.** Done: the optional link guard against deletions and replacements through mergerfs (§17).
 
-Every item of phase 1b is done. What the beta still needs is the alpha's: the memory of a daemon that runs for days, at 200,000 files, which is also where the link guard and `bytes_placed` are still to be measured (TODO.md).
+Every item of phase 1b is done. What the beta still needs is the alpha's: the memory of a daemon that runs for days, at 200,000 files. The link guard and `bytes_placed` are measured there (§26): the guard's passes hold up to 205 MiB, to bring under the 200 MB (TODO.md).
 
 ## v0.1: phase 2a, Atoll's own view
 

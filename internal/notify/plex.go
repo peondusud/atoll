@@ -19,7 +19,7 @@ type Plex struct {
 	TokenFile string
 	ViewMount string
 	PathMap   map[string]string
-	Client    *http.Client // http.DefaultClient when nil
+	Client    *http.Client // one that follows no redirect when nil
 }
 
 // Name is the table of the configuration that sets Plex.

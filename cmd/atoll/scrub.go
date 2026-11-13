@@ -29,6 +29,7 @@ type scrubDiskOutput struct {
 	Quarantined []pathItem `json:"quarantined"`
 	Kept        []pathItem `json:"kept"`
 	Changed     []pathItem `json:"changed"`
+	Conflict    []pathItem `json:"conflict"`
 	Left        bool       `json:"left"`
 }
 
@@ -82,9 +83,10 @@ func runScrub(configPath string, args []string, stdout, stderr io.Writer) int {
 		d := &out.Disks[i]
 		result.Disks = append(result.Disks, scrubDiskOutput{ID: d.ID, Scrubbed: d.Scrubbed, CopiesRead: d.Read, BytesRead: d.Bytes,
 			Corrupt: pathItems(d.Corrupt), Repaired: pathItems(d.Repaired), Quarantined: pathItems(d.Quarantined), Kept: pathItems(d.Kept),
-			Changed: pathItems(d.Changed), Left: d.Left})
+			Changed: pathItems(d.Changed), Conflict: pathItems(d.Conflict), Left: d.Left})
 		quarantine = quarantine || len(d.Quarantined) > 0 || len(d.Repaired) > 0
-		kept = kept || len(d.Kept) > 0
+		// A conflict found stays for the user to resolve, as a corrupt copy with no healthy one does.
+		kept = kept || len(d.Kept) > 0 || len(d.Conflict) > 0
 	}
 	if parsed.asJSON {
 		err = writeJSON(stdout, result)
@@ -198,7 +200,8 @@ func scrubText(out *scrubOutput, yes bool) string {
 		for _, list := range []struct {
 			what  string
 			paths []pathItem
-		}{{"corrupt", d.Corrupt}, {"kept, no healthy copy elsewhere", d.Kept}, {"changed, for the next pass", d.Changed}} {
+		}{{"corrupt", d.Corrupt}, {"kept, no healthy copy elsewhere", d.Kept}, {"changed, for the next pass", d.Changed},
+			{"never verified, another version of its file: a conflict", d.Conflict}} {
 			for _, p := range list.paths {
 				fmt.Fprintf(&b, "  %s: %s\n", list.what, pathText(p))
 			}
@@ -222,8 +225,5 @@ func scrubText(out *scrubOutput, yes bool) string {
 }
 
 func pathText(p pathItem) string {
-	if p.PathB64 != "" {
-		return "(base64) " + p.PathB64
-	}
-	return p.Path
+	return shownB64(p.Path, p.PathB64)
 }

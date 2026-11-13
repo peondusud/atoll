@@ -35,10 +35,10 @@
     },
     "dry_run": { "type": "boolean" },
     "warnings": {
-      "description": "In the order they arose; each is also said on standard error. readonly: the disk takes no copy until mounted read-write. topology-unchecked: whether it shares a physical disk with another is not known. not-immutable, immutable-unchecked: the folder under its mount point is not immutable, or that is not known. catalog-not-updated, marker-not-written, daemon-not-told: added to the configuration, and that step left undone, with exit 4.",
+      "description": "In the order they arose; each is also said on standard error. readonly: the disk takes no copy until mounted read-write. topology-unchecked: whether it shares a physical disk with another is not known. not-immutable, immutable-unchecked: the folder under its mount point is not immutable, or that is not known. catalog-not-updated, marker-not-written, daemon-not-told: added to the configuration, and that step left undone, with exit 4. config-not-synced: the configuration is written, and its folder could not be synced after, with exit 4.",
       "type": "array",
       "items": {
-        "enum": ["readonly", "topology-unchecked", "not-immutable", "immutable-unchecked", "catalog-not-updated", "marker-not-written", "daemon-not-told"]
+        "enum": ["readonly", "topology-unchecked", "not-immutable", "immutable-unchecked", "catalog-not-updated", "marker-not-written", "daemon-not-told", "config-not-synced"]
       }
     }
   }

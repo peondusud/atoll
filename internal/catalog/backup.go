@@ -24,6 +24,8 @@ const BackupFolder = "backups"
 const (
 	backupPrefix = "catalog-"
 	backupSuffix = ".db"
+	// backupPart ends the name a backup is written under until it is checked.
+	backupPart = ".part"
 )
 
 // BackupName gives the name of a backup made at a time.
@@ -33,18 +35,21 @@ func BackupName(nowNS int64) string {
 
 // Backup writes a consistent copy of the catalog in the folder backups beside it, under the name of that time:
 // through <name>.part, which SQLite's VACUUM INTO fills from one snapshot, checked whole, then renamed. It then
-// removes the oldest backups past BackupKeep. It gives the path written and the names removed (specs.md §9).
+// removes the oldest backups past BackupKeep. It gives the path written and the names removed (specs.md §9). A part
+// goes with the backup that fails, and one an earlier backup left, as a crash leaves it, goes first: the system disk
+// that had no room for one must not keep what was written of it.
 func Backup(ctx context.Context, db *sql.DB, catalogFile, poolID string, nowNS int64) (written string, removed []string, err error) {
 	dir := path.Join(path.Dir(catalogFile), BackupFolder)
 	if err := fsx.MkdirAll(dir); err != nil {
 		return "", nil, fmt.Errorf("backup: %w", err)
 	}
-	written = path.Join(dir, BackupName(nowNS))
-	part := written + ".part"
-	if err := fsx.RemoveFile(part); err != nil && !fsx.IsAbsent(err) {
-		return "", nil, fmt.Errorf("backup: %w", err)
+	if err := removeParts(dir); err != nil {
+		return "", nil, err
 	}
+	written = path.Join(dir, BackupName(nowNS))
+	part := written + backupPart
 	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", part); err != nil {
+		_ = fsx.RemoveFile(part)
 		return "", nil, fmt.Errorf("backup %s: %w", part, err)
 	}
 	if err := CheckBackup(ctx, part, poolID); err != nil {
@@ -52,6 +57,7 @@ func Backup(ctx context.Context, db *sql.DB, catalogFile, poolID string, nowNS i
 		return "", nil, err
 	}
 	if err := fsx.RenameFile(part, written); err != nil {
+		_ = fsx.RemoveFile(part)
 		return "", nil, fmt.Errorf("backup: %w", err)
 	}
 	names, err := fsx.ListNames(dir)
@@ -73,6 +79,24 @@ func Backup(ctx context.Context, db *sql.DB, catalogFile, poolID string, nowNS i
 		backups = backups[1:]
 	}
 	return written, removed, nil
+}
+
+// removeParts removes what backups that did not end left in their folder: catalog-<time>.db.part, and nothing else,
+// as the folder is not Atoll's alone.
+func removeParts(dir string) error {
+	names, err := fsx.ListNames(dir)
+	if err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	for _, n := range names {
+		if !strings.HasPrefix(n, backupPrefix) || !strings.HasSuffix(n, backupSuffix+backupPart) {
+			continue
+		}
+		if err := fsx.RemoveFile(path.Join(dir, n)); err != nil && !fsx.IsAbsent(err) {
+			return fmt.Errorf("backup: %w", err)
+		}
+	}
+	return nil
 }
 
 // CheckBackup opens a catalog file read-only, and checks it whole: SQLite's integrity check, its foreign keys, and

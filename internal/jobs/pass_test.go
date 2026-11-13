@@ -30,10 +30,15 @@ type bench struct {
 	fail   map[string]func(call, name string) error
 	// walkFail makes a call fail in a walk, which goes through its own handle.
 	walkFail map[string]func(call, name string) error
-	unread   map[string]bool
-	ro       map[string]bool
-	gone     map[string]bool
-	at       map[string]func()
+	// pastCache counts, by mount, the reads of a disk's head past the cache: what confirms a disk, and wakes it.
+	pastCache map[string]int
+	// bare gives, by mount, the folder a walk finds at the root's path in place of the disk's: what its mount point
+	// holds while the disk is away, until the walk has opened it.
+	bare   map[string]string
+	unread map[string]bool
+	ro     map[string]bool
+	gone   map[string]bool
+	at     map[string]func()
 	// precision is how finely a disk holds a time, by id, as its head would say; 0 says nothing.
 	precision map[string]int64
 	// tops dresses the top of a disk, by mount, as a driver answers for it: shortNames, for one.
@@ -78,6 +83,7 @@ func (b *bench) Device(_ names.Filesystem, entry *disks.MountEntry) disks.Device
 }
 
 func (b *bench) ReadPastCache(_ names.Filesystem, entry *disks.MountEntry) disks.DeviceSeen {
+	b.pastCache[entry.MountPoint]++
 	if b.unread[entry.MountPoint] {
 		return disks.DeviceSeen{Device: disks.DeviceUnreadable, Note: "EIO"}
 	}
@@ -99,7 +105,11 @@ func (b *bench) Checkpoint(point string) {
 }
 
 func (b *bench) OpenRoot(mount, root string) (fsx.Dir, error) {
-	dir, err := fsx.OpenDir(filepath.Join(mount, root))
+	at := filepath.Join(mount, root)
+	if bare := b.bare[mount]; bare != "" {
+		at = bare
+	}
+	dir, err := fsx.OpenDir(at)
 	if err != nil {
 		return nil, err //nolint:wrapcheck // a test double
 	}
@@ -137,7 +147,7 @@ func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 	top := t.TempDir()
 	var text strings.Builder
 	fmt.Fprintf(&text, "pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(top, "catalog.db"), filepath.Join(top, "pool"))
-	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, walkFail: map[string]func(string, string) error{}, unread: map[string]bool{}, ro: map[string]bool{},
+	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, walkFail: map[string]func(string, string) error{}, bare: map[string]string{}, pastCache: map[string]int{}, unread: map[string]bool{}, ro: map[string]bool{},
 		gone: map[string]bool{}, at: map[string]func(){}, precision: map[string]int64{}, tops: map[string]func(fsx.Dir) fsx.Dir{}, now: 1767225600000000000}
 	for i, id := range ids {
 		dir := filepath.Join(top, id)
@@ -3646,4 +3656,125 @@ func reconfigured(t *testing.T, b *bench, guard string) *config.Config {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// A pass counts the names its walk could not reach as they refuse the account that asks, and keeps the first of them
+// in byte order, for the alert that says so: the disk is walked all the same, and nothing is decided of what is below
+// such a name (specs.md §15.10, §23).
+func TestAPassCountsTheNamesThatRefuseIt(t *testing.T) {
+	b := pool(t)
+	for _, name := range []string{"z/x", "m/x", "b/x"} {
+		b.write("t1", name, "x")
+		b.write("t2", name, "x")
+	}
+	b.scan(true)
+	b.walkFail[b.dirs["t1"]] = func(call, name string) error {
+		if call == "opendir" && (name == "z" || name == "b") {
+			return syscall.EACCES
+		}
+		return nil
+	}
+	out := b.pass()
+	if out.Partial || len(out.Decisions) != 0 || len(out.Operations) != 0 {
+		t.Fatalf("%+v", out)
+	}
+	t1 := out.Disks[0]
+	if !t1.Walked || t1.Verdict.State != disks.Online || t1.Refused != 2 || !slices.Equal(t1.RefusedFirst, []string{"b", "z"}) {
+		t.Errorf("%+v", t1)
+	}
+	if t2 := out.Disks[1]; t2.Refused != 0 || len(t2.RefusedFirst) != 0 {
+		t.Errorf("%+v", t2)
+	}
+	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't1' AND gone_ns IS NOT NULL"); got != 0 {
+		t.Errorf("%d copies below a name that refused the walk are taken for gone", got)
+	}
+}
+
+// A walk reads the folder it opens at the root's path, some time after the check that found its disk mounted. A
+// disk unmounted in between leaves its mount point, and whatever folder is at the root's path there, as one a
+// program made while the disk was away, was walked for the disk: every file of the disk absent. With the disk
+// mounted again by the time those absences are confirmed, they were recorded, and the deletions sent to the other
+// copies. The folder walked is now compared with what is mounted there once it is read: another folder says nothing
+// of the disk (specs.md §10, invariants 3 and 4).
+func TestAWalkOfAnotherFolderSaysNothingOfTheDisk(t *testing.T) {
+	b := pool(t)
+	bare := filepath.Join(t.TempDir(), "media")
+	if err := os.Mkdir(bare, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bare, "stray"), []byte("s"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b.bare[b.dirs["t2"]] = bare
+	out := b.settle()
+	for _, line := range out.Disks {
+		if line.ID == "t2" && (line.Walked || line.Verdict.State != disks.Missing) {
+			t.Errorf("the disk whose root was another folder: %+v", line)
+		}
+	}
+	if !b.exists("t1", "media/a") || !b.exists("t2", "media/a") {
+		t.Error("a copy left the library for a walk of another folder")
+	}
+	if got := b.count("SELECT count(*) FROM trash") + b.count("SELECT count(*) FROM jobs") + b.count("SELECT count(*) FROM ops"); got != 0 {
+		t.Errorf("%d entries of the trash, jobs and operations", got)
+	}
+	if got := b.text("SELECT group_concat(disk_id || ':' || state, ' ') FROM (SELECT disk_id, state FROM copies ORDER BY disk_id)"); got != "t1:ok t2:ok" {
+		t.Errorf("copies %s", got)
+	}
+	if got := b.count("SELECT count(*) FROM files"); got != 1 {
+		t.Errorf("%d files: what the other folder held was recorded", got)
+	}
+	// The disk's own folder, walked again, is the disk.
+	delete(b.bare, b.dirs["t2"])
+	out = b.settle()
+	for _, line := range out.Disks {
+		if line.ID == "t2" && !line.Walked {
+			t.Errorf("the disk walked at its own root: %+v", line)
+		}
+	}
+	if got := b.text("SELECT state FROM files"); got != "ok" {
+		t.Errorf("the file is %s", got)
+	}
+}
+
+// A copy yet to make is no copy of its disk (specs.md §14.1): it sits nowhere there. A folder renamed on that disk
+// did not wait any less for it to leave the old name, which it never does: the rename reached no other disk, and the
+// copy, once made, brought the old folder back beside the new one (specs.md §15.12).
+func TestAFolderRenameDoesNotWaitForACopyYetToMake(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "F/x", "x")
+	b.write("t1", "F/y", "y")
+	b.write("t2", "F/y", "y")
+	b.scan(true)
+	b.now += settleNS
+	mount := b.dirs["t2"]
+	b.fail[mount] = func(call, name string) error {
+		if call == "create" && strings.HasSuffix(name, ".part") {
+			return syscall.EACCES
+		}
+		return nil
+	}
+	b.pass()
+	if got := b.count("SELECT count(*) FROM copies WHERE state = 'pending' AND disk_id = 't2'"); got != 1 {
+		t.Fatalf("%d copies yet to make on t2", got)
+	}
+	b.rename("t2", "F", "G")
+	b.settle()
+	b.settle()
+	if !b.exists("t1", "media/G/y") || !b.exists("t1", "media/G/x") || b.exists("t1", "media/F") {
+		t.Fatalf("the rename did not reach the other disk: files %s, entries %s, jobs %s",
+			b.text("SELECT group_concat(CAST(lpath AS TEXT), ' ') FROM (SELECT lpath FROM files ORDER BY lpath)"),
+			b.text("SELECT group_concat(disk_id || ':' || CAST(lpath AS TEXT), ' ') FROM (SELECT disk_id, lpath FROM entries ORDER BY disk_id, lpath)"),
+			b.text("SELECT group_concat(kind || ':' || state, ' ') FROM jobs"))
+	}
+	// The copy is made where its file is now.
+	delete(b.fail, mount)
+	b.now += 24 * 3600_000_000_000
+	b.settle()
+	if !b.exists("t2", "media/G/x") || b.exists("t2", "media/F") {
+		t.Errorf("the copy made later: at G/x %v, a folder F %v", b.exists("t2", "media/G/x"), b.exists("t2", "media/F"))
+	}
+	if got := b.text("SELECT group_concat(state, ' ') FROM files"); got != "ok ok" {
+		t.Errorf("files %s", got)
+	}
 }

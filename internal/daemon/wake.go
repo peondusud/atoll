@@ -32,6 +32,8 @@ type WakeInput struct {
 	// First says that no pass has run since it started, Reloaded that the configuration was read again since the
 	// last pass, and Gone and Back that a disk went missing, or came back.
 	First, Reloaded, Gone, Back bool
+	// AfterPass says that the last step the daemon took was a pass, a check aside.
+	AfterPass bool
 	// PassDueNS is the last pass's next_due, GroupDueNS when a waiting group ripens: nil when none.
 	PassDueNS, GroupDueNS *int64
 	// RipeOrigins holds who made the groups ripe now.
@@ -178,7 +180,15 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 			earliest(in.ScrubWindow.Next(opened.AddDate(0, 0, 1)).UnixNano())
 		}
 	}
-	if len(out.Because) > 0 || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+	other := out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub
+	// Right after a pass, another step due runs before a pass for events or next_due alone, which keeps them for the
+	// turn after it: passes that each take longer than the changes take to come, as on a large pool, would otherwise
+	// follow one another for as long as the changes do, and nothing else would ever run. A pass for any other reason
+	// does not wait.
+	if in.AfterPass && other && !slices.ContainsFunc(out.Because, func(why string) bool { return why != BecauseEvents && why != BecauseDue }) {
+		out.Because = nil
+	}
+	if len(out.Because) > 0 || other {
 		wake = now
 	}
 	out.WakeNS = max(wake, now)

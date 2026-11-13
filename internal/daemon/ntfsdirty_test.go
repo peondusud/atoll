@@ -1,12 +1,14 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"slices"
 	"testing"
 
+	"github.com/peondusud/atoll/internal/alerts"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/names"
@@ -114,5 +116,61 @@ func TestRemountWanted(t *testing.T) {
 		if got := remountWanted(d, &tc.st); got != tc.want {
 			t.Errorf("%+v, %q: %v", tc.st, tc.state, got)
 		}
+	}
+}
+
+func (m *dirtyBench) Now() int64 { return 42 }
+
+// silent is a channel that takes every alert.
+type silent struct{}
+
+func (silent) Name() string                                { return "alerts.test" }
+func (silent) Send(context.Context, *alerts.Message) error { return nil }
+
+// A volume found dirty brings a pass at once, which works its alert out: nothing else brings one for a disk that stays
+// away, and the alert waited for a pass that had nothing to do with it. A reminder is due a day after an alert was
+// last sent, and brings a pass then, unless one is due sooner (specs.md §22, §23).
+func TestWhatBringsAPassForAnAlert(t *testing.T) {
+	m := &dirtyBench{dirty: true, plugged: true}
+	d := &config.Disk{ID: "n1", UUID: "4A3F1C2B9D8E7F60", FS: names.NTFS}
+	for _, tc := range []struct {
+		name     string
+		apply    bool
+		channels []alerts.Channel
+		want     bool
+	}{
+		{"a channel set", true, []alerts.Channel{silent{}}, true},
+		{"no channel", true, nil, false},
+		{"a dry run", false, []alerts.Channel{silent{}}, false},
+	} {
+		l := &loop{opt: &Options{Machine: m, Apply: tc.apply, Config: &config.Config{Disks: []config.Disk{*d}}}, log: slog.New(slog.DiscardHandler),
+			set: &settings{channels: tc.channels}}
+		st := &diskState{state: disks.Missing}
+		l.disks = map[string]*diskState{"n1": st}
+		l.probeDirty(d, st)
+		if !st.dirty || (l.passDue != nil) != tc.want || (tc.want && *l.passDue != 42) {
+			t.Errorf("%s: dirty %v, a pass due %v", tc.name, st.dirty, l.passDue)
+		}
+	}
+	l := &loop{}
+	l.remindAt(nil)
+	l.remindAt(&alerts.Due{})
+	if l.passDue != nil {
+		t.Errorf("with nothing to remind of, a pass is due at %d", *l.passDue)
+	}
+	l.remindAt(&alerts.Due{RemindNS: 900})
+	if l.passDue == nil || *l.passDue != 900 {
+		t.Fatalf("a reminder at 900: %v", l.passDue)
+	}
+	// A pass due sooner stays, and one due later gives way.
+	l.remindAt(&alerts.Due{RemindNS: 1200})
+	sooner := int64(500)
+	if *l.passDue != 900 {
+		t.Errorf("a later reminder moved the pass to %d", *l.passDue)
+	}
+	l.passDue = &sooner
+	l.remindAt(&alerts.Due{RemindNS: 900})
+	if *l.passDue != 500 {
+		t.Errorf("a pass due sooner moved to %d", *l.passDue)
 	}
 }

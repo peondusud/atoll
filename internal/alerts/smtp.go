@@ -17,6 +17,36 @@ import (
 	"time"
 )
 
+// smtpLimit is how much a server may send in one conversation, its TLS handshake included: a real one sends a
+// certificate chain and a line or a few for each command, some thousands of bytes in all.
+const smtpLimit = 256 << 10
+
+// answerLimit is how much is kept of what a server says of a refusal, as of an HTTP answer.
+const answerLimit = 512
+
+// errSMTPTooMuch says that a server sent more than a conversation takes.
+var errSMTPTooMuch = errors.New("the server sent more than a conversation takes")
+
+// bounded is a connection that gives at most left bytes more, then fails: a server's line is read whole, however
+// long, so one that never ends would be held as fast as the link carries it, for as long as the conversation has.
+// TLS reads through it, so the bound is on what the server sends, its handshake included.
+type bounded struct {
+	net.Conn
+	left int
+}
+
+func (b *bounded) Read(p []byte) (int, error) {
+	if b.left <= 0 {
+		return 0, errSMTPTooMuch
+	}
+	if len(p) > b.left {
+		p = p[:b.left]
+	}
+	n, err := b.Conn.Read(p)
+	b.left -= n
+	return n, err //nolint:wrapcheck // the connection's own, as its other methods give it
+}
+
 // SMTP sends an alert by mail (specs.md §23).
 type SMTP struct {
 	URL          string
@@ -149,6 +179,7 @@ func (s *SMTP) Send(ctx context.Context, m *Message) error {
 		_ = conn.Close()
 		return fmt.Errorf("smtp: %w", err)
 	}
+	conn = &bounded{Conn: conn, left: smtpLimit}
 	if t.implicitTLS {
 		conn = tls.Client(conn, s.tlsFor(t.host))
 	}
@@ -192,7 +223,10 @@ func (s *SMTP) Send(ctx context.Context, m *Message) error {
 	if err := w.Close(); err != nil {
 		return answer(err)
 	}
-	return answer(c.Quit())
+	// The server took the mail: it went, whatever becomes of the goodbye (specs.md §23). Counted as not sent, it
+	// would be sent again at each try.
+	_ = c.Quit()
+	return nil
 }
 
 // tlsFor gives the TLS configuration for a host: what s.TLS trusts, for that name.
@@ -212,7 +246,15 @@ func answer(err error) error {
 	}
 	var te *textproto.Error
 	if errors.As(err, &te) {
-		return fmt.Errorf("smtp: %w", &AnswerError{Status: fmt.Sprint(te.Code), Text: te.Msg})
+		return fmt.Errorf("smtp: %w", &AnswerError{Status: fmt.Sprint(te.Code), Text: shortText(te.Msg)})
 	}
 	return fmt.Errorf("smtp: %w", err)
+}
+
+// shortText keeps the first answerLimit bytes of what a server says, and no part of a character.
+func shortText(text string) string {
+	if len(text) <= answerLimit {
+		return text
+	}
+	return strings.ToValidUTF8(text[:answerLimit], "")
 }

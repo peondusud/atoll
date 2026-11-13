@@ -76,6 +76,7 @@ A percentage is checked through its use: the share of a total, such as `min_free
 |---|---|---|
 | `input` | string | the window as written in the configuration |
 | `at` | string | an instant, in RFC 3339 with an offset; the offset gives the wall-clock time in the configured `timezone` |
+| `zone` | string | the configured `timezone`, by its name in the time zone database, where a case is about a change of offset: `at`, `next` and `opened` are then instants of that zone, each written with the offset it has there. Left out, the zone is the fixed offset of `at` |
 | `inside` | boolean | whether `at` falls inside the window |
 | `next` | string | the first instant inside the window at or after `at`, in `at`'s offset; left out where a case does not ask |
 | `opened` | string | for an `at` inside the window, when the stretch of it that holds `at` began: its start that day, or the day before for a window wrapping past midnight, in `at`'s offset; left out where a case does not ask. Outside, there is none |
@@ -214,6 +215,16 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `index` | integer | in place of the fields above: a chunk's index, whose name `chunk_name` gives |
 | `chunk_name` | string | the name of that chunk in its folder |
 | `error` | boolean | `true` when the id is not positive, the path is not well-formed, or the index is negative |
+
+### `work_names.json` — the names of the work folder that hold an operation's id (§9, §14.2, §16.1, §17)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `folder` | string | `tmp` for a name of `<workdir>/tmp/`, `trash` for the name of a folder of `<workdir>/trash/<date>/` |
+| `name` | string | the name |
+| `op_id` | integer | the operation it names; absent when it names none, as any name Atoll does not write |
+| `index` | integer | in `tmp`, the index of the chunk a repair saves there, `<op-id>.<index>.part`; absent for a copy's part, `<op-id>.part` |
+| `chunks` | boolean | in `trash`, `true` for a folder of chunks, `<op-id>.chunks` |
 
 ### `prune.json` — what `atoll prune` does with each surplus copy (§17.3)
 
@@ -401,6 +412,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `rescan_every_ns` | integer | `maintenance.rescan_every` |
 | `window`, `timezone` | string | `maintenance.window`, and the IANA zone its wall clock is in |
 | `reloaded` | boolean | the configuration was read again since the last pass |
+| `after_pass` | boolean | the last step the daemon took was a pass, a check aside: another step due then runs before a pass whose every reason is `events` or `due`, and `because` is empty |
 | `hash_pending` | boolean | files may be waiting for their hash |
 | `scrub_pending` | boolean | copies may be due for the scrub |
 | `scrub_window` | string | `integrity.window` |
@@ -411,7 +423,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
 | `balance_due_ns` | integer | when the daemon next balances; left out when it never does |
 | `check` | boolean | `true` when the mount check is due |
-| `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is |
+| `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is, or when `after_pass` makes it wait |
 | `notify` | boolean | `true` when the media servers are to be told now: `notify_due_ns` has come |
 | `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
 | `balance` | boolean | `true` when the daemon is to balance now: `balance_due_ns` has come |
@@ -571,7 +583,7 @@ The text of `/proc/self/mountinfo`, one line per mount: `id parent major:minor r
 | `length` | integer | the size of the device: that many bytes, all zero but for `bytes` |
 | `bytes` | array of objects | what the device holds: `at`, an offset, and `hex`, the bytes |
 | `dirty` | boolean | whether the flag `VOLUME_IS_DIRTY` (0x0001) of `$VOLUME_INFORMATION` is set, in the fourth record of the MFT (`$Volume`): at the MFT's cluster, from the boot sector, plus three records. Bytes per sector at 0x0B; sectors per cluster at 0x0D, `2^(256 - n)` above 0x80; the MFT's cluster at 0x30; at 0x40, clusters per record, or `2^-n` bytes when negative. The record's update sequence is applied first |
-| `error` | boolean | `true` for a device that is no NTFS, a geometry that is not powers of two, a record that is not `FILE`, torn (a block whose end is not the update number) or whose update sequence does not fit it, or with no resident `$VOLUME_INFORMATION` |
+| `error` | boolean | `true` for a device that is no NTFS, a geometry that is not powers of two or is past what a volume has (more than 2^12 sectors a cluster, a record given as a power past 2^20 bytes: 0xC1 at 0x0D and 0x80 at 0x40 are refused as any other), a record that is not `FILE`, torn (a block whose end is not the update number) or whose update sequence does not fit it, or with no resident `$VOLUME_INFORMATION` |
 
 ### `time_precision.json` — how finely a filesystem holds a time (§9, §10)
 

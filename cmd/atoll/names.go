@@ -144,16 +144,16 @@ func namesCheck(ctx context.Context, c *config.Config, under string) (out *names
 func writeNamesText(w io.Writer, out *namesOutput) error {
 	buffered := bufio.NewWriter(w)
 	for _, f := range out.Findings {
-		name := f.Path
-		if name == "" {
-			name = "(base64) " + f.PathB64
-		}
-		line := name + ": " + f.Kind
+		line := shownB64(f.Path, f.PathB64) + ": " + f.Kind
 		switch {
 		case f.FS != "":
 			line += fmt.Sprintf(T(" on %s (%s)"), f.FS, strings.Join(f.Reasons, ", "))
 		case len(f.With) > 0:
-			line += " with " + strings.Join(f.With, ", ")
+			with := make([]string, 0, len(f.With))
+			for _, name := range f.With {
+				with = append(with, shownPath(name))
+			}
+			line += " with " + strings.Join(with, ", ")
 		case f.Disk != "":
 			line += " on disk " + f.Disk
 		}

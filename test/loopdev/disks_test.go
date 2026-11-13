@@ -60,9 +60,18 @@ func attempt(t *testing.T, name string, args ...string) error {
 // newVolume makes a filesystem on a new loop device, and takes it away at the end.
 func newVolume(t *testing.T, fs names.Filesystem, extra ...string) *volume {
 	t.Helper()
+	return newVolumeSized(t, fs, 0, extra...)
+}
+
+// newVolumeSized is newVolume of mb MiB, or of its maker's size with 0.
+func newVolumeSized(t *testing.T, fs names.Filesystem, mb int64, extra ...string) *volume {
+	t.Helper()
 	for _, m := range makers {
 		if m.fs != fs {
 			continue
+		}
+		if mb == 0 {
+			mb = m.mb
 		}
 		if _, err := exec.LookPath(m.mkfs[0]); err != nil {
 			t.Skipf("no %s", m.mkfs[0])
@@ -71,7 +80,7 @@ func newVolume(t *testing.T, fs names.Filesystem, extra ...string) *volume {
 		if err := os.WriteFile(img, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Truncate(img, m.mb<<20); err != nil {
+		if err := os.Truncate(img, mb<<20); err != nil {
 			t.Fatal(err)
 		}
 		args := append(append(append([]string{}, m.mkfs[1:]...), extra...), img)

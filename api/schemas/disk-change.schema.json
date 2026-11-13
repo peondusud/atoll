@@ -39,7 +39,8 @@
     },
     "warnings": {
       "type": "array",
-      "items": { "enum": ["catalog-not-updated", "daemon-not-told"] }
+      "description": "catalog-not-updated, daemon-not-told: the configuration is changed, and that step left undone. config-not-synced: the configuration is written, and its folder could not be synced after. Each with exit 4.",
+      "items": { "enum": ["catalog-not-updated", "daemon-not-told", "config-not-synced"] }
     }
   }
 }

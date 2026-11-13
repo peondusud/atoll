@@ -23,7 +23,10 @@ type inotifySource struct {
 	ino     int
 	root    string
 	mountID uint64
-	tree    *folderTree[int32]
+	// rootDev and rootIno are the root's folder as it was first watched, and ended says that its watch went.
+	rootDev, rootIno uint64
+	ended            bool
+	tree             *folderTree[int32]
 	// moved holds the folders that left their parent in this read, by cookie, until the other end comes.
 	moved map[uint32]*folderNode[int32]
 }
@@ -45,7 +48,7 @@ func openInotify(ctx context.Context, root string) (*inotifySource, error) {
 		_ = unix.Close(ino)
 		return nil, fmt.Errorf("%w", err)
 	}
-	s.mountID = info.MountID
+	s.mountID, s.rootDev, s.rootIno = info.MountID, info.Dev, info.Ino
 	wd, err := s.watch(dir)
 	if err != nil {
 		_ = unix.Close(ino)
@@ -85,6 +88,14 @@ func (s *inotifySource) watchBelow(ctx context.Context, dir fsx.Dir, node *folde
 
 func (s *inotifySource) fd() int { return s.ino }
 
+// alive: the root is still the folder that was watched first. Its watch going ends the reading by itself.
+func (s *inotifySource) alive() bool {
+	return sameRoot(s.root, s.rootDev, s.rootIno)
+}
+
+// errRootGone says that the watch of a source's root went: nothing below it is heard any more.
+var errRootGone = errors.New("the watch of the root is gone")
+
 func (s *inotifySource) close() error { return unix.Close(s.ino) }
 
 func (s *inotifySource) drain(buf []byte) ([]change, []int32, error) {
@@ -107,6 +118,11 @@ func (s *inotifySource) drain(buf []byte) ([]change, []int32, error) {
 		if perr != nil {
 			out = append(out, change{kind: KindOverflow})
 		}
+		if s.ended {
+			// The root's folder was removed, or its filesystem unmounted: what is at that path now is watched by
+			// nothing, and the watch ends, which whoever asked for it finds out (Watcher.Alive).
+			return out, nil, errRootGone
+		}
 	}
 }
 
@@ -116,7 +132,11 @@ func (s *inotifySource) changes(r *inotifyRecord) []change {
 	case r.mask&unix.IN_Q_OVERFLOW != 0:
 		return []change{{kind: KindOverflow}}
 	case r.mask&unix.IN_IGNORED != 0:
-		if n := s.tree.nodes[r.wd]; n != nil && n != s.tree.root {
+		switch n := s.tree.nodes[r.wd]; n {
+		case nil:
+		case s.tree.root:
+			s.ended = true
+		default:
 			s.tree.remove(n)
 		}
 		return nil
@@ -172,7 +192,7 @@ func (s *inotifySource) arrive(parent *folderNode[int32], name string) []change 
 		return nil
 	}
 	at := join(dirPath, name)
-	sub, err := fsx.OpenDir(path.Join(s.root, at))
+	sub, err := openBelow(s.root, at, s.mountID)
 	if err != nil {
 		return nil
 	}

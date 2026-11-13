@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -45,6 +46,101 @@ func diskOf(out *ScrubOutcome, id string) *ScrubDisk {
 		}
 	}
 	return nil
+}
+
+// A copy never verified that does not hold its file's content is another version of the file, not a corrupt copy:
+// nothing says it ever held that content. The file becomes a conflict, both versions kept, and nothing is written to
+// either (specs.md §15.7, §16). The scrub called it corrupt: with auto_repair it wrote the first version over the
+// second, and without it sent the second to the trash.
+func TestScrubCallsACopyNeverVerifiedAConflict(t *testing.T) {
+	for _, config := range []string{"", "[integrity]\nauto_repair = false\n"} {
+		b := newBenchWith(t, config, "t1", "t2")
+		b.write("t1", "a.mkv", "a film")
+		b.scan(true)
+		// Another version, of the same size, comes with the second disk, as when a disk is added: recorded, not read.
+		b.write("t2", "a.mkv", "A FILM")
+		b.scan(false)
+		if n := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND state = 'ok' AND verified_ns IS NULL"); n != 1 {
+			t.Fatalf("%q: %d copies of t2 recorded and never verified", config, n)
+		}
+		out := b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+		t2 := diskOf(out, "t2")
+		if len(t2.Corrupt) != 0 || len(t2.Repaired) != 0 || len(t2.Quarantined) != 0 || len(t2.Kept) != 0 || !slices.Equal(t2.Conflict, []string{"a.mkv"}) {
+			t.Errorf("%q: %+v", config, *t2)
+		}
+		if got := b.read("t2", "a.mkv"); got != "A FILM" {
+			t.Errorf("%q: the second version now holds %q", config, got)
+		}
+		if got := b.read("t1", "a.mkv"); got != "a film" {
+			t.Errorf("%q: the first version now holds %q", config, got)
+		}
+		if state := b.text("SELECT state FROM files WHERE CAST(lpath AS TEXT) = 'a.mkv'"); state != "conflict" {
+			t.Errorf("%q: the file is %s", config, state)
+		}
+		if n := b.count("SELECT count(*) FROM trash"); n != 0 {
+			t.Errorf("%q: %d entries in the trash", config, n)
+		}
+		// While the conflict stands, no scrub reads its copies again: nothing tells them apart.
+		out = b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+		if t1, t2 := diskOf(out, "t1"), diskOf(out, "t2"); t1.Read != 0 || t2.Read != 0 || len(t2.Conflict) != 0 || len(t2.Corrupt) != 0 {
+			t.Errorf("%q, a second scrub: %+v, %+v", config, *t1, *t2)
+		}
+	}
+}
+
+// A disk that is readonly is read, and nothing is written to it (specs.md §10): a corrupt copy found there stays
+// where it is, with a healthy copy elsewhere or not. The scrub repaired it in place, or moved it to that disk's
+// trash, making its work folder on the way.
+func TestScrubWritesNothingToAReadonlyDisk(t *testing.T) {
+	for _, config := range []string{"", "[integrity]\nauto_repair = false\n"} {
+		for _, yes := range []bool{true, false} {
+			b := newBenchWith(t, config, "t1", "t2")
+			b.write("t1", "a.mkv", "a film")
+			b.write("t2", "a.mkv", "a film")
+			b.scan(true)
+			b.now += int64(month)
+			b.rot("t2", "a.mkv", "a FILM")
+			b.ro[b.dirs["t2"]] = true
+			out := b.scrub(ScrubOptions{Apply: true, Quarantine: yes})
+			t2 := diskOf(out, "t2")
+			if !slices.Equal(t2.Corrupt, []string{"a.mkv"}) || len(t2.Repaired) != 0 || len(t2.Quarantined) != 0 || !slices.Equal(t2.Kept, []string{"a.mkv"}) {
+				t.Errorf("%q, --yes %v: %+v", config, yes, *t2)
+			}
+			if got := b.read("t2", "a.mkv"); got != "a FILM" {
+				t.Errorf("%q, --yes %v: the copy on the readonly disk now holds %q", config, yes, got)
+			}
+			if b.exists("t2", "Atoll") {
+				t.Errorf("%q, --yes %v: a work folder was made on the readonly disk", config, yes)
+			}
+		}
+	}
+}
+
+// A scrub that was not told --yes writes to no disk, and so resolves nothing of what a crash left (specs.md §17.2):
+// an operation stays planned, for a run that may write. It did resolve them, as its session was opened to write so
+// that its disks were confirmed.
+func TestAScrubWithoutYesResolvesNothing(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "a.mkv", "a film")
+	b.write("t2", "a.mkv", "a film")
+	b.scan(true)
+	// A move to the trash journaled, and stopped before it was made.
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, path2, file_key, started_ns, state) VALUES (900, 't2', 'trash', CAST('a.mkv' AS BLOB), CAST('2026-01-01/900/a.mkv' AS BLOB), ?, 1, 'planned')",
+		strconv.FormatUint(b.inode("t2", "a.mkv"), 10))
+	b.exec("INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, reason, deleted_ns, expires_ns) VALUES (CAST('a.mkv' AS BLOB), 't2', CAST('2026-01-01/900/a.mkv' AS BLOB), 900, 6, 'surplus', 1, 2)")
+	state := func() string { return b.text("SELECT state FROM ops WHERE id = 900") }
+	b.scrub(ScrubOptions{Apply: true})
+	if got := state(); got != "planned" {
+		t.Errorf("after a scrub without --yes the operation is %s", got)
+	}
+	if b.exists("t2", "Atoll") {
+		t.Error("a scrub without --yes made a work folder")
+	}
+	// With --yes it may write, and the reprise comes first.
+	b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+	if got := state(); got == "planned" {
+		t.Error("after a scrub with --yes the operation is still planned")
+	}
 }
 
 // A copy that rotted, read again past the cache, is corrupt: with a healthy copy elsewhere it goes to the trash,
@@ -220,5 +316,48 @@ func TestScrubUnder(t *testing.T) {
 	}
 	if !underPath("a/b", "a") || underPath("ab", "a") || !underPath("a", "a") || !underPath("x", "") {
 		t.Error("underPath")
+	}
+}
+
+// A scrub asks the catalog what is due on a disk before it opens the disk: a disk with nothing due is left asleep
+// (specs.md §16, "one disk at a time to limit wake-ups", §22). Each scrub confirmed every disk first, which reads its
+// head past the cache and so wakes it: the daemon's slices, 30 s each all night, kept every disk awake for a scrub of
+// one, and woke them all on a night with nothing due.
+func TestScrubLeavesADiskWithNothingDueAsleep(t *testing.T) {
+	b := pool(t)
+	for _, tc := range []struct {
+		name string
+		opts ScrubOptions
+	}{
+		{"told --yes", ScrubOptions{Apply: true, Quarantine: true}},
+		{"not told --yes", ScrubOptions{Apply: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Every copy was verified a minute ago: nothing is due.
+			clear(b.pastCache)
+			out := b.scrub(tc.opts)
+			if out.Partial || len(out.Disks) != 2 {
+				t.Fatalf("%+v", out)
+			}
+			if len(b.pastCache) != 0 {
+				t.Errorf("with nothing due, disks were read past the cache: %v", b.pastCache)
+			}
+			// A month on, one disk's copy alone is due: that disk alone is opened.
+			b.exec("UPDATE copies SET verified_ns = 1 WHERE disk_id = 't2'")
+			clear(b.pastCache)
+			out = b.scrub(tc.opts)
+			if t2 := diskOf(out, "t2"); out.Partial || t2 == nil || t2.Read != 1 {
+				t.Fatalf("%+v", out)
+			}
+			if b.pastCache[b.dirs["t1"]] != 0 || b.pastCache[b.dirs["t2"]] == 0 {
+				t.Errorf("with one disk due, read past the cache: %v", b.pastCache)
+			}
+		})
+	}
+	// A disk that is away is still one the scrub could not read, as the mount check says without waking anything.
+	b.gone[b.dirs["t1"]] = true
+	b.pass()
+	if out := b.scrub(ScrubOptions{Apply: true, Quarantine: true}); !out.Partial {
+		t.Errorf("a scrub with one disk away: %+v", out)
 	}
 }

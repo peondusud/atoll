@@ -67,11 +67,6 @@ func (d *Disk) openWritable(logical string, is func(*fsx.Stat) bool) (fsx.Writab
 	return f, st, nil
 }
 
-// chunkPart is the name in <workdir>/tmp/ of a chunk a repair is saving (specs.md §16.1, step 3).
-func chunkPart(opID, index int64) string {
-	return strconv.FormatInt(opID, 10) + "." + strconv.FormatInt(index, 10) + ".part"
-}
-
 // SaveChunk saves the bytes of a bad chunk to the trash, before anything overwrites them (specs.md §16.1, step 3):
 // written to <workdir>/tmp/<op-id>.<index>.part with the copy's permission bits and owner, synced, then moved without
 // replacing anything to the operation's folder of chunks. Its folders take the mode and owner of those they stand
@@ -85,12 +80,15 @@ func (d *Disk) SaveChunk(op *Op, index int64, data []byte, copyStat *fsx.Stat) e
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
-	part := d.tmpPlace(chunkPart(op.ID, index))
+	part := d.tmpPlace(layout.ChunkPartName(op.ID, index))
 	tmp, err := d.makeFolders(part[:len(part)-1], nil)
 	if err != nil {
 		return err
 	}
 	defer tmp.close()
+	if err := private(tmp.Dir); err != nil {
+		return err
+	}
 	name := part[len(part)-1]
 	partStat, err := d.writePart(tmp.Dir, name, data, copyStat)
 	if err != nil {
@@ -226,16 +224,24 @@ func (d *Disk) SetTimeBack(f fsx.WritableFile, mtime fsx.Time) (fsx.Stat, error)
 	return st, nil
 }
 
-// SavedChunks gives the chunks a repair saved, by index, with their bytes: what its folder of chunks holds. A folder
-// never made holds none.
-func (d *Disk) SavedChunks(op *Op) (map[int64][]byte, error) {
+// SavedChunk is what a repair saved of a chunk: how many bytes, and their hash. The bytes themselves are never held:
+// a chunk is 4 MiB, and those of a copy with many bad ones, read at once at each reprise, were gigabytes in a daemon
+// that is to stay under 200 MB (specs.md §16.1, §26).
+type SavedChunk struct {
+	Size int64
+	Sum  [integrity.HashSize]byte
+}
+
+// SavedChunks gives the chunks a repair saved, by index: what its folder of chunks holds, each read in its turn
+// through one buffer. A folder never made holds none.
+func (d *Disk) SavedChunks(op *Op) (map[int64]SavedChunk, error) {
 	if err := d.Verify(); err != nil {
 		return nil, err
 	}
 	dir, err := d.open(d.trashPlace(op.Path2))
 	switch {
 	case fsx.IsAbsent(err):
-		return map[int64][]byte{}, nil
+		return map[int64]SavedChunk{}, nil
 	case err != nil:
 		return nil, classify(err)
 	}
@@ -244,7 +250,8 @@ func (d *Disk) SavedChunks(op *Op) (map[int64][]byte, error) {
 	if err != nil {
 		return nil, classify(err)
 	}
-	saved := map[int64][]byte{}
+	saved := map[int64]SavedChunk{}
+	var buf []byte
 	for _, name := range listed {
 		index, err := strconv.ParseInt(name, 10, 64)
 		if err != nil || index < 0 {
@@ -253,13 +260,38 @@ func (d *Disk) SavedChunks(op *Op) (map[int64][]byte, error) {
 		if want, _ := layout.ChunkName(index); want != name {
 			continue
 		}
-		data, err := readAll(dir.Dir, name)
+		chunk, err := sumOf(dir.Dir, name, &buf)
 		if err != nil {
 			return nil, err
 		}
-		saved[index] = data
+		saved[index] = chunk
 	}
 	return saved, nil
+}
+
+// sumOf gives the size of a file of a folder and the hash of its bytes, read through buf, which it makes once and
+// leaves for the next. A file larger than a chunk is none a repair saved: its size says so, and it is not read.
+func sumOf(dir fsx.Dir, name string, buf *[]byte) (SavedChunk, error) {
+	f, err := dir.OpenFile(name)
+	if err != nil {
+		return SavedChunk{}, classify(err)
+	}
+	defer func() { _ = f.Close() }()
+	st, err := f.Info()
+	if err != nil {
+		return SavedChunk{}, classify(err)
+	}
+	if st.Size > integrity.ChunkSize {
+		return SavedChunk{Size: st.Size}, nil
+	}
+	if *buf == nil {
+		*buf = make([]byte, integrity.ChunkSize)
+	}
+	data := (*buf)[:st.Size]
+	if n, err := f.ReadAt(data, 0); int64(n) < st.Size {
+		return SavedChunk{}, classify(fmt.Errorf("read %q: %w", name, err))
+	}
+	return SavedChunk{Size: st.Size, Sum: integrity.ChunkSum(data)}, nil
 }
 
 // PurgeChunks deletes an entry of chunks a repair left in the trash (specs.md §17): each chunk of its folder, then
@@ -318,24 +350,6 @@ func (d *Disk) PurgeChunks(op *Op) error {
 	return nil
 }
 
-// readAll reads a file of a folder whole.
-func readAll(dir fsx.Dir, name string) ([]byte, error) {
-	f, err := dir.OpenFile(name)
-	if err != nil {
-		return nil, classify(err)
-	}
-	defer func() { _ = f.Close() }()
-	st, err := f.Info()
-	if err != nil {
-		return nil, classify(err)
-	}
-	data := make([]byte, st.Size)
-	if n, err := f.ReadAt(data, 0); int64(n) < st.Size {
-		return nil, classify(fmt.Errorf("read %q: %w", name, err))
-	}
-	return data, nil
-}
-
 // Why a repair stopped, in its event, when a reprise stops it (specs.md §16.1).
 const (
 	stoppedByReprise = "reprise"
@@ -347,25 +361,27 @@ const (
 // corrupt; not begun, or the copy someone else's since, nothing is written. A repair that does not finish ends done
 // when a chunk reached the trash, and undone when none did.
 func (d *Disk) recoverRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64) error {
-	_, err := d.ResolveRepair(ctx, db, op, nowNS, "")
+	_, err := d.ResolveRepair(ctx, db, op, nowNS, "", false)
 	return err
 }
 
 // ResolveRepair resolves a repair at once, as its reprise would, after it stopped for why, which its event says when
-// it does not finish; a reprise gives none. It says whether the repair finished after all.
-func (d *Disk) ResolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string) (bool, error) {
-	finished, err := d.resolveRepair(ctx, db, op, nowNS, why)
+// it does not finish; a reprise gives none. wrote says that the run that asks wrote to the copy itself, which a
+// reprise never knows: a change time that moved is then its own doing, and no change of anyone else's. It says whether
+// the repair finished after all.
+func (d *Disk) ResolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
+	finished, err := d.resolveRepair(ctx, db, op, nowNS, why, wrote)
 	return finished, err
 }
 
-func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string) (bool, error) {
+func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
 	saved, err := d.SavedChunks(op)
 	if err != nil {
 		return false, err
 	}
 	var savedBytes int64
-	for _, data := range saved {
-		savedBytes += int64(len(data))
+	for _, chunk := range saved {
+		savedBytes += chunk.Size
 	}
 	stop := func(ctime sql.NullInt64, reason string) (bool, error) {
 		if why != "" {
@@ -405,10 +421,18 @@ func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	}
 	ctime := TimeOf(st.Ctime)
 	action, err := integrity.RepairReprise(seen, ctime.Valid && ctime.Int64 == row.CtimeNS)
-	if err != nil {
+	switch {
+	case err != nil:
 		// What the trash holds is not what this repair saves: someone else's, as the copy is.
 		slog.Warn("a repair's chunks are not what it saves", "disk", d.config.ID, "op", op.ID, "error", err)
 		action = integrity.RepairForeign
+	case wrote && action == integrity.RepairForeign:
+		// A copy that holds what the repair found, with a change time that moved, is someone else's to a reprise. To
+		// the run that wrote to it, the change time is its own doing: a write that left what was there began all the
+		// same, so the time is set back, and the row takes the change time (specs.md §16.1).
+		if own, err := integrity.RepairReprise(seen, true); err == nil && own == integrity.RepairUntouched {
+			action = integrity.RepairKeep
+		}
 	}
 	switch action {
 	case integrity.RepairFinish:
@@ -437,7 +461,7 @@ func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 
 // chunksNow reads a copy whole, and says of each chunk whether the repair found it bad, whether it saved it, and
 // what it holds now.
-func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved map[int64][]byte) ([]integrity.RepairChunk, error) {
+func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved map[int64]SavedChunk) ([]integrity.RepairChunk, error) {
 	n := (row.Size + integrity.ChunkSize - 1) / integrity.ChunkSize
 	found := make(map[int64]bool, len(bad))
 	for _, i := range bad {
@@ -454,12 +478,12 @@ func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved m
 			return nil, classify(err)
 		}
 		sum := integrity.ChunkSum(buf[:length])
-		data, isSaved := saved[i]
+		was, isSaved := saved[i]
 		holds := integrity.HoldsOther
 		switch {
 		case bytes.Equal(sum[:], row.Chunks[i*integrity.HashSize:(i+1)*integrity.HashSize]):
 			holds = integrity.HoldsGood
-		case isSaved && bytes.Equal(data, buf[:length]):
+		case isSaved && was.Size == length && was.Sum == sum:
 			holds = integrity.HoldsSaved
 		}
 		out[i] = integrity.RepairChunk{Bad: found[i], Saved: isSaved, Holds: holds}

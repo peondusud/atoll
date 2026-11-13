@@ -50,6 +50,10 @@ type Report struct {
 	PathTaken   []string
 	Unreadable  []string
 	OtherMounts []string
+	// Refused holds the names of Unreadable that refused the account that asked, EACCES, in the walk's order: what
+	// lasts until someone gives the right, where a name that went during the walk is there again at the next
+	// (specs.md §15.10). An alert says so (§23); the output of a scan lists them with the others.
+	Refused []string
 	// Seen holds the verdict about each copy that is not as its row says, by file id, and FolderMoves
 	// the folders renamed: what a pass decides on (specs.md §15.12).
 	Seen        []CopySeen
@@ -287,16 +291,49 @@ func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, er
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
 	}
+	opened, err := root.Info()
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
 	walked, err := Walk(ctx, root)
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = root.Close()
 	if err != nil {
 		return walked, err
 	}
+	if err := walkedTheDisk(m, d, &opened); err != nil {
+		return nil, err
+	}
 	if err := withoutOwnLinks(m, d, walked); err != nil {
 		return nil, err
 	}
 	return walked, nil
+}
+
+// walkedTheDisk says whether the folder a walk read is the root of the disk mounted at its mount point, once it is
+// read (specs.md §10). A walk opens its root by its path, some time after the check that found the disk: a disk
+// unmounted in between leaves its mount point, and whatever folder sits at the root's path there was read in its
+// place, every file of the disk absent from it. A disk mounted again before those absences are confirmed would then
+// pass its confirmation, for a walk of another folder. So the mount check must hold now, and the mount point, and
+// the root's path, must still lead to the mount and the folder the walk held open. Anything else is an interrupted
+// walk, which says nothing of the disk (invariant 4).
+func walkedTheDisk(m disks.Machine, d *config.Disk, opened *fsx.Stat) error {
+	if v := disks.Check(m, d); v.State == disks.Missing {
+		return fmt.Errorf("%w: after the walk, %s: %s", ErrInterrupted, v.Reason, v.Message)
+	}
+	top, err := fsx.StatPath(d.Mount)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
+	now, err := fsx.StatPath(path.Join(d.Mount, d.Root))
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
+	if top.MountID != opened.MountID || now.MountID != opened.MountID || now.Dev != opened.Dev || now.Ino != opened.Ino {
+		return fmt.Errorf("%w: the folder that was walked is not the root of what is mounted at %q now", ErrInterrupted, d.Mount)
+	}
+	return nil
 }
 
 // withoutOwnLinks takes the link guard's links out of the count of names of each file a walk found: they are Atoll's,
@@ -342,7 +379,7 @@ func withoutOwnLinks(m disks.Machine, d *config.Disk, w *Walked) error {
 // sides are in the byte order of paths, so it is a merge. Only what is not where its row says is looked
 // up, and only what no row claims is indexed for that.
 func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Disk, w *Walked, r *Report, look *Look, now int64) (*catalog.Walk, error) {
-	r.Unreadable = w.Unreadable
+	r.Unreadable, r.Refused = w.Unreadable, w.Refused
 	r.OtherMounts = w.OtherMounts
 	slices.SortFunc(w.Files, func(a, b FoundFile) int { return cmp.Compare(a.Path, b.Path) })
 	found := func(f *FoundFile) {
@@ -1175,6 +1212,12 @@ func readCopy(ctx context.Context, reader *diskReader, path string, cp *catalog.
 		reader.fail(err)
 		return copyHash{}, false, nil
 	}
+	// Before a byte of it is read: a copy that is no longer what its row says is the next pass's to look at, and a
+	// file still being written would otherwise be read from end to end, each time, to be left aside.
+	if !matchesRow(&before, cp) {
+		reader.report.Changed = append(reader.report.Changed, path)
+		return copyHash{}, false, nil
+	}
 	sum, chunks, err := integrity.HashReader(ctx, file)
 	switch {
 	case ctx.Err() != nil:
@@ -1189,7 +1232,7 @@ func readCopy(ctx context.Context, reader *diskReader, path string, cp *catalog.
 		return copyHash{}, false, nil
 	}
 	reader.report.Hashed++
-	if !sameVersion(&before, &after) || !matchesRow(&before, cp) {
+	if !sameVersion(&before, &after) {
 		reader.report.Changed = append(reader.report.Changed, path)
 		return copyHash{}, false, nil
 	}

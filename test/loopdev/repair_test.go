@@ -106,7 +106,9 @@ func TestRepairOnEachDriver(t *testing.T) {
 				t.Fatal("the file reads as before: no rot to find")
 			}
 
-			_, err = b.db.ExecContext(t.Context(), "UPDATE copies SET verified_ns = NULL")
+			// Due now, as a month would make them: verified long ago. Never verified, a copy that differs is another
+			// version of its file, a conflict, and no rot (specs.md §16).
+			_, err = b.db.ExecContext(t.Context(), "UPDATE copies SET verified_ns = 1")
 			mustDo(t, err)
 			out, err := jobs.Scrub(t.Context(), b.db, b.config, b.machine, jobs.ScrubOptions{Apply: true, Quarantine: true})
 			mustDo(t, err)

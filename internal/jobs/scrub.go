@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
 )
@@ -58,6 +60,9 @@ type ScrubDisk struct {
 	Kept []string
 	// Changed are the copies that changed since their row, or while read: for the next pass to look at.
 	Changed []string
+	// Conflict are the copies never verified whose content is not their file's, read again past the cache, size and
+	// times unchanged: another version of the file, which becomes a conflict. Nothing is written to them.
+	Conflict []string
 	// Left says that copies due were left when the budget ran out.
 	Left bool
 }
@@ -105,7 +110,14 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 			return nil, fmt.Errorf("integrity.scrub_budget: %w", err)
 		}
 	}
-	session, err := trash.Open(ctx, db, c, m, opts.Apply)
+	// Without Quarantine it writes to no disk, and so resolves nothing of what a crash left (specs.md §17.2): it only
+	// has its disks confirmed, to read through them.
+	var session *trash.Session
+	if opts.Apply && !opts.Quarantine {
+		session, err = trash.OpenToRead(ctx, db, c, m)
+	} else {
+		session, err = trash.Open(ctx, db, c, m, opts.Apply)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -161,15 +173,27 @@ func (s *scrubber) scrubDisk(ctx context.Context, d *config.Disk, sd *ScrubDisk)
 	if !s.session.Readable(d.ID) {
 		return false, nil
 	}
+	cursor, resume, err := catalog.ReadScrubCursor(ctx, s.db, d.ID)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if !resume {
+		// The catalog first: a disk with nothing due is not opened, which would confirm it, a read of its head past
+		// the cache that wakes it (specs.md §10, §16). The daemon scrubs by slices all night, each from the first disk on.
+		first, err := catalog.ScrubDue(ctx, s.db, d.ID, s.due, catalog.ScrubKey{VerifiedNS: -2}, 1, s.opts.Under)
+		if err != nil {
+			return false, fmt.Errorf("catalog: %w", err)
+		}
+		if len(first) == 0 {
+			sd.Scrubbed = true
+			return false, nil
+		}
+	}
 	handle, err := s.session.Handle(ctx, d.ID)
 	if err != nil || handle == nil {
 		return false, err
 	}
 	sd.Scrubbed = true
-	cursor, resume, err := catalog.ReadScrubCursor(ctx, s.db, d.ID)
-	if err != nil {
-		return false, fmt.Errorf("catalog: %w", err)
-	}
 	if resume {
 		cp, found, err := catalog.ScrubCopyOf(ctx, s.db, d.ID, cursor.FileID)
 		if err != nil {
@@ -271,6 +295,9 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 				return false, s.lost(ctx, d.ID, err)
 			}
 			if !match {
+				if !cp.VerifiedNS.Valid {
+					return false, s.conflict(ctx, d, cp, sd)
+				}
 				return false, s.corrupt(ctx, d, cp, sd)
 			}
 			slog.Warn("a chunk read wrong once, then right past the cache", "disk", d.ID, "path", cp.Path, "chunk", i)
@@ -312,6 +339,20 @@ func (s *scrubber) readChunk(f fsx.File, size, i int64, want []byte) (bool, erro
 // corrupt records a corrupt copy, and when another copy is healthy repairs it from that one, with auto_repair, or
 // sends it to the trash (specs.md §16, §16.1): the file is then degraded, and replication makes the copy again. With
 // none, it stays, and alerts say so.
+// conflict records that a copy never verified does not hold its file's content: nothing says it ever did, so it is
+// another version of the file, and no rot. The file becomes a conflict, with every version kept (specs.md §15.7, §16):
+// the copy is neither repaired nor moved, as a corrupt one would be, which would lose the version it holds.
+func (s *scrubber) conflict(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
+	sd.Conflict = append(sd.Conflict, cp.Path)
+	slog.Warn("a copy never verified holds another version of its file: a conflict", "disk", d.ID, "path", cp.Path)
+	if s.opts.Apply {
+		if err := catalog.WriteHashes(ctx, s.db, s.now, &catalog.HashWrite{FileID: cp.FileID, Conflict: true}); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
 	sd.Corrupt = append(sd.Corrupt, cp.Path)
 	slog.Warn("a corrupt copy", "disk", d.ID, "path", cp.Path)
@@ -328,7 +369,9 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 	if err != nil {
 		return err
 	}
-	if healthy == nil {
+	// With no healthy copy, or on a disk that may only be read, it stays where it is: nothing is written to such a
+	// disk, and without --yes nothing is said to be repaired or moved there either (specs.md §10).
+	if healthy == nil || !s.session.Writable(d.ID) {
 		sd.Kept = append(sd.Kept, cp.Path)
 		return nil
 	}
@@ -340,34 +383,41 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 		}
 		return nil
 	}
-	for i := range f.Copies {
-		c := &f.Copies[i]
-		if c.Disk != d.ID {
-			continue
+	at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == d.ID })
+	if at < 0 {
+		return nil
+	}
+	c := &f.Copies[at]
+	if s.repair {
+		settled, err := s.repairOrNot(ctx, f, c, healthy, cp, sd)
+		if err != nil || settled {
+			return err
 		}
-		if s.repair {
-			repaired, err := s.repairOrNot(ctx, f, c, healthy, cp, sd)
-			if err != nil || repaired {
-				return err
-			}
+		if f, c, err = s.leftCorrupt(ctx, cp.FileID, d.ID, healthy); err != nil {
+			return err
 		}
-		outcome, err := s.session.Send(ctx, f, c, catalog.ReasonQuarantined)
-		if err != nil {
-			return fmt.Errorf("%w", err)
-		}
-		if outcome == trash.OutcomeTrashed {
-			sd.Quarantined = append(sd.Quarantined, cp.Path)
-		} else {
-			slog.Warn("a corrupt copy stays where it is", "disk", d.ID, "path", cp.Path, "outcome", outcome)
+		if c == nil {
+			slog.Warn("a corrupt copy a repair could not mend stays where it is", "disk", d.ID, "path", cp.Path)
 			sd.Kept = append(sd.Kept, cp.Path)
+			return nil
 		}
+	}
+	outcome, err := s.session.Send(ctx, f, c, catalog.ReasonQuarantined)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	if outcome == trash.OutcomeTrashed {
+		sd.Quarantined = append(sd.Quarantined, cp.Path)
+	} else {
+		slog.Warn("a corrupt copy stays where it is", "disk", d.ID, "path", cp.Path, "outcome", outcome)
+		sd.Kept = append(sd.Kept, cp.Path)
 	}
 	return nil
 }
 
 // repairOrNot repairs a corrupt copy from a healthy one (specs.md §16.1), and says whether that settled it: repaired,
-// or left where it is. A repair that found no room leaves it to quarantine, as a move to the trash takes no room but
-// its folders'.
+// or left where it is. A repair that failed leaves it to quarantine (specs.md §16): for want of room, as a move to the
+// trash takes no room but its folders', or for anything else that stopped it.
 func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, healthy *trash.Healthy, cp *catalog.ScrubCopy, sd *ScrubDisk) (bool, error) {
 	mode := modeFor(c, s.mode)
 	outcome, _, err := repairCopy(ctx, s.db, s.session, f, c, healthy, cp.Chunks, mode, true, true, s.now)
@@ -381,13 +431,46 @@ func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catal
 			s.remake = append(s.remake, f.Path)
 		}
 		return true, nil
-	case trash.OutcomeNoRoom:
+	case trash.OutcomeNoRoom, trash.OutcomeIOError:
 		return false, nil
 	default:
+		// It reads right after all, or changed, which is for the next pass; or nothing can be moved either, on a disk
+		// that cannot be reached, or under a name its trash refuses.
 		slog.Warn("a corrupt copy stays where it is", "disk", c.Disk, "path", cp.Path, "outcome", outcome)
 		sd.Kept = append(sd.Kept, cp.Path)
 		return true, nil
 	}
+}
+
+// leftCorrupt gives the copy a repair could not mend, with its file, as the catalog has them now, for the scrub to
+// send it to the trash (specs.md §16): what a repair wrote before it stopped gave the copy another change time, which
+// its row took (specs.md §16.1), and a move is told of the copy its row says. It gives none for a copy that is to stay
+// where it is: no longer corrupt, on a disk that cannot be written to any more, with no healthy copy that can still be
+// read, or with an operation on it still planned, which the reprise resolves first (specs.md §17.2).
+func (s *scrubber) leftCorrupt(ctx context.Context, fileID int64, disk string, healthy *trash.Healthy) (*catalog.FileRow, *catalog.CopyRow, error) {
+	if !s.session.Writable(disk) || !s.session.Readable(healthy.Disk) {
+		return nil, nil, nil
+	}
+	f, err := catalog.FileByID(ctx, s.db, fileID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	if f == nil {
+		return nil, nil, nil
+	}
+	at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == disk && c.State == string(solver.CopyCorrupt) })
+	if at < 0 {
+		return nil, nil, nil
+	}
+	c := &f.Copies[at]
+	planned, err := catalog.PlannedAt(ctx, s.db, disk, c.Place(f))
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	if planned {
+		return nil, nil, nil
+	}
+	return f, c, nil
 }
 
 // lost says that a disk failed while read: the scrub of it stops there.

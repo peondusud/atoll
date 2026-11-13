@@ -40,6 +40,14 @@ func TestPartStatesReadFromTheirID(t *testing.T) {
 	}
 }
 
+// The state of a repair, which names the chunks it left in tmp/, is read by its id (specs.md §14.2, §16.1).
+func TestRepairStatesReadFromTheirID(t *testing.T) {
+	plan := planOf(t, openForOps(t).sql(), "repair states", repairStateQuery)
+	if len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INTEGER PRIMARY KEY (rowid=?)") {
+		t.Errorf("%q", plan)
+	}
+}
+
 // The files a plan reads as leaving are looked for over its page of paths, and their jobs by file, never over the
 // whole catalog or every job: a plan reads every file at each pass (specs.md §13.4).
 func TestLeavingReadsItsPage(t *testing.T) {

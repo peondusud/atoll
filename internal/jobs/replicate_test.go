@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -78,6 +79,69 @@ func only(t *testing.T, items []ReplicateItem, outcome string) {
 	t.Helper()
 	if len(items) != 1 || items[0].Path != "a" || items[0].Disk != "t2" || items[0].Source != "t1" || items[0].Outcome != outcome {
 		t.Fatalf("%+v, want %s", items, outcome)
+	}
+}
+
+// A source that fails once the copy is read and verified is the disk that is lost, not the target: the folder a copy
+// goes in is made like the source's, which is looked at then (specs.md §14.2, invariant 4). The healthy target was
+// lost in its place, every other job of the run with it, and the failing source stayed in service.
+func TestASourceThatFailsLateIsTheOneLost(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "Films/a", "content")
+	b.scan(false)
+	late := false
+	b.at["verified"] = func() { late = true }
+	b.fail[b.dirs["t1"]] = func(call, name string) error {
+		if late && call == "stat" && name == "Films" {
+			return syscall.EIO
+		}
+		return nil
+	}
+	items, _ := b.replicate("Films/a", ReplicateOptions{Now: true})
+	if len(items) != 1 || items[0].Outcome != trash.OutcomeIOError {
+		t.Fatalf("%+v", items)
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't2'"); got == "missing" {
+		t.Error("the target is lost for an error of the source")
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't1'"); got != "missing" {
+		t.Errorf("the source that failed is %s", got)
+	}
+	if got := b.count("SELECT count(*) FROM ops WHERE state = 'planned'"); got != 0 {
+		t.Errorf("%d operations left planned on a target that did not fail", got)
+	}
+}
+
+// The folder of the parts is closed to others, one an earlier version left open included, and a part takes its owner
+// before its mode (specs.md §14.2). A part carries its source's mode and owner while it is read again, which takes as
+// long as the file is large: in a folder anyone may enter, a file that only its folders kept private was open to every
+// account for that time. And a mode set first lost its setuid and setgid bits to the change of owner that followed:
+// the copy of such a file was made without them.
+func TestAPartIsPrivateAndTakesItsOwnerFirst(t *testing.T) {
+	for _, left := range []bool{false, true} {
+		b := newBench(t, "t1", "t2")
+		b.write("t1", "a", "content")
+		if err := os.Chmod(filepath.Join(b.dirs["t1"], "media", "a"), 0o755|os.ModeSetuid); err != nil {
+			t.Fatal(err)
+		}
+		tmp := filepath.Join(b.dirs["t2"], "Atoll", "tmp")
+		if left {
+			if err := os.MkdirAll(tmp, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(tmp, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b.scan(false)
+		items, _ := b.replicate("a", ReplicateOptions{Now: true})
+		only(t, items, OutcomeReplicated)
+		if st, err := os.Stat(tmp); err != nil || st.Mode().Perm()&0o077 != 0 {
+			t.Errorf("left open before %v: tmp/ is %v, %v", left, st.Mode(), err)
+		}
+		if st, err := os.Stat(filepath.Join(b.dirs["t2"], "media", "a")); err != nil || st.Mode() != 0o755|os.ModeSetuid {
+			t.Errorf("left open before %v: the copy's mode is %v, %v", left, st.Mode(), err)
+		}
 	}
 }
 

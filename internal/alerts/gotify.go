@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,7 +15,7 @@ import (
 type Gotify struct {
 	URL       string
 	TokenFile string
-	Client    *http.Client // http.DefaultClient when nil
+	Client    *http.Client // one that follows no redirect when nil
 }
 
 // Name is the key of the channel.
@@ -62,7 +61,7 @@ func (g *Gotify) Send(ctx context.Context, m *Message) error {
 	req.Header.Set("X-Gotify-Key", token)
 	client := g.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = direct
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -73,9 +72,8 @@ func (g *Gotify) Send(ctx context.Context, m *Message) error {
 		return fmt.Errorf("gotify: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	text, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("gotify: %w", &AnswerError{Status: resp.Status, Text: string(bytes.TrimSpace(text))})
+		return fmt.Errorf("gotify: %w", &AnswerError{Status: resp.Status, Text: answerText(resp)})
 	}
 	return nil
 }

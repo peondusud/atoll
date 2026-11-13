@@ -591,6 +591,10 @@ const (
 	copiesBelowSQL = `
 		SELECT (SELECT count(*) FROM files f CROSS JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3)
 			+ (SELECT count(*) FROM copies WHERE disk_id = ?1 AND old_lpath >= ?2 AND old_lpath < ?3)`
+	// A copy yet to make is not there, and has no old path.
+	madeBelowSQL = `
+		SELECT (SELECT count(*) FROM files f CROSS JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.state <> 'pending' AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3)
+			+ (SELECT count(*) FROM copies WHERE disk_id = ?1 AND old_lpath >= ?2 AND old_lpath < ?3)`
 	settledBelowSQL = `
 		SELECT (SELECT count(*) FROM files f CROSS JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.gone_ns IS NULL AND c.old_lpath IS NULL AND f.lpath >= ?2 AND f.lpath < ?3)
 			+ (SELECT count(*) FROM copies WHERE disk_id = ?1 AND gone_ns IS NULL AND old_lpath >= ?2 AND old_lpath < ?3)`
@@ -642,6 +646,19 @@ func CopiesBelow(ctx context.Context, db *sql.DB, disk, folder string) (int64, e
 	lo, hi := folderRange(folder)
 	var count int64
 	err := db.QueryRowContext(ctx, copiesBelowSQL, disk, lo, hi).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("copies: %w", err)
+	}
+	return count, nil
+}
+
+// MadeBelow counts the copies of a disk that sit below a folder, leaving out those yet to make: a pending copy holds
+// its place in the catalog and is nowhere on the disk (specs.md §14.1). A folder renamed on that disk waits for the
+// copies below its old name to leave it, and one that was never there never leaves (specs.md §15.12).
+func MadeBelow(ctx context.Context, db *sql.DB, disk, folder string) (int64, error) {
+	lo, hi := folderRange(folder)
+	var count int64
+	err := db.QueryRowContext(ctx, madeBelowSQL, disk, lo, hi).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("copies: %w", err)
 	}

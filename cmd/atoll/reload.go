@@ -39,7 +39,7 @@ func tellDaemon() (int, error) {
 		}
 		// A process that ended meanwhile, or that this user may not look at, is none of ours.
 		exe, err := fsx.Readlink("/proc/" + name + "/exe")
-		if err != nil || exe != self {
+		if err != nil || !sameExecutable(exe, self) {
 			continue
 		}
 		cmdline, err := fsx.ReadFile("/proc/" + name + "/cmdline")
@@ -53,6 +53,17 @@ func tellDaemon() (int, error) {
 		told++
 	}
 	return told, errors.Join(failed...)
+}
+
+// deleted is what the kernel adds to the name of an executable that was removed or replaced on disk since the process
+// that runs it started, as an upgrade leaves the daemon's.
+const deleted = " (deleted)"
+
+// sameExecutable says whether a process runs this executable, from what /proc/<pid>/exe says of each: the same path,
+// whether or not the file it named was replaced since. A daemon started before an upgrade is still the one to tell.
+func sameExecutable(exe, self string) bool {
+	exe, self = strings.TrimSuffix(exe, deleted), strings.TrimSuffix(self, deleted)
+	return exe != "" && exe == self
 }
 
 // runsForGood says whether a command line is atoll daemon without --until-idle: the daemon that runs for good.

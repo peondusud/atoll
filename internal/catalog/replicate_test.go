@@ -262,3 +262,38 @@ func TestAPendingCopyIsNotOnItsDisk(t *testing.T) {
 		t.Errorf("%d rows left", got)
 	}
 }
+
+// The chunks a repair saves go through tmp/ under names of its own, <op-id>.<index>.part, which no column holds: a
+// name written so is that repair's, on its disk, and no other operation's (specs.md §14.2, §16.1). PartStates knew
+// only <op-id>.part, so that what a repair left in tmp/ was named by nothing, and stayed for good.
+func TestPartStatesOfARepair(t *testing.T) {
+	b, _ := newReplicateDB(t)
+	for _, op := range []struct {
+		id          int64
+		disk, kind  string
+		path2       any
+		state       string
+		description string
+	}{
+		{5, "u2", "repair", "2026-01-01/5.chunks/a", "undone", "a repair that saved nothing"},
+		{6, "u2", "repair", "2026-01-01/6.chunks/a", "done", "one that saved a chunk"},
+		{7, "u2", "repair", "2026-01-01/7.chunks/a", "planned", "one a crash left"},
+		{8, "u1", "repair", "2026-01-01/8.chunks/a", "done", "one of another disk"},
+		{9, "u2", "create", "9.part", "done", "a copy"},
+		{10, "u2", "trash", "2026-01-01/10/a", "done", "a move to the trash"},
+	} {
+		b.exec("INSERT INTO ops(id, disk_id, kind, path, path2, started_ns, state) VALUES (?, ?, ?, CAST('a' AS BLOB), CAST(? AS BLOB), 1, ?)",
+			op.id, op.disk, op.kind, op.path2, op.state)
+	}
+	names := []string{
+		"5.0.part", "5.12.part", "6.3.part", "7.1.part", "9.part",
+		// Of another disk, of an operation that is no repair, of none.
+		"8.1.part", "9.1.part", "10.1.part", "11.1.part",
+		// A repair names no copy's part, and nothing written otherwise than it writes.
+		"5.part", "5.01.part", "05.1.part", "5.-1.part", "5.+1.part", "5..part", "5.1.2.part", "5.1.PART", "5.1.part.old", "5.1", "0.1.part",
+	}
+	want := map[string]string{"5.0.part": "undone", "5.12.part": "undone", "6.3.part": "done", "7.1.part": "planned", "9.part": "done"}
+	if states, err := PartStates(t.Context(), b.sql(), "u2", names); err != nil || !maps.Equal(states, want) {
+		t.Errorf("%v, %v, want %v", states, err, want)
+	}
+}

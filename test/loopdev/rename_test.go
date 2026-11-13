@@ -26,13 +26,15 @@ import (
 // passBench is a pool of two real filesystems: an ext4 disk, and the driver under test, with a debounce
 // short enough to wait for.
 type passBench struct {
-	t       *testing.T
-	db      *sql.DB
-	config  *config.Config
-	catalog string
-	keep    string
-	at      string
-	machine disks.Machine
+	t      *testing.T
+	db     *sql.DB
+	config *config.Config
+	// configText is what config was read from.
+	configText string
+	catalog    string
+	keep       string
+	at         string
+	machine    disks.Machine
 }
 
 const shortDebounce = 1100 * time.Millisecond
@@ -54,7 +56,12 @@ func newPassBenchWith(t *testing.T, v *volume, at, more string) *passBench {
 // newPassBenchGuarded is newPassBenchWith with guards of its own in place of benchGuards.
 func newPassBenchGuarded(t *testing.T, v *volume, at, guards, more string) *passBench {
 	t.Helper()
-	kept := newVolume(t, names.Ext4)
+	return newPassBenchKept(t, newVolume(t, names.Ext4), v, at, guards, more)
+}
+
+// newPassBenchKept is newPassBenchGuarded with a volume of the caller's for the disk k.
+func newPassBenchKept(t *testing.T, kept, v *volume, at, guards, more string) *passBench {
+	t.Helper()
 	keep := mountPoint(t)
 	mountVolume(t, kept, "", keep)
 	for _, top := range []string{keep, at} {
@@ -84,7 +91,17 @@ func newPassBenchGuarded(t *testing.T, v *volume, at, guards, more string) *pass
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &passBench{t: t, db: db, config: c, catalog: file, keep: keep, at: at, machine: machine}
+	return &passBench{t: t, db: db, config: c, configText: text, catalog: file, keep: keep, at: at, machine: machine}
+}
+
+// reconfigure reads the bench's configuration again with more, as whole tables it does not have yet.
+func (b *passBench) reconfigure(more string) *config.Config {
+	b.t.Helper()
+	c, err := config.Parse([]byte(b.configText + more))
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	return c
 }
 
 func (b *passBench) scan(full bool) {
