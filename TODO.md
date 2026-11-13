@@ -86,7 +86,7 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Data and conformance
 
-- **`balance` sends to the trash a misplaced copy marked `surplus` with nothing made to stand in for it** (`internal/jobs/balance.go`, `finish`, `replaced`, `retire`): a job that ends `no-room` leaves a pending copy, which the plan counts. `retire` asks neither that the copies that stay are verified nor that the file is not in `conflict`.
+- **A copy whose part cannot be made for want of room ends `io-error`** (`internal/jobs/replicate.go`): only a write to the part that answers `ENOSPC` ends `no-room`, and making the part can answer it too, with no block or no inode left. Seen in the test of `balance` below level; what differs between the two outcomes for the job is to check.
 - **A stale copy can lose its `overwritten` job**, and then nothing ever sends it to the trash or makes it again: a rename with a moved copy, a guard rejected and a deletion each remove every queued trash job of the file (`internal/catalog/propagate.go`), not only those of a deletion. The old version stays in `media/`, and mergerfs serves it when its branch comes first.
 - **The copy that replaces a stale one waits for the window of a `scheduled` file** (`internal/jobs/passcopies.go`), against §12.3, "Refreshing stale copies ignores the mode".
 - **The disk's copy of the catalog is unlinked before a rename that ntfs-3g refuses** (`internal/ops/marker.go`, `PutCatalog`); `WriteMarker` has no fallback either, so `disk add` never writes a marker on those drivers; and a failed `VACUUM INTO` leaves its `.part` beside the backups (`internal/catalog/backup.go`).

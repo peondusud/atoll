@@ -367,8 +367,10 @@ func (b *balancer) preview(ctx context.Context, path string, from []string, jobs
 		case i < len(jobs):
 			item.To, item.Outcome = jobs[i].Dst, OutcomeToMove
 		case replaced(f, disk):
-			// Made by a run stopped before its end: only the old copy's move to the trash is left.
-			item.Outcome = OutcomeToMove
+			// Made by a run stopped before its end: only the old copy's move to the trash is left, if it may go.
+			if item.Outcome, err = b.retire(ctx, f, disk); err != nil {
+				return err
+			}
 		case heir != "":
 			// A user copy no copy need stand in for: its part goes to a copy that is where the setting wants it.
 			item.To, item.Outcome = heir, OutcomeToMove
@@ -421,21 +423,24 @@ func (b *balancer) finish(ctx context.Context, path string, from []string, made 
 	return nil
 }
 
-// retire sends an old copy to the trash, as rebalance, when the plan marked it surplus: never a user copy.
+// retire sends an old copy to the trash, as rebalance, when the plan marked it surplus, never a user copy, and only as
+// atoll prune would send it (specs.md §17.3): the plan marks a copy surplus for a copy still to make too, which stands
+// in for nothing until it is made. In a run that may not write, it says that the copy is to move.
 func (b *balancer) retire(ctx context.Context, f *catalog.FileRow, disk string) (string, error) {
-	if f == nil {
+	if !replaced(f, disk) {
 		return OutcomeCopied, nil
 	}
-	at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == disk })
-	if at < 0 || f.Copies[at].State != string(solver.CopySurplus) || f.Copies[at].CreatedBy != solver.CreatedByAtoll {
-		return OutcomeCopied, nil
-	}
-	outcome, err := b.session.Send(ctx, f, &f.Copies[at], catalog.ReasonRebalance)
+	outcome, err := b.session.Retire(ctx, f, disk, catalog.ReasonRebalance)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
 	}
-	if outcome == trash.OutcomeTrashed {
+	switch outcome {
+	case trash.OutcomeTrashed:
 		return OutcomeMoved, nil
+	case string(solver.PruneToTrash):
+		return OutcomeToMove, nil
+	case "":
+		return OutcomeCopied, nil
 	}
 	return outcome, nil
 }

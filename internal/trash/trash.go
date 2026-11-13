@@ -479,20 +479,19 @@ func (s *Session) wantedReplicas(f *catalog.FileRow) int {
 	return f.ReplicasTarget
 }
 
-func (s *Session) pruneFile(ctx context.Context, f *catalog.FileRow, position map[string]int, summary *Summary, each func(*PruneItem) error) error {
-	if !hasSurplus(f) {
-		return nil
-	}
+// decidePrune says what becomes of each surplus copy of a file, by position, from a look at each of its copies now
+// (specs.md §17.3). It puts the file's copies in the order of their disks.
+func (s *Session) decidePrune(ctx context.Context, f *catalog.FileRow, position map[string]int) ([]solver.PruneResult, error) {
 	slices.SortFunc(f.Copies, func(a, b catalog.CopyRow) int { return cmp.Compare(position[a.Disk], position[b.Disk]) })
 	if err := s.refreshCtimes(ctx, f); err != nil {
-		return err
+		return nil, err
 	}
 	input := solver.PruneInput{State: solver.State(f.State), Replicas: s.wantedReplicas(f), HasHash: f.Hash != nil}
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		unchanged, err := s.unchanged(ctx, f.Path, c)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		state := solver.DiskMissing
 		if sl := s.slots[c.Disk]; sl != nil {
@@ -505,7 +504,44 @@ func (s *Session) pruneFile(ctx context.Context, f *catalog.FileRow, position ma
 	}
 	results, err := solver.DecidePrune(input)
 	if err != nil {
-		return fmt.Errorf("%q: %w", f.Path, err)
+		return nil, fmt.Errorf("%q: %w", f.Path, err)
+	}
+	return results, nil
+}
+
+// Retire sends the surplus copy a file has on one disk to the trash, for a reason of the caller's, when atoll prune
+// would send it and only then (specs.md §13.3, §17.3): the copies that stay, ok, unchanged and on a disk that can be
+// read, reach the file's level without it, each verified, and the file is neither in conflict nor corrupt. A copy still
+// to make is none of those, whatever the plan keeps it for. It says what became of the copy: trashed; to-trash in a
+// run that may not write; why it stays; and nothing when the file has no surplus copy there.
+func (s *Session) Retire(ctx context.Context, f *catalog.FileRow, disk, reason string) (string, error) {
+	position, err := s.positions(ctx)
+	if err != nil {
+		return "", err
+	}
+	results, err := s.decidePrune(ctx, f, position)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range results {
+		if r.Disk != disk {
+			continue
+		}
+		if r.Outcome == solver.PruneToTrash && s.apply {
+			return s.Send(ctx, f, copyOn(f, disk), reason)
+		}
+		return string(r.Outcome), nil
+	}
+	return "", nil
+}
+
+func (s *Session) pruneFile(ctx context.Context, f *catalog.FileRow, position map[string]int, summary *Summary, each func(*PruneItem) error) error {
+	if !hasSurplus(f) {
+		return nil
+	}
+	results, err := s.decidePrune(ctx, f, position)
+	if err != nil {
+		return err
 	}
 	for _, r := range results {
 		c := copyOn(f, r.Disk)

@@ -3,6 +3,7 @@ package jobs
 import (
 	"database/sql"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -113,5 +114,78 @@ func TestBalanceAtollLeavesUserCopies(t *testing.T) {
 	}
 	if got != "t1 user ok, t3 atoll ok" {
 		t.Errorf("the copies: %s", got)
+	}
+}
+
+// An old copy goes to the trash only once a copy is made that stands in for it (specs.md §13.3): a copy still to make,
+// which its job left pending, stands in for nothing. With strict domains the plan keeps a pending copy for the domain
+// it is to cover, and marks an old copy surplus for it. The old copy went to the trash on that mark alone: the file
+// was left with two copies of three, and the third in the trash.
+func TestBalanceRetiresNothingForACopyStillToMake(t *testing.T) {
+	ids := []string{"a1", "a2", "a3", "b1", "c1"}
+	b := newBenchWith(t, "[defaults]\nreplicas = 2\n", ids...)
+	for _, id := range ids {
+		b.base = strings.Replace(b.base, "id = \""+id+"\"\n", "id = \""+id+"\"\ndomain = \""+id[:1]+"\"\n", 1)
+	}
+	b.reconfigure("[defaults]\nreplicas = 2\n")
+	for _, id := range ids[:3] {
+		b.write(id, "a", "x")
+	}
+	b.scan(true)
+	// Two of the three are Atoll's: only those move.
+	b.exec("UPDATE copies SET created_by = 'atoll' WHERE disk_id IN ('a2', 'a3')")
+	// Three domains to cover now, of which one takes no copy, as its disk may only be read.
+	b.ro[b.dirs["b1"]] = true
+	b.reconfigure("[defaults]\nreplicas = 2\n[placement]\nspread_mode = \"strict\"\n")
+	b.scan(false)
+	// The copy made for the third domain finds no room.
+	b.fail[b.dirs["c1"]] = func(call, name string) error {
+		if call == "create" && strings.HasSuffix(name, ".part") {
+			return syscall.ENOSPC
+		}
+		return nil
+	}
+	run := func() []BalanceItem {
+		t.Helper()
+		var items []BalanceItem
+		if _, err := BalanceAtoll(t.Context(), b.db, b.config, b, 0, func(item *BalanceItem) error {
+			items = append(items, *item)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return items
+	}
+	copies := func() string {
+		return b.text("SELECT group_concat(line, ', ') FROM (SELECT disk_id || ' ' || state AS line FROM copies ORDER BY disk_id)")
+	}
+	items := run()
+	if len(items) != 2 || items[0].From != "a2" || items[0].To != "c1" || items[1] != (BalanceItem{Path: "a", From: "a3", Size: 1, Outcome: "below-level"}) {
+		t.Errorf("%+v", items)
+	}
+	if got := b.text("SELECT COALESCE(group_concat(disk_id || ' ' || reason, ', '), '') FROM trash"); got != "" {
+		t.Errorf("in the trash, with no copy made: %s", got)
+	}
+	for _, id := range ids[:3] {
+		if !b.exists(id, "media/a") {
+			t.Errorf("the copy on %s went, and none was made", id)
+		}
+	}
+	if got := copies(); got != "a1 ok, a2 ok, a3 surplus, c1 pending" {
+		t.Errorf("the copies: %s", got)
+	}
+	// Once the copy is made, it stands in for the old one, which the next run sends to the trash.
+	delete(b.fail, b.dirs["c1"])
+	if made, _ := b.replicate("a", ReplicateOptions{Now: true}); len(made) != 1 || made[0].Disk != "c1" || made[0].Outcome != OutcomeReplicated {
+		t.Fatalf("%+v", made)
+	}
+	if items := run(); len(items) != 1 || items[0].From != "a3" || items[0].Outcome != OutcomeMoved {
+		t.Errorf("once the copy is made: %+v", items)
+	}
+	if got := copies(); got != "a1 ok, a2 ok, c1 ok" {
+		t.Errorf("the copies: %s", got)
+	}
+	if got := b.text("SELECT group_concat(disk_id || ' ' || reason, ', ') FROM trash"); got != "a3 rebalance" {
+		t.Errorf("the trash: %s", got)
 	}
 }
