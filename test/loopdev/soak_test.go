@@ -111,12 +111,23 @@ func sampleMemory(t *testing.T, since time.Time, catalog string) memorySample {
 	return s
 }
 
+// resetPeak makes the most the kernel records the process held start again from what it holds now (VmHWM). It may run
+// in any goroutine.
+func resetPeak(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile("/proc/self/clear_refs", []byte("5"), 0); err != nil {
+		t.Error(err)
+	}
+}
+
 // TestDaemonSoak: the daemon that runs for good, for -atoll.soak, on two ext4 disks, while a writer adds, edits,
-// renames and deletes files every second or so. It logs the memory every tenth of the run, at the end of the pass that
-// follows it; at the end, the heap in use after a collection, its open files and its goroutines must not have grown
-// past the second tenth's by more than a tenth and 8 MiB, 16 files and 16 goroutines: what a daemon that runs for days
-// would keep growing (specs.md §26). No pass may be held by a guard, and the last tenth must run at least half the
-// passes of the second: a pass that costs more as the catalog grows would run fewer.
+// renames and deletes files every second or so. It logs the memory at the end of the first pass, which finds every
+// copy of a catalog that knows none, and every tenth of the run, at the end of the pass that follows it, each with the
+// most the process held since the sample before. At the end, the heap in use after a collection, its open files and
+// its goroutines must not have grown past the second tenth's by more than a tenth and 8 MiB, 16 files and 16
+// goroutines: what a daemon that runs for days would keep growing (specs.md §26). No pass may be held by a guard, and
+// the last tenth must run at least half the passes of the second: a pass that costs more as the catalog grows would
+// run fewer.
 func TestDaemonSoak(t *testing.T) {
 	needRoot(t)
 	if *soakFor <= 0 {
@@ -141,10 +152,14 @@ func TestDaemonSoak(t *testing.T) {
 	// how far it had gone rather than what the daemon keeps.
 	var start time.Time
 	asked := make(chan chan memorySample, 1)
+	firstPass := make(chan memorySample, 1)
+	asked <- firstPass
 	passes, stop := runDaemonAfter(t, b, filepath.Join(t.TempDir(), "fstab"), func() {
 		select {
 		case reply := <-asked:
 			reply <- sampleMemory(t, start, b.catalog)
+			// Each sample's peak is its own: what one pass holds says nothing of the next.
+			resetPeak(t)
 		default:
 		}
 	})
@@ -157,6 +172,11 @@ func TestDaemonSoak(t *testing.T) {
 			t.Fatal("no first pass")
 		}
 	}
+	// The hook answers before the pass is sent.
+	s := <-firstPass
+	t.Logf("the first pass: heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, %d goroutines, %d open files, catalog %.1f MiB",
+		float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20))
+	most := s.hwm
 	var mu sync.Mutex
 	count, held := 0, 0
 	go func() {
@@ -188,7 +208,6 @@ func TestDaemonSoak(t *testing.T) {
 		time.Sleep(time.Until(start.Add(time.Duration(i+1) * every)))
 		reply := make(chan memorySample, 1)
 		asked <- reply
-		var s memorySample
 		select {
 		case s = <-reply:
 		case <-time.After(firstPassWithin(*soakFiles)):
@@ -205,6 +224,7 @@ func TestDaemonSoak(t *testing.T) {
 		t.Logf("after %v: %d passes, %d this tenth, heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, %d goroutines, %d open files, catalog %.1f MiB",
 			s.at, passed, passed-before, float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20))
 		samples = append(samples, s)
+		most = max(most, s.hwm)
 	}
 	stopWriter()
 	stop()
@@ -213,9 +233,7 @@ func TestDaemonSoak(t *testing.T) {
 	for _, s := range samples[1:] {
 		heaps = append(heaps, s.heap)
 	}
-	t.Logf("heap in use from the second tenth on: %v bytes; the most resident %.1f MiB", heaps, float64(slices.MaxFunc(samples, func(a, b memorySample) int {
-		return int(a.hwm>>20) - int(b.hwm>>20)
-	}).hwm)/(1<<20))
+	t.Logf("heap in use from the second tenth on: %v bytes; the most resident %.1f MiB", heaps, float64(most)/(1<<20))
 	if grown := int64(last.heap) - int64(first.heap); grown > int64(first.heap)/10 && grown > 8<<20 {
 		t.Errorf("the heap grew by %.1f MiB, from %.1f MiB", float64(grown)/(1<<20), float64(first.heap)/(1<<20))
 	}

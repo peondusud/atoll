@@ -5,6 +5,7 @@ package loopdev
 import (
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,11 +19,12 @@ import (
 var scaleFiles = flag.Int("atoll.scale", 0, "run TestScale with this many files a disk; 0 skips it")
 
 // TestScale measures, at -atoll.scale files a disk on two disks, what grows with the pool and no other test reaches
-// (specs.md §26): the first scan; atoll status, with no strict setting and with a strict rule, for which it plans the
-// whole pool to give bytes_placed; and with the link guard, the first pass, which makes a link for each copy, a pass
-// after it, and the pass that removes them once the guard is off. Each is logged with the memory the process holds
-// then, and the most it held during that step. In qemu without KVM every instruction is emulated: the times say how
-// each grows, not what a machine takes.
+// (specs.md §26): the first pass, which finds every copy of a catalog that knows none, as the daemon's first does; a
+// scan after it; reading the hash of every copy, and a pass then, with nothing left to do; atoll status, with no strict
+// setting and with a strict rule, for which it plans the whole pool to give bytes_placed; and with the link guard, the
+// first pass, which makes a link for each copy, a pass after it, and the pass that removes them once the guard is off.
+// Each is logged with the memory the process holds then, and the most it held during that step. In qemu without KVM
+// every instruction is emulated: the times say how each grows, not what a machine takes.
 func TestScale(t *testing.T) {
 	needRoot(t)
 	if *scaleFiles <= 0 {
@@ -43,8 +45,8 @@ func TestScale(t *testing.T) {
 	t.Logf("%d files written on each disk in %v", n, time.Since(start).Round(time.Second))
 	measure := func(what string, do func()) {
 		t.Helper()
-		// The kernel's peak of the process starts again from what it holds now, so that each step logs its own.
-		mustDo(t, os.WriteFile("/proc/self/clear_refs", []byte("5"), 0))
+		// Each step logs its own peak.
+		resetPeak(t)
 		began := time.Now()
 		do()
 		took := time.Since(began).Round(time.Millisecond)
@@ -52,7 +54,18 @@ func TestScale(t *testing.T) {
 		t.Logf("%s: %v; heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, catalog %.1f MiB", what, took,
 			float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(s.catalog)/(1<<20))
 	}
-	measure("the first scan", func() { b.scan(false) })
+	measure("the first pass, which finds every copy", func() { b.pass() })
+	measure("a scan with every copy known", func() { b.scan(false) })
+	measure("reading the hash of every copy", func() {
+		if left, err := watch.HashNew(t.Context(), b.db, b.config, b.machine, math.MaxInt64); err != nil || left {
+			t.Fatalf("%v, %v", left, err)
+		}
+	})
+	measure("a pass with nothing to do", func() {
+		if out := b.pass(); len(out.Decisions) != 0 {
+			t.Errorf("%d decisions", len(out.Decisions))
+		}
+	})
 	status := func(misplaced map[string]bool) *watch.Status {
 		t.Helper()
 		s, err := watch.ReadStatus(t.Context(), b.db, "", misplaced, func(*catalog.FileRow) error { return nil })
