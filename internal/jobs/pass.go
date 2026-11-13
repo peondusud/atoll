@@ -468,7 +468,7 @@ func (p *pass) ownFiles(d *config.Disk, inodes map[string]bool) (map[string][]so
 	if handle == nil {
 		return nil, nil //nolint:nilnil // the confirmation that follows says what became of the disk
 	}
-	own, err := handle.OwnFiles(ctx, inodes)
+	own, err := handle.OwnFiles(ctx, p.db, inodes)
 	if errors.Is(err, ops.ErrDiskLost) {
 		if err := p.session.Lose(ctx, d.ID, err); err != nil {
 			return nil, fmt.Errorf("%w", err)

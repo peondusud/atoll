@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -1008,30 +1009,126 @@ func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, 
 }
 
 // OwnFiles gives what this disk's own trash and tmp hold of those inodes: a copy that is there was an
-// interrupted operation of Atoll's, not a user's deletion (specs.md §15.5).
-func (d *Disk) OwnFiles(ctx context.Context, inodes map[string]bool) (map[string][]solver.FileLook, error) {
+// interrupted operation of Atoll's, not a user's deletion (specs.md §15.5, invariant 11). It asks the journal first,
+// which names where each copy Atoll moved went, and looks at those names alone: every operation is journaled before it
+// runs (invariant 12). tmp/, which holds only what is in progress, is listed whole. The trash is walked whole, as it
+// always was, only when the journal cannot answer for it: it holds something that is no operation of this disk's in
+// the journal, as after a catalog rebuild, or on a disk that came with its work folder.
+func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool) (map[string][]solver.FileLook, error) {
 	out := map[string][]solver.FileLook{}
-	for _, folder := range []string{layout.TrashFolder, layout.TmpFolder} {
-		dir, err := d.open(components(d.config.Workdir, folder))
-		switch {
-		case fsx.IsAbsent(err):
-			continue
-		case err != nil:
-			// That disk's trouble, as a walk of it that fails is: nothing can be said of what is absent.
-			return nil, lost(err)
-		}
-		walked, err := watch.Walk(ctx, dir.Dir)
-		dir.close()
+	if err := d.walkOwn(ctx, layout.TmpFolder, inodes, out); err != nil {
+		return nil, err
+	}
+	asked := false
+	for _, key := range slices.Sorted(maps.Keys(inodes)) {
+		places, err := catalog.PlacesOf(ctx, db, d.config.ID, key)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrDiskLost, err)
+			return nil, fmt.Errorf("catalog: %w", err)
 		}
-		for i := range walked.Files {
-			if f := &walked.Files[i]; inodes[f.FileKey] {
-				out[f.FileKey] = append(out[f.FileKey], watch.FoundLook(f))
+		for _, place := range places {
+			st, there, err := d.stat(d.trashPlace(place))
+			switch {
+			case errors.Is(err, ErrDiskLost):
+				return nil, err
+			case err != nil || !there || st.Kind != fsx.KindFile || keyOf(&st) != key:
+				// Not there, or not it: the name of an operation that put it elsewhere, or that something followed.
+				continue
+			}
+			if found, err := watch.FileFrom(place, &st); err == nil {
+				out[key] = append(out[key], watch.FoundLook(&found))
+			}
+		}
+		asked = asked || len(out[key]) == 0
+	}
+	if !asked {
+		return out, nil
+	}
+	known, err := d.journalKnowsTrash(ctx, db)
+	if err != nil || known {
+		return out, err
+	}
+	// What the journal names was found already: only the others are looked for.
+	left := make(map[string]bool, len(inodes))
+	for key := range inodes {
+		if len(out[key]) == 0 {
+			left[key] = true
+		}
+	}
+	if err := d.walkOwn(ctx, layout.TrashFolder, left, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// walkOwn walks one of the work folder's folders whole, and adds what it holds of those inodes.
+func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]bool, out map[string][]solver.FileLook) error {
+	dir, err := d.open(components(d.config.Workdir, folder))
+	switch {
+	case fsx.IsAbsent(err):
+		return nil
+	case err != nil:
+		// That disk's trouble, as a walk of it that fails is: nothing can be said of what is absent.
+		return lost(err)
+	}
+	walked, err := watch.Walk(ctx, dir.Dir)
+	dir.close()
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrDiskLost, err)
+	}
+	for i := range walked.Files {
+		if f := &walked.Files[i]; inodes[f.FileKey] {
+			out[f.FileKey] = append(out[f.FileKey], watch.FoundLook(f))
+		}
+	}
+	return nil
+}
+
+// journalKnowsTrash says whether everything the trash holds at its top is an operation of this disk's in the journal:
+// the dates, and below each the folder of an operation, each read as Atoll writes it (specs.md §17). Only names are
+// listed, and nothing below an operation's folder is looked at. Anything else there, or an operation the journal does
+// not hold for this disk, is something the journal cannot answer for.
+func (d *Disk) journalKnowsTrash(ctx context.Context, db *sql.DB) (bool, error) {
+	trash, err := d.open(components(d.config.Workdir, layout.TrashFolder))
+	switch {
+	case fsx.IsAbsent(err):
+		return true, nil
+	case err != nil:
+		return false, lost(err)
+	}
+	defer trash.close()
+	days, err := trash.Names()
+	if err != nil {
+		return false, lost(err)
+	}
+	for _, day := range days {
+		below, err := trash.OpenDir(day)
+		switch {
+		case fsx.IsDiskLost(err):
+			return false, lost(err)
+		case err != nil:
+			// No folder, or one that cannot be opened: no date of Atoll's.
+			return false, nil
+		}
+		folders, err := below.Names()
+		_ = below.Close()
+		if err != nil {
+			return false, lost(err)
+		}
+		for _, name := range folders {
+			id, _, ok := layout.TrashOp(name)
+			if !ok {
+				return false, nil
+			}
+			held, err := catalog.OpOnDisk(ctx, db, d.config.ID, id)
+			if err != nil {
+				return false, fmt.Errorf("catalog: %w", err)
+			}
+			if !held {
+				return false, nil
 			}
 		}
 	}
-	return out, nil
+	return true, nil
 }
 
 // FolderInfo looks at a folder below the root, to make one like it, and says nil for anything else.

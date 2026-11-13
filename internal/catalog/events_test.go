@@ -3,6 +3,7 @@ package catalog
 import (
 	"database/sql"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -53,6 +54,20 @@ func TestTheTrashIsReadThroughItsIndexes(t *testing.T) {
 		if !found {
 			t.Errorf("%s: %q", name, plan)
 		}
+	}
+}
+
+// Where the journal put the file of an inode is read through the index of the operations by disk and inode, never
+// over the whole journal, which holds an operation for each copy ever made (specs.md §9).
+func TestTheJournalIsAskedByInode(t *testing.T) {
+	b := openForOps(t)
+	if plan := planOf(t, b.sql(), "places", placesOfSQL); len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INDEX ops_by_key (disk_id=? AND file_key=?)") {
+		t.Errorf("%q", plan)
+	}
+	if plan := planOf(t, b.sql(), "on disk", opOnDiskSQL); !slices.ContainsFunc(plan, func(step string) bool {
+		return strings.HasPrefix(step, "SEARCH ops USING INTEGER PRIMARY KEY (rowid=?)")
+	}) {
+		t.Errorf("%q", plan)
 	}
 }
 
