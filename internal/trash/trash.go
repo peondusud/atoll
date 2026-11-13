@@ -573,6 +573,10 @@ func (s *Session) unchanged(ctx context.Context, path string, c *catalog.CopyRow
 // Send sends one copy to the trash, and says what became of it (specs.md §17.1).
 func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, error) {
 	place := c.Place(f)
+	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
+	if !s.writable(c.Disk) {
+		return outcomeUnavailable, nil
+	}
 	handle, err := s.open(ctx, c.Disk)
 	if err != nil {
 		return "", err

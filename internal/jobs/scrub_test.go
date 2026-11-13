@@ -87,6 +87,34 @@ func TestScrubCallsACopyNeverVerifiedAConflict(t *testing.T) {
 	}
 }
 
+// A disk that is readonly is read, and nothing is written to it (specs.md §10): a corrupt copy found there stays
+// where it is, with a healthy copy elsewhere or not. The scrub repaired it in place, or moved it to that disk's
+// trash, making its work folder on the way.
+func TestScrubWritesNothingToAReadonlyDisk(t *testing.T) {
+	for _, config := range []string{"", "[integrity]\nauto_repair = false\n"} {
+		for _, yes := range []bool{true, false} {
+			b := newBenchWith(t, config, "t1", "t2")
+			b.write("t1", "a.mkv", "a film")
+			b.write("t2", "a.mkv", "a film")
+			b.scan(true)
+			b.now += int64(month)
+			b.rot("t2", "a.mkv", "a FILM")
+			b.ro[b.dirs["t2"]] = true
+			out := b.scrub(ScrubOptions{Apply: true, Quarantine: yes})
+			t2 := diskOf(out, "t2")
+			if !slices.Equal(t2.Corrupt, []string{"a.mkv"}) || len(t2.Repaired) != 0 || len(t2.Quarantined) != 0 || !slices.Equal(t2.Kept, []string{"a.mkv"}) {
+				t.Errorf("%q, --yes %v: %+v", config, yes, *t2)
+			}
+			if got := b.read("t2", "a.mkv"); got != "a FILM" {
+				t.Errorf("%q, --yes %v: the copy on the readonly disk now holds %q", config, yes, got)
+			}
+			if b.exists("t2", "Atoll") {
+				t.Errorf("%q, --yes %v: a work folder was made on the readonly disk", config, yes)
+			}
+		}
+	}
+}
+
 // A copy that rotted, read again past the cache, is corrupt: with a healthy copy elsewhere it goes to the trash,
 // and the next pass makes it again from the healthy one (specs.md §16).
 func TestScrubQuarantines(t *testing.T) {

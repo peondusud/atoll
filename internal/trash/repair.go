@@ -40,6 +40,10 @@ func chunkLength(size, i int64) int64 {
 // hashes. It says what became of the copy, which stays corrupt unless repaired.
 func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, bad []int64, healthy *Healthy, chunks []byte) (string, error) {
 	place := c.Place(f)
+	// A disk that may only be read is never written to, its corrupt copies included (specs.md §10).
+	if !s.writable(c.Disk) {
+		return outcomeUnavailable, nil
+	}
 	handle, err := s.open(ctx, c.Disk)
 	if err != nil {
 		return "", err

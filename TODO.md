@@ -86,7 +86,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Data and conformance
 
-- **Repair and quarantine write to a disk that is `readonly`** (`internal/trash/repair.go`, `internal/jobs/scrub.go`, `internal/jobs/repair.go`): nothing asks whether the disk may be written, against §10.
 - **A repair that fails otherwise than for want of room leaves the corrupt copy in `media/`** (`internal/jobs/scrub.go`), where §16 sends it to the trash; a corrupt copy is never due again, and mergerfs serves it when its branch comes first.
 - **`atoll scrub` without `--yes` runs the reprise and cleans `tmp/`** (`cmd/atoll/scrub.go`), as its session is opened to write, against §17.2.
 - **`balance` sends to the trash a misplaced copy marked `surplus` with nothing made to stand in for it** (`internal/jobs/balance.go`, `finish`, `replaced`, `retire`): a job that ends `no-room` leaves a pending copy, which the plan counts. `retire` asks neither that the copies that stay are verified nor that the file is not in `conflict`.

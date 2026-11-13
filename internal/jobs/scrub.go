@@ -348,7 +348,9 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 	if err != nil {
 		return err
 	}
-	if healthy == nil {
+	// With no healthy copy, or on a disk that may only be read, it stays where it is: nothing is written to such a
+	// disk, and without --yes nothing is said to be repaired or moved there either (specs.md §10).
+	if healthy == nil || !s.session.Writable(d.ID) {
 		sd.Kept = append(sd.Kept, cp.Path)
 		return nil
 	}
