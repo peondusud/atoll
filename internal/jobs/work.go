@@ -1321,6 +1321,14 @@ func (p *pass) queuedTrashes(ctx context.Context, d *config.Disk, writable bool)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
+	// What a real pass queues before it runs anything: the overwrite of a stale copy that lost its job.
+	lost, err := p.staleWithoutJob(ctx, d.ID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range lost {
+		jobs = append(jobs, catalog.TrashJob{FileID: lost[i].FileID, Src: lost[i].Src, Dst: d.ID, Reason: catalog.ReasonOverwritten, State: catalog.JobQueued})
+	}
 	plan := p.planOf(d.ID)
 	var list []Operation
 	for i := range jobs {

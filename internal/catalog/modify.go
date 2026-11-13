@@ -125,6 +125,67 @@ func markStale(ctx context.Context, tx *sql.Tx, m *Modification) error {
 	return nil
 }
 
+// StaleCopy is a stale copy that no queued trash job covers, with the copy it can be made again from.
+type StaleCopy struct {
+	FileID int64
+	Path   string
+	Size   int64
+	Disk   string
+	Src    string
+}
+
+// staleNoJobSQL finds, through the index of the stale copies, those that hold a file and that no queued trash job
+// covers, of a file that is neither in conflict nor corrupt and has a copy to make them again from: the first ok or
+// surplus one by disk position. Those are the copies whose overwrite would stand (specs.md §15.4, §15.12).
+const staleNoJobSQL = `
+	SELECT c.file_id, f.lpath, f.size, c.disk_id,
+		(SELECT o.disk_id FROM copies o JOIN disks d ON d.id = o.disk_id
+			WHERE o.file_id = c.file_id AND o.state IN ('ok', 'surplus') ORDER BY d.position LIMIT 1)
+	FROM copies c JOIN files f ON f.id = c.file_id
+	WHERE c.state = 'stale' AND (?1 = '' OR c.disk_id = ?1) AND c.file_key IS NOT NULL AND f.state NOT IN ('conflict', 'corrupt')
+		AND EXISTS(SELECT 1 FROM copies o WHERE o.file_id = c.file_id AND o.state IN ('ok', 'surplus'))
+		AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind = 'trash' AND j.file_id = c.file_id AND j.dst_disk = c.disk_id AND j.state = 'queued')
+	ORDER BY c.disk_id, c.file_id`
+
+// StaleWithoutJob gives the stale copies that have lost their trash job and would have it stand, on one disk or, with
+// none given, on all: by disk, then by file. A decision that drops every job of a file drops that one too, as a
+// rename seen after a deletion does, and nothing else would ever send the copy to the trash (specs.md §15.4).
+func StaleWithoutJob(ctx context.Context, db *sql.DB, disk string) ([]StaleCopy, error) {
+	rows, err := db.QueryContext(ctx, staleNoJobSQL, disk)
+	if err != nil {
+		return nil, fmt.Errorf("stale copies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var list []StaleCopy
+	for rows.Next() {
+		var s StaleCopy
+		var path []byte
+		if err := rows.Scan(&s.FileID, &path, &s.Size, &s.Disk, &s.Src); err != nil {
+			return nil, fmt.Errorf("stale copies: %w", err)
+		}
+		s.Path = string(path)
+		list = append(list, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("stale copies: %w", err)
+	}
+	return list, nil
+}
+
+// QueueOverwrite gives a stale copy its trash job again, to be made again from src once in the trash, as markStale
+// queued it: only while the copy is stale, holds a file, and has no trash job queued.
+func QueueOverwrite(ctx context.Context, db *sql.DB, fileID int64, src, disk string, priority int64) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO jobs(kind, file_id, src_disk, dst_disk, priority, state, reason) SELECT 'trash', ?1, ?2, ?3, ?4, ?5, ?6
+		WHERE EXISTS(SELECT 1 FROM copies WHERE file_id = ?1 AND disk_id = ?3 AND state = 'stale' AND file_key IS NOT NULL)
+			AND NOT EXISTS(SELECT 1 FROM jobs WHERE kind = 'trash' AND file_id = ?1 AND dst_disk = ?3 AND state = ?5)`,
+		fileID, src, disk, priority, JobQueued, ReasonOverwritten)
+	if err != nil {
+		return fmt.Errorf("job: %w", err)
+	}
+	return nil
+}
+
 // applyMetadata records a metadata-only change, once its time has reached each copy it could (specs.md §15.4).
 func applyMetadata(ctx context.Context, tx *sql.Tx, nowNS int64, m *Modification) error {
 	for i := range m.Changed {
