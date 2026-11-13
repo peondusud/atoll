@@ -63,6 +63,13 @@ Every item here is a **decision**:
 
 - The local API's commands that write (moving, deleting, answering a guard), which the alpha leaves to the CLI (§25.1).
 
+## What the review of the code leaves (2026-11-13)
+
+Each is a **decision**: the code does what the spec says, and the review found what that costs.
+
+- **A file that cannot be opened stops the hashes of its disk** (§15.10). Any error but `ENOENT`, `ELOOP` and `ENOTDIR` stops the reading of a disk, as an I/O error must. One that says nothing of the disk does too: `EACCES`, `ENOKEY` for a file whose key is not loaded, `EMFILE` when the process is out of descriptors. The file stays without a hash, so each slice of the daemon stops at it again, and the files after it in the order of the paths are never hashed on that disk, with nothing to say so. To decide: report such a file as `unreadable` and go on, an I/O error alone stopping the disk.
+- **One transaction for each file hashed** (§15.10), so that an interruption loses little. On 400,000 copies of a few bytes that is 31 minutes in qemu without KVM, 4.7 ms a copy, nearly all of it in commits (§26); on a slow system disk it is one `fsync` a file. To decide: one transaction for the files read within a second, which loses as little of a large file and costs a small one nearly nothing.
+
 ## Phase 1a, the alpha, not started (specs.md §28)
 
 - Configuration in the shell (§24.3, §10):

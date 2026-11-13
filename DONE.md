@@ -2,6 +2,34 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## What a review of the code found (specs.md §9, §15.1, §15.13, §21.5, §23, §25.1)
+
+Commits "Find an entry of the trash through an index", "Give the remount its time, and a check its time before the next", "Give up an answer of the local API nobody waits for", "Follow no redirect with a token", "Keep what a process is for 10 s, not for good", "Close the catalog's folder to other accounts" and "Start each measured peak from what the process keeps, and hold a long soak's window", on `beta`, after a review of the code for performance, security and conformance to the spec. Each fix came after a test that fails without it.
+
+- **The trash read whole, again and again.** No index held its entries but by expiry. Each purge deleted its row by disk and place, each undone operation and each refresh of a stale copy looked for theirs by operation, and each read every entry to find its own: a purge of every entry of a large trash read the whole of it once for each. The list sorted the whole trash for each page of 1,000 entries. And after every pass the daemon loaded every entry, paths included, to ask whether a purge was due. `0010_trash_by_path.sql` indexes the entries by path, then by operation; each statement that finds one names its path, which its operation holds; the list reads each page in the index's order; and `PurgeDue` reads what the choice needs of each entry, with no path and no sort. `TestATrashQueryReadsOnlyItsEntries` pins the seven plans.
+- **A remount with no limit of time.** After a USB reset the daemon ran `umount -l`, then `mount`, with the daemon's own context. On a disk that died halfway a `mount` can wait for good, and the daemon's only loop with it. Each of the two now has 90 s, then is killed with the helpers it started (`TestRemountGivesUp`).
+- **A check due again as soon as it ended.** The time of the next mount check was counted from the start of a check. One that took longer than the 30 s between two, as when a remount waited for its disk, was due again at once, and a check comes before every pass: no pass ran. It is counted from the check's end (`TestACheckLeavesItsTimeBeforeTheNext`).
+- **Answers of the local API nobody waited for.** `/v1/status`, `/v1/trash` and `/v1/guards` read the catalog with a context of their own, so a client that was gone, or whose 60 s were over, stopped nothing; and any number were made at once, in the daemon's own process, where `/v1/status` plans the whole pool when a strict setting exists. Each answer now takes its request's context, with its 60 s, and those that read the catalog are made one at a time. A connection that asks nothing more is closed after 60 s: one left open for good, which a client with no token could do, held a descriptor the daemon needs for its disks.
+- **Redirects followed with a token.** The requests to ntfy, Gotify, Plex, Emby and Jellyfin went through Go's default client, which follows redirects and, to another host, drops only `Authorization` and `Cookie`: `X-Plex-Token`, `X-Emby-Token` and `X-Gotify-Key` went to whatever host an answer named. A `POST` redirected with 301 or 302 also becomes a `GET`: an alert sent that way reached nobody, was answered 200 and counted as sent. No redirect is followed now, and one is an answer that is not 2xx.
+- **What a process is, kept for good.** The watcher kept what the process behind an event was, by its number, until it knew a thousand. The kernel gives the number of a process that ended to another: after a command of Atoll that wrote to a disk, a program that took its number had its changes counted as Atoll's own, which bring no pass. The answer is kept 10 s (`TestOriginIsAskedAgain`).
+- **The catalog readable by every account.** The unit left `/var/lib/atoll` at 0755, and the catalog and its backups are made 0644: every account could read every path of the library, its trash and its history, which the local API gives only through its socket or with its token. `StateDirectoryMode=0750` closes the folder.
+- **Two faults of the measures.** `TestScale` started a step's peak from what the step before had left resident, so a light step logged the peak of the one before it; and the soak's maintenance window, written from its two ends as times of day, was 3 hours a day for a run of 72 hours, where the run of 4 hours had it all along.
+
+### Decided without the maintainer, to confirm
+
+- **`schema/migrations/0010_trash_by_path.sql`**, a new migration: `CREATE INDEX trash_by_path ON trash(lpath, op_id)`. One index rather than one by operation and one by place: with an index by operation alone, SQLite leads the join that sums each trash's sizes by the journal, which keeps every operation for good, and reads all of it (measured on its plan).
+- **The next mount check is due 30 s after the one before ended** (§15.13), no longer 30 s after it started. The two differ only when a check is slow.
+- **90 s for `umount`, then for `mount`**, at a remount (§15.13): what systemd gives a mount.
+- **The local API** (§25.1): the answers that read the catalog one at a time, another waiting within its own 60 s; an answer given up with its request; 60 s for a connection that asks nothing more.
+- **No redirect is followed** (§21.5, §23). A server reached through one, as behind a proxy that sends `http` to `https`, must be written by the address the redirect leads to: until then its alerts and scans fail, and say why.
+- **What a process is stays known 10 s** (§15.1).
+- **`StateDirectoryMode=0750`** in `deploy/atoll.service`: the catalog's folder is for `atoll`, its group and root. The process's mask is left as it is, as it would also reach the folders Atoll makes on the disks with no folder to make them like.
+
+### Left as the spec says, for the maintainer to decide
+
+- **Reading hashes stops its disk at an error that is not absence**, which §15.10 asks for: TODO.md says what that costs when one file cannot be opened.
+- **One transaction per file hashed**, which §15.10 asks for too: TODO.md says what it costs on many small files.
+
 ## What the soak on 200,000 files found (specs.md §15.13, §26)
 
 Commits "Hear the watcher between the daemon's steps, and give the others a turn after a pass", "Give each step of TestScale its own peak", "Look the copies of a disk up by inode through an index", "Measure the daemon's own steps at scale, each with its own peak" and "Record what TestScale measures on 200,000 files a disk", on `beta`, from the first runs of `TestDaemonSoak` and `TestScale` on 200,000 files a disk, in qemu without KVM.
