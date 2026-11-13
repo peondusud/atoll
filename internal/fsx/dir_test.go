@@ -3,6 +3,7 @@ package fsx
 import (
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -193,9 +194,9 @@ func TestStatSaysWhatStatxSays(t *testing.T) {
 	}
 }
 
-// TestSyncEntry: a file and a folder are synced by their name. A name that leads nowhere, to a symlink, or
-// to what Atoll may not open says it was not opened, with why, so that only a failed fsync reads as a disk
-// lost. The fault wrapper names the entry.
+// TestSyncEntry: a file and a folder are synced by their name. A name that leads nowhere, to a symlink, to
+// what is neither a file nor a folder, or to what Atoll may not open says it was not opened, with why, so that
+// only a failed fsync of a file or a folder reads as a disk lost. The fault wrapper names the entry.
 func TestSyncEntry(t *testing.T) {
 	top := t.TempDir()
 	if err := os.WriteFile(filepath.Join(top, "file"), []byte("abc"), 0o644); err != nil {
@@ -230,12 +231,21 @@ func TestSyncEntry(t *testing.T) {
 			t.Errorf("closed: %v", err)
 		}
 	}
-	// A FIFO opens without waiting, and its fsync fails: what that says is the fsync's, not the open's.
+	// A FIFO or a socket put at the name is not what was moved there, and has nothing to sync: its fsync, or its
+	// open, fails with what a failing disk also answers, and whoever can write in that folder would so lose the
+	// disk at will.
 	if err := syscall.Mkfifo(filepath.Join(top, "pipe"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := dir.SyncEntry("pipe"); !errors.Is(err, syscall.EINVAL) || errors.Is(err, ErrNotOpened) {
-		t.Errorf("pipe: %v", err)
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(top, "socket"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	for _, name := range []string{"pipe", "socket"} {
+		if err := dir.SyncEntry(name); !errors.Is(err, ErrNotOpened) || !IsUnreadableName(err) || IsDiskLost(err) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 	var calls []string
 	faulty := Fault(dir, func(call, name string) error {

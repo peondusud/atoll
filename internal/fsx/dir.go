@@ -104,7 +104,7 @@ type Dir interface {
 	// SyncEntry makes durable what the file or folder a name leads to records of itself, its own names
 	// included: on NTFS each keeps them in its own record, which ntfs3 does not write when only the folder
 	// is synced, so that a device failing then leaves neither name (measured). A name it cannot open gives
-	// ErrNotOpened.
+	// ErrNotOpened, and so does one that leads to neither a file nor a folder, which has nothing to sync.
 	SyncEntry(name string) error
 	// CreateFile makes a regular file with a mode, less the umask, and fails on a name that exists: a
 	// copy in progress (specs.md §14.2). Nothing else on a pool disk is ever opened for writing.
@@ -374,8 +374,22 @@ func (d *realDir) Sync() error {
 func (d *realDir) SyncEntry(name string) error {
 	// O_NONBLOCK: a name that has become a FIFO must not hang this. A folder opens as a file does.
 	fd, err := unix.Openat(d.fd(), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
+	switch {
+	case errors.Is(err, unix.ENXIO):
+		// A socket, or a device node with no device behind it: not what was moved there. Its own error is left
+		// out, as a disk that fails answers the same.
+		return fmt.Errorf("open %q: %w: %w", name, ErrNotOpened, ErrNotARegularFile)
+	case err != nil:
 		return fmt.Errorf("open %q: %w: %w", name, ErrNotOpened, err)
+	}
+	// Only a file or a folder has anything to sync. The fsync of a FIFO fails, as that of a failing disk does:
+	// whoever can write in this folder would lose the disk at will by putting one at the name.
+	if st, err := statx(fd, "", unix.AT_EMPTY_PATH); err != nil || (st.Kind != KindFile && st.Kind != KindDir) {
+		closed := unix.Close(fd)
+		if err != nil {
+			return errors.Join(err, closed)
+		}
+		return fmt.Errorf("open %q: %w: %w", name, ErrNotOpened, ErrNotARegularFile)
 	}
 	synced := unix.Fsync(fd)
 	closed := unix.Close(fd)
