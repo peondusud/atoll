@@ -263,7 +263,7 @@ func TestDescribe(t *testing.T) {
 			{ID: "t2", Verdict: disks.Verdict{State: disks.Readonly}, Walked: true, Refused: 12, RefusedFirst: []string{"alice", "bob/mnt"}},
 			{ID: "t7", Verdict: disks.Verdict{State: disks.Online}, Walked: true, Refused: 1, RefusedFirst: []string{"carol"}}},
 		Unopened: map[string][]string{"t7": {"bob.mkv", "dave.mkv"}},
-		Foreign:  []ForeignWorkdir{{ID: "t2", Path: "/mnt/t2/Atoll", UID: 1000, Want: 997}},
+		Foreign:  []ForeignWorkdir{{ID: "t2", Path: "/mnt/t2/Atoll/links", UID: 1000, Want: 997}},
 		Guards:   []jobs.GuardLine{{Disk: "t1", Kind: jobs.GuardDeletions, Count: 40}, {Disk: "t2", Kind: jobs.GuardModifications, Count: 7}},
 		Refused:  Refused{Count: 1, First: []string{"bad\xff"}},
 		Used:     95,
@@ -307,8 +307,8 @@ func TestDescribe(t *testing.T) {
 		{"no-access:t2", 1, "Atoll: 1 name of disk t2 refuses the account Atoll runs as", 3, nil},
 		// The names of both, in byte order: what a walk could not reach, and the files a read could not open.
 		{"no-access:t7", 3, "Atoll: 3 names of disk t7 refuse the account Atoll runs as", 3, []string{"\nbob.mkv\ncarol\ndave.mkv", "or a read could not open them"}},
-		{"workdir-owner:t2", 1, "Atoll: the work folder of disk t2 belongs to another account", 3, []string{
-			"/mnt/t2/Atoll", "the account 1000", "chown -R 997 /mnt/t2/Atoll"}},
+		{"workdir-owner:t2", 1, "Atoll: a folder Atoll works in on disk t2 belongs to another account", 3, []string{
+			"The folder /mnt/t2/Atoll/links, which Atoll works in on disk t2, belongs to the account 1000", "chown -R 997 /mnt/t2/Atoll/links"}},
 	} {
 		m, err := Describe(t.Context(), db, f, Holding{Key: tc.key, Count: tc.count})
 		if err != nil {

@@ -110,6 +110,62 @@ func ForeignWorkdir(d *config.Disk, trusted []uint32) (uid uint32, foreign bool,
 	return uid, !slices.Contains(trusted, uid), nil
 }
 
+// ForeignWork says whether a folder Atoll works in on a disk belongs to an account that is none of those trusted: its
+// work folder, then the tmp/, links/ and trash/ below it, the first of them that does, with where it is from the top
+// of the disk and whose it is (specs.md §10). An account that owns one of the three reads what goes through it, or
+// removes what it holds, whoever owns the work folder above. Each is looked at itself, through a handle on the folder
+// that holds it, and never what a link at its name leads to: below a work folder that is no folder, nothing is looked
+// at. What ForeignWorkdir leaves out, this leaves out.
+func ForeignWork(d *config.Disk, trusted []uint32) (place string, uid uint32, foreign bool, err error) {
+	uid, foreign, err = ForeignWorkdir(d, trusted)
+	if err != nil {
+		return "", 0, false, err
+	}
+	if foreign {
+		return d.Workdir, uid, true, nil
+	}
+	if d.FS == names.NTFS {
+		return "", 0, false, nil
+	}
+	top, err := fsx.OpenDir(d.Mount)
+	if fsx.IsAbsent(err) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("%w", err)
+	}
+	defer func() { _ = top.Close() }()
+	work := top
+	for _, name := range components(d.Workdir) {
+		below, err := work.OpenDir(name)
+		if work != top {
+			_ = work.Close()
+		}
+		if fsx.IsUnreadableName(err) {
+			// None yet, or no folder: nothing below it is Atoll's to look at.
+			return "", 0, false, nil
+		}
+		if err != nil {
+			return "", 0, false, fmt.Errorf("%w", err)
+		}
+		work = below
+	}
+	defer func() { _ = work.Close() }()
+	for _, name := range []string{layout.TmpFolder, layout.LinksFolder, layout.TrashFolder} {
+		st, err := work.Stat(name)
+		if fsx.IsAbsent(err) {
+			continue
+		}
+		if err != nil {
+			return "", 0, false, fmt.Errorf("%w", err)
+		}
+		if !slices.Contains(trusted, st.Uid) {
+			return d.Workdir + "/" + name, st.Uid, true, nil
+		}
+	}
+	return "", 0, false, nil
+}
+
 // ReadMarker reads the disk's Atoll/disk.toml, and says whether there is one.
 func (d *Disk) ReadMarker() (text []byte, found bool, err error) {
 	f, err := d.open(components(d.config.Workdir))

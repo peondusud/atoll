@@ -99,7 +99,8 @@ type Facts struct {
 	Unopened map[string][]string
 }
 
-// ForeignWorkdir is a disk's work folder that another account owns: where it is, whose it is, and whose it should be.
+// ForeignWorkdir is a disk's work folder, or the folder of its parts, of its links or of its trash, that another
+// account owns: where it is, whose it is, and whose it should be.
 type ForeignWorkdir struct {
 	ID   string
 	Path string
@@ -321,10 +322,10 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 				w = f.Foreign[i]
 			}
 		}
-		m.Title = fmt.Sprintf("Atoll: the work folder of disk %s belongs to another account", id)
-		m.Body = fmt.Sprintf("The work folder %s of disk %s belongs to the account %d, which is neither root's nor the one Atoll "+
-			"runs as. That account can read what Atoll copies, through the folders of its parts and of its links, and remove what its "+
-			"trash holds. Atoll goes on writing there. Give the folder back: chown -R %d %s", Shown(w.Path), id, w.UID, w.Want, Shown(w.Path))
+		m.Title = fmt.Sprintf("Atoll: a folder Atoll works in on disk %s belongs to another account", id)
+		m.Body = fmt.Sprintf("The folder %s, which Atoll works in on disk %s, belongs to the account %d, which is neither root's "+
+			"nor the one Atoll runs as. That account can read what Atoll copies, through the folders of its parts and of its links, "+
+			"and remove what its trash holds. Atoll goes on writing there. Give the folder back: chown -R %d %s", Shown(w.Path), id, w.UID, w.Want, Shown(w.Path))
 	case strings.HasPrefix(h.Key, KeySmartFailing):
 		id := strings.TrimPrefix(h.Key, KeySmartFailing)
 		m.Priority = priorityHigh
