@@ -480,7 +480,21 @@ func (l *loop) check(ctx context.Context) {
 		if remountWanted(d, st) {
 			l.remount(ctx, d)
 		}
+		if st.watched && st.state != disks.Missing && d.State != config.DiskFailed && !l.watcher.Alive(d.ID) {
+			l.rearm(ctx, d.ID)
+		}
 	}
+}
+
+// rearm watches again a disk whose watch ended while the disk stayed there: its reader stopped on an error, or the
+// disk was unmounted and mounted again between two checks, which found it mounted both times, while the kernel's
+// marks went with the filesystem that was unmounted (specs.md §15.1). What changed meanwhile was heard by nobody: the
+// disk is looked at whole, as after an overflow, once it is watched again.
+func (l *loop) rearm(ctx context.Context, id string) {
+	l.log.Warn("the watch of a disk ended: it is watched again, and the disk looked at whole", "disk", id)
+	l.unwatch(id)
+	l.watch(ctx, id)
+	l.add(watch.Event{Disk: id, Kind: watch.KindOverflow, Origin: watch.OriginUnknown, AtNS: l.opt.Machine.Now()})
 }
 
 // remountWanted says whether to try the remount of a disk: missing for a reason a USB reset gives, not failed, and

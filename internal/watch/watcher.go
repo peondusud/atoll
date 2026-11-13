@@ -61,6 +61,7 @@ type originSeen struct {
 const originKept = 10 * time.Second
 
 type diskWatch struct {
+	src     source
 	stop    chan struct{}
 	wake    [2]int // a pipe whose write wakes the reader's poll
 	done    chan struct{}
@@ -72,6 +73,10 @@ type source interface {
 	fd() int
 	// drain reads what waits, and gives what it says; an error ends the watch of that disk.
 	drain(buf []byte) ([]change, []int32, error)
+	// alive says whether the source can still hear its disk: false once what it listens through went, with a
+	// filesystem that was unmounted or a root that is another folder now. It is asked from another goroutine than
+	// the one that drains, and reads nothing that one writes.
+	alive() bool
 	close() error
 }
 
@@ -99,22 +104,100 @@ func (w *Watcher) Watch(ctx context.Context, d *config.Disk) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("watch %s: %w", d.ID, err)
 	}
-	dw := &diskWatch{stop: make(chan struct{}), done: make(chan struct{})}
+	if err := w.arm(d.ID, src); err != nil {
+		return "", err
+	}
+	return how, nil
+}
+
+// arm starts reading a source for a disk, and closes it if it cannot.
+func (w *Watcher) arm(id string, src source) error {
+	dw := &diskWatch{src: src, stop: make(chan struct{}), done: make(chan struct{})}
 	if err := unix.Pipe2(dw.wake[:], unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
 		_ = src.close()
-		return "", fmt.Errorf("watch %s: %w", d.ID, err)
+		return fmt.Errorf("watch %s: %w", id, err)
 	}
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
 		_ = src.close()
 		closePipe(dw.wake)
-		return "", fmt.Errorf("watch %s: the watcher is closed", d.ID)
+		return fmt.Errorf("watch %s: the watcher is closed", id)
 	}
-	w.disks[d.ID] = dw
+	w.disks[id] = dw
 	w.mu.Unlock()
-	go w.run(d.ID, src, dw)
-	return how, nil
+	go w.run(id, src, dw)
+	return nil
+}
+
+// Alive says whether a disk is watched and its watch still hears it (specs.md §15.1). A watch ends by itself when
+// its source fails, which it tells with an overflow. And it goes deaf without a word when its disk is unmounted: the
+// kernel drops the marks with the filesystem, and a disk mounted there again is another filesystem to it, which
+// nothing listens to. Whoever keeps a disk watched asks, and watches it again.
+func (w *Watcher) Alive(id string) bool {
+	w.mu.Lock()
+	dw := w.disks[id]
+	w.mu.Unlock()
+	if dw == nil {
+		return false
+	}
+	select {
+	case <-dw.done:
+		return false
+	default:
+	}
+	return dw.src.alive()
+}
+
+// marked says whether a fanotify group still holds a mark, from the head of what the kernel lists of it. It says
+// true when that cannot be read: nothing then says that the marks went.
+func marked(group int) bool {
+	fd, err := unix.Open("/proc/self/fdinfo/"+strconv.Itoa(group), unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = unix.Close(fd) }()
+	// The descriptor's own lines, the group's, then one line a mark: the first mark is within the first lines,
+	// however many follow.
+	buf := make([]byte, 4096)
+	n := 0
+	for n < len(buf) {
+		got, err := unix.Read(fd, buf[n:])
+		switch {
+		case errors.Is(err, unix.EINTR):
+			continue
+		case err != nil:
+			return true
+		}
+		if got <= 0 {
+			break
+		}
+		n += got
+	}
+	return hasMarks(buf[:n])
+}
+
+// hasMarks says whether what /proc/self/fdinfo lists of a fanotify group names a mark: a line of fanotify's that is
+// not the group's own, "fanotify flags:". A mark on an inode, a mount or a filesystem each has such a line.
+func hasMarks(fdinfo []byte) bool {
+	for line := range bytes.SplitSeq(fdinfo, []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("fanotify ")) && !bytes.HasPrefix(line, []byte("fanotify flags:")) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameRoot says whether the folder at a root's path is still the one a source put its first watch on. A root
+// removed and made again, or renamed away for another, leaves the watches on the folder that went.
+func sameRoot(root string, dev, ino uint64) bool {
+	dir, err := fsx.OpenDir(root)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = dir.Close() }()
+	info, err := dir.Info()
+	return err == nil && info.Dev == dev && info.Ino == ino
 }
 
 // Stop stops watching a disk, if it was watched.
@@ -301,6 +384,9 @@ func openFilesystem(root string) (*filesystemSource, error) {
 
 func (s *filesystemSource) fd() int { return s.group }
 
+// alive: the mark is on the filesystem, and goes with it when it is unmounted.
+func (s *filesystemSource) alive() bool { return marked(s.group) }
+
 func (s *filesystemSource) close() error {
 	return unix.Close(s.group)
 }
@@ -376,7 +462,9 @@ type foldersSource struct {
 	group   int
 	root    string
 	mountID uint64
-	tree    *folderTree[string]
+	// rootDev and rootIno are the root's folder as it was marked.
+	rootDev, rootIno uint64
+	tree             *folderTree[string]
 }
 
 func openFolders(ctx context.Context, root string) (*foldersSource, error) {
@@ -396,7 +484,7 @@ func openFolders(ctx context.Context, root string) (*foldersSource, error) {
 		_ = unix.Close(group)
 		return nil, fmt.Errorf("%w", err)
 	}
-	s.mountID = info.MountID
+	s.mountID, s.rootDev, s.rootIno = info.MountID, info.Dev, info.Ino
 	key, err := s.mark(dir)
 	if err != nil {
 		_ = unix.Close(group)
@@ -475,6 +563,12 @@ func eachEntry(ctx context.Context, dir fsx.Dir, mountID uint64, prefix string, 
 }
 
 func (s *foldersSource) fd() int { return s.group }
+
+// alive: the marks are on the folders, and go with their filesystem when it is unmounted; and the root is still the
+// folder that was marked first.
+func (s *foldersSource) alive() bool {
+	return marked(s.group) && sameRoot(s.root, s.rootDev, s.rootIno)
+}
 
 func (s *foldersSource) close() error { return unix.Close(s.group) }
 
