@@ -202,10 +202,11 @@ func scheduleOf(c *config.Config) (schedule, error) {
 
 // waitsForWindow says whether a copy of a file in scheduled mode waits for replication.window: outside it, it stays
 // queued, it counts as waiting, and the pass says when the window opens, so that the daemon wakes then (specs.md
-// §12.3, §14.1).
+// §12.3, §14.1). The copy that takes the place of a stale one waits for none: its file has a copy less until it is
+// made, as the stale one went to the trash at once.
 func (p *pass) waitsForWindow(job *catalog.ReplicateJob, s schedule) bool {
 	size := job.Size
-	if p.config.Policy(job.Path, &size).Mode != "scheduled" {
+	if job.Refresh || p.config.Policy(job.Path, &size).Mode != "scheduled" {
 		return false
 	}
 	now := time.Unix(0, p.now).In(s.location)

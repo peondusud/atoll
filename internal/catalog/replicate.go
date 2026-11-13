@@ -29,6 +29,9 @@ type ReplicateJob struct {
 	// Replaces is the disk whose user copy this copy stands in for, as atoll balance --move-originals makes it: the
 	// copy becomes a user copy, and that one an Atoll copy, when it is recorded (specs.md §13.3).
 	Replaces string
+	// Refresh says that this copy takes the place of a stale one that went to the trash: it waits for no window,
+	// whatever its file's mode (specs.md §12.3, §15.4).
+	Refresh bool
 }
 
 // jobPayload is what a replicate job holds beyond its columns (specs.md §9).
@@ -36,10 +39,11 @@ type jobPayload struct {
 	Part     string `json:"part,omitempty"`
 	Blake3   string `json:"blake3,omitempty"`
 	Replaces string `json:"replaces,omitempty"`
+	Refresh  bool   `json:"refresh,omitempty"`
 }
 
 func (j *ReplicateJob) payload() (string, error) {
-	data := jobPayload{Part: j.Part, Replaces: j.Replaces}
+	data := jobPayload{Part: j.Part, Replaces: j.Replaces, Refresh: j.Refresh}
 	if j.Hash != nil {
 		data.Blake3 = hex.EncodeToString(j.Hash)
 	}
@@ -58,7 +62,7 @@ func (j *ReplicateJob) readPayload(text sql.NullString) error {
 	if err := json.Unmarshal([]byte(text.String), &data); err != nil {
 		return fmt.Errorf("job %d: payload: %w", j.ID, err)
 	}
-	j.Part, j.Replaces = data.Part, data.Replaces
+	j.Part, j.Replaces, j.Refresh = data.Part, data.Replaces, data.Refresh
 	if data.Blake3 != "" {
 		hash, err := hex.DecodeString(data.Blake3)
 		if err != nil || len(hash) != 32 {

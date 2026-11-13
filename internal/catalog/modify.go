@@ -304,8 +304,13 @@ func refreshStale(ctx context.Context, tx *sql.Tx, op *Op, fileID int64) (bool, 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE kind = 'trash' AND file_id = ? AND dst_disk = ?", fileID, op.Disk); err != nil {
 		return false, fmt.Errorf("job: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO jobs(kind, file_id, src_disk, dst_disk, priority, state) VALUES ('replicate', ?, ?, ?, ?, ?)",
-		fileID, src, op.Disk, priority, JobQueued)
+	// The job says what it is, so that it waits for no window (specs.md §12.3).
+	payload, err := (&ReplicateJob{Refresh: true}).payload()
+	if err != nil {
+		return false, err
+	}
+	_, err = tx.ExecContext(ctx, "INSERT INTO jobs(kind, file_id, src_disk, dst_disk, priority, state, payload) VALUES ('replicate', ?, ?, ?, ?, ?, ?)",
+		fileID, src, op.Disk, priority, JobQueued, payload)
 	if err != nil {
 		return false, fmt.Errorf("job: %w", err)
 	}
