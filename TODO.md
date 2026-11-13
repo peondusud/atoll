@@ -68,7 +68,6 @@ Every item here is a **decision**:
 Each point the review left to decide was put to the maintainer as a question, with its options and what each costs. What he chose is below; the reasons and the costs are in the entries of the sections that follow, which stay until each is done. Each is done as any fix: a test that fails first, the spec, DONE.md.
 
 10. **The sync of each file `MakeLink` links** (§17.1): measured first on ext4, XFS and btrfs, as it was on ntfs3, a device failing right after the folder's sync; kept on NTFS alone only if the measure allows.
-14. **The guards of §15.6 stay as they are** for a change of metadata alone and for the copies a refused rename sends to the trash: §15.6 is to say that the guards protect content, which neither destroys.
 16. **The soak of 72 hours** started on 2026-11-13 on `c294b35` was stopped the same evening, after 3 passes: several of the above change the loop it measures. It runs again once they are done and verified.
 
 Left as recommended, with no question put: the jobs read whole, the renames by rounds and the bound on a path's depth, the bursts of the watcher, `cannotLeave` and `GonePaths`; `guard list` is to write as it reads when the local API serves large pools.
@@ -96,7 +95,6 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 
 ### Decisions
 
-- **A change of metadata alone makes the other copies stale outside the guard of modifications**, and **the copies a refused rename sends to the trash are in no guard's window**: both follow the letter of §15.6.
 - **No bound on a path's depth**, which §15.8 says does not bind Atoll: the walk holds a handle a level, and its memory grows as the square of the depth.
 
 ## Phase 1a, the alpha, not started (specs.md §28)
