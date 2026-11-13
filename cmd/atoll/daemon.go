@@ -94,12 +94,20 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 	if !untilIdle && asJSON {
 		return usage(stderr, T("daemon: --json goes with --until-idle"))
 	}
+	// The daemon that runs for good listens for a hangup before it reads anything: one that comes while its
+	// configuration loads, as a disk command run then sends, ends a process that does not listen (specs.md §15.13).
+	var hangups chan os.Signal
+	if !untilIdle {
+		hangups = make(chan os.Signal, 1)
+		signal.Notify(hangups, syscall.SIGHUP)
+		defer signal.Stop(hangups)
+	}
 	c, err := load(configPath)
 	if err != nil {
 		return failure(stderr, err)
 	}
 	if !untilIdle {
-		return runForGood(configPath, c, !dryRun, stderr)
+		return runForGood(configPath, c, !dryRun, stderr, hangups)
 	}
 	buffered := bufio.NewWriter(stdout)
 	var sink daemonSink = &textDaemon{w: buffered}
@@ -129,17 +137,15 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 }
 
 // runForGood runs the daemon until SIGTERM or SIGINT, reading the configuration again on SIGHUP (specs.md
-// §15.13). Atoll never detaches itself: --foreground changes nothing.
-func runForGood(configPath string, c *config.Config, apply bool, stderr io.Writer) int {
+// §15.13), which hangups has given since before the configuration was first read. Atoll never detaches itself:
+// --foreground changes nothing.
+func runForGood(configPath string, c *config.Config, apply bool, stderr io.Writer, hangups <-chan os.Signal) int {
 	machine, err := disks.NewMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	hangups := make(chan os.Signal, 1)
-	signal.Notify(hangups, syscall.SIGHUP)
-	defer signal.Stop(hangups)
 	reload := make(chan struct{}, 1)
 	go func() {
 		for range hangups {
