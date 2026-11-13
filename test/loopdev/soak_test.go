@@ -27,6 +27,25 @@ var (
 	soakFiles = flag.Int("atoll.soak-files", 2000, "the files each disk of TestDaemonSoak starts with")
 )
 
+// sizedVolume makes an ext4 volume for files of a few bytes: 64 MiB holds the soak's default 2,000; past that, blocks of
+// 1 KiB and an inode for each file, its folders and the trash's turnover, as mkfs would give a small volume too few.
+func sizedVolume(t *testing.T, files int) *volume {
+	t.Helper()
+	if files <= 2000 {
+		return newVolume(t, names.Ext4)
+	}
+	inodes := files*6/5 + 50000
+	// 2 KiB a file, a block and its share of the folders, and 256 bytes an inode, past what a small volume needs.
+	mb := int64(64 + (files*2+inodes/4)/1024)
+	return newVolumeSized(t, names.Ext4, mb, "-b", "1024", "-N", strconv.Itoa(inodes))
+}
+
+// firstPassWithin is how long the first pass of a run with files a disk may take: it walks every file of both disks,
+// which in qemu without KVM is slow.
+func firstPassWithin(files int) time.Duration {
+	return 15*time.Minute + time.Duration(files)*10*time.Millisecond
+}
+
 // soakGuards keeps the guards out of the writer's way, a minute's window and counts it never reaches: a soak in which
 // they trip measures a daemon that holds what the writer does and decides nothing more, as the first one did.
 const soakGuards = "[deletes]\ndebounce = \"1s\"\n" +
@@ -85,13 +104,13 @@ func TestDaemonSoak(t *testing.T) {
 	if *soakFor <= 0 {
 		t.Skip("-atoll.soak is not set")
 	}
-	v := newVolume(t, names.Ext4)
+	v := sizedVolume(t, *soakFiles)
 	at := mountPoint(t)
 	mountVolume(t, v, "", at)
 	window := time.Now().Add(-time.Hour).Format("15:04") + "-" + time.Now().Add(2*time.Hour+*soakFor).Format("15:04")
 	// The trash turns over every ten minutes: the writer sends about two copies a second there, each with its own
 	// folders, and a retention of 30 days would fill the inodes of these small disks within the hour.
-	b := newPassBenchGuarded(t, v, at, soakGuards, "[defaults]\nsettle = \"0s\"\n[maintenance]\nwindow = \""+window+"\"\n[trash]\nretention = \"10m\"\n")
+	b := newPassBenchKept(t, sizedVolume(t, *soakFiles), v, at, soakGuards, "[defaults]\nsettle = \"0s\"\n[maintenance]\nwindow = \""+window+"\"\n[trash]\nretention = \"10m\"\n")
 	// The same files on both disks: the first pass finds them in step, and has nothing to copy.
 	for i := range *soakFiles {
 		for _, top := range []string{b.keep, at} {
@@ -104,7 +123,7 @@ func TestDaemonSoak(t *testing.T) {
 		select {
 		case p := <-passes:
 			started = slices.Contains(p.because, daemon.BecauseStart)
-		case <-time.After(15 * time.Minute):
+		case <-time.After(firstPassWithin(*soakFiles)):
 			t.Fatal("no first pass")
 		}
 	}
