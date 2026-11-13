@@ -467,9 +467,9 @@ type mappedVolume struct {
 	name, sectors, real string
 }
 
-func newMapped(t *testing.T, fs names.Filesystem) *mappedVolume {
+func newMapped(t *testing.T, fs names.Filesystem, extra ...string) *mappedVolume {
 	t.Helper()
-	v := newVolume(t, fs)
+	v := newVolume(t, fs, extra...)
 	sectors := must(t, "blockdev", "--getsz", v.device)
 	name := "atoll-" + strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
 	must(t, "dmsetup", "create", "--noudevsync", "--noudevrules", name, "--table", "0 "+sectors+" linear "+v.device+" 0")
