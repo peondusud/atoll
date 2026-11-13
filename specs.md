@@ -1620,7 +1620,7 @@ atoll daemon [--foreground] [--until-idle] [--dry-run]
   - a path where nothing is mounted, a filesystem other than ext4, XFS, btrfs and NTFS, or a disk its mount check finds `missing`, such as one with no `<root>` folder, which Atoll never creates;
   - an identifier another disk of the configuration has, or that the catalog knows under another id;
   - a variant that changes the rules of names: the reasons `ads`, `nocase`, `casefold`, `ascii-ci` and `ignore-case` of §10;
-  - a disk on a physical disk another disk of the configuration lives on (R-06): a partition's disk, and the disks below a device-mapper or md device, followed down, or below a btrfs filesystem; a loop device is its own;
+  - a disk on a physical disk another disk of the configuration lives on (R-06): a partition's disk, and the disks below a device-mapper or md device, followed down, a partition of such a device included, or below a btrfs filesystem; a loop device is its own;
   - a marker of another pool, another disk or another filesystem;
   - on ext4, XFS and btrfs, a `<workdir>` that is there already and belongs to an account that is neither root's, the command's nor the catalog's owner's (§10).
 
