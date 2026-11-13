@@ -255,6 +255,9 @@ func TestReplicateFailures(t *testing.T) {
 		then string
 	}{
 		{"no room", failOn("t2", "write", syscall.ENOSPC), OutcomeNoRoom, "undone", 0, true, OutcomeReplicated},
+		// Making the part can find no room too, with no block or no inode left: the same outcome, and no I/O error.
+		{"no room for the part", failOn("t2", "create", syscall.ENOSPC), OutcomeNoRoom, "undone", 0, true, OutcomeReplicated},
+		{"no room for the part's folder", failOn("t2", "mkdir", syscall.ENOSPC), OutcomeNoRoom, "undone", 0, true, OutcomeReplicated},
 		{"a disk lost while writing", failOn("t2", "write", syscall.EIO), "io-error", "planned", 1, true, OutcomeReplicated},
 		{"a disk lost at the part's sync", failOn("t2", "filesync", syscall.EIO), "io-error", "planned", 1, true, OutcomeReplicated},
 		{"a disk lost at the rename", failOn("t2", "rename", syscall.EIO), "io-error", "planned", 1, true, OutcomeReplicated},

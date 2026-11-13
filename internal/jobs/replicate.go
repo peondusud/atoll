@@ -505,7 +505,11 @@ func (c *copier) openPart(ctx context.Context, resume bool) (*ops.Part, int, err
 		}
 	}
 	part, err := c.dst.MakePart(c.op)
-	if err != nil {
+	switch {
+	case err != nil && isNoRoom(err):
+		// No block or no inode left for the part, or for its folder: no room, as when a write to it finds none.
+		return nil, 0, c.drop(ctx, OutcomeNoRoom, true)
+	case err != nil:
 		return nil, 0, err
 	}
 	if err := catalog.SetCreateKey(ctx, c.r.db, c.op, strconv.FormatUint(part.Stat.Ino, 10)); err != nil {
