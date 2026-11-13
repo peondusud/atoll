@@ -83,7 +83,9 @@ type scrubber struct {
 	repair bool
 	mode   string
 	// remake holds the files a copy of which was repaired whole: replication makes it again once the scrub is over.
-	remake   []string
+	remake []string
+	// run is what the repair of a copy takes from this scrub (specs.md §16.1).
+	run      *repairRun
 	now      int64
 	due      int64 // a copy verified at or before it is due
 	deadline int64
@@ -127,6 +129,7 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 		deadline: now + opts.Budget.Nanoseconds(), buf: make([]byte, integrity.ChunkSize)}
 	s.repair, _ = effective["integrity.auto_repair"].(bool)
 	s.mode, _ = effective["integrity.repair_mode"].(string)
+	s.run = &repairRun{db: db, config: c, machine: m, session: session, apply: true, record: true}
 	out := &ScrubOutcome{Disks: []ScrubDisk{}}
 	spent := false
 	for i := range c.Disks {
@@ -155,6 +158,9 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 		out.Partial = out.Partial || session.Lost()
 		if err := session.Settle(ctx); err != nil {
 			return nil, fmt.Errorf("%w", err)
+		}
+		if err := s.run.callConflicts(ctx); err != nil {
+			return nil, err
 		}
 	}
 	session.Close()
@@ -427,7 +433,11 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 // trash takes no room but its folders', or for anything else that stopped it.
 func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, healthy *trash.Healthy, cp *catalog.ScrubCopy, sd *ScrubDisk) (bool, error) {
 	mode := modeFor(c, s.mode)
-	outcome, _, err := repairCopy(ctx, s.db, s.session, f, c, healthy, cp.Chunks, mode, true, true, s.now)
+	// A copy that changed since the scrub read it is read as it is now, as a repair by hand reads it.
+	outcome, changed, err := s.run.changedCopy(ctx, f, c, cp.Chunks)
+	if err == nil && !changed {
+		outcome, _, err = s.run.repairCopy(ctx, f, c, healthy, cp.Chunks, mode)
+	}
 	if err != nil {
 		return true, err
 	}
@@ -440,6 +450,10 @@ func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catal
 		return true, nil
 	case trash.OutcomeNoRoom, trash.OutcomeIOError:
 		return false, nil
+	case OutcomeConflict:
+		// Another version by now, kept with the others: neither repaired nor moved.
+		sd.Conflict = append(sd.Conflict, cp.Path)
+		return true, nil
 	default:
 		// It reads right after all, or changed, which is for the next pass; or nothing can be moved either, on a disk
 		// that cannot be reached, or under a name its trash refuses.

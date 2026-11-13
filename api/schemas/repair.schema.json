@@ -58,11 +58,12 @@
           "minimum": 0
         },
         "outcome": {
-          "description": "repaired; to-repair without --yes; verified, a copy that reads right after all; no-healthy-copy; changed; name-refused; no-room; disk-unavailable; io-error.",
+          "description": "repaired; to-repair without --yes; verified, a copy that reads right after all, or that changed since it was found corrupt and holds the file's content; conflict, a copy that changed since and holds another content, its file a conflict for atoll conflicts resolve; no-healthy-copy; changed; name-refused; no-room; disk-unavailable; io-error.",
           "enum": [
             "repaired",
             "to-repair",
             "verified",
+            "conflict",
             "no-healthy-copy",
             "changed",
             "name-refused",

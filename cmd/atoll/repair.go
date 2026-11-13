@@ -204,6 +204,8 @@ func repairOutcomeText(outcome string) string {
 		return T("reads right after all")
 	case jobs.OutcomeNoHealthyCopy:
 		return T("no healthy copy to repair it from")
+	case jobs.OutcomeConflict:
+		return T("changed since, and not the file's content: a conflict, for atoll conflicts resolve")
 	default:
 		return outcome
 	}
