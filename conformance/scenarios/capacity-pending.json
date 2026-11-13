@@ -1,0 +1,135 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a713.3, \u00a713.4, \u00a714.1",
+  "description": "A copy queued and not yet made takes its room all the same: its size comes off its disk's free space, as the disk has not seen it yet. The capacity reachable is the same whether the replica is still to plan or waits in the queue for replication.window; at one copy the plan keeps no pending copy, and nothing comes off.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 2000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "timezone = \"UTC\"\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[defaults]\nmode = \"scheduled\"\nsettle = \"0s\"\n[replication]\nwindow = \"02:00-04:00\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "capacity",
+        "--json"
+      ],
+      "stdout_json": {
+        "spread_mode": "prefer",
+        "levels": [
+          {
+            "copies": 1,
+            "theoretical": 2850000,
+            "reachable": 2850000,
+            "stored": 1024,
+            "short": 0
+          },
+          {
+            "copies": 2,
+            "theoretical": 950000,
+            "reachable": 950000,
+            "stored": 1024,
+            "short": 0
+          },
+          {
+            "copies": 3,
+            "theoretical": 0,
+            "reachable": 0,
+            "stored": 0,
+            "short": 1
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, c.state FROM copies c ORDER BY c.disk_id",
+      "rows": [
+        [
+          "t1",
+          "ok"
+        ],
+        [
+          "t2",
+          "pending"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "capacity",
+        "--json"
+      ],
+      "stdout_json": {
+        "spread_mode": "prefer",
+        "levels": [
+          {
+            "copies": 1,
+            "theoretical": 2850000,
+            "reachable": 2850000,
+            "stored": 1024,
+            "short": 0
+          },
+          {
+            "copies": 2,
+            "theoretical": 950000,
+            "reachable": 950000,
+            "stored": 1024,
+            "short": 0
+          },
+          {
+            "copies": 3,
+            "theoretical": 0,
+            "reachable": 0,
+            "stored": 0,
+            "short": 1
+          }
+        ]
+      }
+    }
+  ]
+}
