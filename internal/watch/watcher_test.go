@@ -251,3 +251,62 @@ func TestHasMarks(t *testing.T) {
 		}
 	}
 }
+
+// A folder that appears is opened some time after its event, to be watched and listed. Opened by its path, with a
+// folder above it traded for a symbolic link meanwhile, it was a folder anywhere on the machine: watched, and what it
+// holds told of as new below the root, which a media server is then asked to scan. It is opened from the root, one
+// name at a time, following no link (specs.md §15.1).
+func TestAnArrivingFolderIsOpenedBelowTheRoot(t *testing.T) {
+	top := t.TempDir()
+	root, outside := filepath.Join(top, "media"), filepath.Join(top, "elsewhere")
+	for _, dir := range []string{filepath.Join(root, "d"), filepath.Join(outside, "new")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(outside, "new", "secret"), []byte("s"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := openInotify(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.close() }()
+	var d *folderNode[int32]
+	for _, n := range s.tree.nodes {
+		if p, ok := n.path(); ok && p == "d" {
+			d = n
+		}
+	}
+	if d == nil {
+		t.Fatal("the folder d is not watched")
+	}
+	watched := len(s.tree.nodes)
+	// d is traded for a link that leads elsewhere, between the event of a folder made in it and the look at it.
+	if err := os.Rename(filepath.Join(root, "d"), filepath.Join(root, "d2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "d")); err != nil {
+		t.Fatal(err)
+	}
+	if found := s.arrive(d, "new"); len(found) != 0 || len(s.tree.nodes) != watched {
+		t.Errorf("a folder a link leads to was taken: %+v, %d folders watched for %d", found, len(s.tree.nodes), watched)
+	}
+	// The folder itself, once it is there, is taken, with what it holds.
+	if err := os.Remove(filepath.Join(root, "d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(root, "d2"), filepath.Join(root, "d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "d", "new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "d", "new", "a"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found := s.arrive(d, "new")
+	if len(found) != 1 || found[0] != (change{path: "d/new/a", kind: KindCreated}) || len(s.tree.nodes) != watched+1 {
+		t.Errorf("the folder made there: %+v, %d folders watched for %d", found, len(s.tree.nodes), watched+1)
+	}
+}

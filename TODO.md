@@ -76,7 +76,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Security
 
-- **The watcher opens a folder that arrived by its path** (`arrive`, `internal/watch/watcher.go` and `inotify.go`), with no check of its mount: a parent traded for a link puts the mark on a folder outside the root. Events are hints, so no decision is wrong, but a media server is told the wrong folder.
 - **A work folder that becomes another account's after `disk add` is told of, and still written to** (§10), as the maintainer decided on 2026-11-13: an alert, and nothing stops unattended. What that leaves: the owner of a disk's top can rename `<workdir>` and make another, at any time, and reads what Atoll copies there until someone acts on the alert; and nothing looks at the owner of `tmp/`, `links/` and `trash/` themselves, only at `<workdir>`'s. `links/` and `tmp/` are closed to other accounts when found open.
 - **`init` makes the configuration 0644** whatever the mask, while the spec's own example keeps an ntfy topic in it, which is a secret on a public server; and a schema error quotes the offending string, so a URL mistyped with a password reaches the log.
 

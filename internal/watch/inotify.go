@@ -192,7 +192,7 @@ func (s *inotifySource) arrive(parent *folderNode[int32], name string) []change 
 		return nil
 	}
 	at := join(dirPath, name)
-	sub, err := fsx.OpenDir(path.Join(s.root, at))
+	sub, err := openBelow(s.root, at, s.mountID)
 	if err != nil {
 		return nil
 	}

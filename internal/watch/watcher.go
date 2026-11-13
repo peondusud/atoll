@@ -188,6 +188,35 @@ func hasMarks(fdinfo []byte) bool {
 	return false
 }
 
+// openBelow opens the folder at a logical path below a root, one name at a time and following no symbolic link, and
+// gives it only when it is on the mount the root was watched on. A folder that appears is opened some time after its
+// event: by its path, with a folder above it traded for a link meanwhile, it would be a folder anywhere on the
+// machine, watched and listed as one of the library's (specs.md §15.1).
+func openBelow(root, at string, mountID uint64) (fsx.Dir, error) {
+	dir, err := fsx.OpenDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	for name := range strings.SplitSeq(at, "/") {
+		sub, err := dir.OpenDir(name)
+		_ = dir.Close()
+		if err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+		dir = sub
+	}
+	info, err := dir.Info()
+	if err != nil {
+		_ = dir.Close()
+		return nil, fmt.Errorf("%w", err)
+	}
+	if info.MountID != mountID {
+		_ = dir.Close()
+		return nil, fmt.Errorf("%q is on another mount than its root", at)
+	}
+	return dir, nil
+}
+
 // sameRoot says whether the folder at a root's path is still the one a source put its first watch on. A root
 // removed and made again, or renamed away for another, leaves the watches on the folder that went.
 func sameRoot(root string, dev, ino uint64) bool {
@@ -644,7 +673,7 @@ func (s *foldersSource) arrive(parent *folderNode[string], name string) []change
 		return nil
 	}
 	at := join(dirPath, name)
-	sub, err := fsx.OpenDir(path.Join(s.root, at))
+	sub, err := openBelow(s.root, at, s.mountID)
 	if err != nil {
 		return nil
 	}
