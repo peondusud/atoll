@@ -617,6 +617,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	l.log.Info("a pass ended", "because", because, "seconds", float64(end-start)/1e9, "decisions", sink.decisions,
 		"operations", sink.operations, "waiting", outcome.Waiting, "partial", outcome.Partial, "held", outcome.Held)
 	l.sendAlerts(ctx, due)
+	l.remindAt(due)
 	if l.opt.OnPass != nil {
 		l.opt.OnPass(because, outcome)
 	}
@@ -707,6 +708,18 @@ func (l *loop) sendAlerts(ctx context.Context, due *alerts.Due) {
 		if l.passDue == nil || *l.passDue > retry {
 			l.passDue = &retry
 		}
+	}
+}
+
+// remindAt brings a pass when the next reminder of an alert is due, 24 h after it was last sent (specs.md §23): on a
+// pool where nothing changes, nothing else brings one before the next rescan, and a disk away was told of once.
+func (l *loop) remindAt(due *alerts.Due) {
+	if due == nil || due.RemindNS == 0 {
+		return
+	}
+	if l.passDue == nil || *l.passDue > due.RemindNS {
+		at := due.RemindNS
+		l.passDue = &at
 	}
 }
 

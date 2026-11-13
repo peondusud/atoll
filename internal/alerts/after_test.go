@@ -107,3 +107,41 @@ func TestSendAll(t *testing.T) {
 		t.Errorf("sent %q, a got %q, b got %q, failures %q", sent, a.got, b.got, failures)
 	}
 }
+
+// What a pass leaves says when the next reminder is due: 24 h after the alert of a condition that holds was last
+// sent, the earliest of them, and never with nothing that holds. The daemon comes back then: on a pool where nothing
+// changes no pass was due for days, and the reminder with it (specs.md §23).
+func TestPrepareSaysWhenToRemind(t *testing.T) {
+	db := newCatalog(t, nil)
+	ctx := t.Context()
+	const hour = int64(3600e9)
+	day := Remind.Nanoseconds()
+	due, err := Prepare(ctx, db, missing("t1"), 1000, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if due.RemindNS != 1000+day {
+		t.Errorf("an alert to send now: remind at %d, want %d", due.RemindNS, 1000+day)
+	}
+	if err := Record(ctx, db, due, keys(due)); err != nil {
+		t.Fatal(err)
+	}
+	// Ten hours later another condition begins: the first one's reminder comes first.
+	due, err = Prepare(ctx, db, missing("t1", "t2"), 1000+10*hour, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(keys(due), []string{"disk-missing:t2"}) || due.RemindNS != 1000+day {
+		t.Errorf("ten hours later: %q, remind at %d, want %d", keys(due), due.RemindNS, 1000+day)
+	}
+	if err := Record(ctx, db, due, keys(due)); err != nil {
+		t.Fatal(err)
+	}
+	// Once the first ended, the second's.
+	if due, err = Prepare(ctx, db, missing("t2"), 1000+11*hour, true); err != nil || len(due.Messages) != 0 || due.RemindNS != 1000+10*hour+day {
+		t.Errorf("then: %q, remind at %d, %v", keys(due), due.RemindNS, err)
+	}
+	if due, err = Prepare(ctx, db, missing(), 1000+12*hour, true); err != nil || due.RemindNS != 0 {
+		t.Errorf("with nothing that holds: remind at %d, %v", due.RemindNS, err)
+	}
+}

@@ -16,6 +16,9 @@ const Remind = 24 * time.Hour
 // Due is what a pass leaves to send, in key order, and what to record of each once it went.
 type Due struct {
 	Messages []*Message
+	// RemindNS is when the next reminder of a condition that holds is due, 0 when none holds (specs.md §23): the
+	// daemon comes back then, as nothing else may bring a pass.
+	RemindNS int64
 	rows     map[string]catalog.AlertRow
 }
 
@@ -51,6 +54,14 @@ func Prepare(ctx context.Context, db *sql.DB, f *Facts, nowNS int64, write bool)
 	due := &Due{rows: make(map[string]catalog.AlertRow, len(plan.Store))}
 	for _, s := range plan.Store {
 		due.rows[s.Key] = catalog.AlertRow(s)
+	}
+	// What holds is sent again a day after it last was: what is sent now, a day from now.
+	for _, list := range [][]Stored{plan.Keep, plan.Store} {
+		for _, s := range list {
+			if at := s.SentNS + Remind.Nanoseconds(); due.RemindNS == 0 || at < due.RemindNS {
+				due.RemindNS = at
+			}
+		}
 	}
 	for _, s := range plan.Send {
 		m, err := Describe(ctx, db, f, Holding{Key: s.Key, Count: counts[s.Key]})

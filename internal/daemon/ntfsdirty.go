@@ -29,6 +29,13 @@ func (l *loop) probeDirty(d *config.Disk, st *diskState) {
 		l.log.Warn("the NTFS volume of a missing disk cannot be read", "disk", d.ID, "error", err)
 	case dirty:
 		l.log.Warn("the NTFS volume of a missing disk is marked dirty: repair it with chkdsk on Windows", "disk", d.ID)
+		// A pass works the alert out, as after a reading of SMART that tells of trouble: nothing else brings one for
+		// a disk that stays away, and a dry run sends none.
+		if l.opt.Apply && l.set != nil && len(l.set.channels) > 0 {
+			if now := l.opt.Machine.Now(); l.passDue == nil || *l.passDue > now {
+				l.passDue = &now
+			}
+		}
 	}
 	st.probed, st.dirty = true, dirty
 }
