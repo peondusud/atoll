@@ -67,7 +67,6 @@ Every item here is a **decision**:
 
 Each point the review left to decide was put to the maintainer as a question, with its options and what each costs. What he chose is below; the reasons and the costs are in the entries of the sections that follow, which stay until each is done. Each is done as any fix: a test that fails first, the spec, DONE.md.
 
-4. **A file that cannot be opened for its hash** (§15.10) and says nothing of its disk is `unreadable`, counted in the alert `no-access:<disk>`, and the hashes go on. An I/O error alone stops the disk; a process out of descriptors stops the slice, not the disk.
 5. **The modify step** (§15.13) reads the changed copies after the pass, by slices of 30 s, as the hashes of new files are read; a file is decided only once its changed copy is read.
 6. **A purge** goes by slices of 30 s and reads the entries due through their indexes; `trash purge` by hand stays whole.
 7. **A copy found gone** (invariant 11): the journal is asked first where Atoll moved it, through an index on `ops(disk_id, file_key)`, a migration; the walk of the trash and `tmp/` stays as the fallback.
@@ -87,7 +86,6 @@ Left as recommended, with no question put: the jobs read whole, the renames by r
 
 Each is a **decision**: the code does what the spec says, and the review found what that costs.
 
-- **A file that cannot be opened stops the hashes of its disk** (§15.10). Any error but `ENOENT`, `ELOOP` and `ENOTDIR` stops the reading of a disk, as an I/O error must. One that says nothing of the disk does too: `EACCES`, `ENOKEY` for a file whose key is not loaded, `EMFILE` when the process is out of descriptors. The file stays without a hash, so each slice of the daemon stops at it again, and the files after it in the order of the paths are never hashed on that disk, with nothing to say so. To decide: report such a file as `unreadable` and go on, an I/O error alone stopping the disk.
 - **One transaction for each file hashed** (§15.10), so that an interruption loses little. On 400,000 copies of a few bytes that is 31 minutes in qemu without KVM, 4.7 ms a copy, nearly all of it in commits (§26); on a slow system disk it is one `fsync` a file. To decide: one transaction for the files read within a second, which loses as little of a large file and costs a small one nearly nothing.
 
 ## What the review of the code found, still open (2026-11-13)

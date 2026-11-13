@@ -187,6 +187,9 @@ type loop struct {
 	afterPass bool
 	// hashPending says that files may be waiting for their hash: set by each pass, cleared once none is left.
 	hashPending bool
+	// unopened holds, by disk, the files a read could not open for a reason that says nothing of their disk, in byte
+	// order, until one opens: the alerts after a pass count those that still refuse (specs.md §15.10, §23).
+	unopened map[string][]string
 	// scrubSpent is what the scrub spent in the stretch of its window that began at scrubOpened, and scrubIdle the
 	// stretch in which it found no copy left to read: copies come due again with the next one (specs.md §16).
 	scrubSpent  time.Duration
@@ -687,6 +690,7 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 	if err == nil {
 		facts.Dirty = l.dirtyDisks()
 		facts.Foreign = l.foreignWorkdirs(outcome)
+		facts.Unopened = l.stillUnopened()
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {
@@ -745,16 +749,91 @@ func (l *loop) remindAt(due *alerts.Due) {
 
 // hash reads new files' hashes for a slice of time, under the catalog's lock (specs.md §15.13).
 func (l *loop) hash(ctx context.Context) {
-	left := false
+	var out *watch.HashSlice
 	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		var err error
-		left, err = watch.HashNew(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Machine.Now()+hashSlice.Nanoseconds())
+		out, err = watch.HashNew(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Machine.Now()+hashSlice.Nanoseconds())
 		return nil, err
 	})
-	if err != nil && ctx.Err() == nil {
-		l.log.Warn("reading new files' hashes failed: the next pass tries again", "error", err)
+	if err != nil {
+		if ctx.Err() == nil {
+			l.log.Warn("reading new files' hashes failed: the next pass tries again", "error", err)
+		}
+		l.hashPending = false
+		return
 	}
-	l.hashPending = left && err == nil
+	l.hashPending = out.Left
+	l.keepUnopened(out.Refused)
+}
+
+// unopenedKept is how many files a read could not open the daemon keeps for a disk. Past it, the alert tells of that
+// many: a whole disk that refuses would otherwise be kept name by name.
+const unopenedKept = 1000
+
+// keepUnopened keeps the files a read could not open, by disk, and brings a pass when one is new, whose alerts tell
+// of them (specs.md §15.13, §23): nothing else tells of a file that is never hashed, or of a copy that is never
+// verified. The slices that follow that pass try the same files again, find nothing new, and bring none.
+func (l *loop) keepUnopened(refused map[string][]string) {
+	found := false
+	for id, names := range refused {
+		for _, name := range names {
+			kept := l.unopened[id]
+			at, has := slices.BinarySearch(kept, name)
+			if has || len(kept) >= unopenedKept {
+				continue
+			}
+			if l.unopened == nil {
+				l.unopened = map[string][]string{}
+			}
+			l.unopened[id] = slices.Insert(kept, at, name)
+			found = true
+		}
+	}
+	if found {
+		now := l.opt.Machine.Now()
+		l.passDue = &now
+	}
+}
+
+// stillUnopened asks again of each file kept as one a read could not open, and gives those that still refuse, by
+// disk, for the alerts. One that opens, or whose name is gone, is told of no more, nor is a disk the configuration no
+// longer lists. A disk that is missing says nothing now, and what is known of it is kept.
+func (l *loop) stillUnopened() map[string][]string {
+	told := map[string][]string{}
+	for id, names := range l.unopened {
+		d := l.set.disksByID[id]
+		if d == nil {
+			delete(l.unopened, id)
+			continue
+		}
+		if st := l.disks[id]; st == nil || st.state == disks.Missing {
+			continue
+		}
+		root, err := l.opt.Machine.OpenRoot(d.Mount, d.Root)
+		if err != nil {
+			continue
+		}
+		still := names[:0]
+		for _, name := range names {
+			f, err := fsx.OpenFileAt(root, name)
+			switch {
+			case err == nil:
+				// A file only opened, whose close failing changes nothing.
+				_ = f.Close()
+			case fsx.IsUnreadableName(err):
+			default:
+				still = append(still, name)
+			}
+		}
+		_ = root.Close()
+		if len(still) == 0 {
+			delete(l.unopened, id)
+			continue
+		}
+		l.unopened[id] = still
+		told[id] = still
+	}
+	return told
 }
 
 // scrub reads the copies due for a slice of time, under the catalog's lock, within what is left of the budget of the
@@ -783,10 +862,14 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		return
 	}
 	left, corrupt := false, 0
+	refused := map[string][]string{}
 	for i := range out.Disks {
 		d := &out.Disks[i]
 		left = left || d.Left
 		corrupt += len(d.Corrupt)
+		if len(d.Refused) > 0 {
+			refused[d.ID] = d.Refused
+		}
 		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Changed) > 0 {
 			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "repaired", len(d.Repaired), "quarantined", len(d.Quarantined),
 				"kept", len(d.Kept), "changed", len(d.Changed))
@@ -799,6 +882,7 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		now := l.opt.Machine.Now()
 		l.passDue = &now
 	}
+	l.keepUnopened(refused)
 }
 
 // backup backs the catalog up, under its lock, once for the stretch of maintenance.window that began at opened, and

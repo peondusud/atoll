@@ -63,6 +63,9 @@ type ScrubDisk struct {
 	// Conflict are the copies never verified whose content is not their file's, read again past the cache, size and
 	// times unchanged: another version of the file, which becomes a conflict. Nothing is written to them.
 	Conflict []string
+	// Refused are the copies that could not be opened, for a reason that says nothing of their disk: neither
+	// verified nor corrupt, they stay due (specs.md §16).
+	Refused []string
 	// Left says that copies due were left when the budget ran out.
 	Left bool
 }
@@ -146,7 +149,7 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 				out.Partial = true
 			}
 		}
-		if !sd.Scrubbed && !spent {
+		if !sd.Scrubbed && !spent || len(sd.Refused) > 0 {
 			out.Partial = true
 		}
 		out.Disks = append(out.Disks, sd)
@@ -258,11 +261,21 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 		MtimeNS: sql.NullInt64{Int64: cp.MtimeNS, Valid: true}, CtimeNS: sql.NullInt64{Int64: cp.CtimeNS, Valid: true}, FileKey: cp.FileKey}
 	f, st, err := handle.OpenSource(cp.Path, known)
 	switch {
+	case err == nil:
 	case errors.Is(err, ops.ErrGone):
 		sd.Changed = append(sd.Changed, cp.Path)
 		return false, nil
-	case err != nil:
+	case errors.Is(err, ops.ErrDiskLost):
 		return false, s.lost(ctx, d.ID, err)
+	case fsx.IsOutOfFiles(err):
+		// Nothing else opens either: the scrub stops, and no disk is the worse for it.
+		return false, fmt.Errorf("scrub: %q on %s: %w", cp.Path, d.ID, err)
+	default:
+		// It refuses the account that asks, or its key is not loaded: that says nothing of its disk, whose other
+		// copies are read (specs.md §15.10, §16). Taken for the disk's, it lost the disk at each slice, at this copy.
+		slog.Warn("a copy cannot be opened to verify it", "disk", d.ID, "path", cp.Path, "error", err)
+		sd.Refused = append(sd.Refused, cp.Path)
+		return false, nil
 	}
 	defer func() { _ = f.Close() }()
 	for i := start; i < n; i++ {

@@ -48,7 +48,10 @@ func TestHoldings(t *testing.T) {
 			{ID: "t3", Verdict: disks.Verdict{State: disks.Online}, Walked: true, Refused: 2, RefusedFirst: []string{"p", "q"}},
 			// What a walk that did not end found says nothing.
 			{ID: "t8", Verdict: disks.Verdict{State: disks.Online}, Refused: 5},
+			{ID: "t9", Verdict: disks.Verdict{State: disks.Online}, Walked: true},
 		},
+		// The files a read could not open count with the names a walk could not reach, on a disk that was walked.
+		Unopened: map[string][]string{"t3": {"r", "s", "t"}, "t8": {"z"}, "t9": {"y"}},
 		Guards: []jobs.GuardLine{
 			{Disk: "t3", Kind: jobs.GuardDeletions, Count: 40}, {Disk: "t3", Kind: jobs.GuardModifications, Count: 7},
 			{Disk: "t3", Kind: jobs.GuardDeletions, Count: 41},
@@ -71,7 +74,7 @@ func TestHoldings(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s=%d", h.Key, h.Count))
 	}
 	want := []string{"disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
-		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "no-access:t3=2", "ntfs-dirty:t7=1", "pool-full=1", "smart-failing:t4=1",
+		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "no-access:t3=5", "no-access:t9=1", "ntfs-dirty:t7=1", "pool-full=1", "smart-failing:t4=1",
 		"smart-sectors:t4=10", "smart-sectors:t6=3", "trash-full:t3=1", "workdir-owner:t3=1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)
@@ -256,7 +259,9 @@ func TestDescribe(t *testing.T) {
 	db := newCatalog(t, files)
 	f := &Facts{
 		Disks: []jobs.DiskLine{{ID: "t1", Verdict: disks.Verdict{State: disks.Missing, Message: "nothing is mounted there"}},
-			{ID: "t2", Verdict: disks.Verdict{State: disks.Readonly}, Walked: true, Refused: 12, RefusedFirst: []string{"alice", "bob/mnt"}}},
+			{ID: "t2", Verdict: disks.Verdict{State: disks.Readonly}, Walked: true, Refused: 12, RefusedFirst: []string{"alice", "bob/mnt"}},
+			{ID: "t7", Verdict: disks.Verdict{State: disks.Online}, Walked: true, Refused: 1, RefusedFirst: []string{"carol"}}},
+		Unopened: map[string][]string{"t7": {"bob.mkv", "dave.mkv"}},
 		Foreign:  []ForeignWorkdir{{ID: "t2", Path: "/mnt/t2/Atoll", UID: 1000, Want: 997}},
 		Guards:   []jobs.GuardLine{{Disk: "t1", Kind: jobs.GuardDeletions, Count: 40}, {Disk: "t2", Kind: jobs.GuardModifications, Count: 7}},
 		Refused:  Refused{Count: 1, First: []string{"bad\xff"}},
@@ -299,6 +304,8 @@ func TestDescribe(t *testing.T) {
 		{"no-access:t2", 12, "Atoll: 12 names of disk t2 refuse the account Atoll runs as", 3, []string{"\nalice\nbob/mnt\nand 10 more",
 			"nothing there is copied or verified"}},
 		{"no-access:t2", 1, "Atoll: 1 name of disk t2 refuses the account Atoll runs as", 3, nil},
+		// The names of both, in byte order: what a walk could not reach, and the files a read could not open.
+		{"no-access:t7", 3, "Atoll: 3 names of disk t7 refuse the account Atoll runs as", 3, []string{"\nbob.mkv\ncarol\ndave.mkv", "or a read could not open them"}},
 		{"workdir-owner:t2", 1, "Atoll: the work folder of disk t2 belongs to another account", 3, []string{
 			"/mnt/t2/Atoll", "the account 1000", "chown -R 997 /mnt/t2/Atoll"}},
 	} {

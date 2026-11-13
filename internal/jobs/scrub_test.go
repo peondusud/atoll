@@ -361,3 +361,45 @@ func TestScrubLeavesADiskWithNothingDueAsleep(t *testing.T) {
 		t.Errorf("a scrub with one disk away: %+v", out)
 	}
 }
+
+// A copy the scrub cannot open, for a reason that says nothing of its disk, is left as it is, neither verified nor
+// corrupt, and the scrub of its disk goes on (specs.md §16). It lost the disk, as an I/O error does, at each slice and
+// at the same copy: never verified, such a copy is the first due of its disk.
+func TestAScrubLeavesACopyItCannotOpen(t *testing.T) {
+	for _, refusal := range []error{syscall.EACCES, syscall.ENOKEY} {
+		b := newBench(t, "t1", "t2")
+		for _, id := range []string{"t1", "t2"} {
+			b.write(id, "a.mkv", "a film")
+			b.write(id, "b.mkv", "another")
+		}
+		b.scan(true)
+		b.now += int64(month)
+		b.fail[b.dirs["t1"]] = func(call, name string) error {
+			if call == "openfile" && name == "a.mkv" {
+				return refusal
+			}
+			return nil
+		}
+		out := b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+		t1, t2 := diskOf(out, "t1"), diskOf(out, "t2")
+		if !t1.Scrubbed || t1.Read != 1 || !slices.Equal(t1.Refused, []string{"a.mkv"}) || len(t1.Corrupt)+len(t1.Changed)+len(t1.Kept) != 0 {
+			t.Fatalf("%v: t1 %+v", refusal, t1)
+		}
+		if !t2.Scrubbed || t2.Read != 2 || len(t2.Refused) != 0 {
+			t.Errorf("%v: t2 %+v", refusal, t2)
+		}
+		// Not everything due was read: the command says so by its exit, as for a disk it could not read.
+		if !out.Partial {
+			t.Errorf("%v: a scrub that could not open a copy says it read all that was due", refusal)
+		}
+		if got := b.count("SELECT count(*) FROM disks WHERE state = 'missing'"); got != 0 {
+			t.Errorf("%v: %d disks recorded as missing", refusal, got)
+		}
+		if got := b.count("SELECT count(*) FROM copies WHERE state <> 'ok'"); got != 0 {
+			t.Errorf("%v: %d copies are no longer ok", refusal, got)
+		}
+		if got := b.count("SELECT count(*) FROM copies WHERE verified_ns >= ?", b.now); got != 3 {
+			t.Errorf("%v: %d copies verified by this scrub, want every one but the one refused", refusal, got)
+		}
+	}
+}

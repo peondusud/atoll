@@ -66,8 +66,8 @@ func TestScale(t *testing.T) {
 	measure("the first pass, which finds every copy", func() { b.pass() })
 	measure("a scan with every copy known", func() { b.scan(false) })
 	measure("reading the hash of every copy", func() {
-		if left, err := watch.HashNew(t.Context(), b.db, b.config, b.machine, math.MaxInt64); err != nil || left {
-			t.Fatalf("%v, %v", left, err)
+		if out, err := watch.HashNew(t.Context(), b.db, b.config, b.machine, math.MaxInt64); err != nil || out.Left {
+			t.Fatalf("%+v, %v", out, err)
 		}
 	})
 	measure("a pass with nothing to do", func() {

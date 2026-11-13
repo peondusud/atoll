@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"slices"
 	"strconv"
@@ -52,7 +53,8 @@ type Report struct {
 	OtherMounts []string
 	// Refused holds the names of Unreadable that refused the account that asked, EACCES, in the walk's order: what
 	// lasts until someone gives the right, where a name that went during the walk is there again at the next
-	// (specs.md §15.10). An alert says so (§23); the output of a scan lists them with the others.
+	// (specs.md §15.10). An alert says so (§23); the output of a scan lists them with the others. The files that could
+	// not be opened for their hash, for a reason that says nothing of their disk, come after them.
 	Refused []string
 	// Seen holds the verdict about each copy that is not as its row says, by file id, and FolderMoves
 	// the folders renamed: what a pass decides on (specs.md §15.12).
@@ -979,15 +981,24 @@ func hashCopies(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 	return nil
 }
 
+// HashSlice is what a slice of the hashes of new files says (specs.md §15.13).
+type HashSlice struct {
+	// Left says that it stopped at its time with files left to read.
+	Left bool
+	// Refused holds, by disk, the files it could not open, for a reason that says nothing of their disk, in the order
+	// it tried them: the alert no-access counts them (specs.md §23).
+	Refused map[string][]string
+}
+
 // HashNew reads the copies of the files that have no hash yet, on the disks that pass their mount check, until
-// the time until; it says whether it stopped there with some left (specs.md §15.13). It walks nothing: a copy
-// that is no longer what its row says is left as it is, for the next pass to look at, and so is one on a disk
-// that fails.
-func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64) (left bool, err error) {
+// the time until; it says whether it stopped there with some left, and which files it could not open (specs.md
+// §15.13). It walks nothing: a copy that is no longer what its row says is left as it is, for the next pass to look
+// at, and so is one on a disk that fails.
+func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64) (*HashSlice, error) {
 	now := m.Now()
 	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
 	if err != nil {
-		return false, fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 	readers := make(map[string]*diskReader, len(c.Disks))
 	defer func() {
@@ -1008,21 +1019,31 @@ func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine,
 		}
 		readers[d.ID] = reader
 	}
+	out := &HashSlice{Refused: map[string][]string{}}
+	said := func() *HashSlice {
+		for id, r := range readers {
+			if len(r.report.Refused) > 0 {
+				out.Refused[id] = r.report.Refused
+			}
+		}
+		return out
+	}
 	files := catalog.NewFileReader(db)
 	for {
 		page, err := files.NextUnhashed(ctx)
 		if err != nil {
-			return false, fmt.Errorf("catalog: %w", err)
+			return nil, fmt.Errorf("catalog: %w", err)
 		}
 		if len(page) == 0 {
-			return false, nil
+			return said(), nil
 		}
 		for i := range page {
 			if m.Now() >= until {
-				return true, nil
+				out.Left = true
+				return said(), nil
 			}
 			if err := hashFile(ctx, db, &page[i], readers, order, now); err != nil {
-				return false, err
+				return nil, err
 			}
 		}
 	}
@@ -1193,16 +1214,29 @@ func hashFile(ctx context.Context, db *sql.DB, f *catalog.FileRow, readers map[s
 }
 
 // readCopy reads one copy to its end. It says false when that gives no hash to use: the name can
-// no longer be reached, or the copy moved during the read, or the disk stopped answering. Only a
-// canceled context is an error.
+// no longer be reached, or cannot be opened, or the copy moved during the read, or the disk stopped
+// answering. Only a canceled context is an error, and a process that can open no more files.
 func readCopy(ctx context.Context, reader *diskReader, path string, cp *catalog.CopyRow) (copyHash, bool, error) {
 	file, err := fsx.OpenFileAt(reader.root, path)
 	switch {
+	case err == nil:
 	case fsx.IsUnreadableName(err):
 		reader.report.Unreadable = append(reader.report.Unreadable, path)
 		return copyHash{}, false, nil
-	case err != nil:
+	case fsx.IsDiskLost(err):
+		// An I/O error alone says that the disk cannot be relied on (invariant 4).
 		reader.fail(err)
+		return copyHash{}, false, nil
+	case fsx.IsOutOfFiles(err):
+		// Nothing else opens either, on this disk or another: the reading stops, and no disk is the worse for it.
+		return copyHash{}, false, fmt.Errorf("read %q on %s: %w", path, reader.report.ID, err)
+	default:
+		// It refuses the account that asks, as EACCES, or its key is not loaded, ENOKEY: that says nothing of its
+		// disk, whose other files are read. It stopped them, and each slice of the daemon stopped at it again, the
+		// files after it never hashed, with nothing to say so (specs.md §15.10).
+		slog.Warn("a file cannot be opened to read it: it stays without a hash", "disk", reader.report.ID, "path", path, "error", err)
+		reader.report.Unreadable = append(reader.report.Unreadable, path)
+		reader.report.Refused = append(reader.report.Refused, path)
 		return copyHash{}, false, nil
 	}
 	// A file only read, whose close failing changes nothing that was read from it.
