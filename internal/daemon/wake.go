@@ -45,6 +45,9 @@ type WakeInput struct {
 	Location      *time.Location
 	// HashPending says that files may be waiting for their hash, which is read inside the window.
 	HashPending bool
+	// ChangedPending says that the last pass left files whose changed copies must be read to be decided, which they
+	// are at any time (specs.md §15.4).
+	ChangedPending bool
 	// ScrubPending says that copies may be due for the scrub, which reads them inside ScrubWindow, integrity.window,
 	// ScrubBudgetNS a stretch of it (specs.md §16). ScrubSpentNS is what the stretch that began at
 	// ScrubSpentOpenedNS spent: a stretch begun at another time has a budget of its own.
@@ -64,14 +67,15 @@ type WakeInput struct {
 	BalanceDueNS *int64
 }
 
-// WakeOutput says what to do now, and when to look again. Notify says to tell the media servers of the folders that
-// changed, once any check and pass due are done; Smart to read the disks' SMART, after that; Balance to balance, after
-// that; Hash to read new files' hashes, after that; Backup to back the catalog up, when there is no hash to read; and
-// Scrub to scrub, when there is neither. ScrubOpenedNS is when the stretch of the scrub's window that holds now began,
-// 0 outside it or with no scrub pending.
+// WakeOutput says what to do now, and when to look again. Read says to read the changed copies the last pass left, once
+// any check and pass due are done; Notify to tell the media servers of the folders that changed, after that; Smart to
+// read the disks' SMART, after that; Balance to balance, after that; Hash to read new files' hashes, after that; Backup
+// to back the catalog up, when there is no hash to read; and Scrub to scrub, when there is neither. ScrubOpenedNS is
+// when the stretch of the scrub's window that holds now began, 0 outside it or with no scrub pending.
 type WakeOutput struct {
 	Check         bool
 	Because       []string
+	Read          bool
 	Notify        bool
 	Smart         bool
 	Balance       bool
@@ -128,6 +132,7 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 		}
 		earliest(in.Window.Next(time.Unix(0, max(at, now)).In(in.Location)).UnixNano())
 	}
+	out.Read = in.ChangedPending
 	if in.NotifyDueNS != nil {
 		if *in.NotifyDueNS <= now {
 			out.Notify = true
@@ -180,7 +185,7 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 			earliest(in.ScrubWindow.Next(opened.AddDate(0, 0, 1)).UnixNano())
 		}
 	}
-	other := out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub
+	other := out.Read || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub
 	// Right after a pass, another step due runs before a pass for events or next_due alone, which keeps them for the
 	// turn after it: passes that each take longer than the changes take to come, as on a large pool, would otherwise
 	// follow one another for as long as the changes do, and nothing else would ever run. A pass for any other reason

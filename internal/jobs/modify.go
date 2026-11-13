@@ -10,10 +10,13 @@ import (
 	"strings"
 
 	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/solver"
+	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -156,7 +159,8 @@ func (p *pass) modifyFile(ctx context.Context, finder *catalog.FileFinder, id in
 		return err
 	}
 	// Held by the mass-modification guard of its disk: nothing is read until someone answers (specs.md §15.6).
-	if first := firstChanged(in); first != nil && p.heldBefore(first.Disk, ctimes[first.Disk]) {
+	first := firstChanged(in)
+	if first != nil && p.heldBefore(first.Disk, ctimes[first.Disk]) {
 		p.out.Held = true
 		return nil
 	}
@@ -181,6 +185,15 @@ func (p *pass) modifyFile(ctx context.Context, finder *catalog.FileFinder, id in
 		}
 		if d.Kind != solver.ModRead {
 			break
+		}
+		if p.later {
+			// This pass reads no file whole: the file is decided by the slices that follow it (specs.md §15.13).
+			pending := PendingRead{FileID: f.ID}
+			if first != nil {
+				pending.AnswerID = p.answerOver(first.Disk, ctimes[first.Disk])
+			}
+			p.out.ToRead = append(p.out.ToRead, pending)
+			return nil
 		}
 		for _, disk := range d.Read {
 			at := slices.IndexFunc(in.Copies, func(c solver.ModCopy) bool { return c.Disk == disk })
@@ -373,4 +386,140 @@ func (o *overwrite) operation(disk string, unavailable bool) Operation {
 		op.Outcome = OutcomeUnavailable
 	}
 	return op
+}
+
+// ReadChanged decides the files a pass left to read, in their order, until the time until, and gives those it had no
+// time for (specs.md §15.4, §15.13). Each is decided as a pass decides it: its copies looked at again, the changed ones
+// read, with what they are compared with, the mass-modification guard asked, the decision recorded, and a change of
+// metadata applied to the other copies. The copies it makes stale are for the pass that follows: it runs no job.
+func ReadChanged(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, sink Sink, pending []PendingRead, until int64) (out *Outcome, left []PendingRead, err error) {
+	p := newPass(db, c, m, true, sink, nil)
+	if err := p.readSettings(); err != nil {
+		return nil, nil, err
+	}
+	session, err := trash.Open(ctx, db, c, m, true)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w", err)
+	}
+	defer session.Close()
+	p.session = session
+	planned, err := catalog.PlannedOps(ctx, db)
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		if d.State == config.DiskFailed {
+			continue
+		}
+		if p.rows[d.ID], err = catalog.CopyCount(ctx, db, d.ID); err != nil {
+			return nil, nil, fmt.Errorf("catalog: %w", err)
+		}
+		p.planned[d.ID] = plannedOn(planned, d.ID)
+	}
+	if err := p.readModifyGuards(ctx); err != nil {
+		return nil, nil, err
+	}
+	finder, err := catalog.NewFileFinder(ctx, db)
+	if err != nil {
+		return nil, nil, fmt.Errorf("catalog: %w", err)
+	}
+	defer func() {
+		if closeErr := finder.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("catalog: %w", closeErr))
+		}
+	}()
+	positions, err := p.positions(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	left = pending
+	for len(left) > 0 && m.Now() < until {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, fmt.Errorf("modify: %w", err)
+		}
+		next := left[0]
+		left = left[1:]
+		p.takenUnder = next.AnswerID
+		if err := p.lookAtFile(ctx, finder, next.FileID); err != nil {
+			return nil, nil, err
+		}
+		if err := p.modifyFile(ctx, finder, next.FileID, positions); err != nil {
+			return nil, nil, err
+		}
+		if p.sinkErr != nil {
+			return nil, nil, p.sinkErr
+		}
+	}
+	if err := p.sortGuards(ctx); err != nil {
+		return nil, nil, err
+	}
+	p.listMetaOps()
+	if p.sinkErr != nil {
+		return nil, nil, p.sinkErr
+	}
+	if err := session.Finish(ctx); err != nil {
+		return nil, nil, fmt.Errorf("%w", err)
+	}
+	p.out.Waiting, p.out.NextDue = p.copiesWaiting, p.copiesDue
+	p.out.Partial = p.out.Partial || session.Lost()
+	return p.out, left, nil
+}
+
+// lookAtFile looks at each copy of a file where it sits, as a walk would, for a slice of reads: what a pass found of
+// it may be hours old by the time its slice comes. A copy that is no longer at its name is gone, as far as this look
+// can tell, which leaves its file to the next pass; so does a copy this slice cannot get to.
+func (p *pass) lookAtFile(ctx context.Context, finder *catalog.FileFinder, id int64) error {
+	clear(p.seen)
+	clear(p.walked)
+	f, err := finder.ByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	if f == nil {
+		return nil
+	}
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		if c.State == string(solver.CopyPending) {
+			continue
+		}
+		handle, err := p.session.Handle(ctx, c.Disk)
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		if handle == nil {
+			continue
+		}
+		place := c.Place(f)
+		seen := watch.CopySeen{FileID: f.ID, Verdict: solver.VerdictUnknown}
+		st, there, err := handle.StatRoot(place)
+		switch {
+		case errors.Is(err, ops.ErrDiskLost):
+			if err := p.loseRead(ctx, c.Disk, err); err != nil {
+				return err
+			}
+			continue
+		case err != nil:
+			slog.Warn("a copy could not be looked at", "disk", c.Disk, "path", place, "error", err)
+		case !there:
+			seen.Verdict = solver.VerdictGone
+		case st.Kind != fsx.KindFile:
+			seen.Verdict = solver.VerdictReplaced
+		default:
+			found, err := watch.FileFrom(place, &st)
+			if err != nil {
+				break
+			}
+			known := catalog.KnownCopy{Path: place, FilePath: f.Path, FileID: f.ID, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, BtimeNS: c.BtimeNS, FileKey: c.FileKey}
+			look := watch.FoundLook(&found)
+			seen.Verdict, _ = solver.VerdictOf(&solver.VerdictInput{Row: watch.RowLook(&known), AtName: &look})
+			seen.CtimeNS, seen.Nlink, seen.Regular = found.CtimeNS, found.Nlink, true
+		}
+		p.walked[c.Disk] = true
+		if seen.Verdict != solver.VerdictThere {
+			p.seen[c.Disk] = []watch.CopySeen{seen}
+		}
+	}
+	return nil
 }

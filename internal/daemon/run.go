@@ -187,6 +187,10 @@ type loop struct {
 	afterPass bool
 	// hashPending says that files may be waiting for their hash: set by each pass, cleared once none is left.
 	hashPending bool
+	// toRead holds the files the last pass left to read before they are decided, and readDecided says that a slice of
+	// those reads left something for a pass since: copies made stale, a guard tripped, a disk lost (specs.md §15.13).
+	toRead      []jobs.PendingRead
+	readDecided bool
 	// unopened holds, by disk, the files a read could not open for a reason that says nothing of their disk, in byte
 	// order, until one opens: the alerts after a pass count those that still refuse (specs.md §15.10, §23).
 	unopened map[string][]string
@@ -313,7 +317,7 @@ func (l *loop) run(ctx context.Context) error {
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
 			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
-			HashPending: l.hashPending && l.opt.Apply,
+			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
@@ -335,9 +339,13 @@ func (l *loop) run(ctx context.Context) error {
 			l.afterPass = true
 			continue
 		}
-		if out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+		if out.Read || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
 			// The turn another step has after a pass.
 			l.afterPass = false
+		}
+		if out.Read {
+			l.readChanged(ctx)
+			continue
 		}
 		if out.Notify {
 			l.tell(ctx)
@@ -589,7 +597,8 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	sink := &passSink{folders: map[string]bool{}}
 	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
-		outcome, err := jobs.RunClosed(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
+		// A pass reads no file whole: what must be read to be decided is read after it, by slices (specs.md §15.13).
+		outcome, err := jobs.RunLater(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
 		if err != nil {
 			return nil, err
 		}
@@ -628,6 +637,8 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	l.queueFolders(sink.folders)
 	l.passDue = nil
 	l.hashPending = true
+	// What this pass left to read is all there is to read: what an earlier one left and is still changed, it found again.
+	l.toRead, l.readDecided = outcome.ToRead, false
 	if outcome.NextDue.Valid {
 		next := outcome.NextDue.Int64
 		l.passDue = &next
@@ -744,6 +755,49 @@ func (l *loop) remindAt(due *alerts.Due) {
 	if l.passDue == nil || *l.passDue > due.RemindNS {
 		at := due.RemindNS
 		l.passDue = &at
+	}
+}
+
+// readChanged reads, for a slice of time and under the catalog's lock, the changed copies the last pass left, and
+// decides their files as a pass would have (specs.md §15.4, §15.13). A slice runs no job: once nothing is left to read,
+// a pass follows when a slice left it something, the copies a modification made stale, a guard that tripped or a disk
+// lost, and its alerts with it. What a slice could not decide is the next pass's to find again.
+func (l *loop) readChanged(ctx context.Context) {
+	sink := &passSink{folders: map[string]bool{}}
+	var left []jobs.PendingRead
+	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
+		outcome, rest, err := jobs.ReadChanged(ctx, db, l.opt.Config, l.opt.Machine, sink, l.toRead, l.opt.Machine.Now()+hashSlice.Nanoseconds())
+		left = rest
+		return outcome, err
+	})
+	now := l.opt.Machine.Now()
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		// The pass finds again what is still changed.
+		l.toRead = nil
+		retry := now + retryAfter.Nanoseconds()
+		if l.passDue == nil || *l.passDue > retry {
+			l.passDue = &retry
+		}
+		l.log.Warn("reading the changed copies failed: a pass tries again", "error", err)
+		return
+	}
+	l.queueFolders(sink.folders)
+	l.toRead = left
+	l.readDecided = l.readDecided || sink.decisions > 0 || outcome.Held || outcome.Partial
+	if sink.decisions > 0 || sink.operations > 0 || outcome.Held {
+		l.log.Info("changed copies were read", "decisions", sink.decisions, "operations", sink.operations, "left", len(left), "waiting", outcome.Waiting,
+			"partial", outcome.Partial, "held", outcome.Held)
+	}
+	if outcome.NextDue.Valid && (l.passDue == nil || *l.passDue > outcome.NextDue.Int64) {
+		next := outcome.NextDue.Int64
+		l.passDue = &next
+	}
+	if len(left) == 0 && l.readDecided {
+		l.readDecided = false
+		l.passDue = &now
 	}
 }
 

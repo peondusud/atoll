@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"log/slog"
 	"maps"
 	"os"
@@ -9,11 +10,13 @@ import (
 	"strconv"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -137,5 +140,88 @@ func TestWhatStillRefusesIsStillToldOf(t *testing.T) {
 	l.disks["t1"].state = disks.Missing
 	if got := l.stillUnopened(); len(got) != 0 || len(l.unopened["t1"]) != 1 {
 		t.Errorf("a missing disk: told of %v, kept %v", got, l.unopened)
+	}
+}
+
+// The daemon's pass reads no file whole (specs.md §15.13): a copy touched, whose content must be read to tell a
+// change of metadata from an edit, is left by the pass, read by the slice that follows it, and its time reaches the
+// other copy there, with no pass in between.
+func TestTheDaemonReadsChangedCopiesAfterItsPass(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "catalog.db")
+	text := "pool_id = \"p\"\ncatalog = " + strconv.Quote(file) + "\n[view]\nmount = " + strconv.Quote(filepath.Join(dir, "pool")) + "\n[defaults]\nsettle = \"0s\"\n"
+	for i, id := range []string{"t1", "t2"} {
+		mount := filepath.Join(dir, id)
+		if err := os.MkdirAll(filepath.Join(mount, "media"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(mount, "media", "a"), []byte("a film"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		text += "[[disk]]\nid = " + strconv.Quote(id) + "\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3" + strconv.Itoa(i) + "\"\nmount = " + strconv.Quote(mount) + "\nfs = \"ext4\"\n"
+	}
+	c, err := config.Parse([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
+		t.Fatal(err)
+	}
+	m := &refusingDisks{folderDisks: folderDisks{list: c.Disks}}
+	db, err := catalog.OpenPool(t.Context(), file, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := watch.Scan(t.Context(), db, c, m, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	touched := time.Unix(1_700_000_000, 0)
+	if err := os.Chtimes(filepath.Join(dir, "t1", "media", "a"), touched, touched); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	type passed struct {
+		because []string
+		toRead  int
+	}
+	passes := make(chan passed, 16)
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, Options{Config: c, Machine: m, Apply: true, Log: slog.New(slog.DiscardHandler), CheckEvery: 50 * time.Millisecond, Inotify: true,
+			OnPass: func(because []string, o *jobs.Outcome) { passes <- passed{because, len(o.ToRead)} }})
+	}()
+	select {
+	case first := <-passes:
+		if !slices.Equal(first.because, []string{BecauseStart}) || first.toRead != 1 {
+			t.Fatalf("the first pass: %+v, want one file left to read", first)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("no first pass")
+	}
+	// The slice applies the time to the other copy, and a pass follows it, as it decided something.
+	select {
+	case next := <-passes:
+		if !slices.Contains(next.because, BecauseDue) || next.toRead != 0 {
+			t.Errorf("the pass after the slice: %+v", next)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("no pass after the slice")
+	}
+	info, err := os.Stat(filepath.Join(dir, "t2", "media", "a"))
+	if err != nil || !info.ModTime().Equal(touched) {
+		t.Errorf("the other copy's time is %v, %v", info.ModTime(), err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("stopped: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("did not stop")
 	}
 }
