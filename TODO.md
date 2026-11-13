@@ -89,7 +89,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 - **A run reads the clock once**: `not_before_ns` after `changed`, `verified_ns` and the window of a scheduled copy are judged at the start of the pass or the command (`internal/jobs/replicate.go`, `passcopies.go`, `balance.go`).
 - **`atoll capacity` does not take the pending copies off the free space** (`internal/watch/capacity.go`), against §13.3.
 - **The disk commands read the configuration before they wait for the catalog's lock** (`cmd/atoll/diskadd.go`, `diskstate.go`): the second of two fails with "the file changed since it was read". A failure after the rename of the configuration says "unchanged" (`internal/fsx/replace.go`).
-- **The walk's handle is never compared with the mount that was confirmed** (`internal/watch/scan.go`), against §10.
 - **A partition's parent is not followed down** (`internal/fsx/topology.go`, `disksBelow`): a filesystem on `md0p1` is not seen to share a disk with one on `sda3`, against R-06.
 
 ### Performance

@@ -291,16 +291,49 @@ func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, er
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
 	}
+	opened, err := root.Info()
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
 	walked, err := Walk(ctx, root)
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = root.Close()
 	if err != nil {
 		return walked, err
 	}
+	if err := walkedTheDisk(m, d, &opened); err != nil {
+		return nil, err
+	}
 	if err := withoutOwnLinks(m, d, walked); err != nil {
 		return nil, err
 	}
 	return walked, nil
+}
+
+// walkedTheDisk says whether the folder a walk read is the root of the disk mounted at its mount point, once it is
+// read (specs.md §10). A walk opens its root by its path, some time after the check that found the disk: a disk
+// unmounted in between leaves its mount point, and whatever folder sits at the root's path there was read in its
+// place, every file of the disk absent from it. A disk mounted again before those absences are confirmed would then
+// pass its confirmation, for a walk of another folder. So the mount check must hold now, and the mount point, and
+// the root's path, must still lead to the mount and the folder the walk held open. Anything else is an interrupted
+// walk, which says nothing of the disk (invariant 4).
+func walkedTheDisk(m disks.Machine, d *config.Disk, opened *fsx.Stat) error {
+	if v := disks.Check(m, d); v.State == disks.Missing {
+		return fmt.Errorf("%w: after the walk, %s: %s", ErrInterrupted, v.Reason, v.Message)
+	}
+	top, err := fsx.StatPath(d.Mount)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
+	now, err := fsx.StatPath(path.Join(d.Mount, d.Root))
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInterrupted, err)
+	}
+	if top.MountID != opened.MountID || now.MountID != opened.MountID || now.Dev != opened.Dev || now.Ino != opened.Ino {
+		return fmt.Errorf("%w: the folder that was walked is not the root of what is mounted at %q now", ErrInterrupted, d.Mount)
+	}
+	return nil
 }
 
 // withoutOwnLinks takes the link guard's links out of the count of names of each file a walk found: they are Atoll's,
