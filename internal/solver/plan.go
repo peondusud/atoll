@@ -180,6 +180,10 @@ func makePlan(in Input, each func(file int, jobs []Job) error) (Plan, error) {
 	}
 	order := slices.Clone(p.files)
 	slices.SortFunc(order, compareFiles)
+	// The pending copies first, in the order of the files: what each keeps is no longer there for the next.
+	for _, f := range order {
+		p.holdRoom(f)
+	}
 	var plan Plan
 	give := func(f *planFile) error {
 		if each == nil || len(plan.Jobs) == 0 {
@@ -536,8 +540,8 @@ type countedCopy struct {
 	disk *planDisk
 }
 
-// keep chooses the copies that stay when more count than the level (specs.md §13.4),
-// sets their marks, and takes the size of each pending one off its disk.
+// keep chooses the copies that stay when more count than the level (specs.md §13.4), and sets their marks. The room
+// of a pending copy it keeps is held once every file is read: holdRoom.
 func (f *planFile) keep(counted []countedCopy) {
 	byRank := slices.Clone(counted)
 	slices.SortFunc(byRank, func(a, b countedCopy) int { return compareKeep(a, b, f.Placement) })
@@ -568,12 +572,46 @@ func (f *planFile) keep(counted []countedCopy) {
 			f.mark().cancel = append(f.mark().cancel, c.disk)
 		case kept && c.copy.State == CopyPending:
 			f.pending++
-			c.disk.room = subtract(c.disk.room, f.Size)
 		}
 		// A pending copy the plan has just canceled is no copy the file reaches: counted, a file left with one copy
 		// that can be read, beside one on a disk away, was not degraded until the next plan.
 		if c.disk.State != DiskMissing && (kept || c.copy.State != CopyPending) {
 			f.reached++
+		}
+	}
+}
+
+// holdRoom takes the size of each pending copy a file keeps off its disk, by position, when the file fits in what that
+// disk has left after min_free. One that does not fit is canceled, and counts no more: its file is then below its
+// level, and is placed again as any other, on a disk with room, or waits there (specs.md §12.4, §13.4). Kept whatever
+// room was left, a copy queued while there was room was written later into the reserve of min_free.
+func (p *planner) holdRoom(f *planFile) {
+	if f.pending == 0 {
+		return
+	}
+	var kept []*planDisk
+	for i := range f.Copies {
+		if d := p.byID[f.Copies[i].Disk]; f.Copies[i].State == CopyPending && slices.Contains(f.counted, d) {
+			kept = append(kept, d)
+		}
+	}
+	slices.SortFunc(kept, func(a, b *planDisk) int { return cmp.Compare(a.Position, b.Position) })
+	canceled := false
+	for _, d := range kept {
+		if f.Size <= d.room {
+			d.room = subtract(d.room, f.Size)
+			continue
+		}
+		canceled = true
+		f.pending--
+		f.reached--
+		f.counted = slices.DeleteFunc(f.counted, func(o *planDisk) bool { return o == d })
+		f.mark().cancel = append(f.mark().cancel, d)
+	}
+	if canceled {
+		f.covered = f.covered[:0]
+		for _, d := range f.counted {
+			f.covered = appendNew(f.covered, d.domain)
 		}
 	}
 }

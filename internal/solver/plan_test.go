@@ -454,11 +454,19 @@ func checkPlan(t *testing.T, round int, in Input, plan Plan) {
 	for i := range plan.Results {
 		results[plan.Results[i].Path] = &plan.Results[i]
 	}
+	kept := map[string]bool{}
 	for _, f := range in.Files {
 		for _, c := range f.Copies {
 			if c.State == CopyPending && !slices.Contains(results[f.Path].Cancel, c.Disk) {
 				room[c.Disk] -= f.Size
+				kept[c.Disk] = true
 			}
+		}
+	}
+	// A pending copy is kept only while min_free holds (specs.md §12.4, §13.4).
+	for id := range kept {
+		if room[id] < 0 {
+			t.Errorf("round %d: the pending copies kept on %q go %d bytes past min_free", round, id, -room[id])
 		}
 	}
 	placed := map[string]int{}
@@ -653,11 +661,51 @@ func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Di
 // add. A plan that kept finding more would move data for nothing.
 func checkStable(t *testing.T, round int, in Input, plan Plan) {
 	t.Helper()
+	second, err := MakePlan(applied(in, plan, false))
+	if err != nil {
+		t.Fatalf("round %d: %v", round, err)
+	}
+	if !cancels(plan) {
+		// With nothing canceled, the plan is at rest at once: its jobs, made pending copies, are all it wanted.
+		if len(second.Jobs) > 0 {
+			t.Errorf("round %d: a second plan adds %+v to %+v", round, second.Jobs, plan.Jobs)
+		}
+		return
+	}
+	// A pending copy canceled goes with the plan, and frees a name, a path or room that another file may take at the
+	// next plan: the plans that follow must come to rest, with no copy canceled for want of room twice.
+	next := in
+	for range 10 {
+		next = applied(next, plan, true)
+		if plan, err = MakePlan(next); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		if len(plan.Jobs) == 0 && !cancels(plan) {
+			return
+		}
+	}
+	t.Errorf("round %d: the plans do not come to rest: still %+v", round, plan)
+}
+
+func cancels(plan Plan) bool {
+	return slices.ContainsFunc(plan.Results, func(r Result) bool { return len(r.Cancel) > 0 })
+}
+
+// applied gives the input of the plan that follows one: its jobs made pending copies, and, with drop, the pending
+// copies it cancels gone, as the catalog applies both at once.
+func applied(in Input, plan Plan, drop bool) Input {
 	next := in
 	next.Files = slices.Clone(in.Files)
 	for i := range next.Files {
 		f := &next.Files[i]
 		f.Copies = slices.Clone(f.Copies)
+		if drop {
+			for _, r := range plan.Results {
+				if r.Path == f.Path {
+					f.Copies = slices.DeleteFunc(f.Copies, func(c Copy) bool { return c.State == CopyPending && slices.Contains(r.Cancel, c.Disk) })
+				}
+			}
+		}
 		for _, j := range plan.Jobs {
 			if j.Path != f.Path {
 				continue
@@ -669,13 +717,7 @@ func checkStable(t *testing.T, round int, in Input, plan Plan) {
 			}
 		}
 	}
-	second, err := MakePlan(next)
-	if err != nil {
-		t.Fatalf("round %d: %v", round, err)
-	}
-	if len(second.Jobs) > 0 {
-		t.Errorf("round %d: a second plan adds %+v to %+v", round, second.Jobs, plan.Jobs)
-	}
+	return next
 }
 
 // With k copies of every file, a pool cannot protect more than the capacity of
