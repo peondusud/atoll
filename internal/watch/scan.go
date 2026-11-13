@@ -609,8 +609,11 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	if err != nil {
 		return err
 	}
+	// The plan asks the catalog of the names an NTFS disk holds, and holds none of them (specs.md §13.4).
+	taken, done := catalog.KeysTaken(ctx, db)
+	defer done()
 	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance,
-		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals}
+		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals, Taken: taken}
 	var release func(string) bool
 	if rep != nil {
 		release = rep.Release

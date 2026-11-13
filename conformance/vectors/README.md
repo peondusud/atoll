@@ -541,6 +541,7 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 | `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source |
 | `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`) |
 | `entries` | array of objects | `disk`, `path`, `kind`: `dir`, `symlink` or `ignored` |
+| `taken` | array of objects | `disk`, `path`: what the catalog answers when the plan asks whether a disk has another name with the collision key of that path (`specs.md` §15.7). Taken for the names listed, free for every other; none when left out. The plan asks of an NTFS disk alone, of each folder above a file, then of the file. The files and the entries of the case do not answer: a case whose collision is with a name on the disk lists it here |
 | `min_free` | array of strings | as in the configuration; `["0%"]` when left out |
 | `jobs` | array of objects | `kind` (`refresh` or `replicate`), `path` or `path_b64`, `src`, `dst` |
 | `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel`, `misplaced` (disks by position), `overflow`. What is left out is empty or false |

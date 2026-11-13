@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
@@ -18,6 +19,7 @@ type planVector struct {
 	Disks   []diskVector   `json:"disks"`
 	Files   []fileVector   `json:"files"`
 	Entries []entryVector  `json:"entries"`
+	Taken   []takenVector  `json:"taken"`
 	MinFree []string       `json:"min_free"`
 	Jobs    []jobVector    `json:"jobs"`
 	Results []resultVector `json:"results"`
@@ -77,6 +79,12 @@ type entryVector struct {
 	Disk string `json:"disk"`
 	Path string `json:"path"`
 	Kind string `json:"kind"`
+}
+
+// takenVector is a name the catalog answers as taken on a disk.
+type takenVector struct {
+	Disk string `json:"disk"`
+	Path string `json:"path"`
 }
 
 type jobVector struct {
@@ -147,6 +155,15 @@ func (v *planVector) input() (Input, error) {
 	for _, e := range v.Entries {
 		in.Entries = append(in.Entries, Entry{Disk: e.Disk, Path: e.Path, Kind: EntryKind(e.Kind)})
 	}
+	// What the catalog answers: taken for the names listed, and free for every other.
+	taken := map[takenVector]bool{}
+	for _, name := range v.Taken {
+		if taken[name] {
+			return in, fmt.Errorf("taken: %q on %s is listed twice", name.Path, name.Disk)
+		}
+		taken[name] = true
+	}
+	in.Taken = func(disk, path string) (bool, error) { return taken[takenVector{Disk: disk, Path: path}], nil }
 	return in, nil
 }
 
@@ -344,7 +361,57 @@ func randomInput(x *xorshift) Input {
 			in.Entries = append(in.Entries, Entry{Disk: d.ID, Path: oneOf(x, "p", "t", "w", "z", "T"), Kind: oneOf(x, EntryDir, EntrySymlink, EntryIgnored)})
 		}
 	}
+	in.Taken = asCatalog(&in)
 	return in
+}
+
+// asCatalog answers as the catalog does of the names a disk holds (Input.Taken), by their key: the name of each copy
+// it has a row for, where that copy sits; each entry; and the folders above whatever a look found there, which a walk
+// records as entries. A copy that is pending or away has its row, and no folder above it for that.
+func asCatalog(in *Input) func(disk, path string) (bool, error) {
+	held := map[string]map[string][]string{}
+	add := func(disk, name string) {
+		key, ok := names.CollisionKey(name)
+		if !ok {
+			return
+		}
+		if held[disk] == nil {
+			held[disk] = map[string][]string{}
+		}
+		if !slices.Contains(held[disk][key], name) {
+			held[disk][key] = append(held[disk][key], name)
+		}
+	}
+	found := func(disk, name string) {
+		add(disk, name)
+		parents(name, func(folder string) bool {
+			add(disk, folder)
+			return true
+		})
+	}
+	for i := range in.Files {
+		f := &in.Files[i]
+		for _, c := range f.Copies {
+			switch {
+			case c.OldPath != "":
+				found(c.Disk, c.OldPath)
+			case c.State == CopyPending || c.Away:
+				add(c.Disk, f.Path)
+			default:
+				found(c.Disk, f.Path)
+			}
+		}
+	}
+	for _, e := range in.Entries {
+		found(e.Disk, e.Path)
+	}
+	return func(disk, path string) (bool, error) {
+		key, ok := names.CollisionKey(path)
+		if !ok {
+			return false, nil
+		}
+		return slices.ContainsFunc(held[disk][key], func(name string) bool { return name != path }), nil
+	}
 }
 
 func (x *xorshift) shuffle(list []string) {
@@ -717,6 +784,8 @@ func applied(in Input, plan Plan, drop bool) Input {
 			}
 		}
 	}
+	// The catalog has a row for each copy queued, and answers for its name.
+	next.Taken = asCatalog(&next)
 	return next
 }
 
@@ -836,5 +905,47 @@ func BenchmarkPlan200k(b *testing.B) {
 		if _, err := MakePlan(in); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// TestWhatThePlanAsksOfTheCatalog: the plan asks whether a name is taken of an NTFS disk alone; of a folder once in a
+// plan, however many files it holds; and of a file once for each disk, however many times a disk is looked for it. An
+// error of the catalog ends the plan with it (specs.md §15.7).
+func TestWhatThePlanAsksOfTheCatalog(t *testing.T) {
+	minFree, err := value.ParseMinFree([]string{"0%"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := Input{MinFree: minFree}
+	for i, fs := range []names.Filesystem{names.Ext4, names.NTFS, names.NTFS, names.XFS} {
+		id := string(rune('a' + i))
+		in.Disks = append(in.Disks, Disk{ID: id, Position: i, State: DiskOnline, Role: RoleData, Capacity: 1000, Free: 900 - int64(i), FS: fs, Mount: "/mnt/" + id, Root: "media"})
+	}
+	three := &Placement{Replicas: 2, TagsMode: ModePrefer, Spread: SpreadDomain, SpreadMode: ModePrefer, Overflow: OverflowAllow}
+	for _, path := range []string{"s/t/1", "s/t/2", "s/3", "4"} {
+		in.Files = append(in.Files, File{Path: path, Size: 1, Placement: three, Copies: []Copy{{Disk: "a", State: CopyOK, CreatedBy: CreatedByUser}}})
+	}
+	asked := map[string]int{}
+	in.Taken = func(disk, path string) (bool, error) {
+		asked[disk+" "+path]++
+		return false, nil
+	}
+	plan, err := MakePlan(in)
+	if err != nil || len(plan.Jobs) != 8 {
+		t.Fatalf("%+v, %v", plan.Jobs, err)
+	}
+	want := map[string]int{}
+	for _, disk := range []string{"b", "c"} {
+		for _, name := range []string{"s", "s/t", "s/t/1", "s/t/2", "s/3", "4"} {
+			want[disk+" "+name] = 1
+		}
+	}
+	if !maps.Equal(asked, want) {
+		t.Errorf("asked %v", asked)
+	}
+	down := errors.New("down")
+	in.Taken = func(string, string) (bool, error) { return false, down }
+	if _, err := MakePlan(in); !errors.Is(err, down) {
+		t.Errorf("%v", err)
 	}
 }

@@ -271,6 +271,19 @@ func CopyOf(ctx context.Context, db *sql.DB, disk, path, fileKey string) (KnownC
 	return row, nil
 }
 
+// The names a disk holds with a key and other bytes than a path's: those of the files with a copy there that sits at
+// its name, pending or away as it may be; those copies still sit at; and those of its entries, a folder as any other.
+// Each is found by the index on its key. The files come first and their copy after, by its key: left to itself,
+// SQLite reads every copy of the disk to find the file of each, hundreds of thousands of rows for one name.
+const (
+	fileKeySQL  = "SELECT f.lpath FROM files f INDEXED BY files_by_key CROSS JOIN copies c ON c.file_id = f.id WHERE f.lpath_key = ?2 AND f.lpath <> ?3 AND c.disk_id = ?1 AND c.old_lpath IS NULL"
+	oldKeySQL   = "SELECT old_lpath FROM copies WHERE disk_id = ?1 AND old_lpath_key = ?2 AND old_lpath <> ?3"
+	entryKeySQL = "SELECT lpath FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3"
+)
+
+// keyTakenSQL says whether a disk holds any such name.
+const keyTakenSQL = "SELECT EXISTS(" + fileKeySQL + ") OR EXISTS(" + oldKeySQL + ") OR EXISTS(" + entryKeySQL + ")"
+
 // KeyTaken says whether a disk holds a name with the same lpath_key as path, and other bytes
 // (specs.md §15.7). A name without a key never collides.
 func KeyTaken(ctx context.Context, db *sql.DB, disk, path string) (bool, error) {
@@ -279,34 +292,52 @@ func KeyTaken(ctx context.Context, db *sql.DB, disk, path string) (bool, error) 
 		return false, nil
 	}
 	var taken bool
-	err := db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3)
-			OR EXISTS(SELECT 1 FROM copies WHERE disk_id = ?1 AND old_lpath_key = ?2 AND old_lpath <> ?3)
-			OR EXISTS(SELECT 1 FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3)`,
-		disk, key, []byte(path)).Scan(&taken)
-	if err != nil {
+	if err := db.QueryRowContext(ctx, keyTakenSQL, disk, key, []byte(path)).Scan(&taken); err != nil {
 		return false, fmt.Errorf("names: %w", err)
 	}
 	return taken, nil
 }
 
+// KeysTaken gives KeyTaken as a plan asks it, of each name it thinks of placing on an NTFS disk and of the folders
+// above it, in place of holding every name of that disk (specs.md §13.4, §26): one statement for them all, made at
+// the first question, which done closes. A plan that places nothing on such a disk asks nothing, and makes none.
+func KeysTaken(ctx context.Context, db *sql.DB) (taken func(disk, path string) (bool, error), done func()) {
+	var stmt *sql.Stmt
+	taken = func(disk, path string) (bool, error) {
+		key := keyOf(path)
+		if !key.Valid {
+			return false, nil
+		}
+		if stmt == nil {
+			prepared, err := db.PrepareContext(ctx, keyTakenSQL) //nolint:sqlclosecheck // done closes it
+			if err != nil {
+				return false, fmt.Errorf("names: %w", err)
+			}
+			stmt = prepared
+		}
+		var is bool
+		if err := stmt.QueryRowContext(ctx, disk, key, []byte(path)).Scan(&is); err != nil {
+			return false, fmt.Errorf("names: %w", err)
+		}
+		return is, nil
+	}
+	done = func() {
+		if stmt != nil {
+			_ = stmt.Close()
+		}
+	}
+	return taken, done
+}
+
 // KeyTakenExcept is KeyTaken, leaving out one name and all below it: what a rename frees as it comes.
 func KeyTakenExcept(ctx context.Context, db *sql.DB, disk, path, except string) (bool, error) {
-	return keyTakenBy(ctx, db, disk, path, except, nil, []string{
-		"SELECT f.lpath FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3",
-		"SELECT old_lpath FROM copies WHERE disk_id = ?1 AND old_lpath_key = ?2 AND old_lpath <> ?3",
-		"SELECT lpath FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3",
-	})
+	return keyTakenBy(ctx, db, disk, path, except, nil, []string{fileKeySQL, oldKeySQL, entryKeySQL})
 }
 
 // KeyStaysTaken is KeyTakenExcept by what the last look still found: not a row whose clock runs, nor a name at or
 // below a folder found renamed and not yet decided. A rename waits for those, and nothing goes to the trash for them.
 func KeyStaysTaken(ctx context.Context, db *sql.DB, disk, path, except string, leaving []string) (bool, error) {
-	return keyTakenBy(ctx, db, disk, path, except, leaving, []string{
-		"SELECT f.lpath FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND c.gone_ns IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3",
-		"SELECT old_lpath FROM copies WHERE disk_id = ?1 AND gone_ns IS NULL AND old_lpath_key = ?2 AND old_lpath <> ?3",
-		"SELECT lpath FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3",
-	})
+	return keyTakenBy(ctx, db, disk, path, except, leaving, []string{fileKeySQL + " AND c.gone_ns IS NULL", oldKeySQL + " AND gone_ns IS NULL", entryKeySQL})
 }
 
 func keyTakenBy(ctx context.Context, db *sql.DB, disk, path, except string, leaving, queries []string) (bool, error) {
