@@ -277,10 +277,30 @@ func (d *realDir) Mkdir(name string, mode uint32) error {
 	return nil
 }
 
+// ErrNotNew says that a name no longer holds the folder that was just made there.
+var ErrNotNew = errors.New("not the folder just made")
+
+// Adopt sets the owner, then the mode, on the folder itself, opened by its name without following a link. Whoever owns
+// its parent can trade the new name for something else between the making and this call: a mode set by name would go
+// to whatever a symbolic link names, with its setuid bits, and so give a user of the library any file of the machine;
+// and a folder put there in its place would change owner. A folder just made holds nothing, so one that does is not
+// it.
 func (d *realDir) Adopt(name string, like *Stat) error {
-	mode := unix.Fchmodat(d.fd(), name, like.Mode, 0)
-	owner := unix.Fchownat(d.fd(), name, int(like.Uid), int(like.Gid), unix.AT_SYMLINK_NOFOLLOW)
-	if err := errors.Join(mode, owner); err != nil {
+	fd, err := unix.Openat(d.fd(), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("adopt %q: %w", name, err)
+	}
+	folder := os.NewFile(uintptr(fd), name)
+	defer func() { _ = folder.Close() }()
+	switch held, err := folder.Readdirnames(1); {
+	case len(held) > 0:
+		return fmt.Errorf("adopt %q: %w", name, ErrNotNew)
+	case err != nil && !errors.Is(err, io.EOF):
+		return fmt.Errorf("adopt %q: %w", name, err)
+	}
+	owner := unix.Fchown(fd, int(like.Uid), int(like.Gid))
+	mode := unix.Fchmod(fd, like.Mode)
+	if err := errors.Join(owner, mode); err != nil {
 		return fmt.Errorf("adopt %q: %w", name, err)
 	}
 	return nil
