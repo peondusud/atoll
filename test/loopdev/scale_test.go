@@ -21,7 +21,8 @@ var scaleFiles = flag.Int("atoll.scale", 0, "run TestScale with this many files 
 // (specs.md §26): the first scan; atoll status, with no strict setting and with a strict rule, for which it plans the
 // whole pool to give bytes_placed; and with the link guard, the first pass, which makes a link for each copy, a pass
 // after it, and the pass that removes them once the guard is off. Each is logged with the memory the process holds
-// then. In qemu without KVM every instruction is emulated: the times say how each grows, not what a machine takes.
+// then, and the most it held during that step. In qemu without KVM every instruction is emulated: the times say how
+// each grows, not what a machine takes.
 func TestScale(t *testing.T) {
 	needRoot(t)
 	if *scaleFiles <= 0 {
@@ -42,6 +43,8 @@ func TestScale(t *testing.T) {
 	t.Logf("%d files written on each disk in %v", n, time.Since(start).Round(time.Second))
 	measure := func(what string, do func()) {
 		t.Helper()
+		// The kernel's peak of the process starts again from what it holds now, so that each step logs its own.
+		mustDo(t, os.WriteFile("/proc/self/clear_refs", []byte("5"), 0))
 		began := time.Now()
 		do()
 		took := time.Since(began).Round(time.Millisecond)
