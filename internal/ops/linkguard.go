@@ -311,7 +311,7 @@ func (d *Disk) RemoveLinksFolder() {
 // LinkToTrash moves the link of a file to the trash, an operation kind = trash with a link, as ToTrash moves a copy
 // (specs.md §17.1): its data lost every name Atoll knows of in the root. The folders of the target stand for the
 // root and the folders of the logical path, as they do for a copy: each is made like the one it stands for, while
-// that one is still there, and otherwise like the last of them on the way that is.
+// that one is still there, and otherwise private, and the file's owner's.
 func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
 	if err := d.Verify(); err != nil {
 		return nil, err
@@ -327,10 +327,11 @@ func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
 	}
 	defer source.close()
 	name := src[len(src)-1]
-	if _, err := holds(source, name, byKey(op.FileKey)); err != nil {
+	held, err := holds(source, name, byKey(op.FileKey))
+	if err != nil {
 		return nil, err
 	}
-	like, err := d.likeLogical(op.Path, dst)
+	like, err := d.likeLogical(op.Path, dst, &held)
 	if err != nil {
 		return nil, err
 	}
@@ -368,9 +369,11 @@ func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
 }
 
 // likeLogical gives, for each level of a target in the trash that stands for the root or a folder of a logical path,
-// the mode and owner of that folder below the root, or of the last one on the way that is still there: what the
-// guard sends to the trash may have lost its folders, and a private one must not come back open.
-func (d *Disk) likeLogical(logical string, dst []string) (map[int]fsx.Stat, error) {
+// the mode and owner of that folder below the root while it is still there. What the guard sends to the trash may
+// have lost its folders, and nothing says any more how open one that went was: it is private in the trash, and so
+// is every one below it, with the owner of the file. The last folder on the way that is still there may be open to
+// every account, as the root is, and a private folder must not come back open (specs.md §17.1).
+func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[int]fsx.Stat, error) {
 	parts := strings.Split(logical, "/")
 	folders := len(parts) - 1
 	// The last levels of dst are the operation's folder, the folders of the logical path, then its name.
@@ -404,7 +407,7 @@ func (d *Disk) likeLogical(logical string, dst []string) (map[int]fsx.Stat, erro
 				}
 				at, last = next, st
 			case fsx.IsAbsent(err), fsx.IsNotAFolder(err):
-				at = nil
+				at, last = nil, fsx.Stat{Kind: fsx.KindDir, Mode: 0o700, Uid: file.Uid, Gid: file.Gid}
 			default:
 				return nil, classify(err)
 			}

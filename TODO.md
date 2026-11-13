@@ -76,7 +76,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Security
 
-- **A trash folder that stands for a vanished private folder** takes the mode and owner of its nearest surviving ancestor (`internal/ops/linkguard.go`, `likeLogical`): a folder of mode 0700 deleted through the view has its files open to every account in the trash, and `trash restore` makes it again open, against §17.1, "a private folder is never open, even for a moment".
 - **The watcher opens a folder that arrived by its path** (`arrive`, `internal/watch/watcher.go` and `inotify.go`), with no check of its mount: a parent traded for a link puts the mark on a folder outside the root. Events are hints, so no decision is wrong, but a media server is told the wrong folder.
 - **An existing `links/` folder is used whatever its mode and owner** (`internal/ops/linkguard.go`), where §17 makes it 0700.
 - **`init` makes the configuration 0644** whatever the mask, while the spec's own example keeps an ntfy topic in it, which is a secret on a public server; and a schema error quotes the offending string, so a URL mistyped with a password reaches the log.

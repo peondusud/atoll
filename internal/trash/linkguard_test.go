@@ -314,3 +314,66 @@ func TestTheGuardFails(t *testing.T) {
 		})
 	}
 }
+
+// A folder that went with what it held stands in the trash as a private one: nothing says any more how open it was,
+// and the folder above it may be open to every account, as the root is. The trash held the files of a private folder
+// under a folder open to all, for as long as it kept them, and a restore made that folder again as open (specs.md
+// §17.1, "a private folder is never open, even for a moment").
+func TestAFolderThatWentIsPrivateInTheTrash(t *testing.T) {
+	b := newBench(t)
+	for _, id := range []string{"t1", "t2", "t3"} {
+		b.write(id, "p/q/x", "z")
+	}
+	private := filepath.Join(b.dirs["t3"], "media", "p")
+	if err := os.Chmod(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, lost := b.guarded("t3", true); lost {
+		t.Fatal("lost")
+	}
+	// Removed whole, as rm -r through the view removes it, and its copy's row gone as a pass leaves it.
+	if err := os.RemoveAll(private); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.db.ExecContext(t.Context(), "DELETE FROM copies WHERE disk_id = 't3' AND file_id = (SELECT id FROM files WHERE CAST(lpath AS TEXT) = 'p/q/x')"); err != nil {
+		t.Fatal(err)
+	}
+	items, lost := b.guarded("t3", true)
+	if lost || len(items) != 1 || items[0] != (LinkItem{Disk: "t3", Path: "p/q/x", Reason: solver.LinkDeleted, Outcome: OutcomeTrashed}) {
+		t.Fatalf("%+v, lost %v", items, lost)
+	}
+	entry := filepath.Join(b.dirs["t3"], "Atoll", "trash", filepath.FromSlash(b.text("SELECT CAST(trash_path AS TEXT) FROM trash")))
+	for _, folder := range []string{filepath.Dir(entry), filepath.Dir(filepath.Dir(entry))} {
+		info, err := os.Stat(folder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o700 {
+			t.Errorf("in the trash, %s is %v", filepath.Base(folder), info.Mode().Perm())
+		}
+	}
+	// The folder that stands for the root is as the root, which is still there.
+	if info, err := os.Stat(filepath.Dir(filepath.Dir(filepath.Dir(entry)))); err != nil || info.Mode().Perm() != 0o755 {
+		t.Errorf("the operation's folder: %v, %v", info, err)
+	}
+	s := b.opened()
+	got := ""
+	if _, err := s.Restore(t.Context(), "p/q/x", func(i *EntryItem) error { got = i.Outcome; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got != OutcomeRestored {
+		t.Fatalf("%q", got)
+	}
+	for _, folder := range []string{private, filepath.Join(private, "q")} {
+		info, err := os.Stat(folder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o700 {
+			t.Errorf("back, %s is %v", filepath.Base(folder), info.Mode().Perm())
+		}
+	}
+}
