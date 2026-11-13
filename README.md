@@ -1,4 +1,4 @@
-<img src="docs/logo.svg" alt="The logo of Atoll: four islets on one reef around a lagoon" width="128" align="right">
+<img src="docs/logo.png" alt="The logo of Atoll: four islets on one reef around a lagoon, seen from the air" width="128" align="right">
 
 # Atoll
 
