@@ -103,7 +103,8 @@
       "stdout_json": {
         "moves": [],
         "applied": false,
-        "bytes": 0
+        "bytes": 0,
+        "originals": 1
       }
     },
     {
@@ -125,7 +126,8 @@
           }
         ],
         "applied": false,
-        "bytes": 1024
+        "bytes": 1024,
+        "originals": 0
       }
     },
     {
@@ -147,7 +149,8 @@
           }
         ],
         "applied": true,
-        "bytes": 1024
+        "bytes": 1024,
+        "originals": 0
       }
     },
     {

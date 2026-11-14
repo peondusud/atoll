@@ -94,6 +94,25 @@ func MisplacedFiles(ctx context.Context, db *sql.DB, c *config.Config, now int64
 	return out, nil
 }
 
+// UserCopiesMisplaced counts the user copies that break a strict setting of their file: atoll balance moves none of
+// them, and --move-originals would, the only way one moves (specs.md §6.1, item 9, §13.3). It writes nothing, and makes
+// one plan of the pool.
+func UserCopiesMisplaced(ctx context.Context, db *sql.DB, c *config.Config, now int64) (int, error) {
+	misplaced, _, err := planBalance(ctx, db, c, now, true)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for path, from := range misplaced {
+		_, users, err := usersFirst(ctx, db, path, from)
+		if err != nil {
+			return 0, err
+		}
+		count += users
+	}
+	return count, nil
+}
+
 // planBalance makes the plan of atoll balance: the misplaced copies of each file, by disk position, and the copies
 // it wants of those files, writing nothing. With originals, a user copy can be misplaced too.
 func planBalance(ctx context.Context, db *sql.DB, c *config.Config, now int64, originals bool) (map[string][]string, map[string][]watch.PlannedJob, error) {

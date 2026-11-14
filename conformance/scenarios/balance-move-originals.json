@@ -113,7 +113,8 @@
           }
         ],
         "applied": false,
-        "bytes": 1024
+        "bytes": 1024,
+        "originals": 1
       }
     },
     {
@@ -142,7 +143,8 @@
           }
         ],
         "applied": false,
-        "bytes": 2048
+        "bytes": 2048,
+        "originals": 0
       }
     },
     {
@@ -187,7 +189,8 @@
           }
         ],
         "applied": true,
-        "bytes": 2048
+        "bytes": 2048,
+        "originals": 0
       }
     },
     {
@@ -252,7 +255,8 @@
       "stdout_json": {
         "moves": [],
         "applied": true,
-        "bytes": 0
+        "bytes": 0,
+        "originals": 0
       }
     }
   ]

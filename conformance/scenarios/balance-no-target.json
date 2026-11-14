@@ -99,7 +99,8 @@
      }
     ],
     "applied": false,
-    "bytes": 0
+    "bytes": 0,
+    "originals": 1
    }
   },
   {
@@ -120,7 +121,8 @@
      }
     ],
     "applied": true,
-    "bytes": 0
+    "bytes": 0,
+    "originals": 1
    }
   },
   {
