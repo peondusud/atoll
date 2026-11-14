@@ -59,7 +59,7 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 	}
 	if !on && len(entries) == 0 {
 		handle.RemoveLinksFolder()
-		return nil
+		return s.countUnnamed(ctx, id, 0)
 	}
 	in, err := s.linksInput(ctx, id, on, entries)
 	if err != nil {
@@ -67,6 +67,7 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 	}
 	plan := solver.PlanLinks(in)
 	var unlinks, makes []catalog.LinkStart
+	unnamed := 0
 	for i := range plan {
 		step := &plan[i]
 		switch step.Do {
@@ -85,11 +86,15 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 			}
 		case solver.LinkUnnamed:
 			slog.Warn("a link of the guard holds data that nothing names: it stays, for the user to look at", "disk", id, "link", step.Name)
+			unnamed++
 		case solver.LinkStray:
 			slog.Warn("the links folder holds something Atoll did not make: it stays", "disk", id, "name", step.Name)
 		case solver.LinkMake:
 			makes = append(makes, catalog.LinkStart{FileID: step.FileID, Path: step.Path, FileKey: step.Inode})
 		}
+	}
+	if err := s.countUnnamed(ctx, id, unnamed); err != nil {
+		return err
 	}
 	if _, err := s.linkOps(ctx, handle, catalog.OpUnlink, unlinks); err != nil || s.lostDisk(id) {
 		return err
@@ -296,6 +301,15 @@ func (s *Session) dropLinksOf(ctx context.Context, handle *ops.Disk, e *catalog.
 	}
 	_, err = s.linkOps(ctx, handle, catalog.OpUnlink, list)
 	return err
+}
+
+// countUnnamed records on a disk's row the links its run found whose data nothing names, for the alert link-unnamed
+// and atoll status (specs.md §17, §23).
+func (s *Session) countUnnamed(ctx context.Context, id string, links int) error {
+	if err := catalog.SetLinksUnnamed(ctx, s.db, id, links); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	return nil
 }
 
 // guardFailed loses a disk that failed, and lets anything else wait for the next pass: a link is a second name.

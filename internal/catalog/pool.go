@@ -212,6 +212,8 @@ type Disk struct {
 	// NamesDisagree counts the operations the last reprise on the disk left planned as a name and its file's record
 	// disagree there (specs.md §17.2).
 	NamesDisagree int
+	// LinksUnnamed counts the links of the guard whose data nothing names, as the guard's last run found them (§17).
+	LinksUnnamed int
 }
 
 // SyncDisks rewrites the disks from the configuration, which wins (specs.md §9). A disk it no longer

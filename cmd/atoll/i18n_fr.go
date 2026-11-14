@@ -39,6 +39,7 @@ var frenchMessages = map[string]string{
 	"warning: rule %s: rule %s, before it, matches every file it does: it never applies\n":                                     "attention : règle %s : la règle %s, avant elle, s'applique à chaque fichier qu'elle vise : elle ne s'applique jamais\n",
 	"note: rule %s: no file of the catalog reaches it\n":                                                                       "note : règle %s : aucun fichier du catalogue ne l'atteint\n",
 	"  %d operations stay planned: names and records disagree on its volume, which needs a repair with chkdsk /f on Windows\n": "  %d opérations restent prévues : des noms et leurs enregistrements ne concordent plus sur son volume, qui doit être réparé avec chkdsk /f sous Windows\n",
+	"  %d links of the guard hold data nothing names: they stay in Atoll/links, for you to look at\n":                          "  %d liens du garde-liens tiennent des données que rien ne nomme : ils restent dans Atoll/links, à examiner\n",
 	"%s: its names do not follow the rules Atoll relies on: %s (%s)":                                                           "%s : ses noms ne suivent pas les règles sur lesquelles Atoll s'appuie : %s (%s)",
 	"%s: Atoll cannot make what it writes there durable: %s (%s)":                                                              "%s : Atoll ne peut pas y rendre durable ce qu'il écrit : %s (%s)",
 	"%s: not sent: %s\n":    "%s : non envoyée : %s\n",

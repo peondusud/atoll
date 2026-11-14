@@ -63,6 +63,11 @@
           "description": "The operations the last reprise on the disk left planned as a name and its file's record disagree on its volume, as ntfs3 leaves them when a device fails during a move: only a repair of the volume resolves them (specs.md §17.2). Left out when there is none.",
           "type": "integer",
           "minimum": 1
+        },
+        "links_unnamed": {
+          "description": "The links of the guard whose data nothing names, with neither a row nor a copy-gone event, as its last run on the disk found them: they stay where they are (specs.md §17). Left out when there is none.",
+          "type": "integer",
+          "minimum": 1
         }
       }
     },

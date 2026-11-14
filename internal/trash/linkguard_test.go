@@ -498,3 +498,38 @@ func TestTheSizeOfALinkSentToTheTrash(t *testing.T) {
 		t.Errorf("the entries are %q", got)
 	}
 }
+
+// A link whose data nothing names, with neither a row nor a copy-gone event, stays where it is, with a warning (specs.md
+// §17): each run of the guard records on the disk's row how many it found so, for the alert link-unnamed and atoll
+// status, and 0 once there is none.
+func TestALinkNothingNamesIsCounted(t *testing.T) {
+	b := newBench(t)
+	if _, lost := b.guarded("t3", true); lost {
+		t.Fatal("lost")
+	}
+	link := b.linkOf("t3", 1)
+	if err := os.Remove(filepath.Join(b.dirs["t3"], "media", "a")); err != nil {
+		t.Fatal(err)
+	}
+	// Its file's rows went, and nothing says where it was: a catalog rebuilt from disks that no longer hold it.
+	b.exec("DELETE FROM copies")
+	b.exec("DELETE FROM file_chunks")
+	b.exec("DELETE FROM files")
+	if items, lost := b.guarded("t3", true); len(items) != 0 || lost {
+		t.Fatalf("%+v, lost %v", items, lost)
+	}
+	if inodeOf(t, link) == 0 {
+		t.Fatal("the link went")
+	}
+	if got := b.count("SELECT links_unnamed FROM disks WHERE id = 't3'"); got != 1 {
+		t.Errorf("the disk counts %d", got)
+	}
+	// Once the user removed it, nothing is counted any more.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	b.guarded("t3", true)
+	if got := b.count("SELECT links_unnamed FROM disks WHERE id = 't3'"); got != 0 {
+		t.Errorf("with no such link, the disk counts %d", got)
+	}
+}

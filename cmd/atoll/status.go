@@ -80,6 +80,9 @@ type statusDisk struct {
 	// NamesDisagree counts the operations left planned as a name and its file's record disagree on the disk's
 	// volume, which only a repair of it resolves; left out when there is none (specs.md §17.2).
 	NamesDisagree int `json:"names_disagree,omitempty"`
+	// LinksUnnamed counts the links of the guard whose data nothing names, as its last run found them; left out when
+	// there is none (specs.md §17).
+	LinksUnnamed int `json:"links_unnamed,omitempty"`
 }
 
 // statusCopy is one copy of api/schemas/status.schema.json.
@@ -235,7 +238,7 @@ func statusSummaryFrom(s *watch.Status) *statusSummary {
 	}
 	for i := range s.Disks {
 		d := &s.Disks[i]
-		disk := statusDisk{ID: d.ID, State: d.State, Mount: d.Mount, FS: d.FS, Role: d.Role, Copies: d.Copies, Bytes: d.Bytes, NamesDisagree: d.NamesDisagree}
+		disk := statusDisk{ID: d.ID, State: d.State, Mount: d.Mount, FS: d.FS, Role: d.Role, Copies: d.Copies, Bytes: d.Bytes, NamesDisagree: d.NamesDisagree, LinksUnnamed: d.LinksUnnamed}
 		if d.Seen {
 			lastSeen := timeText(d.LastSeenNS)
 			disk.Capacity, disk.Free, disk.LastSeen = &d.Capacity, &d.Free, &lastSeen
@@ -365,6 +368,9 @@ func (t textStatus) end(s *statusSummary) error {
 			fmt.Fprintf(&text, T(", %d of %d bytes free, seen %s"), *d.Free, *d.Capacity, *d.LastSeen)
 		}
 		text.WriteString("\n")
+		if d.LinksUnnamed > 0 {
+			fmt.Fprintf(&text, T("  %d links of the guard hold data nothing names: they stay in Atoll/links, for you to look at\n"), d.LinksUnnamed)
+		}
 		if d.NamesDisagree > 0 {
 			fmt.Fprintf(&text, T("  %d operations stay planned: names and records disagree on its volume, which needs a repair with chkdsk /f on Windows\n"), d.NamesDisagree)
 		}

@@ -34,6 +34,7 @@ const (
 	KeySmartSectors = "smart-sectors:"
 	KeyNTFSDirty    = "ntfs-dirty:"
 	KeyNTFSNames    = "ntfs-names:"
+	KeyLinkUnnamed  = "link-unnamed:"
 	KeyNoAccess     = "no-access:"
 	KeyWorkdirOwner = "workdir-owner:"
 )
@@ -95,12 +96,21 @@ type Facts struct {
 	// Disagree holds the disks whose last reprise left operations planned as a name and its file's record disagree
 	// there, in the catalog's order of the disks (specs.md §17.2).
 	Disagree []NamesDisagree
+	// Unnamed holds the disks whose links of the guard hold data nothing names, as its last run found them, in the
+	// catalog's order of the disks (specs.md §17).
+	Unnamed []UnnamedLinks
 	// Foreign holds the disks whose work folder belongs to an account that is neither root's nor Atoll's, in the
 	// configuration's order (specs.md §10).
 	Foreign []ForeignWorkdir
 	// Unopened holds, by disk, the files a read of the daemon could not open, for a reason that says nothing of
 	// their disk, in byte order (specs.md §15.10): they count with the names a walk could not reach.
 	Unopened map[string][]string
+}
+
+// UnnamedLinks is a disk whose links of the guard hold data nothing names, and how many.
+type UnnamedLinks struct {
+	ID    string
+	Links int
 }
 
 // NamesDisagree is a disk whose volume holds names and records that disagree, and the operations left for that.
@@ -160,6 +170,9 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 		f.Smart = appendSmart(f.Smart, d)
 		if d.NamesDisagree > 0 && d.State != "retired" {
 			f.Disagree = append(f.Disagree, NamesDisagree{ID: d.ID, Ops: d.NamesDisagree})
+		}
+		if d.LinksUnnamed > 0 && d.State != "retired" {
+			f.Unnamed = append(f.Unnamed, UnnamedLinks{ID: d.ID, Links: d.LinksUnnamed})
 		}
 		if !slices.Contains([]string{"online", "standby", "readonly", "draining"}, d.State) {
 			continue
@@ -237,6 +250,9 @@ func Holdings(f *Facts) []Holding {
 	for _, d := range f.Disagree {
 		counts[KeyNTFSNames+d.ID] = int64(d.Ops)
 	}
+	for _, d := range f.Unnamed {
+		counts[KeyLinkUnnamed+d.ID] = int64(d.Links)
+	}
 	for i := range f.Smart {
 		s := &f.Smart[i]
 		if s.Failing {
@@ -313,6 +329,13 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s is marked dirty", id)
 		m.Body = fmt.Sprintf("The disk %s is missing: its NTFS volume is marked dirty, as an unclean unplugging leaves it, and Linux "+
 			"mounts it only by force, which Atoll never does. Repair it with chkdsk /f on Windows, then plug it back.", id)
+	case strings.HasPrefix(h.Key, KeyLinkUnnamed):
+		id := strings.TrimPrefix(h.Key, KeyLinkUnnamed)
+		m.Title = fmt.Sprintf("Atoll: %d %s of disk %s %s data nothing names", h.Count, plural(h.Count, "link", "links"), id,
+			plural(h.Count, "holds", "hold"))
+		m.Body = fmt.Sprintf("The link guard of disk %s holds %d %s in Atoll/links whose data has no other name Atoll knows, and no "+
+			"row or event says where it was: nothing is removed, as it may be someone's file. Look at it there, and move it back "+
+			"under the root, or remove the link once it is nobody's.", id, h.Count, plural(h.Count, "link", "links"))
 	case strings.HasPrefix(h.Key, KeyNTFSNames):
 		id := strings.TrimPrefix(h.Key, KeyNTFSNames)
 		m.Priority = priorityHigh
