@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/names"
@@ -89,6 +91,16 @@ type checkOutput struct {
 	Valid    bool           `json:"valid"`
 	Problems []checkProblem `json:"problems"`
 	Warnings []checkWarning `json:"warnings"`
+	// Hidden are the rules an earlier one hides whole, in simple cases, and Unreached the rules no file of the catalog
+	// reaches, nil when the catalog cannot be read (specs.md §11.3, §25).
+	Hidden    []checkHidden `json:"hidden"`
+	Unreached []string      `json:"unreached"`
+}
+
+// checkHidden is a rule an earlier one hides whole: their labels.
+type checkHidden struct {
+	Rule string `json:"rule"`
+	By   string `json:"by"`
 }
 
 func rulesCheck(configPath string, args []string, stdout, stderr io.Writer) int {
@@ -118,7 +130,7 @@ func rulesCheck(configPath string, args []string, stdout, stderr io.Writer) int 
 }
 
 func check(configPath string) checkOutput {
-	out := checkOutput{Valid: true, Problems: []checkProblem{}, Warnings: []checkWarning{}}
+	out := checkOutput{Valid: true, Problems: []checkProblem{}, Warnings: []checkWarning{}, Hidden: []checkHidden{}}
 	c, err := load(configPath)
 	if err != nil {
 		out.Valid = false
@@ -135,6 +147,35 @@ func check(configPath string) checkOutput {
 	for _, w := range c.Warnings {
 		out.Warnings = append(out.Warnings, checkWarning{Key: w.Key, LaterPhase: w.LaterPhase, Message: w.Message})
 	}
+	for _, h := range rules.Hidden(c.Rules) {
+		out.Hidden = append(out.Hidden, checkHidden{Rule: c.Rules[h.Rule].Label, By: c.Rules[h.By].Label})
+	}
+	out.Unreached = unreached(c)
+	return out
+}
+
+// unreached gives the rules no file of the catalog reaches, nil when the catalog cannot be read: there is none yet,
+// or it is another pool's or of another version (specs.md §25). It reads the catalog and nothing else, and takes no
+// lock: what a command writes meanwhile is a file more or less, which the next check counts.
+func unreached(c *config.Config) []string {
+	ctx := context.Background()
+	file := catalogPath(c)
+	if there, err := fsx.Exists(file); err != nil || !there {
+		return nil
+	}
+	db, err := catalog.OpenPool(ctx, file, c.PoolID)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = db.Close() }()
+	reach := rules.NewReach(c.Rules)
+	if err := catalog.RuleSubjects(ctx, db, func(path string, size *int64) { reach.Add(path, size) }); err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, at := range reach.Unreached() {
+		out = append(out, c.Rules[at].Label)
+	}
 	return out
 }
 
@@ -149,6 +190,12 @@ func printCheck(w io.Writer, out checkOutput) error {
 	}
 	for _, warning := range out.Warnings {
 		fmt.Fprintf(&text, T("warning: %s: %s\n"), warning.Key, warning.Message)
+	}
+	for _, h := range out.Hidden {
+		fmt.Fprintf(&text, T("warning: rule %s: rule %s, before it, matches every file it does: it never applies\n"), h.Rule, h.By)
+	}
+	for _, label := range out.Unreached {
+		fmt.Fprintf(&text, T("note: rule %s: no file of the catalog reaches it\n"), label)
 	}
 	if out.Valid {
 		text.WriteString(T("the configuration is valid\n"))

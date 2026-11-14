@@ -1,0 +1,113 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §11.3, §25",
+  "description": "rules check tells of the rules an earlier one hides whole, from the configuration alone, and once it can read the catalog of the rules no file there reaches: a file reaches the first rule that matches it, and a file a rule ignores, which the catalog holds as an entry with no size, the rules that may match it. Before atoll init there is no catalog, and nothing is said of what is reached. Neither changes the exit code.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/Films/a.mkv",
+          "text": "film"
+        },
+        {
+          "path": "media/b.tmp",
+          "text": "part"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"films\"\npath = \"Films/**\"\n[[rule]]\nlabel = \"films-mkv\"\npath = \"Films/**\"\next = [\"mkv\"]\nreplicas = 2\n[[rule]]\nlabel = \"music\"\npath = \"Music/**\"\n[[rule]]\nlabel = \"tmp\"\nfilename = \"*.tmp\"\naction = \"ignore\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [],
+        "hidden": [
+          {
+            "rule": "films-mkv",
+            "by": "films"
+          }
+        ],
+        "unreached": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [],
+        "hidden": [
+          {
+            "rule": "films-mkv",
+            "by": "films"
+          }
+        ],
+        "unreached": [
+          "films",
+          "films-mkv",
+          "music",
+          "tmp"
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [],
+        "hidden": [
+          {
+            "rule": "films-mkv",
+            "by": "films"
+          }
+        ],
+        "unreached": [
+          "films-mkv",
+          "music"
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check"
+      ]
+    }
+  ]
+}

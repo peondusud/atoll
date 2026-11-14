@@ -36,6 +36,8 @@ var frenchMessages = map[string]string{
 	"warning: disk %s: %s in its trash is no entry (%s), and stays as it is":                                                  "attention : disque %s : %s dans sa corbeille n'est pas une entrée (%s), et reste tel quel",
 	"warning: disk %s: its trash could not be listed again (%v)":                                                              "attention : disque %s : sa corbeille n'a pas pu être relue (%v)",
 	"%d user copies break a strict setting too, which no setting moves: atoll balance --move-originals would\n":               "%d copies de l'utilisateur enfreignent aussi un réglage strict, qu'aucun réglage ne déplace : atoll balance --move-originals le ferait\n",
+	"warning: rule %s: rule %s, before it, matches every file it does: it never applies\n":                                    "attention : règle %s : la règle %s, avant elle, s'applique à chaque fichier qu'elle vise : elle ne s'applique jamais\n",
+	"note: rule %s: no file of the catalog reaches it\n":                                                                      "note : règle %s : aucun fichier du catalogue ne l'atteint\n",
 	"%s: its names do not follow the rules Atoll relies on: %s (%s)":                                                          "%s : ses noms ne suivent pas les règles sur lesquelles Atoll s'appuie : %s (%s)",
 	"%s: Atoll cannot make what it writes there durable: %s (%s)":                                                             "%s : Atoll ne peut pas y rendre durable ce qu'il écrit : %s (%s)",
 	"%s: not sent: %s\n":    "%s : non envoyée : %s\n",

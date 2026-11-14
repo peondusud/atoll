@@ -513,6 +513,32 @@ func (r *FileReader) readFiles(rows *sql.Rows) ([]FileRow, error) {
 	return files, nil
 }
 
+// RuleSubjects gives each file a rule may reach (specs.md §11.3, §25): every file of the catalog with its size, and
+// every file a rule ignores, which an entry records without one. Each path once, in no order.
+func RuleSubjects(ctx context.Context, db *sql.DB, each func(path string, size *int64)) error {
+	rows, err := db.QueryContext(ctx, "SELECT lpath, size FROM files UNION ALL SELECT lpath, NULL FROM entries WHERE kind = 'ignored' GROUP BY lpath")
+	if err != nil {
+		return fmt.Errorf("files: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var path []byte
+	var size sql.NullInt64
+	for rows.Next() {
+		if err := rows.Scan(&path, &size); err != nil {
+			return fmt.Errorf("files: %w", err)
+		}
+		if size.Valid {
+			each(string(path), &size.Int64)
+		} else {
+			each(string(path), nil)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("files: %w", err)
+	}
+	return nil
+}
+
 // EntryKey says what an entry is, for the plan.
 type EntryKey struct {
 	Disk string

@@ -20,7 +20,9 @@
             "message": "${ANY}"
           }
         ],
-        "warnings": []
+        "warnings": [],
+        "hidden": [],
+        "unreached": null
       }
     },
     {
@@ -39,7 +41,9 @@
             "message": "${ANY}"
           }
         ],
-        "warnings": []
+        "warnings": [],
+        "hidden": [],
+        "unreached": null
       }
     },
     {
@@ -59,7 +63,9 @@
             "message": "${ANY}"
           }
         ],
-        "warnings": []
+        "warnings": [],
+        "hidden": [],
+        "unreached": null
       }
     }
   ]

@@ -19,7 +19,9 @@
             "message": "${ANY}"
           }
         ],
-        "warnings": []
+        "warnings": [],
+        "hidden": [],
+        "unreached": null
       }
     },
     {

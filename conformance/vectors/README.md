@@ -515,6 +515,17 @@ A case has `error`, or `errors`, or at least one of `effective`, `not_set` and `
 | `drop` | array of strings | the keys of the conditions that ended, in byte order |
 | `error` | boolean | `true` for a key held twice, a negative count, or a `remind_ns` that is not positive |
 
+### `rules_check.json` — the rules no file reaches, and the rules an earlier one hides (§11.3, §25)
+
+A case loads a configuration and the files the catalog has, then tells of its rules, each by `label`, in the configuration's order.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `toml` | string | the text of the configuration |
+| `files` | array of objects | the catalog's files and the files a rule ignores: `path` or `path_b64`, and `size`, left out when it is not known, as for a file a rule ignores |
+| `unreached` | array of strings | the rules no file reaches: a file reaches the first rule that matches it, as in `policy.json`; with no size known, each rule that may match it, up to and including the first that has no size condition |
+| `hidden` | array of objects | `rule` and `by`: a rule that an earlier one hides whole, and the first that does. Simple cases only: each condition of the earlier rule holds for every file, as a path `**` or a filename `*` does, or is one the later rule has too, written the same with the same `ignore_case`, or for `ext` lists every extension the later lists; and its size range holds the later's. A rule with no size condition is never hidden by one that has one |
+
 ### `policy.json` — the effective policy of a file (§11.3, §12.2, §24.2)
 
 A case loads a configuration, then asks for the policy of one file. The values are the ones the configuration asks for: the fallbacks of a phase not yet implemented (§12.2) are not applied.
