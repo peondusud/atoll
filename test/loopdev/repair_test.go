@@ -4,6 +4,7 @@ package loopdev
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,8 +43,22 @@ func physicalAt(t *testing.T, path string, offset int64) int64 {
 	return 0
 }
 
+// btrfsPhysical gives where a logical address of a btrfs filesystem lies on its one device: FIEMAP gives btrfs's
+// logical addresses, which its chunk tree maps to the device, as btrfs-map-logical reads it.
+func btrfsPhysical(t *testing.T, device string, logical int64) int64 {
+	t.Helper()
+	out := must(t, "btrfs-map-logical", "-l", strconv.FormatInt(logical, 10), device)
+	m := regexp.MustCompile(`physical (\d+)`).FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("btrfs-map-logical says:\n%s", out)
+	}
+	physical, _ := strconv.ParseInt(m[1], 10, 64)
+	return physical
+}
+
 // repairDrivers are the filesystems and drivers a chunk repair runs on. btrfs checks its own data, and answers a
-// read of a block that rotted with EIO: no rot reaches Atoll there, and a disk that answers EIO is missing (§10).
+// read of a block that rotted with EIO: on a disk that confirms, that is the chunk's fault, which a repair writes
+// over, its trash keeping an empty file for it (specs.md §16, §16.1).
 var repairDrivers = []struct {
 	name   string
 	fs     names.Filesystem
@@ -51,6 +66,7 @@ var repairDrivers = []struct {
 }{
 	{"ext4", names.Ext4, ""},
 	{"xfs", names.XFS, ""},
+	{"btrfs", names.Btrfs, ""},
 	{"ntfs3", names.NTFS, "ntfs3"},
 	{"ntfs-3g", names.NTFS, "ntfs-3g"},
 	{"lowntfs-3g", names.NTFS, "lowntfs-3g"},
@@ -58,8 +74,8 @@ var repairDrivers = []struct {
 
 // TestRepairOnEachDriver: a chunk that rotted on the device, below the filesystem, of a file whose name takes 255
 // bytes, is repaired in place by the scrub, on each filesystem and driver: the file keeps its inode and its time, its
-// other chunks are never written, and the chunk it held reaches the trash, in <op>.chunks/<name>/00000001
-// (specs.md §16.1, §17).
+// other chunks are never written, and the chunk it held reaches the trash, in <op>.chunks/<name>/00000001, an empty
+// file on btrfs, which cannot read it (specs.md §16.1, §17).
 func TestRepairOnEachDriver(t *testing.T) {
 	needRoot(t)
 	for _, tc := range repairDrivers {
@@ -91,6 +107,9 @@ func TestRepairOnEachDriver(t *testing.T) {
 			}
 			mountVolume(t, v, look, at, driverOptions(t, look)...)
 			offset := physicalAt(t, path, integrity.ChunkSize)
+			if tc.fs == names.Btrfs {
+				offset = btrfsPhysical(t, v.device, offset)
+			}
 			unmountWhenFree(t, at)
 			dev, err := os.OpenFile(v.device, os.O_RDWR, 0)
 			mustDo(t, err)
@@ -101,8 +120,15 @@ func TestRepairOnEachDriver(t *testing.T) {
 			mountVolume(t, v, tc.driver, at, options...)
 			dropCaches(t)
 			rotten, err := os.ReadFile(path)
-			mustDo(t, err)
-			if bytes.Equal(rotten, data) {
+			switch {
+			case tc.fs == names.Btrfs:
+				// Its own checksum refuses the block: nothing of the chunk can be read.
+				if !errors.Is(err, syscall.EIO) {
+					t.Fatalf("btrfs read the rot: %v", err)
+				}
+			case err != nil:
+				t.Fatal(err)
+			case bytes.Equal(rotten, data):
 				t.Fatal("the file reads as before: no rot to find")
 			}
 
@@ -130,7 +156,12 @@ func TestRepairOnEachDriver(t *testing.T) {
 			entry := b.text("SELECT CAST(trash_path AS TEXT) FROM trash WHERE reason = 'repaired'")
 			saved, err := os.ReadFile(filepath.Join(at, "Atoll", "trash", filepath.FromSlash(entry), "00000001"))
 			mustDo(t, err)
-			if !bytes.Equal(saved, rotten[integrity.ChunkSize:2*integrity.ChunkSize]) {
+			switch {
+			case tc.fs == names.Btrfs:
+				if len(saved) != 0 {
+					t.Errorf("%d bytes saved of a chunk that could not be read", len(saved))
+				}
+			case !bytes.Equal(saved, rotten[integrity.ChunkSize:2*integrity.ChunkSize]):
 				t.Error("the chunk saved is not what rotted")
 			}
 			if parts, err := os.ReadDir(filepath.Join(at, "Atoll", "tmp")); err == nil && len(parts) != 0 {
