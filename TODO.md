@@ -71,7 +71,6 @@ Each point the review left to decide was put to the maintainer as a question, wi
 
 Four more, on what the measure of 10 showed, answered on 2026-11-14:
 
-18. **A changed copy whose change time did not move past its row's** is no user's change: its file is a `conflict`, both versions kept, for `conflicts resolve`, never `modified` (§15.4). That is a copy a power cut left empty or short, and a disk put back from an older image (§15.6). A contract: §15.4's table and `modification.json`.
 19. **`MakeLink` keeps the sync of each file it links**, as it is: the prepared change (`decision-10-prepared.patch`) is not applied. Half an hour once, when the guard is turned on; nothing for a pool of NTFS disks.
 20. **CLAUDE.md's invariant 4** says that a read that fails on a disk that confirms right after is the chunk's fault: the copy is `corrupt` (§16), as decision 1 has it. Done with this record.
 
@@ -87,7 +86,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Data and conformance
 
-- **A copy that a power cut left shorter than its row reads as a modification** (§15.4: one changed copy with another size than the file's is `modified`, with nothing read). ext4 and XFS bring back empty a file whose content the kernel had not written when the power went (measured for the links of the guard, §17.1), with the change time its row has or an earlier one, where a change by a user always moves the change time forward. Where the file has another copy by then, as in `immediate` mode, the next pass makes that copy stale and writes the empty file over it: its content is in the trash until its retention ends, and the mass-modification guard counts it. The sync of each file the link guard links hides this where the guard is on. Found by a measure, not seen on a pool. To decide: a changed copy whose change time is not later than its row's is no user's change, and is `corrupt`, for a repair from another copy. Performance: none. Security: the good copy stays in place. Functionality: a disk put back from an older image (§15.6) would read the same way, each of its files `corrupt`, which may be what is wanted there too. Product: after a power cut only. **Recommended: decide it with the older image of §15.6.** Decided on 2026-11-14, for both cases: a `conflict`, not `corrupt` (18 above), as nothing tells a short copy from another version, and invariant 9 calls a copy corrupt only with its size and times unchanged.
 
 ### Performance, each to decide
 

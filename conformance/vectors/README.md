@@ -330,9 +330,9 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `file` | object | `state` (one of §4), `size`, `hash` when it has one, and `running` when a job of it is running |
-| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `verdict`, `other` when a `replaced` copy holds what is no regular file or the file another copy of its disk moved to, `state`, `size` (what its look found for a changed copy, what its row says otherwise), `due` when a changed copy's `settle` has passed, `readable` when its disk can be read, and `hash` when it has been read. Booleans are `false` when absent |
+| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `verdict`, `other` when a `replaced` copy holds what is no regular file or the file another copy of its disk moved to, `state`, `size` (what its look found for a changed copy, what its row says otherwise), `due` when a changed copy's `settle` has passed, `ctime_not_later` when a changed copy's change time, as its look found it, is not later than what its row says, `readable` when its disk can be read, and `hash` when it has been read. Booleans are `false` when absent |
 | `decision` | object | `kind` (`none`, `wait`, `read`, `modified`, `metadata` or `conflict`), and when they apply, by position: `read`, the copies to read before deciding; `changed`; `stale`, the copies a modification makes stale; `reference`, the copy read to compare with where the file had no hash; `hash`, what the file's hash becomes |
-| `error` | boolean | `true` on an unknown word, a pending copy, a disk or a position that appears twice, or `other` on a copy not `replaced` |
+| `error` | boolean | `true` on an unknown word, a pending copy, a disk or a position that appears twice, `other` on a copy not `replaced`, or `ctime_not_later` on a copy not changed, neither `edited` nor `replaced` without `other` |
 
 ### `metadata.json` — what a metadata-only change applies to the other copies (§15.4)
 

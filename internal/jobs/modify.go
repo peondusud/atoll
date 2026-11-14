@@ -125,6 +125,8 @@ func (p *pass) modInput(ctx context.Context, finder *catalog.FileFinder, f *cata
 			mc.Other = !s.Regular
 		}
 		if isChanged(&mc) {
+			// Any change moves the change time forward, and no program sets it back (specs.md §15.4).
+			mc.CtimeNotLater = c.CtimeNS.Valid && s.CtimeNS <= c.CtimeNS.Int64
 			ctimes[c.Disk] = s.CtimeNS
 			due := s.CtimeNS + settle
 			mc.Due = !p.apply || due <= p.now
