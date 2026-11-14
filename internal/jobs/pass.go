@@ -177,6 +177,8 @@ type pass struct {
 	closed Closed
 	// linkGuardOn is trash.link_guard (specs.md §17).
 	linkGuardOn bool
+	// restores holds the copies a page of decisions makes again in their place, with deletes.direct = "restore".
+	restores []catalog.Queue
 	// settled says that the copies worked out each file, and that nothing ran since
 	settled bool
 	// later says that this pass reads no file whole: what must be read to be decided is left in the outcome's ToRead
@@ -821,6 +823,7 @@ func hasMoved(p *pass, f *catalog.FileRow) bool {
 
 func (p *pass) applyDecisions(ctx context.Context, decisions []solver.PropDecision, rows map[string]*catalog.FileRow) error {
 	var changes []catalog.FileChange
+	p.restores = p.restores[:0]
 	for i := range decisions {
 		d := &decisions[i]
 		switch d.Kind {
@@ -849,6 +852,14 @@ func (p *pass) applyDecisions(ctx context.Context, decisions []solver.PropDecisi
 		}
 		p.session.MarkChanged()
 		p.machine.Checkpoint("decided")
+		// A copy gone with deletes.direct = "restore" is made again in its place (specs.md §15.5). Its row went with the
+		// decision: a crash here leaves the file below its level, which the plan places as any. With replication off,
+		// nothing is copied, and none is queued, as the plan queues none.
+		if enabled, _ := p.config.Effective()["replication.enabled"].(bool); enabled {
+			if err := catalog.QueueReplicate(ctx, p.db, p.now, p.restores); err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+		}
 	}
 	for i := range decisions {
 		p.reportDecision(&decisions[i], rows[decisions[i].Path])
@@ -950,6 +961,11 @@ func (p *pass) changeOf(d *solver.PropDecision, f *catalog.FileRow) catalog.File
 		case solver.ActDrop:
 			row.Drop = true
 			p.dropEvents(d, c, s, &row, &change)
+		case solver.ActRestore:
+			// No deletion is propagated: its row goes with no copy-gone, and a copy is queued in its place.
+			row.Drop = true
+			size := f.Size
+			p.restores = append(p.restores, catalog.Queue{FileID: f.ID, Src: d.Src, Dst: a.Disk, Priority: int64(p.config.Policy(f.Path, &size).Priority)})
 		case solver.ActOwnFile:
 			// One file, for the copies of one size. Another has no place in it: its row goes, and the next walk adds
 			// it with the checks of a copy not yet in the catalog.

@@ -81,7 +81,6 @@ Left as recommended, with no question put: the jobs read whole, the renames by r
 Put to him with their options and what each costs; the option he chose is below. Each is done as any fix: a test that fails first, the spec, DONE.md.
 
 2. **The topology of R-06 looked at each start** (§10, §13.4): two disks found on one physical disk raise an alert, and the plan counts them as one, so that it never places two copies of a file on them and moves the extra copy elsewhere; writes go on, as for the work folder. A contract: an alert kind, and one more input of the plan, with its vectors in `plan.json`.
-6. **`deletes.direct = "restore"`** (§15.5): the deleted copy is made again in its place, on that disk, from another copy, through the copy pipeline.
 7. **btrfs in `TestRepairOnEachDriver`** (§16.1): a test, not a choice, as decision 1 makes a chunk btrfs cannot read on a disk that confirms corrupt; in qemu once no soak runs.
 
 5, passes that walk only what changed, waits for phase 2b (Later phases), and 9, SMART setting `standby`, stays as it is (Phase 1a, the alerts).
@@ -120,7 +119,7 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
   - the watcher's limits: a folder that leaves the root under inotify and comes back in another read is watched again from scratch; a path past `PATH_MAX` cannot get a mark of its own on ntfs-3g; the process of an event already gone reads as `user`;
   - the remount after a USB reset of an ntfs-3g disk, through `mount.ntfs-3g`, as the dedicated user, is not tested.
 - What the copy pipeline leaves for later (§14): one copy at a time, in one pass, is all the daemon runs, so `max_parallel_per_disk` waits for its loop; the creation time set after the rename on Windows (§7).
-- What modifications leave as limits (§15.4, §15.12): a swap of two names whose other copies are on NTFS, whose drivers cannot exchange two names, and a copy replaced by anything but a regular file, which are only reported. `deletes.direct = "restore"` (§15.5), which the copy pipeline now allows, still propagates nothing.
+- What modifications leave as limits (§15.4, §15.12): a swap of two names whose other copies are on NTFS, whose drivers cannot exchange two names, and a copy replaced by anything but a regular file, which are only reported.
 - What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), were confirmed on 2026-11-12.
 - The rest of the trash (§17): a folder Atoll emptied in a run that was stopped before its end stays, as nothing records it (§17.5). A folder's attributes other than its mode and owner wait for the pipeline.
 - The scrub: `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`; once no copy is corrupt, the next pass finds the conflict again from the rows of its copies (§16).

@@ -169,6 +169,7 @@ const (
 	ActDrop        PropAction = "drop"         // its row goes
 	ActKeepGone    PropAction = "keep-gone"    // gone, under a guard: its row stays, with old_lpath where it was
 	ActTrash       PropAction = "trash"        // a trash job
+	ActRestore     PropAction = "restore"      // gone, with deletes.direct = "restore": made again in its place, from Src
 )
 
 // PropCopyAction is what happens to one copy.
@@ -439,7 +440,7 @@ func decideRest(f *PropFile, direct string) PropDecision {
 		return PropDecision{Path: f.Path, Kind: PropHeld, Copies: everyCopy(f, ActStay)}
 	case len(left) == 0:
 		return PropDecision{Path: f.Path, Kind: PropGone, Copies: everyCopy(f, ActDrop)}
-	case isDeletion(f, gone, left, direct):
+	case direct == "propagate" && isDeletion(f, gone, left):
 		d := PropDecision{Path: f.Path, Kind: PropDeletion, Src: gone[0].Disk}
 		for i := range f.Copies {
 			action := ActTrash
@@ -451,10 +452,20 @@ func decideRest(f *PropFile, direct string) PropDecision {
 		return d
 	}
 	d := PropDecision{Path: f.Path, Kind: PropKept, ClearConflict: clearsConflict(f, left), DropHash: laterThanWhatWent(gone, left) || noneVerified(left)}
+	// With restore, what a deletion would have sent to the trash stays, and what went is made again in its place, from
+	// the first copy found there by position (specs.md §15.5).
+	if direct == "restore" && isDeletion(f, gone, left) {
+		if at := slices.IndexFunc(left, func(c *PropCopy) bool { return c.Verdict == VerdictThere }); at >= 0 {
+			d.Src = left[at].Disk
+		}
+	}
 	for i := range f.Copies {
 		action := ActStay
 		if goneLike(f.Copies[i].Verdict) {
 			action = ActDrop
+			if d.Src != "" {
+				action = ActRestore
+			}
 		}
 		d.Copies = append(d.Copies, PropCopyAction{Disk: f.Copies[i].Disk, Action: action})
 	}
@@ -471,8 +482,8 @@ func isHeldGone(c *PropCopy) bool {
 	return c.Verdict == VerdictGone && c.GuardHeld
 }
 
-func isDeletion(f *PropFile, gone, left []*PropCopy, direct string) bool {
-	if direct != "propagate" || f.State == StateConflict || f.State == StateCorrupt {
+func isDeletion(f *PropFile, gone, left []*PropCopy) bool {
+	if f.State == StateConflict || f.State == StateCorrupt {
 		return false
 	}
 	earliest := gone[0].FirstSeenNS

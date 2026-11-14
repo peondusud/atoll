@@ -322,7 +322,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `direct` | string | `deletes.direct` |
 | `files` | array of objects | `path`, `state` (one of §4), `follow` when a folder renamed gives it a new path, and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held` and `size`, 0 when absent |
 | `taken` | array of strings | optional: the paths held by files outside this step |
-| `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone` or `trash`), with `target` for `other-target` |
+| `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone`, `trash` or `restore`), with `target` for `other-target`; `restore`, with `deletes.direct = "restore"`, makes a copy gone again in its place, from the copy `src` names |
 | `error` | boolean | `true` on an unknown word, a path that appears twice, a disk or a position that appears twice in one file, or a `moved` with no target |
 
 ### `modification.json` — what a pass decides about a file a copy of which changed (§15.4)

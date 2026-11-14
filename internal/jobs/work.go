@@ -1213,7 +1213,7 @@ func (p *pass) planDecided(ctx context.Context, d *solver.PropDecision, f *catal
 				outcome = trash.OutcomeChanged
 			}
 			plan.trashes = append(plan.trashes, Operation{Disk: a.Disk, Kind: KindTrash, Path: c.Place(f), Reason: reasonDeleted, Outcome: outcome})
-		case solver.ActDrop:
+		case solver.ActDrop, solver.ActRestore:
 			plan.dropped[f.ID] = true
 			p.leftBelow(plan, a.Disk, c.Place(f))
 		case solver.ActFollow, solver.ActOtherTarget:
