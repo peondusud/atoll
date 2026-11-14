@@ -162,6 +162,10 @@ type diskState struct {
 	// walked says that a pass walked it since it was last found again: its watch and its branch may come back.
 	walked  bool
 	watched bool
+	// unheard says that its watch may have missed a change since its last walk: it was not watched all along, as from
+	// the start of the daemon, or its watch overflowed. The next pass tells the media servers of the folders where its
+	// walk finds new copies, which nothing else told them of (specs.md §21.5).
+	unheard bool
 	// reset says that it went missing for a reason a USB reset gives, so each check tries the remount.
 	reset bool
 	// probed says that the NTFS volume of a missing disk was read once since it went missing, and dirty that it was
@@ -291,6 +295,12 @@ func (l *loop) takeRipe(now int64) (groupNext int64, waiting bool) {
 		}
 	}
 	for _, g := range ripe {
+		// An overflow, or a watch that ended and began again: nothing says what it lost.
+		if slices.Contains(g.Kinds, watch.KindOverflow) {
+			if st := l.disks[g.Disk]; st != nil {
+				st.unheard = true
+			}
+		}
 		for _, o := range g.Origins {
 			if !slices.Contains(l.origins, o) {
 				l.origins = append(l.origins, o)
@@ -483,7 +493,7 @@ func (l *loop) check(ctx context.Context) {
 		d, v := &l.opt.Config.Disks[i], verdicts[i]
 		st := l.disks[d.ID]
 		if st == nil {
-			st = &diskState{state: v.State}
+			st = newDiskState(v.State)
 			l.disks[d.ID] = st
 			if v.State == disks.Missing {
 				l.log.Warn("a disk is missing", "disk", d.ID, "reason", v.Reason, "message", v.Message)
@@ -593,7 +603,20 @@ func (l *loop) watch(ctx context.Context, id string) {
 func (l *loop) unwatch(id string) {
 	l.watcher.Stop(id)
 	if st := l.disks[id]; st != nil {
-		st.watched = false
+		st.watched, st.unheard = false, true
+	}
+}
+
+// newDiskState is what the loop first keeps of a disk: nothing heard what changed on it while the daemon was stopped.
+func newDiskState(state disks.State) *diskState {
+	return &diskState{state: state, unheard: true}
+}
+
+// walked records that a pass walked a disk: what changes on it from then on, its watch hears, if it has one. One that
+// begins after the pass hears nothing of what changed in between.
+func (l *loop) walked(id string) {
+	if st := l.disks[id]; st != nil {
+		st.walked, st.unheard = true, !st.watched
 	}
 }
 
@@ -606,7 +629,13 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	l.log.Info("a pass begins", "because", because)
 	// The sink counts what the pass did instead of keeping each line: a pass over a whole pool would not fit in the
 	// memory of specs.md §26.
-	sink := &passSink{folders: map[string]bool{}}
+	unheard := map[string]bool{}
+	for id, st := range l.disks {
+		if st.unheard {
+			unheard[id] = true
+		}
+	}
+	sink := &passSink{folders: map[string]bool{}, unheard: unheard}
 	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		// A pass reads no file whole: what must be read to be decided is read after it, by slices (specs.md §15.13).
@@ -619,7 +648,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 			switch {
 			case st == nil:
 			case line.Walked:
-				st.walked = true
+				l.walked(line.ID)
 			case line.Verdict.State == disks.Missing && st.state != disks.Missing:
 				// A device that fails still answers the mount check from the cache: only the pass's confirmation
 				// finds it, and the pass has recorded it already.
@@ -675,12 +704,18 @@ type passSink struct {
 	decisions, operations int64
 	refused               alerts.Refused
 	folders               map[string]bool
+	// unheard holds the disks whose watch may have missed a change since their last walk.
+	unheard map[string]bool
 }
 
-// Disks keeps the folders where the pass's walks found new copies: a file written straight to a disk, which no rename
-// or deletion tells the media servers of (specs.md §21.5).
+// Disks keeps the folders where the pass's walks found new copies on a disk whose watch may have missed them: a file
+// written straight to a disk while the daemon was stopped, which no rename or deletion tells the media servers of. On
+// a disk watched all along, the watcher heard it, and its group told of it, or not, by who made it (specs.md §21.5).
 func (s *passSink) Disks(lines []jobs.DiskLine) error {
 	for i := range lines {
+		if !s.unheard[lines[i].ID] {
+			continue
+		}
 		for _, folder := range lines[i].NewFolders {
 			if s.folders != nil {
 				s.folders[folder] = true
