@@ -1,11 +1,13 @@
 package trash
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -59,7 +61,7 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 		handle.RemoveLinksFolder()
 		return nil
 	}
-	in, stats, err := s.linksInput(ctx, id, on, entries)
+	in, err := s.linksInput(ctx, id, on, entries)
 	if err != nil {
 		return err
 	}
@@ -72,7 +74,7 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 		case solver.LinkUnlink:
 			unlinks = append(unlinks, catalog.LinkStart{FileID: step.FileID, Path: step.Path, FileKey: step.Inode})
 		case solver.LinkTrash:
-			drop, err := s.sendLink(ctx, handle, step, stats[step.Name], report)
+			drop, err := s.sendLink(ctx, handle, step, sizeOf(entries, step.Name), report)
 			if err != nil {
 				return err
 			}
@@ -102,37 +104,43 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 	return nil
 }
 
-// linksInput reads what deciding a disk's links needs, and what each link's look found, by name.
-func (s *Session) linksInput(ctx context.Context, id string, on bool, entries []ops.LinkEntry) (*solver.LinksInput, map[string]fsx.Stat, error) {
+// linksInput reads what deciding a disk's links needs. Everything here is held until the last link is decided, for
+// a disk of 200,000 copies (specs.md §26): each copy is read once, straight into the plan's list, and a link that
+// leads to its file's copy, as nearly every link does, shares the text of that copy's inode.
+func (s *Session) linksInput(ctx context.Context, id string, on bool, entries []ops.LinkEntry) (*solver.LinksInput, error) {
 	in := &solver.LinksInput{On: on, Links: make([]solver.LinkEntry, 0, len(entries))}
-	stats := make(map[string]fsx.Stat, len(entries))
-	copies, err := catalog.LinkCopies(ctx, s.db, id)
+	err := catalog.LinkCopies(ctx, s.db, id,
+		func(n int) { in.Copies = make([]solver.LinkCopy, 0, n) },
+		func(c *catalog.LinkCopy) {
+			in.Copies = append(in.Copies, solver.LinkCopy{FileID: c.FileID, Inode: c.FileKey, Place: c.Place, There: c.There})
+		})
 	if err != nil {
-		return nil, nil, fmt.Errorf("catalog: %w", err)
-	}
-	in.Copies = make([]solver.LinkCopy, len(copies))
-	inodeOf := make(map[int64]string, len(copies))
-	for i := range copies {
-		c := &copies[i]
-		in.Copies[i] = solver.LinkCopy{FileID: c.FileID, Inode: c.FileKey, Place: c.Place, There: c.There}
-		inodeOf[c.FileID] = c.FileKey
+		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	// Only a link that does not lead to its file's copy can need a path, and at a pass nearly every link does.
 	var ids []int64
+	var digits [20]byte
 	for i := range entries {
 		e := &entries[i]
-		key := strconv.FormatUint(e.Stat.Ino, 10)
-		in.Links = append(in.Links, solver.LinkEntry{Name: e.Name, File: e.Stat.Kind == fsx.KindFile, Inode: key})
-		stats[e.Name] = e.Stat
-		if fileID, ok := layout.LinkID(e.Name); ok && inodeOf[fileID] != key {
-			ids = append(ids, fileID)
+		inode := strconv.AppendUint(digits[:0], e.Ino, 10)
+		fileID, named := layout.LinkID(e.Name)
+		key := ""
+		if named {
+			key = copyInode(in.Copies, fileID)
 		}
+		if !named || key != string(inode) {
+			key = string(inode)
+			if named {
+				ids = append(ids, fileID)
+			}
+		}
+		in.Links = append(in.Links, solver.LinkEntry{Name: e.Name, File: e.File, Inode: key})
 	}
 	if in.Trash, err = catalog.TrashKeys(ctx, s.db, id); err != nil {
-		return nil, nil, fmt.Errorf("catalog: %w", err)
+		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	if in.Files, err = catalog.FilePaths(ctx, s.db, ids); err != nil {
-		return nil, nil, fmt.Errorf("catalog: %w", err)
+		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	var unknown []int64
 	for _, fileID := range ids {
@@ -141,14 +149,33 @@ func (s *Session) linksInput(ctx context.Context, id string, on bool, entries []
 		}
 	}
 	if in.Gone, err = catalog.GonePaths(ctx, s.db, id, unknown); err != nil {
-		return nil, nil, fmt.Errorf("catalog: %w", err)
+		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	return in, stats, nil
+	return in, nil
+}
+
+// copyInode gives the inode of a file's copy, empty when the disk has none of it: the copies come by file id, so it is
+// found by search, with no map of them.
+func copyInode(copies []solver.LinkCopy, fileID int64) string {
+	i, found := slices.BinarySearchFunc(copies, fileID, func(c solver.LinkCopy, id int64) int { return cmp.Compare(c.FileID, id) })
+	if !found {
+		return ""
+	}
+	return copies[i].Inode
+}
+
+// sizeOf gives the size a look found of a link: the links come by name, so it is found by search, with no map of them.
+func sizeOf(entries []ops.LinkEntry, name string) int64 {
+	i, found := slices.BinarySearchFunc(entries, name, func(e ops.LinkEntry, name string) int { return cmp.Compare(e.Name, name) })
+	if !found {
+		return 0
+	}
+	return entries[i].Size
 }
 
 // sendLink sends a link to the trash, as a copy goes there (specs.md §17.1). Its data may still have its name in the
 // root, as a file a rule now ignores leaves it: then the link only goes, and drop says so.
-func (s *Session) sendLink(ctx context.Context, handle *ops.Disk, step *solver.LinkStep, st fsx.Stat, report func(*LinkItem) error) (*catalog.LinkStart, error) {
+func (s *Session) sendLink(ctx context.Context, handle *ops.Disk, step *solver.LinkStep, size int64, report func(*LinkItem) error) (*catalog.LinkStart, error) {
 	switch seen, there, err := handle.StatRoot(step.Path); {
 	case err != nil:
 		return nil, s.guardFailed(ctx, handle.ID, err)
@@ -160,7 +187,7 @@ func (s *Session) sendLink(ctx context.Context, handle *ops.Disk, step *solver.L
 		return nil, nil
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
-		Disk: handle.ID, Path: step.Path, FileKey: step.Inode, Size: sql.NullInt64{Int64: st.Size, Valid: true}, Reason: step.Reason,
+		Disk: handle.ID, Path: step.Path, FileKey: step.Inode, Size: sql.NullInt64{Int64: size, Valid: true}, Reason: step.Reason,
 		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention), Link: step.FileID,
 	})
 	if err != nil {

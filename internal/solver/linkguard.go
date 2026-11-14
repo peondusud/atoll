@@ -93,8 +93,14 @@ func PlanLinks(in *LinksInput) []LinkStep {
 			copyInodes[c.Inode] = true
 		}
 	}
-	links := slices.Clone(in.Links)
-	slices.SortFunc(links, func(a, b LinkEntry) int { return cmp.Compare(a.Name, b.Name) })
+	// Neither list is changed: one that does not come in order is copied to be put in order, and the lists of a disk
+	// of 200,000 copies come in order (specs.md §26).
+	byName := func(a, b LinkEntry) int { return cmp.Compare(a.Name, b.Name) }
+	links := in.Links
+	if !slices.IsSortedFunc(links, byName) {
+		links = slices.Clone(links)
+		slices.SortFunc(links, byName)
+	}
 	out := make([]LinkStep, 0, len(links))
 	kept := map[int64]bool{}
 	taken := map[int64]bool{}
@@ -138,8 +144,12 @@ func PlanLinks(in *LinksInput) []LinkStep {
 	if !in.On {
 		return out
 	}
-	copies := slices.Clone(in.Copies)
-	slices.SortFunc(copies, func(a, b LinkCopy) int { return cmp.Compare(a.FileID, b.FileID) })
+	byFile := func(a, b LinkCopy) int { return cmp.Compare(a.FileID, b.FileID) }
+	copies := in.Copies
+	if !slices.IsSortedFunc(copies, byFile) {
+		copies = slices.Clone(copies)
+		slices.SortFunc(copies, byFile)
+	}
 	for i := range copies {
 		c := &copies[i]
 		if c.There && c.Inode != "" && !kept[c.FileID] && !taken[c.FileID] {

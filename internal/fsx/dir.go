@@ -718,6 +718,12 @@ func IsDiskLost(err error) bool {
 		errors.Is(err, unix.ENXIO) || errors.Is(err, unix.EROFS) || errors.Is(err, unix.ESTALE)
 }
 
+// IsOutOfFiles says whether an error means that the process, or the system, can open no more files. It says nothing
+// about the disk, nor about the file: nothing else opens until some are closed (specs.md §15.10).
+func IsOutOfFiles(err error) bool {
+	return errors.Is(err, unix.EMFILE) || errors.Is(err, unix.ENFILE)
+}
+
 // IsNoRoom says whether a write found its filesystem full: no block, or no inode, left for it.
 func IsNoRoom(err error) bool {
 	return errors.Is(err, unix.ENOSPC)

@@ -156,6 +156,11 @@ func TestAWatchThatEndedIsNotAlive(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the source of a watch that ended stays open")
 	}
+	// The watch is over once its reader has returned, a moment after it closed its source: whoever asks in between
+	// is still told alive, and asks again, as the daemon does at each of its checks.
+	for deadline := time.Now().Add(5 * time.Second); w.Alive("t1") && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
 	if w.Alive("t1") {
 		t.Error("a watch that ended is alive")
 	}

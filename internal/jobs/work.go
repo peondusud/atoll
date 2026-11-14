@@ -1174,6 +1174,7 @@ func (p *pass) planOf(disk string) *diskPlan {
 func (p *pass) planDecided(ctx context.Context, d *solver.PropDecision, f *catalog.FileRow, change *catalog.FileChange) error {
 	if change.DropJobs {
 		p.jobsDropped[f.ID] = true
+		p.requeued[f.ID] = true
 	}
 	if change.ClearConflict {
 		p.conflictCleared[f.ID] = true
@@ -1333,7 +1334,10 @@ func (p *pass) queuedTrashes(ctx context.Context, d *config.Disk, writable bool)
 	var list []Operation
 	for i := range jobs {
 		job := &jobs[i]
-		if job.State == catalog.JobCanceled || p.jobsDropped[job.FileID] || plan.dropped[job.FileID] {
+		// A decision of this dry run that drops every job of a file drops the overwrite of its stale copy too, and a
+		// real pass queues that one again before it runs anything: it is listed, where the copy will be by then.
+		again := job.Reason == catalog.ReasonOverwritten && p.requeued[job.FileID]
+		if job.State == catalog.JobCanceled || (p.jobsDropped[job.FileID] && !again) || plan.dropped[job.FileID] {
 			continue
 		}
 		f, err := catalog.FileByID(ctx, p.db, job.FileID)
@@ -1344,6 +1348,12 @@ func (p *pass) queuedTrashes(ctx context.Context, d *config.Disk, writable bool)
 			continue
 		}
 		c := copyOn(f, d.ID)
+		if again {
+			if op, listed := p.overwriteAgain(ctx, d, plan, job, f, c); listed {
+				list = append(list, op)
+			}
+			continue
+		}
 		outcome := p.trashOutcome(job.Src)
 		if outcome != OutcomeHeld {
 			stands, err := p.jobStands(ctx, d, job, f, c)
@@ -1363,6 +1373,25 @@ func (p *pass) queuedTrashes(ctx context.Context, d *config.Disk, writable bool)
 		list = append(list, Operation{Disk: d.ID, Kind: KindTrash, Path: c.Place(f), Reason: job.Reason, Outcome: outcome})
 	}
 	return list, nil
+}
+
+// overwriteAgain says what a dry run lists for the overwrite of a stale copy whose job a decision of this dry run
+// dropped with every other job of its file: the job a real pass queues again right after its decisions, when it would
+// stand, at the name the copy has once this disk's renames are done. A copy the decision itself sends to the trash has
+// its own line, and gets none here.
+func (p *pass) overwriteAgain(ctx context.Context, d *config.Disk, plan *diskPlan, job *catalog.TrashJob, f *catalog.FileRow, c *catalog.CopyRow) (Operation, bool) {
+	place := c.Place(f)
+	if slices.ContainsFunc(plan.trashes, func(o Operation) bool { return o.Path == place && o.Reason == reasonDeleted }) {
+		return Operation{}, false
+	}
+	stands, err := p.jobStands(ctx, d, job, f, c)
+	if err != nil || !stands {
+		return Operation{}, false
+	}
+	if at := slices.IndexFunc(plan.renames, func(r catalog.RenameRow) bool { return r.FileID == f.ID }); at >= 0 {
+		place = plan.renames[at].Target
+	}
+	return Operation{Disk: d.ID, Kind: KindTrash, Path: place, Reason: job.Reason, Outcome: p.trashOutcome(job.Src)}, true
 }
 
 func (p *pass) listUnavailable(id string, plan *diskPlan) {

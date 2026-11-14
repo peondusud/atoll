@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
@@ -41,8 +42,10 @@ func chunkLength(size, i int64) int64 {
 
 // RepairChunks repairs a corrupt copy in place from a healthy one, as one operation repair (specs.md §16.1): its bad
 // chunks saved to the trash, then each written and read back, then its time set back. chunks holds the file's chunk
-// hashes. It says what became of the copy, which stays corrupt unless repaired.
-func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, bad []int64, healthy *Healthy, chunks []byte) (string, error) {
+// hashes. unreadable holds those of its bad chunks that cannot be read, on a disk that confirms: nothing can be saved
+// of them, and what is written over them is what gives the sector another place. It says what became of the copy,
+// which stays corrupt unless repaired.
+func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, bad, unreadable []int64, healthy *Healthy, chunks []byte) (string, error) {
 	place := c.Place(f)
 	// A disk that may only be read is never written to, its corrupt copies included (specs.md §10).
 	if !s.writable(c.Disk) {
@@ -80,7 +83,9 @@ func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catal
 	size := c.Size.Int64
 	var saved int64
 	for _, i := range bad {
-		saved += chunkLength(size, i)
+		if !slices.Contains(unreadable, i) {
+			saved += chunkLength(size, i)
+		}
 	}
 	op, err := catalog.BeginRepair(ctx, s.db, &catalog.RepairStart{
 		Disk: c.Disk, Path: place, FileKey: c.FileKey.String, Bad: bad, Size: saved, MtimeNS: c.MtimeNS.Int64,
@@ -90,7 +95,7 @@ func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catal
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	s.machine.Checkpoint("journaled")
-	if err := s.saveChunks(handle, op, w, &st, bad, size); err != nil {
+	if err := s.saveChunks(handle, op, w, &st, bad, unreadable, size); err != nil {
 		return s.stopRepair(ctx, handle, op, err, false)
 	}
 	// Right before the first write, as saving can be long: an edit in place is never overwritten.
@@ -110,6 +115,17 @@ func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catal
 			}
 			err = errHealthyLost
 		}
+		// A chunk that cannot be read back is the disk's fault only when the disk no longer confirms: otherwise the
+		// repair is not done, and the copy is left to whoever asked for it, the scrub sending it to the trash.
+		if errors.Is(err, ops.ErrReadBack) {
+			confirmed, cerr := s.Confirms(ctx, c.Disk, err)
+			if cerr != nil {
+				return "", cerr
+			}
+			if !confirmed {
+				return OutcomeIOError, nil
+			}
+		}
 		return s.stopRepair(ctx, handle, op, err, wrote)
 	}
 	after, err := handle.SetTimeBack(w, fsx.TimeOf(c.MtimeNS.Int64))
@@ -123,12 +139,16 @@ func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catal
 	return OutcomeRepaired, nil
 }
 
-// saveChunks saves every bad chunk of a copy to the trash, then their folder, before any is written.
-func (s *Session) saveChunks(handle *ops.Disk, op *ops.Op, w fsx.WritableFile, st *fsx.Stat, bad []int64, size int64) error {
+// saveChunks saves every bad chunk of a copy to the trash, then their folder, before any is written. A chunk that
+// cannot be read has nothing to save: its place in the trash is an empty file, which says that the repair found it so,
+// to whoever looks at the entry and to the reprise.
+func (s *Session) saveChunks(handle *ops.Disk, op *ops.Op, w fsx.WritableFile, st *fsx.Stat, bad, unreadable []int64, size int64) error {
 	buf := make([]byte, integrity.ChunkSize)
 	for _, i := range bad {
 		data := buf[:chunkLength(size, i)]
-		if n, err := w.ReadAt(data, i*integrity.ChunkSize); n < len(data) {
+		if slices.Contains(unreadable, i) {
+			data = nil
+		} else if n, err := w.ReadAt(data, i*integrity.ChunkSize); n < len(data) {
 			return fmt.Errorf("read chunk %d: %w", i, readError(err))
 		}
 		if err := handle.SaveChunk(op, i, data, st); err != nil {

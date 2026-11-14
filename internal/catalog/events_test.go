@@ -3,6 +3,7 @@ package catalog
 import (
 	"database/sql"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,6 +29,45 @@ func TestGuardReadsUseAnIndex(t *testing.T) {
 		if !searched {
 			t.Errorf("%s: %q", name, plan)
 		}
+	}
+}
+
+// What a purge by slices and a restore read of the trash, they read through its indexes, never the whole of it: the
+// entries whose time has come by their expiry, those of a path and below it by path, and one entry by its row
+// (specs.md §17). A purge listed every entry of the trash, with its paths, to find the few that were due.
+func TestTheTrashIsReadThroughItsIndexes(t *testing.T) {
+	b := openForOps(t)
+	for name, want := range map[string]struct{ query, step string }{
+		"expired":      {trashExpiredSQL, "SEARCH t USING INDEX trash_by_expiry"},
+		"due":          {trashDueSQL, "SEARCH t USING INDEX trash_by_expiry"},
+		"below a path": {trashRangeSQL, "SEARCH t USING INDEX trash_by_path"},
+		"by row":       {trashByRowSQL, "SEARCH t USING INTEGER PRIMARY KEY (rowid=?)"},
+	} {
+		plan := planOf(t, b.sql(), name, want.query)
+		found := false
+		for _, step := range plan {
+			if strings.HasPrefix(step, "SCAN t") || strings.Contains(step, "TEMP B-TREE") {
+				t.Errorf("%s reads or sorts the whole trash: %q", name, plan)
+			}
+			found = found || strings.HasPrefix(step, want.step)
+		}
+		if !found {
+			t.Errorf("%s: %q", name, plan)
+		}
+	}
+}
+
+// Where the journal put the file of an inode is read through the index of the operations by disk and inode, never
+// over the whole journal, which holds an operation for each copy ever made (specs.md §9).
+func TestTheJournalIsAskedByInode(t *testing.T) {
+	b := openForOps(t)
+	if plan := planOf(t, b.sql(), "places", placesOfSQL); len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INDEX ops_by_key (disk_id=? AND file_key=?)") {
+		t.Errorf("%q", plan)
+	}
+	if plan := planOf(t, b.sql(), "on disk", opOnDiskSQL); !slices.ContainsFunc(plan, func(step string) bool {
+		return strings.HasPrefix(step, "SEARCH ops USING INTEGER PRIMARY KEY (rowid=?)")
+	}) {
+		t.Errorf("%q", plan)
 	}
 }
 

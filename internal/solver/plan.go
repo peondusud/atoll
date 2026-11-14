@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/value"
@@ -108,6 +109,12 @@ type Input struct {
 	// MoveOriginals makes a user copy count as one too, with Balance: the plan of atoll balance --move-originals, the
 	// only way a user copy moves (specs.md §6.1, §13.3).
 	MoveOriginals bool
+	// Taken answers for the names a disk holds: whether the catalog has, on that disk, a name with the collision key
+	// of path and other bytes (specs.md §15.7), be it a file with a copy there, the name a copy still sits at, or an
+	// entry, a folder as any other. The plan asks it of an NTFS disk alone, of each folder above a file, then of the
+	// file: it holds no name of a disk that the catalog can answer for, as a disk has hundreds of thousands (§26).
+	// What is not on a disk yet, it holds itself. Nil answers that nothing is taken.
+	Taken func(disk, path string) (bool, error)
 }
 
 // JobKind is a kind of job (specs.md §9).
@@ -180,6 +187,10 @@ func makePlan(in Input, each func(file int, jobs []Job) error) (Plan, error) {
 	}
 	order := slices.Clone(p.files)
 	slices.SortFunc(order, compareFiles)
+	// The pending copies first, in the order of the files: what each keeps is no longer there for the next.
+	for _, f := range order {
+		p.holdRoom(f)
+	}
 	var plan Plan
 	give := func(f *planFile) error {
 		if each == nil || len(plan.Jobs) == 0 {
@@ -232,7 +243,10 @@ type planDisk struct {
 	folders map[string]bool
 	others  map[string]bool    // symlinks and ignored files
 	old     map[string]bool    // the names copies that have not followed a rename still sit at, made when there is one
-	names   *names.TargetNames // built when a file first looks there, on NTFS only
+	names   *names.TargetNames // on NTFS, the names that are not on the disk yet: ownNames
+	asked   map[string]bool    // on NTFS, what the catalog answered of each folder asked
+	last    *planFile          // on NTFS, the file last asked of, and what the catalog answered
+	taken   bool
 }
 
 func (d *planDisk) writable() bool {
@@ -298,11 +312,13 @@ type planner struct {
 	balance bool
 	// originals says that a user copy can be misplaced too (Input.MoveOriginals).
 	originals bool
+	// taken is Input.Taken.
+	taken func(disk, path string) (bool, error)
 }
 
 func newPlanner(in Input) (*planner, error) {
 	p := &planner{byID: map[string]*planDisk{}, byPath: map[string]*planFile{}, entries: in.Entries, balance: in.Balance,
-		originals: in.Balance && in.MoveOriginals}
+		originals: in.Balance && in.MoveOriginals, taken: in.Taken}
 	if err := p.addDisks(in); err != nil {
 		return nil, err
 	}
@@ -536,8 +552,8 @@ type countedCopy struct {
 	disk *planDisk
 }
 
-// keep chooses the copies that stay when more count than the level (specs.md §13.4),
-// sets their marks, and takes the size of each pending one off its disk.
+// keep chooses the copies that stay when more count than the level (specs.md §13.4), and sets their marks. The room
+// of a pending copy it keeps is held once every file is read: holdRoom.
 func (f *planFile) keep(counted []countedCopy) {
 	byRank := slices.Clone(counted)
 	slices.SortFunc(byRank, func(a, b countedCopy) int { return compareKeep(a, b, f.Placement) })
@@ -568,12 +584,46 @@ func (f *planFile) keep(counted []countedCopy) {
 			f.mark().cancel = append(f.mark().cancel, c.disk)
 		case kept && c.copy.State == CopyPending:
 			f.pending++
-			c.disk.room = subtract(c.disk.room, f.Size)
 		}
 		// A pending copy the plan has just canceled is no copy the file reaches: counted, a file left with one copy
 		// that can be read, beside one on a disk away, was not degraded until the next plan.
 		if c.disk.State != DiskMissing && (kept || c.copy.State != CopyPending) {
 			f.reached++
+		}
+	}
+}
+
+// holdRoom takes the size of each pending copy a file keeps off its disk, by position, when the file fits in what that
+// disk has left after min_free. One that does not fit is canceled, and counts no more: its file is then below its
+// level, and is placed again as any other, on a disk with room, or waits there (specs.md §12.4, §13.4). Kept whatever
+// room was left, a copy queued while there was room was written later into the reserve of min_free.
+func (p *planner) holdRoom(f *planFile) {
+	if f.pending == 0 {
+		return
+	}
+	var kept []*planDisk
+	for i := range f.Copies {
+		if d := p.byID[f.Copies[i].Disk]; f.Copies[i].State == CopyPending && slices.Contains(f.counted, d) {
+			kept = append(kept, d)
+		}
+	}
+	slices.SortFunc(kept, func(a, b *planDisk) int { return cmp.Compare(a.Position, b.Position) })
+	canceled := false
+	for _, d := range kept {
+		if f.Size <= d.room {
+			d.room = subtract(d.room, f.Size)
+			continue
+		}
+		canceled = true
+		f.pending--
+		f.reached--
+		f.counted = slices.DeleteFunc(f.counted, func(o *planDisk) bool { return o == d })
+		f.mark().cancel = append(f.mark().cancel, d)
+	}
+	if canceled {
+		f.covered = f.covered[:0]
+		for _, d := range f.counted {
+			f.covered = appendNew(f.covered, d.domain)
 		}
 	}
 }
@@ -642,38 +692,78 @@ func (p *planner) addEntries() error {
 	return nil
 }
 
-// namesOf returns the names on an NTFS disk, gathered the first time a file looks
-// there: most files are at their level, and a plan with nothing to place needs none.
-// Whatever the plan has placed on this disk is in them, as placing it looked here.
-func (p *planner) namesOf(d *planDisk) (*names.TargetNames, error) {
+// ownNames returns the names an NTFS disk is to hold that the catalog cannot answer for (Input.Taken), gathered the
+// first time a file looks there: most files are at their level, and a plan with nothing to place needs none. The
+// catalog answers by the key of a name it has on the disk, a folder as any other, so what is left is what is not there
+// yet: the folders above a copy that is pending or away, which no look found; the name a copy is to take while it
+// still sits at the one it had before a rename, and the folders above it; and whatever the plan places there, as
+// placing it looked here. Those are few, where the names of a disk are hundreds of thousands (specs.md §26).
+func (p *planner) ownNames(d *planDisk) (*names.TargetNames, error) {
 	if d.names != nil {
 		return d.names, nil
 	}
 	t := names.NewTargetNames()
-	for i := range p.entries {
-		if p.entries[i].Disk == d.ID {
-			if err := t.Add(p.entries[i].Path); err != nil {
-				return nil, fmt.Errorf("plan: %w", err)
-			}
-		}
-	}
 	for _, f := range p.files {
-		if slices.Contains(f.holding, d) {
-			if err := t.Add(f.Path); err != nil {
-				return nil, fmt.Errorf("plan: %w", err)
-			}
-		}
-		// A copy that has not followed a rename is at that name on its disk, whatever the file is called.
 		for i := range f.Copies {
-			if c := &f.Copies[i]; c.Disk == d.ID && c.OldPath != "" {
-				if err := t.Add(c.OldPath); err != nil {
-					return nil, fmt.Errorf("plan: %w", err)
+			c := &f.Copies[i]
+			if c.Disk != d.ID {
+				continue
+			}
+			name := ""
+			switch {
+			case c.OldPath != "":
+				name = f.Path
+			case c.State == CopyPending || c.Away:
+				// The catalog answers for the copy's own name, of which it has a row.
+				if slash := strings.LastIndexByte(f.Path, '/'); slash > 0 {
+					name = f.Path[:slash]
 				}
+			}
+			if name == "" {
+				continue
+			}
+			if err := t.Add(name); err != nil {
+				return nil, fmt.Errorf("plan: %w", err)
 			}
 		}
 	}
 	d.names = t
 	return t, nil
+}
+
+// takenOn asks the catalog whether an NTFS disk holds a name that collides with a file's: each folder above it, asked
+// once in a plan however many files it holds, then the file, asked once however many times a disk is looked for it.
+func (p *planner) takenOn(d *planDisk, f *planFile) (bool, error) {
+	if p.taken == nil {
+		return false, nil
+	}
+	if d.last == f {
+		return d.taken, nil
+	}
+	taken := false
+	var err error
+	parents(f.Path, func(folder string) bool {
+		answer, asked := d.asked[folder]
+		if !asked {
+			if answer, err = p.taken(d.ID, folder); err != nil {
+				return false
+			}
+			if d.asked == nil {
+				d.asked = map[string]bool{}
+			}
+			d.asked[folder] = answer
+		}
+		taken = answer
+		return !taken
+	})
+	if err == nil && !taken {
+		taken, err = p.taken(d.ID, f.Path)
+	}
+	if err != nil {
+		return false, fmt.Errorf("plan: %w", err)
+	}
+	d.last, d.taken = f, taken
+	return taken, nil
 }
 
 // compareFiles is the order of specs.md §13.4.
@@ -918,7 +1008,7 @@ func (p *planner) checkName(f *planFile, d *planDisk) (nameRefusal, error) {
 	if d.FS != names.NTFS {
 		return nameRefusal{}, nil
 	}
-	t, err := p.namesOf(d)
+	t, err := p.ownNames(d)
 	if err != nil {
 		return nameRefusal{}, err
 	}
@@ -926,7 +1016,11 @@ func (p *planner) checkName(f *planFile, d *planDisk) (nameRefusal, error) {
 	if err != nil {
 		return nameRefusal{}, fmt.Errorf("plan: %w", err)
 	}
-	return nameRefusal{collision: found != nil}, nil
+	if found != nil {
+		return nameRefusal{collision: true}, nil
+	}
+	taken, err := p.takenOn(d, f)
+	return nameRefusal{collision: taken}, err
 }
 
 // pathFree reports whether nothing on the disk stands in the way of a path.

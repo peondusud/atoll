@@ -32,10 +32,6 @@ const checkEvery = 30 * time.Second
 // asked again and again.
 const retryAfter = time.Minute
 
-// alertRetry is when a pass comes again after an alert could not be sent, so that it is tried again soon
-// (specs.md §23).
-const alertRetry = 5 * time.Minute
-
 // remountTimeout is how long umount, then mount, may each take at a remount, which is what systemd gives a mount: a
 // disk that died halfway can hold one for good, and the loop does nothing else meanwhile. remountLinger is how long
 // one that was killed is then waited for: a helper it started may keep its output open.
@@ -187,6 +183,20 @@ type loop struct {
 	afterPass bool
 	// hashPending says that files may be waiting for their hash: set by each pass, cleared once none is left.
 	hashPending bool
+	// toRead holds the files the last pass left to read before they are decided, and readDecided says that a slice of
+	// those reads left something for a pass since: copies made stale, a guard tripped, a disk lost (specs.md §15.13).
+	toRead      []jobs.PendingRead
+	readDecided bool
+	// purgePending says that the purge of the trash stopped at its slice with entries left (specs.md §17).
+	purgePending bool
+	// unsent holds what the last pass left to send that did not go, alertDue when it is tried again, alone, and
+	// alertTries how many tries in a row left some unsent (specs.md §23).
+	unsent     *alerts.Due
+	alertDue   *int64
+	alertTries int
+	// unopened holds, by disk, the files a read could not open for a reason that says nothing of their disk, in byte
+	// order, until one opens: the alerts after a pass count those that still refuse (specs.md §15.10, §23).
+	unopened map[string][]string
 	// scrubSpent is what the scrub spent in the stretch of its window that began at scrubOpened, and scrubIdle the
 	// stretch in which it found no copy left to read: copies come due again with the next one (specs.md §16).
 	scrubSpent  time.Duration
@@ -310,7 +320,7 @@ func (l *loop) run(ctx context.Context) error {
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
 			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
-			HashPending: l.hashPending && l.opt.Apply,
+			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending, AlertRetryDueNS: l.alertDue,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
 			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
@@ -332,9 +342,21 @@ func (l *loop) run(ctx context.Context) error {
 			l.afterPass = true
 			continue
 		}
-		if out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+		if out.Read || out.Purge || out.Alerts || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
 			// The turn another step has after a pass.
 			l.afterPass = false
+		}
+		if out.Read {
+			l.readChanged(ctx)
+			continue
+		}
+		if out.Purge {
+			l.purgeMore(ctx)
+			continue
+		}
+		if out.Alerts {
+			l.resendAlerts(ctx)
+			continue
 		}
 		if out.Notify {
 			l.tell(ctx)
@@ -586,7 +608,8 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	sink := &passSink{folders: map[string]bool{}}
 	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
-		outcome, err := jobs.RunClosed(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
+		// A pass reads no file whole: what must be read to be decided is read after it, by slices (specs.md §15.13).
+		outcome, err := jobs.RunLater(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
 		if err != nil {
 			return nil, err
 		}
@@ -625,6 +648,8 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	l.queueFolders(sink.folders)
 	l.passDue = nil
 	l.hashPending = true
+	// What this pass left to read is all there is to read: what an earlier one left and is still changed, it found again.
+	l.toRead, l.readDecided = outcome.ToRead, false
 	if outcome.NextDue.Valid {
 		next := outcome.NextDue.Int64
 		l.passDue = &next
@@ -687,6 +712,17 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 	if err == nil {
 		facts.Dirty = l.dirtyDisks()
 		facts.Foreign = l.foreignWorkdirs(outcome)
+		facts.Unopened = l.stillUnopened()
+		// A trash that a purge still under way will bring back under its limit is not full: only one that stays over
+		// once everything due is gone is told of (specs.md §23).
+		if l.purgePending && len(facts.TrashFull) > 0 {
+			var full map[string]bool
+			if full, err = trash.FullOncePurged(ctx, db, l.opt.Config, now); err == nil {
+				facts.TrashFull = slices.DeleteFunc(facts.TrashFull, func(t alerts.TrashFull) bool { return !full[t.ID] })
+			}
+		}
+	}
+	if err == nil {
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {
@@ -704,15 +740,34 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 	return nil
 }
 
-// sendAlerts sends what a pass left to send, outside the catalog's lock, then records what went under it. An
-// alert that did not go brings a pass sooner, which tries it again.
+// sendAlerts sends what a pass left to send, outside the catalog's lock, then records what went under it. What an
+// earlier pass left unsent is this pass's to say again, or not: its conditions were worked out again.
 func (l *loop) sendAlerts(ctx context.Context, due *alerts.Due) {
+	l.unsent, l.alertDue = nil, nil
 	if due == nil || len(due.Messages) == 0 {
+		l.alertTries = 0
 		return
 	}
+	l.trySend(ctx, due)
+}
+
+// resendAlerts tries again, alone, the alerts that did not go (specs.md §23): no pass, which would walk every disk
+// for a server that is down, and their text is the last pass's.
+func (l *loop) resendAlerts(ctx context.Context) {
+	due := l.unsent
+	l.unsent, l.alertDue = nil, nil
+	if due != nil && len(due.Messages) > 0 {
+		l.trySend(ctx, due)
+	}
+}
+
+// trySend sends alerts, records those that went, and keeps the others for another try: 5 minutes later, then twice as
+// long after each try that leaves some unsent, up to an hour, so that a server down for days is not asked 288 times
+// a day.
+func (l *loop) trySend(ctx context.Context, due *alerts.Due) {
 	sent := alerts.SendAll(ctx, l.set.channels, due.Messages, func(m *alerts.Message, c alerts.Channel, err error) {
 		if ctx.Err() == nil {
-			l.log.Warn("an alert could not be sent: a pass tries again", "key", m.Key, "channel", c.Name(), "error", err)
+			l.log.Warn("an alert could not be sent: it is tried again alone", "key", m.Key, "channel", c.Name(), "error", err)
 		}
 	})
 	for _, key := range sent {
@@ -723,12 +778,14 @@ func (l *loop) sendAlerts(ctx context.Context, due *alerts.Due) {
 			l.log.Warn("the alerts sent could not be recorded: they may be sent again", "error", err)
 		}
 	}
-	if len(sent) < len(due.Messages) {
-		retry := l.opt.Machine.Now() + alertRetry.Nanoseconds()
-		if l.passDue == nil || *l.passDue > retry {
-			l.passDue = &retry
-		}
+	if len(sent) == len(due.Messages) {
+		l.alertTries = 0
+		return
 	}
+	l.alertTries++
+	l.unsent = due.Unsent(sent)
+	again := l.opt.Machine.Now() + alerts.RetryAfter(l.alertTries).Nanoseconds()
+	l.alertDue = &again
 }
 
 // remindAt brings a pass when the next reminder of an alert is due, 24 h after it was last sent (specs.md §23): on a
@@ -743,18 +800,136 @@ func (l *loop) remindAt(due *alerts.Due) {
 	}
 }
 
+// readChanged reads, for a slice of time and under the catalog's lock, the changed copies the last pass left, and
+// decides their files as a pass would have (specs.md §15.4, §15.13). A slice runs no job: once nothing is left to read,
+// a pass follows when a slice left it something, the copies a modification made stale, a guard that tripped or a disk
+// lost, and its alerts with it. What a slice could not decide is the next pass's to find again.
+func (l *loop) readChanged(ctx context.Context) {
+	sink := &passSink{folders: map[string]bool{}}
+	var left []jobs.PendingRead
+	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
+		outcome, rest, err := jobs.ReadChanged(ctx, db, l.opt.Config, l.opt.Machine, sink, l.toRead, l.opt.Machine.Now()+hashSlice.Nanoseconds())
+		left = rest
+		return outcome, err
+	})
+	now := l.opt.Machine.Now()
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		// The pass finds again what is still changed.
+		l.toRead = nil
+		retry := now + retryAfter.Nanoseconds()
+		if l.passDue == nil || *l.passDue > retry {
+			l.passDue = &retry
+		}
+		l.log.Warn("reading the changed copies failed: a pass tries again", "error", err)
+		return
+	}
+	l.queueFolders(sink.folders)
+	l.toRead = left
+	l.readDecided = l.readDecided || sink.decisions > 0 || outcome.Held || outcome.Partial
+	if sink.decisions > 0 || sink.operations > 0 || outcome.Held {
+		l.log.Info("changed copies were read", "decisions", sink.decisions, "operations", sink.operations, "left", len(left), "waiting", outcome.Waiting,
+			"partial", outcome.Partial, "held", outcome.Held)
+	}
+	if outcome.NextDue.Valid && (l.passDue == nil || *l.passDue > outcome.NextDue.Int64) {
+		next := outcome.NextDue.Int64
+		l.passDue = &next
+	}
+	if len(left) == 0 && l.readDecided {
+		l.readDecided = false
+		l.passDue = &now
+	}
+}
+
 // hash reads new files' hashes for a slice of time, under the catalog's lock (specs.md §15.13).
 func (l *loop) hash(ctx context.Context) {
-	left := false
+	var out *watch.HashSlice
 	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		var err error
-		left, err = watch.HashNew(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Machine.Now()+hashSlice.Nanoseconds())
+		out, err = watch.HashNew(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Machine.Now()+hashSlice.Nanoseconds())
 		return nil, err
 	})
-	if err != nil && ctx.Err() == nil {
-		l.log.Warn("reading new files' hashes failed: the next pass tries again", "error", err)
+	if err != nil {
+		if ctx.Err() == nil {
+			l.log.Warn("reading new files' hashes failed: the next pass tries again", "error", err)
+		}
+		l.hashPending = false
+		return
 	}
-	l.hashPending = left && err == nil
+	l.hashPending = out.Left
+	l.keepUnopened(out.Refused)
+}
+
+// unopenedKept is how many files a read could not open the daemon keeps for a disk. Past it, the alert tells of that
+// many: a whole disk that refuses would otherwise be kept name by name.
+const unopenedKept = 1000
+
+// keepUnopened keeps the files a read could not open, by disk, and brings a pass when one is new, whose alerts tell
+// of them (specs.md §15.13, §23): nothing else tells of a file that is never hashed, or of a copy that is never
+// verified. The slices that follow that pass try the same files again, find nothing new, and bring none.
+func (l *loop) keepUnopened(refused map[string][]string) {
+	found := false
+	for id, names := range refused {
+		for _, name := range names {
+			kept := l.unopened[id]
+			at, has := slices.BinarySearch(kept, name)
+			if has || len(kept) >= unopenedKept {
+				continue
+			}
+			if l.unopened == nil {
+				l.unopened = map[string][]string{}
+			}
+			l.unopened[id] = slices.Insert(kept, at, name)
+			found = true
+		}
+	}
+	if found {
+		now := l.opt.Machine.Now()
+		l.passDue = &now
+	}
+}
+
+// stillUnopened asks again of each file kept as one a read could not open, and gives those that still refuse, by
+// disk, for the alerts. One that opens, or whose name is gone, is told of no more, nor is a disk the configuration no
+// longer lists. A disk that is missing says nothing now, and what is known of it is kept.
+func (l *loop) stillUnopened() map[string][]string {
+	told := map[string][]string{}
+	for id, names := range l.unopened {
+		d := l.set.disksByID[id]
+		if d == nil {
+			delete(l.unopened, id)
+			continue
+		}
+		if st := l.disks[id]; st == nil || st.state == disks.Missing {
+			continue
+		}
+		root, err := l.opt.Machine.OpenRoot(d.Mount, d.Root)
+		if err != nil {
+			continue
+		}
+		still := names[:0]
+		for _, name := range names {
+			f, err := fsx.OpenFileAt(root, name)
+			switch {
+			case err == nil:
+				// A file only opened, whose close failing changes nothing.
+				_ = f.Close()
+			case fsx.IsUnreadableName(err):
+			default:
+				still = append(still, name)
+			}
+		}
+		_ = root.Close()
+		if len(still) == 0 {
+			delete(l.unopened, id)
+			continue
+		}
+		l.unopened[id] = still
+		told[id] = still
+	}
+	return told
 }
 
 // scrub reads the copies due for a slice of time, under the catalog's lock, within what is left of the budget of the
@@ -783,10 +958,14 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		return
 	}
 	left, corrupt := false, 0
+	refused := map[string][]string{}
 	for i := range out.Disks {
 		d := &out.Disks[i]
 		left = left || d.Left
 		corrupt += len(d.Corrupt)
+		if len(d.Refused) > 0 {
+			refused[d.ID] = d.Refused
+		}
 		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Changed) > 0 {
 			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "repaired", len(d.Repaired), "quarantined", len(d.Quarantined),
 				"kept", len(d.Kept), "changed", len(d.Changed))
@@ -799,6 +978,7 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		now := l.opt.Machine.Now()
 		l.passDue = &now
 	}
+	l.keepUnopened(refused)
 }
 
 // backup backs the catalog up, under its lock, once for the stretch of maintenance.window that began at opened, and
@@ -828,28 +1008,44 @@ func (l *loop) backup(ctx context.Context, opened int64) {
 
 // purge purges the trash after a pass, under the same lock, as atoll trash purge --yes does: what has reached its
 // time, then what goes for room (specs.md §15.13, §17). It reads the catalog first, and checks no disk when nothing is
-// due. A dry run purges nothing.
+// due. It stops at its slice, and what is left goes by slices of its own, the lock let go between two: the day a mass
+// deletion reaches its retention, no command waits for the whole of it. A dry run purges nothing.
 func (l *loop) purge(ctx context.Context, db *sql.DB) {
-	if !l.opt.Apply {
-		return
+	l.purgePending = l.opt.Apply && l.purgeSlice(ctx, db)
+}
+
+// purgeMore goes on with a purge that stopped at its slice, under the catalog's lock.
+func (l *loop) purgeMore(ctx context.Context) {
+	left := false
+	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
+		left = l.purgeSlice(ctx, db)
+		return nil, nil
+	})
+	if err != nil && ctx.Err() == nil {
+		l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
 	}
+	l.purgePending = left && err == nil
+}
+
+// purgeSlice purges the trash for a slice of time, and says whether it stopped there with entries left.
+func (l *loop) purgeSlice(ctx context.Context, db *sql.DB) bool {
 	due, err := trash.PurgeDue(ctx, db, l.opt.Config, l.opt.Machine.Now())
 	if err != nil || !due {
 		if err != nil && ctx.Err() == nil {
 			l.log.Warn("the trash could not be read: the next pass tries again", "error", err)
 		}
-		return
+		return false
 	}
 	s, err := trash.Open(ctx, db, l.opt.Config, l.opt.Machine, true)
 	if err != nil {
 		if ctx.Err() == nil {
 			l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
 		}
-		return
+		return false
 	}
 	defer s.Close()
 	var purged, stayed int
-	summary, err := s.Purge(ctx, nil, func(e *trash.EntryItem) error {
+	summary, left, err := s.PurgeUntil(ctx, l.opt.Machine.Now()+hashSlice.Nanoseconds(), func(e *trash.EntryItem) error {
 		if e.Outcome == trash.OutcomePurged {
 			purged++
 		} else {
@@ -864,9 +1060,10 @@ func (l *loop) purge(ctx context.Context, db *sql.DB) {
 		if ctx.Err() == nil {
 			l.log.Warn("purging the trash failed: the next pass tries again", "error", err)
 		}
-		return
+		return false
 	}
-	l.log.Info("the trash was purged", "entries", purged, "bytes", summary.Bytes, "stayed", stayed, "full", summary.Full)
+	l.log.Info("the trash was purged", "entries", purged, "bytes", summary.Bytes, "stayed", stayed, "full", summary.Full, "left", left)
+	return left
 }
 
 // locked runs fn on the catalog, under its lock, which it takes after the others' and lets go of last.

@@ -21,20 +21,24 @@ type ModifyGuardRead struct {
 	Answer   string        // the kind of the last answer, EventModifyGuardConfirm or EventModifyGuardReject, "" with none
 	UpTo     sql.NullInt64 // of that answer
 	AnswerID int64         // of that answer's event
-	Stands   bool          // a modify-guard event since then
-	GuardNS  int64         // the time of that event
-	Count    int64         // modified events of the disk within the window, later than the answer, not answered
+	// Lapsed says that the answer was given more than the guard's window ago: it decides nothing any more.
+	Lapsed  bool
+	Stands  bool  // a modify-guard event since then
+	GuardNS int64 // the time of that event
+	Count   int64 // modified events of the disk within the window, later than the answer, not answered
 }
 
-// Answers says whether the last answer covers a copy changed at that change time, and so decides it.
+// Answers says whether the last answer covers a copy changed at that change time, and so decides it: one given
+// within the guard's window, as an answer speaks of what the guard held when it was given, and stands for no change
+// found long after (specs.md §15.6).
 func (g *ModifyGuardRead) Answers(ctimeNS int64) bool {
-	return g.UpTo.Valid && ctimeNS <= g.UpTo.Int64
+	return g.UpTo.Valid && !g.Lapsed && ctimeNS <= g.UpTo.Int64
 }
 
 // The reads of the mass-modification guard, made at every pass for each disk (specs.md §15.6), as those of the
 // mass-deletion guard: never over the whole log (TestGuardReadsUseAnIndex).
 const (
-	modifyAnswerQuery = `SELECT id, kind, json_extract(data, '$.up_to') FROM events
+	modifyAnswerQuery = `SELECT id, kind, json_extract(data, '$.up_to'), ts_ns FROM events
 		WHERE kind IN (?1, ?2) AND json_extract(data, '$.disk') = ?3
 		ORDER BY id DESC LIMIT 1`
 	modifyGuardSinceQuery = "SELECT ts_ns FROM events WHERE kind = ? AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1"
@@ -45,8 +49,12 @@ const (
 // ReadModifyGuard reads what the mass-modification guard of a disk looks at.
 func ReadModifyGuard(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS int64) (*ModifyGuardRead, error) {
 	g := &ModifyGuardRead{}
-	err := db.QueryRowContext(ctx, modifyAnswerQuery, EventModifyGuardConfirm, EventModifyGuardReject, disk).Scan(&g.AnswerID, &g.Answer, &g.UpTo)
-	if err != nil && !isNoRows(err) {
+	var givenNS int64
+	err := db.QueryRowContext(ctx, modifyAnswerQuery, EventModifyGuardConfirm, EventModifyGuardReject, disk).Scan(&g.AnswerID, &g.Answer, &g.UpTo, &givenNS)
+	switch {
+	case err == nil:
+		g.Lapsed = nowNS-givenNS > windowNS
+	case !isNoRows(err):
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
 	err = db.QueryRowContext(ctx, modifyGuardSinceQuery, EventModifyGuard, g.AnswerID, disk).Scan(&g.GuardNS)

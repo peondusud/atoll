@@ -44,6 +44,7 @@ func TestForeignWorkdirs(t *testing.T) {
 		{"away", names.Ext4, 1000, disks.Missing},
 		{"ntfs", names.NTFS, 1000, disks.Online},
 		{"new", names.Ext4, -1, disks.Online},
+		{"links", names.Ext4, 997, disks.Online},
 	} {
 		mount := filepath.Join(top, tc.id)
 		if tc.owner >= 0 {
@@ -55,6 +56,16 @@ func TestForeignWorkdirs(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if tc.id == "links" {
+			// The work folder is Atoll's, and the folder of its links another account's.
+			links := filepath.Join(mount, "Atoll", "links")
+			if err := os.Mkdir(links, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chown(links, 1002, 1002); err != nil {
+				t.Fatal(err)
+			}
+		}
 		list = append(list, config.Disk{ID: tc.id, Mount: mount, Workdir: "Atoll", FS: tc.fs})
 		lines = append(lines, jobs.DiskLine{ID: tc.id, Verdict: disks.Verdict{State: tc.verdict}})
 	}
@@ -63,6 +74,7 @@ func TestForeignWorkdirs(t *testing.T) {
 	want := []alerts.ForeignWorkdir{
 		{ID: "theirs", Path: filepath.Join(top, "theirs", "Atoll"), UID: 1000, Want: 997},
 		{ID: "readonly", Path: filepath.Join(top, "readonly", "Atoll"), UID: 1001, Want: 997},
+		{ID: "links", Path: filepath.Join(top, "links", "Atoll", "links"), UID: 1002, Want: 997},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("%+v", got)

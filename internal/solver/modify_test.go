@@ -23,6 +23,7 @@ type modVector struct {
 		State    *CopyState   `json:"state"`
 		Size     *int64       `json:"size"`
 		Due      bool         `json:"due"`
+		NotLater bool         `json:"ctime_not_later"`
 		Readable bool         `json:"readable"`
 		Hash     *string      `json:"hash"`
 	} `json:"copies"`
@@ -56,7 +57,7 @@ func modInputOf(t *testing.T, i int, v *modVector) *ModInput {
 		}
 		in.Copies = append(in.Copies, ModCopy{
 			Disk: *c.Disk, Position: *c.Position, Verdict: *c.Verdict, Other: c.Other, State: *c.State, Size: *c.Size,
-			Due: c.Due, Readable: c.Readable, Hash: hashOf(c.Hash),
+			Due: c.Due, CtimeNotLater: c.NotLater, Readable: c.Readable, Hash: hashOf(c.Hash),
 		})
 	}
 	return in

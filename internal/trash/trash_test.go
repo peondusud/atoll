@@ -44,6 +44,10 @@ type bench struct {
 	otherMount map[string]string
 	// onMount is told of each look at a mount.
 	onMount func(mount string)
+	// elapsed is how long the bench's clock has moved since its start.
+	elapsed int64
+	// capacity is what each disk says it holds, 1 GiB when left at 0.
+	capacity int64
 }
 
 func (b *bench) Mount(mount string) disks.MountSeen {
@@ -85,8 +89,11 @@ func (b *bench) ReadPastCache(_ names.Filesystem, entry *disks.MountEntry) disks
 }
 
 func (b *bench) Root(string, string) disks.RootSeen { return disks.RootSeen{Folder: disks.FolderOK} }
-func (b *bench) Now() int64                         { return 1767225600000000000 }
+func (b *bench) Now() int64                         { return 1767225600000000000 + b.elapsed }
 func (b *bench) Space(string) (capacity, free int64, err error) {
+	if b.capacity > 0 {
+		return b.capacity, b.capacity / 2, nil
+	}
 	return 1 << 30, 1 << 29, nil
 }
 func (b *bench) Checkpoint(point string) {
@@ -3663,20 +3670,6 @@ func TestAReplacementBetweenTheLookAndTheMove(t *testing.T) {
 			t.Errorf("the operation is %q", got)
 		}
 	})
-}
-
-// atOrBelow compares whole components: nothing else may match.
-func TestAtOrBelow(t *testing.T) {
-	for _, tc := range []struct {
-		path, under string
-		want        bool
-	}{
-		{"a", "a", true}, {"a/b", "a", true}, {"a/b/c", "a/b", true}, {"ab", "a", false}, {"a", "a/b", false}, {"a b/c", "a", false},
-	} {
-		if got := atOrBelow(tc.path, tc.under); got != tc.want {
-			t.Errorf("atOrBelow(%q, %q) = %v", tc.path, tc.under, got)
-		}
-	}
 }
 
 // A folder made below the root takes the mode and owner of the one it stands for, in two steps: made, then given

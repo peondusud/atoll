@@ -392,35 +392,63 @@ func TestRunPurgesTheTrash(t *testing.T) {
 	}
 }
 
-// failing is a channel that cannot be reached.
-type failing struct{}
+// recovering is a channel that cannot be reached until it is up.
+type recovering struct{ up *bool }
 
-func (failing) Name() string                                { return "alerts.ntfy" }
-func (failing) Send(context.Context, *alerts.Message) error { return errors.New("unreachable") }
+func (recovering) Name() string { return "alerts.ntfy" }
+func (r recovering) Send(context.Context, *alerts.Message) error {
+	if *r.up {
+		return nil
+	}
+	return errors.New("unreachable")
+}
 
-// An alert that did not go brings the next pass within alertRetry, and never puts off one due sooner.
-func TestFailedAlertBringsAPass(t *testing.T) {
+// An alert that did not go is tried again alone, with no pass: 5 minutes later, then twice as long after each try
+// that leaves it unsent, up to an hour (specs.md §23). It brought a pass every 5 minutes, 288 a day that each walked
+// every disk, for as long as a server was down.
+func TestAnAlertThatDidNotGoIsTriedAgainAlone(t *testing.T) {
+	c := bench(t, "")
+	file, _ := c.Effective()["catalog"].(string)
 	machine, err := disks.NewMachine()
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &loop{opt: &Options{Machine: machine}, set: &settings{channels: []alerts.Channel{failing{}}}, log: slog.New(slog.DiscardHandler)}
-	due := &alerts.Due{Messages: []*alerts.Message{{Key: "disk-missing:t1"}}}
-	before := machine.Now()
-	l.sendAlerts(t.Context(), due)
-	if l.passDue == nil || *l.passDue < before+alertRetry.Nanoseconds() || *l.passDue > machine.Now()+alertRetry.Nanoseconds() {
-		t.Fatalf("the next pass at %v, now %d", l.passDue, before)
+	up := false
+	l := &loop{opt: &Options{Machine: machine, Config: c}, set: &settings{catalog: file, channels: []alerts.Channel{recovering{&up}}}, log: slog.New(slog.DiscardHandler)}
+	due := &alerts.Due{Messages: []*alerts.Message{{Key: "disk-missing:t1"}, {Key: "files-corrupt"}}}
+	for try, wait := range []time.Duration{5 * time.Minute, 10 * time.Minute, 20 * time.Minute, 40 * time.Minute, time.Hour, time.Hour} {
+		before := machine.Now()
+		if try == 0 {
+			l.sendAlerts(t.Context(), due)
+		} else {
+			l.resendAlerts(t.Context())
+		}
+		if l.passDue != nil {
+			t.Fatalf("try %d: an alert that did not go brought a pass", try)
+		}
+		if l.alertDue == nil || *l.alertDue < before+wait.Nanoseconds() || *l.alertDue > machine.Now()+wait.Nanoseconds() {
+			t.Fatalf("try %d: tried again at %v, want %v after %d", try, l.alertDue, wait, before)
+		}
+		if l.unsent == nil || len(l.unsent.Messages) != 2 {
+			t.Fatalf("try %d: %+v kept to send", try, l.unsent)
+		}
 	}
-	sooner := before + 1
-	l.passDue = &sooner
-	l.sendAlerts(t.Context(), due)
-	if *l.passDue != sooner {
-		t.Errorf("a pass due sooner was put off to %d", *l.passDue)
+	// The server is back: both go at the next try, and nothing waits any more.
+	up = true
+	l.resendAlerts(t.Context())
+	if l.unsent != nil || l.alertDue != nil || l.alertTries != 0 {
+		t.Errorf("once sent: %+v kept, tried again at %v, %d tries", l.unsent, l.alertDue, l.alertTries)
 	}
-	l.passDue = nil
+	// What a pass leaves to send replaces what an earlier one left unsent, and a pass with nothing to send leaves none.
+	up = false
+	l.sendAlerts(t.Context(), due)
+	l.sendAlerts(t.Context(), &alerts.Due{Messages: []*alerts.Message{{Key: "pool-full"}}})
+	if l.unsent == nil || len(l.unsent.Messages) != 1 || l.unsent.Messages[0].Key != "pool-full" {
+		t.Errorf("after another pass: %+v kept", l.unsent)
+	}
 	l.sendAlerts(t.Context(), &alerts.Due{})
-	if l.passDue != nil {
-		t.Error("nothing to send brought a pass")
+	if l.unsent != nil || l.alertDue != nil || l.passDue != nil {
+		t.Errorf("after a pass with nothing to send: %+v kept, tried again at %v", l.unsent, l.alertDue)
 	}
 }
 

@@ -233,3 +233,47 @@ func ClearCorrupt(ctx context.Context, db *sql.DB, fileID int64, disk string, no
 	}
 	return nil
 }
+
+// settleChangedSQL gives a copy in state corrupt what a look found of it, and makes it ok: verified at ?9, or never
+// when that is NULL. A file that took its name, ?10, is first seen now; who made the copy stays, as after a change of
+// metadata (specs.md §15.4).
+const settleChangedSQL = `
+	UPDATE copies SET state = 'ok', file_key = ?3, nlink = ?4, size = ?5, mtime_ns = ?6, ctime_ns = ?7, btime_ns = ?8, verified_ns = ?9,
+		first_seen_ns = CASE WHEN ?10 THEN ?11 ELSE first_seen_ns END, mode = ?12, uid = ?13, gid = ?14, gone_ns = NULL, gone_kind = NULL
+	WHERE file_id = ?1 AND disk_id = ?2 AND state = 'corrupt'`
+
+// SettleChanged records what a repair found of a copy in state corrupt whose name no longer holds what its row says,
+// read whole as it is now (specs.md §16.1). The copy is ok, and its row takes what the look before the read found.
+// Holding its file's content, it is verified now. Otherwise nothing tells rot that someone touched from another
+// version of the file: the copy is never verified, and its file becomes a conflict, every version kept (specs.md
+// §15.7), unless another copy of it is still corrupt, as a file is corrupt while a copy is (specs.md §16). It says
+// whether the file is a conflict by its end. A copy no longer corrupt is left as it is.
+func SettleChanged(ctx context.Context, db *sql.DB, fileID int64, c *ChangedCopy, holds bool, nowNS int64) (bool, error) {
+	conflict := false
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		var verified sql.NullInt64
+		if holds {
+			verified = sql.NullInt64{Int64: nowNS, Valid: true}
+		}
+		res, err := tx.ExecContext(ctx, settleChangedSQL, fileID, c.Disk, c.FileKey, c.Nlink, c.Size, c.MtimeNS, c.CtimeNS, c.BtimeNS, verified,
+			c.Replaced, nowNS, c.Mode, c.UID, c.GID)
+		if err != nil {
+			return fmt.Errorf("copy: %w", err)
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 || holds {
+			return err //nolint:wrapcheck // the driver's own, of a count
+		}
+		res, err = tx.ExecContext(ctx, `UPDATE files SET state = 'conflict', updated_ns = ?2
+			WHERE id = ?1 AND NOT EXISTS(SELECT 1 FROM copies WHERE file_id = ?1 AND state = 'corrupt')`, fileID, nowNS)
+		if err != nil {
+			return fmt.Errorf("file: %w", err)
+		}
+		n, err := res.RowsAffected()
+		conflict = n > 0
+		return err //nolint:wrapcheck // the driver's own, of a count
+	})
+	if err != nil {
+		return false, fmt.Errorf("copy of %d on %q: %w", fileID, c.Disk, err)
+	}
+	return conflict, nil
+}

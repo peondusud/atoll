@@ -45,6 +45,7 @@ const (
 	IgnoreCase        Reason = "ignore-case"
 	Casefold          Reason = "casefold"
 	ASCIICI           Reason = "ascii-ci"
+	NoJournal         Reason = "no-journal"
 	ReadOnlyMount     Reason = "read-only-mount"
 )
 
@@ -200,7 +201,7 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	case FolderIOError:
 		return missing(IOError, fmt.Sprintf("%q does not answer: %s", d.Root, root.Note))
 	}
-	verdict := judgeWrites(e, device.Identity.Variant, root.OtherCase, d.Root)
+	verdict := judgeWrites(e, device.Identity, root.OtherCase, d.Root)
 	verdict.TimePrecisionNS = device.Identity.TimePrecisionNS
 	return verdict
 }
@@ -259,8 +260,8 @@ func typeAllowed(fs names.Filesystem, fstype string) bool {
 
 // judgeWrites decides whether Atoll may write to a disk it has identified: the second table of
 // specs.md §10, in its order.
-func judgeWrites(e *MountEntry, variant Variant, otherCase bool, root string) Verdict {
-	ntfs3 := e.FSType == "ntfs3"
+func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string) Verdict {
+	ntfs3, variant := e.FSType == "ntfs3", id.Variant
 	switch {
 	case e.FSType == "ntfs":
 		return readOnly(UnsupportedDriver, "mounted with a driver whose name rules were never measured: use ntfs3 or ntfs-3g")
@@ -274,6 +275,8 @@ func judgeWrites(e *MountEntry, variant Variant, otherCase bool, root string) Ve
 		return readOnly(Casefold, "this ext4 has the casefold feature, which changes name rules")
 	case variant == VariantASCIICI:
 		return readOnly(ASCIICI, "this XFS has the ascii-ci feature, which changes name rules")
+	case id.NoJournal:
+		return readOnly(NoJournal, "this ext4 keeps no journal, so a name made there is not durable once its folder is synced: tune2fs -O has_journal adds one")
 	case otherCase:
 		return readOnly(IgnoreCase, fmt.Sprintf("%q also answers in the other case: remount without ignore_case", root))
 	case slices.Contains(e.MountOptions, "ro"), slices.Contains(e.SuperOptions, "ro"), slices.Contains(e.SuperOptions, "emergency_ro"):

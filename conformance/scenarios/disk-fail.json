@@ -70,7 +70,9 @@
         "state_was": "in-service",
         "depending": 1,
         "depending_first": [
-          "a.mkv"
+          {
+            "path": "a.mkv"
+          }
         ],
         "only_there": 0,
         "planned_operations": 0,
@@ -93,7 +95,9 @@
         "state_was": "in-service",
         "depending": 1,
         "depending_first": [
-          "a.mkv"
+          {
+            "path": "a.mkv"
+          }
         ],
         "only_there": 0,
         "planned_operations": 0,
@@ -116,7 +120,9 @@
         "state_was": "failed",
         "depending": 1,
         "depending_first": [
-          "a.mkv"
+          {
+            "path": "a.mkv"
+          }
         ],
         "only_there": 0,
         "planned_operations": 0,

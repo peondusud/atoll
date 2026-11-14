@@ -330,9 +330,9 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `file` | object | `state` (one of §4), `size`, `hash` when it has one, and `running` when a job of it is running |
-| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `verdict`, `other` when a `replaced` copy holds what is no regular file or the file another copy of its disk moved to, `state`, `size` (what its look found for a changed copy, what its row says otherwise), `due` when a changed copy's `settle` has passed, `readable` when its disk can be read, and `hash` when it has been read. Booleans are `false` when absent |
+| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `verdict`, `other` when a `replaced` copy holds what is no regular file or the file another copy of its disk moved to, `state`, `size` (what its look found for a changed copy, what its row says otherwise), `due` when a changed copy's `settle` has passed, `ctime_not_later` when a changed copy's change time, as its look found it, is not later than what its row says, `readable` when its disk can be read, and `hash` when it has been read. Booleans are `false` when absent |
 | `decision` | object | `kind` (`none`, `wait`, `read`, `modified`, `metadata` or `conflict`), and when they apply, by position: `read`, the copies to read before deciding; `changed`; `stale`, the copies a modification makes stale; `reference`, the copy read to compare with where the file had no hash; `hash`, what the file's hash becomes |
-| `error` | boolean | `true` on an unknown word, a pending copy, a disk or a position that appears twice, or `other` on a copy not `replaced` |
+| `error` | boolean | `true` on an unknown word, a pending copy, a disk or a position that appears twice, `other` on a copy not `replaced`, or `ctime_not_later` on a copy not changed, neither `edited` nor `replaced` without `other` |
 
 ### `metadata.json` — what a metadata-only change applies to the other copies (§15.4)
 
@@ -414,6 +414,8 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `reloaded` | boolean | the configuration was read again since the last pass |
 | `after_pass` | boolean | the last step the daemon took was a pass, a check aside: another step due then runs before a pass whose every reason is `events` or `due`, and `because` is empty |
 | `hash_pending` | boolean | files may be waiting for their hash |
+| `changed_pending` | boolean | the last pass left files whose changed copies must be read to be decided (§15.4) |
+| `purge_pending` | boolean | the purge of the trash stopped at its slice with entries left (§17) |
 | `scrub_pending` | boolean | copies may be due for the scrub |
 | `scrub_window` | string | `integrity.window` |
 | `scrub_budget_ns` | integer | `integrity.scrub_budget`, which must be positive when `scrub_pending` |
@@ -421,9 +423,13 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `backup_pending` | boolean | the stretch of the window that holds now, or the next one, has no catalog backup yet |
 | `smart_due_ns` | integer | when the disks' SMART is next to be read; left out when it never is |
 | `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
+| `alert_retry_due_ns` | integer | when the alerts that could not be sent are next tried again, alone (§23); left out when none waits |
 | `balance_due_ns` | integer | when the daemon next balances; left out when it never does |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is, or when `after_pass` makes it wait |
+| `read_changed` | boolean | `true` when the changed copies are to be read now: `changed_pending`, inside the window or not, before every other step |
+| `purge` | boolean | `true` when the purge of the trash is to go on now: `purge_pending`, inside the window or not, after the changed copies |
+| `send_alerts` | boolean | `true` when the alerts that could not be sent are to be tried again now, with no pass: `alert_retry_due_ns` has come |
 | `notify` | boolean | `true` when the media servers are to be told now: `notify_due_ns` has come |
 | `smart` | boolean | `true` when the disks' SMART is to be read now: `smart_due_ns` has come |
 | `balance` | boolean | `true` when the daemon is to balance now: `balance_due_ns` has come |
@@ -535,6 +541,7 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 | `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source |
 | `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`) |
 | `entries` | array of objects | `disk`, `path`, `kind`: `dir`, `symlink` or `ignored` |
+| `taken` | array of objects | `disk`, `path`: what the catalog answers when the plan asks whether a disk has another name with the collision key of that path (`specs.md` §15.7). Taken for the names listed, free for every other; none when left out. The plan asks of an NTFS disk alone, of each folder above a file, then of the file. The files and the entries of the case do not answer: a case whose collision is with a name on the disk lists it here |
 | `min_free` | array of strings | as in the configuration; `["0%"]` when left out |
 | `jobs` | array of objects | `kind` (`refresh` or `replicate`), `path` or `path_b64`, `src`, `dst` |
 | `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel`, `misplaced` (disks by position), `overflow`. What is left out is empty or false |
@@ -574,6 +581,7 @@ The text of `/proc/self/mountinfo`, one line per mount: `id parent major:minor r
 | `bytes` | array of objects | what the head holds: `at`, an offset, and `hex`, the bytes |
 | `id` | string | the identifier |
 | `variant` | string | `casefold` or `ascii-ci`, when the superblock says so; left out otherwise |
+| `no_journal` | boolean | `true` for an ext4 whose head does not set the bit `0x4` of the little-endian 32-bit compatible features at 1116, `has_journal`: a head of zeros there holds no journal. Left out, `false`, for every other filesystem |
 | `error` | boolean | `true` when the head holds no such filesystem, or `fs` is unknown |
 
 ### `ntfs_dirty.json` — an NTFS volume marked dirty (§22, §23)
@@ -607,6 +615,7 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `no_magic` | boolean | the head does not hold the magic of `fs` |
 | `id` | string | the identifier in the head (`uuid` when left out) |
 | `variant` | string | `casefold` or `ascii-ci`, when the head says so |
+| `no_journal` | boolean | the head says that the ext4 keeps no journal |
 | `root_folder` | string | `ok` (when left out), `absent`, `not-a-folder`, `other-mount` or `io-error`: question 10 |
 | `other_case` | boolean | `<root>` also answers in the other case, with the same inode |
 | `state` | string | `online`, `readonly` or `missing` |

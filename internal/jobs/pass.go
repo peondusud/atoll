@@ -105,6 +105,17 @@ type Outcome struct {
 	// or something due could not run for want of a writable disk. Held says that a guard holds something.
 	Partial bool
 	Held    bool
+	// ToRead holds the files a pass of the daemon left undecided, as their changed copies must be read first, by path
+	// in byte order: ReadChanged decides them, by slices (specs.md §15.13).
+	ToRead []PendingRead
+}
+
+// PendingRead is a file whose changed copies a pass left to read.
+type PendingRead struct {
+	FileID int64
+	// AnswerID is the answer to the mass-modification guard of its disk that decided it when the pass found it, 0 with
+	// none: it stays under that answer, whenever its slice comes (specs.md §15.6).
+	AnswerID int64
 }
 
 type pass struct {
@@ -131,6 +142,9 @@ type pass struct {
 	guards      map[string]*guardState
 	plans       map[string]*diskPlan
 	jobsDropped map[int64]bool // of a dry run: the files whose queued trash jobs a decision drops
+	// of a dry run: the files whose jobs a decision dropped before anything ran, whose stale copies a real pass gives
+	// their overwrite again at once (specs.md §15.4)
+	requeued map[int64]bool
 	// of a dry run: the files in conflict that a decision ends the conflict of
 	conflictCleared map[int64]bool
 	pulled          map[int64]bool // the files decided on an earlier page, with what wanted their name
@@ -162,9 +176,13 @@ type pass struct {
 	linkGuardOn bool
 	// settled says that the copies worked out each file, and that nothing ran since
 	settled bool
-	out     *Outcome
-	sink    Sink
-	sinkErr error
+	// later says that this pass reads no file whole: what must be read to be decided is left in the outcome's ToRead
+	// (specs.md §15.13). takenUnder is, in a slice of those reads, the answer the file now decided was taken under.
+	later      bool
+	takenUnder int64
+	out        *Outcome
+	sink       Sink
+	sinkErr    error
 }
 
 type folderKey struct {
@@ -195,16 +213,32 @@ func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, a
 
 // RunClosed is RunTo for the daemon that runs for good, which tells it what its watcher saw closed.
 func RunClosed(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) (*Outcome, error) {
-	p := &pass{
+	return newPass(db, c, m, apply, sink, closed).run(ctx)
+}
+
+// RunLater is RunClosed for a pass that reads no file whole, as those of the daemon that runs for good (specs.md
+// §15.13): a file whose changed copies must be read to be decided is left in the outcome's ToRead, for ReadChanged. A
+// dry run records nothing, so it reads in its pass what it must to say what it would decide.
+func RunLater(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) (*Outcome, error) {
+	p := newPass(db, c, m, apply, sink, closed)
+	p.later = apply
+	return p.run(ctx)
+}
+
+func newPass(db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) *pass {
+	return &pass{
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink, closed: closed,
 		rows: map[string]int64{}, walked: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
-		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
+		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, requeued: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
 		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
+}
+
+func (p *pass) run(ctx context.Context) (*Outcome, error) {
 	if err := p.readSettings(); err != nil {
 		return nil, err
 	}
-	session, err := trash.Open(ctx, db, c, m, apply)
+	session, err := trash.Open(ctx, p.db, p.config, p.machine, p.apply)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -437,7 +471,7 @@ func (p *pass) ownFiles(d *config.Disk, inodes map[string]bool) (map[string][]so
 	if handle == nil {
 		return nil, nil //nolint:nilnil // the confirmation that follows says what became of the disk
 	}
-	own, err := handle.OwnFiles(ctx, inodes)
+	own, err := handle.OwnFiles(ctx, p.db, inodes)
 	if errors.Is(err, ops.ErrDiskLost) {
 		if err := p.session.Lose(ctx, d.ID, err); err != nil {
 			return nil, fmt.Errorf("%w", err)

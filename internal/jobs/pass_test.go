@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -3776,5 +3777,88 @@ func TestAFolderRenameDoesNotWaitForACopyYetToMake(t *testing.T) {
 	}
 	if got := b.text("SELECT group_concat(state, ' ') FROM files"); got != "ok ok" {
 		t.Errorf("files %s", got)
+	}
+}
+
+// callsOn records the calls made on a disk through its top, by the name each is about.
+func (b *bench) callsOn(id string) map[string][]string {
+	calls := map[string][]string{}
+	b.fail[b.dirs[id]] = func(call, name string) error {
+		calls[name] = append(calls[name], call)
+		return nil
+	}
+	return calls
+}
+
+// A copy found gone is asked of the journal first, which says where Atoll moved each copy it moved, before its file is
+// decided as a deletion (invariant 11, 12): the names it gives are looked at, and nothing else of the trash. A pass
+// that found a copy gone walked the whole trash and tmp/ of its disk, every folder listed and every file looked at:
+// with a month of trash, minutes on a disk that spins, at each deletion.
+func TestAGoneCopyIsAskedOfTheJournal(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	for _, id := range []string{"t1", "t2"} {
+		b.write(id, "kept", "k")
+		b.write(id, "old", "o")
+	}
+	b.scan(true)
+	// A deletion on t1 sends t2's copy to its trash, an operation of the journal.
+	b.remove("t1", "old")
+	b.settle()
+	entry := b.text("SELECT CAST(trash_path AS TEXT) FROM trash WHERE disk_id = 't2'")
+	if !b.exists("t2", "Atoll/trash/"+entry) {
+		t.Fatalf("no entry at %s", entry)
+	}
+	folder := strings.Split(entry, "/")[1]
+	// Then someone removes another copy from t2.
+	b.remove("t2", "kept")
+	calls := b.callsOn("t2")
+	b.pass()
+	if got := b.text("SELECT c.gone_kind FROM copies c WHERE c.disk_id = 't2'"); got != "gone" {
+		t.Fatalf("the copy removed reads as %q", got)
+	}
+	if listed := slices.Contains(calls[folder], "names"); listed || len(calls["old"]) != 0 {
+		t.Errorf("the trash was walked: its entry's folder listed %v, its file looked at %v", listed, calls["old"])
+	}
+}
+
+// A copy that the journal says an operation moved to the trash is found there by the name the journal gives, with no
+// walk, and is no deletion.
+func TestACopyTheJournalMovedIsFoundByItsName(t *testing.T) {
+	b := pool(t)
+	key := strconv.FormatUint(b.inode("t2", "a"), 10)
+	trash := filepath.Join(b.dirs["t2"], "Atoll", "trash", "2026-01-01", "7")
+	if err := os.MkdirAll(trash, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(b.dirs["t2"], "media", "a"), filepath.Join(trash, "a")); err != nil {
+		t.Fatal(err)
+	}
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, path2, file_key, started_ns, state) VALUES (7, 't2', 'trash', CAST('other' AS BLOB), CAST('2026-01-01/7/a' AS BLOB), ?, 1, 'done')", key)
+	calls := b.callsOn("t2")
+	b.pass()
+	if got := b.text("SELECT gone_kind FROM copies WHERE disk_id = 't2'"); got != "own" {
+		t.Fatalf("read as %q", got)
+	}
+	if slices.Contains(calls["7"], "names") {
+		t.Error("the trash was walked for a copy the journal names")
+	}
+}
+
+// The journal answers only for what it knows: with the folder of an operation it does not hold for that disk, as
+// after a catalog rebuild or on a disk that came with its work folder, the trash is walked whole, as before.
+func TestATrashTheJournalDoesNotKnowIsWalked(t *testing.T) {
+	b := pool(t)
+	// The journal holds an operation 7, of another disk.
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, path2, file_key, started_ns, state) VALUES (7, 't1', 'trash', CAST('x' AS BLOB), CAST('2026-01-01/7/x' AS BLOB), '1', 1, 'done')")
+	trash := filepath.Join(b.dirs["t2"], "Atoll", "trash", "2026-01-01", "7")
+	if err := os.MkdirAll(trash, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(b.dirs["t2"], "media", "a"), filepath.Join(trash, "a")); err != nil {
+		t.Fatal(err)
+	}
+	b.pass()
+	if got := b.text("SELECT gone_kind FROM copies WHERE disk_id = 't2'"); got != "own" {
+		t.Errorf("read as %q: a copy in a trash the journal does not know is called deleted", got)
 	}
 }

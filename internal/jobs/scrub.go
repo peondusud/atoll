@@ -63,6 +63,9 @@ type ScrubDisk struct {
 	// Conflict are the copies never verified whose content is not their file's, read again past the cache, size and
 	// times unchanged: another version of the file, which becomes a conflict. Nothing is written to them.
 	Conflict []string
+	// Refused are the copies that could not be opened, for a reason that says nothing of their disk: neither
+	// verified nor corrupt, they stay due (specs.md §16).
+	Refused []string
 	// Left says that copies due were left when the budget ran out.
 	Left bool
 }
@@ -83,7 +86,11 @@ type scrubber struct {
 	repair bool
 	mode   string
 	// remake holds the files a copy of which was repaired whole: replication makes it again once the scrub is over.
-	remake   []string
+	remake []string
+	// run is what the repair of a copy takes from this scrub (specs.md §16.1).
+	run *repairRun
+	// changed says that this scrub found a copy corrupt, or in conflict: a state changed.
+	changed  bool
 	now      int64
 	due      int64 // a copy verified at or before it is due
 	deadline int64
@@ -127,6 +134,7 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 		deadline: now + opts.Budget.Nanoseconds(), buf: make([]byte, integrity.ChunkSize)}
 	s.repair, _ = effective["integrity.auto_repair"].(bool)
 	s.mode, _ = effective["integrity.repair_mode"].(string)
+	s.run = &repairRun{db: db, config: c, machine: m, session: session, apply: true, record: true}
 	out := &ScrubOutcome{Disks: []ScrubDisk{}}
 	spent := false
 	for i := range c.Disks {
@@ -143,7 +151,7 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 				out.Partial = true
 			}
 		}
-		if !sd.Scrubbed && !spent {
+		if !sd.Scrubbed && !spent || len(sd.Refused) > 0 {
 			out.Partial = true
 		}
 		out.Disks = append(out.Disks, sd)
@@ -153,8 +161,16 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 			return nil, fmt.Errorf("%w", err)
 		}
 		out.Partial = out.Partial || session.Lost()
-		if err := session.Settle(ctx); err != nil {
-			return nil, fmt.Errorf("%w", err)
+		// A scrub that only verified copies changed no state. The plan of the whole pool is for one that found a copy
+		// corrupt or in conflict, repaired or moved one, or lost a disk: the daemon scrubs by slices of 30 s, and each
+		// ended by that plan, a night of them for nothing (specs.md §16).
+		if s.changed || session.Changed() || session.Lost() {
+			if err := session.Settle(ctx); err != nil {
+				return nil, fmt.Errorf("%w", err)
+			}
+		}
+		if err := s.run.callConflicts(ctx); err != nil {
+			return nil, err
 		}
 	}
 	session.Close()
@@ -252,11 +268,21 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 		MtimeNS: sql.NullInt64{Int64: cp.MtimeNS, Valid: true}, CtimeNS: sql.NullInt64{Int64: cp.CtimeNS, Valid: true}, FileKey: cp.FileKey}
 	f, st, err := handle.OpenSource(cp.Path, known)
 	switch {
+	case err == nil:
 	case errors.Is(err, ops.ErrGone):
 		sd.Changed = append(sd.Changed, cp.Path)
 		return false, nil
-	case err != nil:
+	case errors.Is(err, ops.ErrDiskLost):
 		return false, s.lost(ctx, d.ID, err)
+	case fsx.IsOutOfFiles(err):
+		// Nothing else opens either: the scrub stops, and no disk is the worse for it.
+		return false, fmt.Errorf("scrub: %q on %s: %w", cp.Path, d.ID, err)
+	default:
+		// It refuses the account that asks, or its key is not loaded: that says nothing of its disk, whose other
+		// copies are read (specs.md §15.10, §16). Taken for the disk's, it lost the disk at each slice, at this copy.
+		slog.Warn("a copy cannot be opened to verify it", "disk", d.ID, "path", cp.Path, "error", err)
+		sd.Refused = append(sd.Refused, cp.Path)
+		return false, nil
 	}
 	defer func() { _ = f.Close() }()
 	for i := start; i < n; i++ {
@@ -275,7 +301,11 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 		want := cp.Chunks[i*integrity.HashSize : (i+1)*integrity.HashSize]
 		match, err := s.readChunk(f, cp.Size, i, want)
 		if err != nil {
-			return false, s.lost(ctx, d.ID, err)
+			// A chunk that cannot be read is one that does not match, when its disk still confirms.
+			if err := s.unreadable(ctx, d, cp.Path, i, err); err != nil {
+				return false, err
+			}
+			match = false
 		}
 		if !match {
 			// A chunk that does not match is read again past the cache, the copy's name and times looked at first: a
@@ -292,7 +322,10 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 				return false, s.lost(ctx, d.ID, err)
 			}
 			if match, err = s.readChunk(f, cp.Size, i, want); err != nil {
-				return false, s.lost(ctx, d.ID, err)
+				if err := s.unreadable(ctx, d, cp.Path, i, err); err != nil {
+					return false, err
+				}
+				match = false
 			}
 			if !match {
 				if !cp.VerifiedNS.Valid {
@@ -345,6 +378,7 @@ func (s *scrubber) readChunk(f fsx.File, size, i int64, want []byte) (bool, erro
 func (s *scrubber) conflict(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
 	sd.Conflict = append(sd.Conflict, cp.Path)
 	slog.Warn("a copy never verified holds another version of its file: a conflict", "disk", d.ID, "path", cp.Path)
+	s.changed = true
 	if s.opts.Apply {
 		if err := catalog.WriteHashes(ctx, s.db, s.now, &catalog.HashWrite{FileID: cp.FileID, Conflict: true}); err != nil {
 			return fmt.Errorf("catalog: %w", err)
@@ -356,6 +390,7 @@ func (s *scrubber) conflict(ctx context.Context, d *config.Disk, cp *catalog.Scr
 func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
 	sd.Corrupt = append(sd.Corrupt, cp.Path)
 	slog.Warn("a corrupt copy", "disk", d.ID, "path", cp.Path)
+	s.changed = true
 	if s.opts.Apply {
 		if err := catalog.MarkCopyCorrupt(ctx, s.db, cp.FileID, d.ID, cp.Path, s.now); err != nil {
 			return fmt.Errorf("catalog: %w", err)
@@ -420,7 +455,11 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 // trash takes no room but its folders', or for anything else that stopped it.
 func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, healthy *trash.Healthy, cp *catalog.ScrubCopy, sd *ScrubDisk) (bool, error) {
 	mode := modeFor(c, s.mode)
-	outcome, _, err := repairCopy(ctx, s.db, s.session, f, c, healthy, cp.Chunks, mode, true, true, s.now)
+	// A copy that changed since the scrub read it is read as it is now, as a repair by hand reads it.
+	outcome, changed, err := s.run.changedCopy(ctx, f, c, cp.Chunks)
+	if err == nil && !changed {
+		outcome, _, err = s.run.repairCopy(ctx, f, c, healthy, cp.Chunks, mode)
+	}
 	if err != nil {
 		return true, err
 	}
@@ -433,6 +472,10 @@ func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catal
 		return true, nil
 	case trash.OutcomeNoRoom, trash.OutcomeIOError:
 		return false, nil
+	case OutcomeConflict:
+		// Another version by now, kept with the others: neither repaired nor moved.
+		sd.Conflict = append(sd.Conflict, cp.Path)
+		return true, nil
 	default:
 		// It reads right after all, or changed, which is for the next pass; or nothing can be moved either, on a disk
 		// that cannot be reached, or under a name its trash refuses.
@@ -471,6 +514,22 @@ func (s *scrubber) leftCorrupt(ctx context.Context, fileID int64, disk string, h
 		return nil, nil, nil
 	}
 	return f, c, nil
+}
+
+// unreadable says whose fault a read of a chunk that failed is (specs.md §16): the disk's when the disk no longer
+// confirms, which loses it and stops its scrub, as an error it gives then; and the chunk's when it does, which is a
+// chunk that does not match. A sector that cannot be read is the commonest fault of an old disk: taken for the
+// disk's, it sent the disk out of the pool at each slice, to come back at the next mount check, the copy never named.
+func (s *scrubber) unreadable(ctx context.Context, d *config.Disk, path string, chunk int64, cause error) error {
+	confirmed, err := s.session.Confirms(ctx, d.ID, cause)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	if !confirmed {
+		return fmt.Errorf("%w: %w", errDiskFailed, cause)
+	}
+	slog.Warn("a chunk cannot be read, on a disk that confirms", "disk", d.ID, "path", path, "chunk", chunk, "error", cause)
+	return nil
 }
 
 // lost says that a disk failed while read: the scrub of it stops there.

@@ -443,3 +443,48 @@ func TestSavedChunksAreNotHeldAtOnce(t *testing.T) {
 		t.Errorf("%d MiB allocated to look at %d chunks of 4 MiB: they were held at once", allocated>>20, chunks)
 	}
 }
+
+// The folders Atoll works in below its work folder are looked at as it is: tmp/, links/ and trash/, each itself. An
+// account that owns one of them reads what goes through it, or removes what it holds, whoever owns the work folder
+// above: only the work folder's own owner was looked at (specs.md §10).
+func TestForeignWork(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("giving a folder to another account takes root")
+	}
+	mount := t.TempDir()
+	d := &config.Disk{ID: "t1", Mount: mount, Workdir: "Atoll", FS: names.Ext4}
+	trusted := []uint32{0, 4242}
+	if place, uid, foreign, err := ForeignWork(d, trusted); err != nil || foreign {
+		t.Fatalf("no work folder: %q, %d, %v, %v", place, uid, foreign, err)
+	}
+	work := filepath.Join(mount, "Atoll")
+	for _, name := range []string{"tmp", "links", "trash"} {
+		if err := os.MkdirAll(filepath.Join(work, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if place, uid, foreign, err := ForeignWork(d, trusted); err != nil || foreign {
+		t.Fatalf("all root's: %q, %d, %v, %v", place, uid, foreign, err)
+	}
+	// The first of them that another account owns is told of, in that order.
+	for _, name := range []string{"trash", "links", "tmp"} {
+		if err := os.Chown(filepath.Join(work, name), 1000, 1000); err != nil {
+			t.Fatal(err)
+		}
+		place, uid, foreign, err := ForeignWork(d, trusted)
+		if err != nil || !foreign || uid != 1000 || place != "Atoll/"+name {
+			t.Errorf("%s given away: %q, %d, %v, %v", name, place, uid, foreign, err)
+		}
+	}
+	// The work folder itself comes first, and a filesystem that holds no owner says nothing.
+	if err := os.Chown(work, 2000, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if place, uid, foreign, err := ForeignWork(d, trusted); err != nil || !foreign || uid != 2000 || place != "Atoll" {
+		t.Errorf("the work folder given away: %q, %d, %v, %v", place, uid, foreign, err)
+	}
+	d.FS = names.NTFS
+	if place, uid, foreign, err := ForeignWork(d, trusted); err != nil || foreign {
+		t.Errorf("on NTFS: %q, %d, %v, %v", place, uid, foreign, err)
+	}
+}

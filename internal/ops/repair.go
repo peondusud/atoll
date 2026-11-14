@@ -22,6 +22,10 @@ import (
 // ErrNotRepaired says that a chunk written in place did not read back as its hash says.
 var ErrNotRepaired = errors.New("a chunk written in place does not read back as its hash says")
 
+// ErrReadBack says that a chunk written in place could not be read back at all: the sector it sits on was given no
+// other place, or its disk is failing, which a confirmation tells (specs.md §10, §16.1).
+var ErrReadBack = errors.New("a chunk written in place cannot be read back")
+
 // OpenRepair opens a corrupt copy for reading and writing in place, after a look that its name still holds what
 // its row says (specs.md §16.1). ErrGone means it no longer does.
 func (d *Disk) OpenRepair(row *catalog.KnownCopy) (fsx.WritableFile, fsx.Stat, error) {
@@ -198,7 +202,7 @@ func (d *Disk) WriteChunk(f fsx.WritableFile, index int64, data, want []byte) er
 		if err == nil || errors.Is(err, io.EOF) {
 			return ErrNotRepaired
 		}
-		return classify(err)
+		return fmt.Errorf("%w: %w", ErrReadBack, err)
 	}
 	sum := integrity.ChunkSum(back)
 	if !bytes.Equal(sum[:], want) {
@@ -472,6 +476,12 @@ func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved m
 	for i := range n {
 		length := min(integrity.ChunkSize, row.Size-i*integrity.ChunkSize)
 		if read, err := f.ReadAt(buf[:length], i*integrity.ChunkSize); int64(read) < length {
+			// A chunk the repair could not read was saved as nothing: one that still cannot be read holds what was
+			// saved of it, which is what the repair found. Any other chunk that cannot be read says nothing yet.
+			if was, isSaved := saved[i]; isSaved && was.Size == 0 && err != nil && !errors.Is(err, io.EOF) {
+				out[i] = integrity.RepairChunk{Bad: found[i], Saved: true, Holds: integrity.HoldsSaved}
+				continue
+			}
 			if err == nil || errors.Is(err, io.EOF) {
 				err = io.ErrUnexpectedEOF
 			}

@@ -600,6 +600,11 @@ func TestAGuardRejectedLeavesAnOverwrite(t *testing.T) {
 	if _, err := catalog.RejectGuard(t.Context(), b.db, "t1", b.now, nil); err != nil {
 		t.Fatal(err)
 	}
+	// The overwrite stays queued as it was, from the copy that changed: it is not left to a later pass to queue again,
+	// from whichever copy comes first.
+	if got := b.text("SELECT COALESCE(group_concat(src_disk || '>' || dst_disk || ' ' || reason, ','), '') FROM jobs WHERE kind = 'trash' AND state = 'queued'"); got != "t1>t2 overwritten" {
+		t.Errorf("after the reject, the queued trash jobs are %q", got)
+	}
 	b.settle()
 	if b.read("t2", "a") != "z" {
 		t.Errorf("the stale copy is not made again: %s", b.staleState())
@@ -628,5 +633,32 @@ func TestAStaleCopyThatChangedGetsNoJobAgain(t *testing.T) {
 	}
 	if b.read("t2", "a") != "mine" {
 		t.Error("an edit went")
+	}
+}
+
+// A dry run lists the overwrite a real pass runs for a stale copy whose file that pass renames. The decision drops
+// every trash job of the file, the stale copy's with them, and the pass queues that one again before it runs anything
+// (specs.md §15.4, §15.12): the dry run dropped it from its listing, and listed nothing in its place.
+func TestADryRunListsTheOverwriteOfARenamedFile(t *testing.T) {
+	b := pool(t)
+	b.ro[b.dirs["t2"]] = true
+	b.awayWhileModified()
+	b.rename("t1", "a", "b")
+	b.pass()
+	b.now += 30_000_000_000
+	b.ro[b.dirs["t2"]] = false
+	dry, err := Run(t.Context(), b.db, b.config, b, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := b.pass()
+	at := slices.IndexFunc(real.Operations, func(op Operation) bool { return op.Kind == KindTrash && op.Reason == catalog.ReasonOverwritten })
+	if at < 0 || real.Operations[at].Outcome != trash.OutcomeTrashed {
+		t.Fatalf("the real pass ran no overwrite: %+v", real.Operations)
+	}
+	want := real.Operations[at]
+	want.Outcome = OutcomeToTrash
+	if !slices.Contains(dry.Operations, want) {
+		t.Errorf("the dry run lists %+v, and not %+v, which the pass then ran", dry.Operations, want)
 	}
 }

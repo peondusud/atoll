@@ -73,7 +73,25 @@ func firstChanged(in *solver.ModInput) *solver.ModCopy {
 // change time, before anything of it is read: one stands, and no answer covers that change.
 func (p *pass) heldBefore(disk string, ctimeNS int64) bool {
 	g := p.modGuards[disk]
-	return g != nil && g.tripped && !g.read.Answers(ctimeNS)
+	return g != nil && g.tripped && !p.answers(g, ctimeNS)
+}
+
+// answers says whether an answer to a guard decides a change at that change time: its last answer, given within its
+// window of the start of this run; or, in a slice of reads, that same answer when the pass that left the file to
+// read found it to decide it, however long ago (specs.md §15.6). A batch that takes hours to read is asked about once.
+func (p *pass) answers(g *modGuard, ctimeNS int64) bool {
+	if g.read.Answers(ctimeNS) {
+		return true
+	}
+	return p.takenUnder != 0 && p.takenUnder == g.read.AnswerID && g.read.UpTo.Valid && ctimeNS <= g.read.UpTo.Int64
+}
+
+// answerOver gives the answer to the guard of a disk that decides a change at that change time now, 0 with none.
+func (p *pass) answerOver(disk string, ctimeNS int64) int64 {
+	if g := p.modGuards[disk]; g != nil && g.read.Answers(ctimeNS) {
+		return g.read.AnswerID
+	}
+	return 0
 }
 
 // guardModification asks the mass-modification guard about a decision that would make copies stale (specs.md §15.6):
@@ -86,10 +104,10 @@ func (p *pass) guardModification(ctx context.Context, d *solver.ModDecision, cti
 	disk := d.Changed[0]
 	g := p.modGuards[disk]
 	switch {
-	case g.read.Answers(ctimeNS) && g.read.Answer == catalog.EventModifyGuardReject:
+	case p.answers(g, ctimeNS) && g.read.Answer == catalog.EventModifyGuardReject:
 		d.Kind, d.Stale, d.Hash = solver.ModConflict, nil, nil
 		return true, false, nil
-	case g.read.Answers(ctimeNS):
+	case p.answers(g, ctimeNS):
 		return true, true, nil
 	}
 	// A guard that stands held this file before anything of it was read (heldBefore): here it is clear.

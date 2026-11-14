@@ -692,39 +692,53 @@ type HashWrite struct {
 	Conflict   bool
 }
 
-// WriteHashes writes what reading one file gave, in its own transaction, so that an interrupted
-// scan loses little (specs.md §15.10).
+// WriteHashes writes what reading one file gave, in its own transaction (specs.md §15.10).
 func WriteHashes(ctx context.Context, db *sql.DB, nowNS int64, w *HashWrite) error {
-	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
-		if w.Hash != nil {
-			if _, err := tx.ExecContext(ctx, "UPDATE files SET blake3 = ?, updated_ns = ? WHERE id = ?", w.Hash, nowNS, w.FileID); err != nil {
-				return fmt.Errorf("hash: %w", err)
-			}
-			if len(w.Chunks) > 0 {
-				if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO file_chunks(file_id, chunks) VALUES (?, ?)", w.FileID, w.Chunks); err != nil {
-					return fmt.Errorf("chunks: %w", err)
-				}
-			}
-		}
-		for _, disk := range w.Verified {
-			if _, err := tx.ExecContext(ctx, "UPDATE copies SET verified_ns = ? WHERE file_id = ? AND disk_id = ?", nowNS, w.FileID, disk); err != nil {
-				return fmt.Errorf("copy on %q: %w", disk, err)
-			}
-		}
-		for _, disk := range w.Unverified {
-			if _, err := tx.ExecContext(ctx, "UPDATE copies SET verified_ns = NULL WHERE file_id = ? AND disk_id = ?", w.FileID, disk); err != nil {
-				return fmt.Errorf("copy on %q: %w", disk, err)
-			}
-		}
-		if w.Conflict {
-			if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'", nowNS, w.FileID); err != nil {
-				return fmt.Errorf("conflict: %w", err)
+	return WriteHashesOf(ctx, db, nowNS, []HashWrite{*w})
+}
+
+// WriteHashesOf writes what reading several files gave, in one transaction: the files a scan reads within a second
+// share one, so that an interrupted scan loses little, and a library of small files does not cost a commit for each
+// (specs.md §15.10).
+func WriteHashesOf(ctx context.Context, db *sql.DB, nowNS int64, list []HashWrite) error {
+	if len(list) == 0 {
+		return nil
+	}
+	return inTransaction(ctx, db, func(tx *sql.Tx) error {
+		for i := range list {
+			if err := writeHashes(ctx, tx, nowNS, &list[i]); err != nil {
+				return fmt.Errorf("file %d: %w", list[i].FileID, err)
 			}
 		}
 		return nil
 	})
-	if err != nil {
-		return fmt.Errorf("file %d: %w", w.FileID, err)
+}
+
+func writeHashes(ctx context.Context, tx *sql.Tx, nowNS int64, w *HashWrite) error {
+	if w.Hash != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE files SET blake3 = ?, updated_ns = ? WHERE id = ?", w.Hash, nowNS, w.FileID); err != nil {
+			return fmt.Errorf("hash: %w", err)
+		}
+		if len(w.Chunks) > 0 {
+			if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO file_chunks(file_id, chunks) VALUES (?, ?)", w.FileID, w.Chunks); err != nil {
+				return fmt.Errorf("chunks: %w", err)
+			}
+		}
+	}
+	for _, disk := range w.Verified {
+		if _, err := tx.ExecContext(ctx, "UPDATE copies SET verified_ns = ? WHERE file_id = ? AND disk_id = ?", nowNS, w.FileID, disk); err != nil {
+			return fmt.Errorf("copy on %q: %w", disk, err)
+		}
+	}
+	for _, disk := range w.Unverified {
+		if _, err := tx.ExecContext(ctx, "UPDATE copies SET verified_ns = NULL WHERE file_id = ? AND disk_id = ?", w.FileID, disk); err != nil {
+			return fmt.Errorf("copy on %q: %w", disk, err)
+		}
+	}
+	if w.Conflict {
+		if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'", nowNS, w.FileID); err != nil {
+			return fmt.Errorf("conflict: %w", err)
+		}
 	}
 	return nil
 }

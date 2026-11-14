@@ -248,7 +248,7 @@ func TestATrashQueryReadsOnlyItsEntries(t *testing.T) {
 			t.Errorf("%s: no %q in %q", q.name, q.want, plan)
 		}
 	}
-	plan := queryPlan(t, b, trashWeightsSQL)
+	plan := queryPlan(t, b, trashWeightsSQL, "")
 	if len(plan) != 2 || plan[0] != "SCAN t" || plan[1] != "SEARCH o USING INTEGER PRIMARY KEY (rowid=?)" {
 		t.Errorf("TrashWeights: %q", plan)
 	}
@@ -301,6 +301,96 @@ func TestKeyTaken(t *testing.T) {
 		got, err := KeyTaken(b.t.Context(), b.sql(), tc.disk, tc.path)
 		if err != nil || got != tc.want {
 			t.Errorf("%s %q: %v, %v", tc.disk, tc.path, got, err)
+		}
+	}
+}
+
+// What a plan asks of the names a disk holds is answered as KeyTaken answers, with one statement, and for every kind
+// of name the disk holds: a file's, with a copy that is there, pending or away; the name a copy still sits at, and not
+// the one it is to take; an entry's. Each is found through the index on its key: a plan asks of every name it thinks of
+// placing, on a disk of hundreds of thousands (specs.md §13.4, §26).
+func TestKeysTaken(t *testing.T) {
+	b := openForOps(t)
+	b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u1', 'x', 'ntfs', '/u', 'media', 'Atoll', 'data', 0, '[]', 'online')")
+	b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u2', 'y', 'ntfs', '/v', 'media', 'Atoll', 'data', 1, '[]', 'online')")
+	for i, f := range []struct{ path, key, state, more string }{
+		{"Film", "FILM", "ok", ""},
+		{"Queued", "QUEUED", "pending", ""},
+		{"Away", "AWAY", "ok", ", gone_ns = 5, gone_kind = 'gone'"},
+		{"New/x", "NEW/X", "ok", ", old_lpath = CAST('Old/x' AS BLOB), old_lpath_key = 'OLD/X'"},
+	} {
+		b.exec("INSERT INTO files(id, lpath, lpath_key, size, mtime_ns, replicas_target, mode, state, first_seen_ns, updated_ns) VALUES (?, ?, ?, 1, 1, 1, 'deferred', 'ok', 1, 1)", i+1, []byte(f.path), f.key)
+		b.exec("INSERT INTO copies(file_id, disk_id, created_by, first_seen_ns, state) VALUES (?, 'u1', 'user', 1, ?)", i+1, f.state)
+		if f.more != "" {
+			b.exec("UPDATE copies SET file_id = file_id"+f.more+" WHERE file_id = ?", i+1)
+		}
+	}
+	b.exec("INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, created_by) VALUES (CAST('Dir' AS BLOB), 'DIR', 'u1', 'dir', 493, 1, 'user')")
+	b.exec("INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, created_by) VALUES (CAST('Old' AS BLOB), 'OLD', 'u1', 'dir', 493, 1, 'user')")
+	taken, done := KeysTaken(t.Context(), b.sql())
+	defer done()
+	for _, tc := range []struct {
+		disk, path string
+		want       bool
+	}{
+		{"u1", "film", true}, {"u1", "Film", false}, {"u2", "film", false},
+		{"u1", "queued", true}, {"u1", "away", true},
+		{"u1", "old/x", true}, {"u1", "Old/x", false}, {"u1", "old", true}, {"u1", "Old", false},
+		// The name a copy is to take is not on the disk yet: the plan holds it.
+		{"u1", "new/x", false}, {"u1", "new", false},
+		{"u1", "dir", true}, {"u1", "Dir", false}, {"u2", "dir", false},
+		{"u1", "other", false}, {"u1", "\xff", false},
+	} {
+		got, err := taken(tc.disk, tc.path)
+		want, wantErr := KeyTaken(t.Context(), b.sql(), tc.disk, tc.path)
+		if err != nil || wantErr != nil || got != tc.want || want != tc.want {
+			t.Errorf("%s %q: %v, %v; KeyTaken says %v, %v", tc.disk, tc.path, got, err, want, wantErr)
+		}
+	}
+	// Each name is found by its key, and the copy of a file by its own: never by reading the copies of the disk.
+	for name, query := range map[string]string{"key taken": keyTakenSQL, "a file's": fileKeySQL, "still found": fileKeySQL + " AND c.gone_ns IS NULL",
+		"an old name": oldKeySQL, "an entry's": entryKeySQL} {
+		plan := planOf(t, b.sql(), name, query)
+		for _, step := range plan {
+			byKey := strings.Contains(step, "INDEX files_by_key (lpath_key=?)") || strings.Contains(step, "INDEX copies_old_key (old_lpath_key=?)") ||
+				strings.Contains(step, "INDEX entries_by_key (lpath_key=?)") || strings.HasPrefix(step, "SEARCH c USING PRIMARY KEY (file_id=? AND disk_id=?)")
+			if !byKey && step != "SCAN CONSTANT ROW" && !strings.HasPrefix(step, "SCALAR SUBQUERY") {
+				t.Errorf("%s: %q, in %q", name, step, plan)
+			}
+		}
+	}
+	plan := planOf(t, b.sql(), "key taken", keyTakenSQL)
+	for _, index := range []string{"files_by_key", "copies_old_key", "entries_by_key"} {
+		if !slices.ContainsFunc(plan, func(step string) bool { return strings.Contains(step, "INDEX "+index+" ") }) {
+			t.Errorf("the lookup does not go through %s: %q", index, plan)
+		}
+	}
+}
+
+// The entries at a path or below it are those of that path and of what it holds, by whole components: nothing else
+// may match, as a restore puts back what it is given (specs.md §17.4). They come by path, then by operation.
+func TestTheEntriesBelowAPath(t *testing.T) {
+	b := openForOps(t)
+	for i, path := range []string{"a", "a/b", "a/b/c", "ab", "a b/c", "a.mkv", "a0", "b"} {
+		id := i + 1
+		b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (?, 't1', 'trash', CAST(? AS BLOB), 1, 'done')", id, path)
+		b.exec("INSERT INTO trash(lpath, disk_id, trash_path, op_id, reason, deleted_ns, expires_ns) VALUES (CAST(? AS BLOB), 't1', CAST(? AS BLOB), ?, 'surplus', 1, 2)", path, fmt.Sprint(id), id)
+	}
+	// A second entry of one path, and one whose operation is not done, which is no entry yet.
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (20, 't1', 'trash', CAST('a/b' AS BLOB), 1, 'done')")
+	b.exec("INSERT INTO trash(lpath, disk_id, trash_path, op_id, reason, deleted_ns, expires_ns) VALUES (CAST('a/b' AS BLOB), 't1', CAST('20' AS BLOB), 20, 'surplus', 1, 2)")
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES (21, 't1', 'trash', CAST('a/z' AS BLOB), 1, 'planned')")
+	b.exec("INSERT INTO trash(lpath, disk_id, trash_path, op_id, reason, deleted_ns, expires_ns) VALUES (CAST('a/z' AS BLOB), 't1', CAST('21' AS BLOB), 21, 'surplus', 1, 2)")
+	for under, want := range map[string]string{
+		"a": "a:1 a/b:2 a/b:20 a/b/c:3", "a/b": "a/b:2 a/b:20 a/b/c:3", "ab": "ab:4", "a/b/c/d": "", "c": "",
+	} {
+		var got []string
+		err := EachTrashEntryBelow(t.Context(), b.sql(), under, func(e *TrashEntry) error {
+			got = append(got, fmt.Sprintf("%s:%d", e.Path, e.OpID))
+			return nil
+		})
+		if err != nil || strings.Join(got, " ") != want {
+			t.Errorf("below %q: %q, %v; want %q", under, strings.Join(got, " "), err, want)
 		}
 	}
 }

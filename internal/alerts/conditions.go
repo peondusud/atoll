@@ -94,9 +94,13 @@ type Facts struct {
 	// Foreign holds the disks whose work folder belongs to an account that is neither root's nor Atoll's, in the
 	// configuration's order (specs.md §10).
 	Foreign []ForeignWorkdir
+	// Unopened holds, by disk, the files a read of the daemon could not open, for a reason that says nothing of
+	// their disk, in byte order (specs.md §15.10): they count with the names a walk could not reach.
+	Unopened map[string][]string
 }
 
-// ForeignWorkdir is a disk's work folder that another account owns: where it is, whose it is, and whose it should be.
+// ForeignWorkdir is a disk's work folder, or the folder of its parts, of its links or of its trash, that another
+// account owns: where it is, whose it is, and whose it should be.
 type ForeignWorkdir struct {
 	ID   string
 	Path string
@@ -183,9 +187,10 @@ func Holdings(f *Facts) []Holding {
 			counts[KeyDiskReadonly+d.ID] = 1
 		case disks.Online:
 		}
-		// Only a walk that ended says what it could not reach.
-		if d.Walked && d.Refused > 0 {
-			counts[KeyNoAccess+d.ID] = d.Refused
+		// Only a walk that ended says what it could not reach, and what a read could not open is said of a disk that
+		// is there.
+		if n := d.Refused + int64(len(f.Unopened[d.ID])); d.Walked && n > 0 {
+			counts[KeyNoAccess+d.ID] = n
 		}
 	}
 	for i := range f.Foreign {
@@ -297,14 +302,18 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		var first []string
 		for _, d := range f.Disks {
 			if d.ID == id {
-				first = d.RefusedFirst
+				first = slices.Concat(d.RefusedFirst, f.Unopened[id])
 			}
 		}
+		slices.Sort(first)
+		first = slices.Compact(first)
+		first = first[:min(len(first), FirstN)]
 		m.Title = fmt.Sprintf("Atoll: %d %s of disk %s %s the account Atoll runs as", h.Count, plural(h.Count, "name", "names"), id,
 			plural(h.Count, "refuses", "refuse"))
-		m.Body = list(fmt.Sprintf("A walk of the disk %s could not reach these names: each refuses the account Atoll runs as, as the "+
-			"mount of another user does, a rule of the system's, or a folder when Atoll lacks its rights. Nothing is concluded of them "+
-			"or of what is below them, and nothing there is copied or verified until they can be read.", id), first, h.Count)
+		m.Body = list(fmt.Sprintf("A walk of the disk %s could not reach these names, or a read could not open them: each refuses "+
+			"the account Atoll runs as, as the mount of another user does, a rule of the system's, a folder when Atoll lacks its "+
+			"rights, or a file whose key is not loaded. Nothing is concluded of them or of what is below them, and nothing there is "+
+			"copied or verified until they can be read.", id), first, h.Count)
 	case strings.HasPrefix(h.Key, KeyWorkdirOwner):
 		id := strings.TrimPrefix(h.Key, KeyWorkdirOwner)
 		var w ForeignWorkdir
@@ -313,10 +322,10 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 				w = f.Foreign[i]
 			}
 		}
-		m.Title = fmt.Sprintf("Atoll: the work folder of disk %s belongs to another account", id)
-		m.Body = fmt.Sprintf("The work folder %s of disk %s belongs to the account %d, which is neither root's nor the one Atoll "+
-			"runs as. That account can read what Atoll copies, through the folders of its parts and of its links, and remove what its "+
-			"trash holds. Atoll goes on writing there. Give the folder back: chown -R %d %s", Shown(w.Path), id, w.UID, w.Want, Shown(w.Path))
+		m.Title = fmt.Sprintf("Atoll: a folder Atoll works in on disk %s belongs to another account", id)
+		m.Body = fmt.Sprintf("The folder %s, which Atoll works in on disk %s, belongs to the account %d, which is neither root's "+
+			"nor the one Atoll runs as. That account can read what Atoll copies, through the folders of its parts and of its links, "+
+			"and remove what its trash holds. Atoll goes on writing there. Give the folder back: chown -R %d %s", Shown(w.Path), id, w.UID, w.Want, Shown(w.Path))
 	case strings.HasPrefix(h.Key, KeySmartFailing):
 		id := strings.TrimPrefix(h.Key, KeySmartFailing)
 		m.Priority = priorityHigh

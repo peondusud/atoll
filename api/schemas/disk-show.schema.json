@@ -39,7 +39,21 @@
       "additionalProperties": { "type": "integer", "minimum": 1 }
     },
     "depending": { "type": "integer", "minimum": 0 },
-    "depending_first": { "type": "array", "maxItems": 10, "items": { "type": "string" } },
+    "depending_first": {
+      "description": "The first ten of the files that depend on it, by path in byte order.",
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "description": "A path of specs.md §29.3: path when it is valid UTF-8, otherwise path_b64.",
+        "type": "object",
+        "additionalProperties": false,
+        "oneOf": [{ "required": ["path"] }, { "required": ["path_b64"] }],
+        "properties": {
+          "path": { "type": "string" },
+          "path_b64": { "type": "string" }
+        }
+      }
+    },
     "only_there": { "type": "integer", "minimum": 0 },
     "planned_operations": { "type": "integer", "minimum": 0 },
     "marker": {

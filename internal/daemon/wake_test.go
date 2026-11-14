@@ -26,6 +26,12 @@ func TestWakeVectors(t *testing.T) {
 		Window        string   `json:"window"`
 		Timezone      string   `json:"timezone"`
 		HashPending   bool     `json:"hash_pending"`
+		ChangedPend   bool     `json:"changed_pending"`
+		ReadChanged   bool     `json:"read_changed"`
+		PurgePending  bool     `json:"purge_pending"`
+		Purge         bool     `json:"purge"`
+		AlertRetryNS  *int64   `json:"alert_retry_due_ns"`
+		SendAlerts    bool     `json:"send_alerts"`
 		ScrubPending  bool     `json:"scrub_pending"`
 		ScrubWindow   string   `json:"scrub_window"`
 		ScrubBudgetNS int64    `json:"scrub_budget_ns"`
@@ -65,7 +71,7 @@ func TestWakeVectors(t *testing.T) {
 				GroupDueNS: v.GroupDueNS, RipeOrigins: v.RipeOrigins, LastPassEndNS: v.LastPassEndNS, RescanEveryNS: v.RescanEveryNS,
 				Window: w, Location: loc, HashPending: v.HashPending, ScrubPending: v.ScrubPending, ScrubWindow: scrubWindow,
 				ScrubBudgetNS: v.ScrubBudgetNS, ScrubSpentNS: v.ScrubSpentNS, ScrubSpentOpenedNS: v.ScrubSpentAt, BackupPending: v.BackupPend,
-				SmartDueNS: v.SmartDueNS, NotifyDueNS: v.NotifyDueNS, BalanceDueNS: v.BalanceDueNS,
+				SmartDueNS: v.SmartDueNS, NotifyDueNS: v.NotifyDueNS, BalanceDueNS: v.BalanceDueNS, ChangedPending: v.ChangedPend, PurgePending: v.PurgePending, AlertRetryDueNS: v.AlertRetryNS,
 			})
 		}
 		switch {
@@ -75,7 +81,7 @@ func TestWakeVectors(t *testing.T) {
 			}
 		case err != nil:
 			t.Errorf("case %d (%s): %v", i, v.Note, err)
-		case out.Check != v.Check || out.Notify != v.Notify || out.Smart != v.Smart || out.Balance != v.Balance || out.Hash != v.ReadHashes || out.Backup != v.Backup || out.Scrub != v.Scrub || out.ScrubOpenedNS != v.ScrubOpenedNS ||
+		case out.Check != v.Check || out.Read != v.ReadChanged || out.Purge != v.Purge || out.Alerts != v.SendAlerts || out.Notify != v.Notify || out.Smart != v.Smart || out.Balance != v.Balance || out.Hash != v.ReadHashes || out.Backup != v.Backup || out.Scrub != v.Scrub || out.ScrubOpenedNS != v.ScrubOpenedNS ||
 			!slices.Equal(out.Because, v.Because) && (len(out.Because) > 0 || len(v.Because) > 0) || out.WakeNS != v.WakeNS:
 			t.Errorf("case %d (%s): check %v, because %v, wake %s; want %v, %v, %s", i, v.Note, out.Check, out.Because,
 				time.Unix(0, out.WakeNS).UTC().Format(time.RFC3339), v.Check, v.Because, time.Unix(0, v.WakeNS).UTC().Format(time.RFC3339))

@@ -14,12 +14,15 @@ type ModCopy struct {
 	Position int
 	Verdict  CopyVerdict
 	// Other says that a copy replaced holds what is no regular file, or the file another copy of its disk moved to.
-	Other    bool
-	State    CopyState
-	Size     int64  // what its look found for a changed copy, what its row says otherwise
-	Due      bool   // a changed copy's settle has passed since its change time
-	Readable bool   // its disk can be read in this pass
-	Hash     []byte // what a read gave, nil until it is read
+	Other bool
+	State CopyState
+	Size  int64 // what its look found for a changed copy, what its row says otherwise
+	Due   bool  // a changed copy's settle has passed since its change time
+	// CtimeNotLater says that a changed copy's change time, as its look found it, is not later than its row's: no
+	// user changed it, as any change moves the change time forward and no program can set it back.
+	CtimeNotLater bool
+	Readable      bool   // its disk can be read in this pass
+	Hash          []byte // what a read gave, nil until it is read
 }
 
 // ModInput is a file a copy of which may have changed. Hash is the file's, nil when it has none, and Running says
@@ -67,7 +70,9 @@ func Modify(in *ModInput) (ModDecision, error) {
 	}
 	copies, changed, others := g.copies, g.changed, g.others
 	d := ModDecision{Changed: disksOf(changed)}
-	if slices.ContainsFunc(changed, func(c *ModCopy) bool { return c.State == CopyStale }) ||
+	// A version that came before was changed; a copy no user changed holds what nothing says is the file's, as a
+	// power cut that left it empty or short, or a disk put back from an older image; or the changed copies differ.
+	if slices.ContainsFunc(changed, func(c *ModCopy) bool { return c.State == CopyStale || c.CtimeNotLater }) ||
 		slices.ContainsFunc(changed, func(c *ModCopy) bool { return c.Size != changed[0].Size }) {
 		d.Kind = ModConflict
 		return d, nil
@@ -219,6 +224,9 @@ func checkMod(in *ModInput) error {
 		}
 		if c.Other && c.Verdict != VerdictReplaced {
 			return fmt.Errorf("modification: %q holds another file, and is %s", c.Disk, c.Verdict)
+		}
+		if c.CtimeNotLater && (c.Other || (c.Verdict != VerdictEdited && c.Verdict != VerdictReplaced)) {
+			return fmt.Errorf("modification: %q has a change time to compare, and is not changed", c.Disk)
 		}
 		switch c.State {
 		case CopyOK, CopySurplus, CopyStale, CopyCorrupt, CopyUnavailable:

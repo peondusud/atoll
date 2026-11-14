@@ -271,6 +271,19 @@ func CopyOf(ctx context.Context, db *sql.DB, disk, path, fileKey string) (KnownC
 	return row, nil
 }
 
+// The names a disk holds with a key and other bytes than a path's: those of the files with a copy there that sits at
+// its name, pending or away as it may be; those copies still sit at; and those of its entries, a folder as any other.
+// Each is found by the index on its key. The files come first and their copy after, by its key: left to itself,
+// SQLite reads every copy of the disk to find the file of each, hundreds of thousands of rows for one name.
+const (
+	fileKeySQL  = "SELECT f.lpath FROM files f INDEXED BY files_by_key CROSS JOIN copies c ON c.file_id = f.id WHERE f.lpath_key = ?2 AND f.lpath <> ?3 AND c.disk_id = ?1 AND c.old_lpath IS NULL"
+	oldKeySQL   = "SELECT old_lpath FROM copies WHERE disk_id = ?1 AND old_lpath_key = ?2 AND old_lpath <> ?3"
+	entryKeySQL = "SELECT lpath FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3"
+)
+
+// keyTakenSQL says whether a disk holds any such name.
+const keyTakenSQL = "SELECT EXISTS(" + fileKeySQL + ") OR EXISTS(" + oldKeySQL + ") OR EXISTS(" + entryKeySQL + ")"
+
 // KeyTaken says whether a disk holds a name with the same lpath_key as path, and other bytes
 // (specs.md §15.7). A name without a key never collides.
 func KeyTaken(ctx context.Context, db *sql.DB, disk, path string) (bool, error) {
@@ -279,34 +292,52 @@ func KeyTaken(ctx context.Context, db *sql.DB, disk, path string) (bool, error) 
 		return false, nil
 	}
 	var taken bool
-	err := db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3)
-			OR EXISTS(SELECT 1 FROM copies WHERE disk_id = ?1 AND old_lpath_key = ?2 AND old_lpath <> ?3)
-			OR EXISTS(SELECT 1 FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3)`,
-		disk, key, []byte(path)).Scan(&taken)
-	if err != nil {
+	if err := db.QueryRowContext(ctx, keyTakenSQL, disk, key, []byte(path)).Scan(&taken); err != nil {
 		return false, fmt.Errorf("names: %w", err)
 	}
 	return taken, nil
 }
 
+// KeysTaken gives KeyTaken as a plan asks it, of each name it thinks of placing on an NTFS disk and of the folders
+// above it, in place of holding every name of that disk (specs.md §13.4, §26): one statement for them all, made at
+// the first question, which done closes. A plan that places nothing on such a disk asks nothing, and makes none.
+func KeysTaken(ctx context.Context, db *sql.DB) (taken func(disk, path string) (bool, error), done func()) {
+	var stmt *sql.Stmt
+	taken = func(disk, path string) (bool, error) {
+		key := keyOf(path)
+		if !key.Valid {
+			return false, nil
+		}
+		if stmt == nil {
+			prepared, err := db.PrepareContext(ctx, keyTakenSQL) //nolint:sqlclosecheck // done closes it
+			if err != nil {
+				return false, fmt.Errorf("names: %w", err)
+			}
+			stmt = prepared
+		}
+		var is bool
+		if err := stmt.QueryRowContext(ctx, disk, key, []byte(path)).Scan(&is); err != nil {
+			return false, fmt.Errorf("names: %w", err)
+		}
+		return is, nil
+	}
+	done = func() {
+		if stmt != nil {
+			_ = stmt.Close()
+		}
+	}
+	return taken, done
+}
+
 // KeyTakenExcept is KeyTaken, leaving out one name and all below it: what a rename frees as it comes.
 func KeyTakenExcept(ctx context.Context, db *sql.DB, disk, path, except string) (bool, error) {
-	return keyTakenBy(ctx, db, disk, path, except, nil, []string{
-		"SELECT f.lpath FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3",
-		"SELECT old_lpath FROM copies WHERE disk_id = ?1 AND old_lpath_key = ?2 AND old_lpath <> ?3",
-		"SELECT lpath FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3",
-	})
+	return keyTakenBy(ctx, db, disk, path, except, nil, []string{fileKeySQL, oldKeySQL, entryKeySQL})
 }
 
 // KeyStaysTaken is KeyTakenExcept by what the last look still found: not a row whose clock runs, nor a name at or
 // below a folder found renamed and not yet decided. A rename waits for those, and nothing goes to the trash for them.
 func KeyStaysTaken(ctx context.Context, db *sql.DB, disk, path, except string, leaving []string) (bool, error) {
-	return keyTakenBy(ctx, db, disk, path, except, leaving, []string{
-		"SELECT f.lpath FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = ?1 AND c.old_lpath IS NULL AND c.gone_ns IS NULL AND f.lpath_key = ?2 AND f.lpath <> ?3",
-		"SELECT old_lpath FROM copies WHERE disk_id = ?1 AND gone_ns IS NULL AND old_lpath_key = ?2 AND old_lpath <> ?3",
-		"SELECT lpath FROM entries WHERE disk_id = ?1 AND lpath_key = ?2 AND lpath <> ?3",
-	})
+	return keyTakenBy(ctx, db, disk, path, except, leaving, []string{fileKeySQL + " AND c.gone_ns IS NULL", oldKeySQL + " AND gone_ns IS NULL", entryKeySQL})
 }
 
 func keyTakenBy(ctx context.Context, db *sql.DB, disk, path, except string, leaving, queries []string) (bool, error) {
@@ -564,8 +595,9 @@ func PlannedAt(ctx context.Context, db *sql.DB, disk, path string) (bool, error)
 	return planned, nil
 }
 
-// TrashEntry is what a disk's trash holds at one location.
+// TrashEntry is what a disk's trash holds at one location. RowID is its row, which finds it again at once.
 type TrashEntry struct {
+	RowID     int64
 	Path      string
 	Disk      string
 	TrashPath string
@@ -589,18 +621,25 @@ const (
 	staleTrashSQL   = "SELECT reason, deleted_ns FROM trash WHERE lpath = ?1 AND op_id = ?2"
 	repairedSizeSQL = "UPDATE trash SET size = ?1 WHERE lpath = ?2 AND op_id = ?3"
 	dropTrashRowSQL = "DELETE FROM trash WHERE lpath = ?1 AND disk_id = ?2 AND trash_path = ?3"
-	// A page of the list, in the index's own order: no sort, and nothing read before the page.
-	trashPageSQL = `
-		SELECT t.lpath, t.disk_id, t.trash_path, t.op_id, t.size, t.blake3, t.reason, t.deleted_ns, t.expires_ns, COALESCE(o.file_key, '')
+	trashEntrySQL   = `
+		SELECT t.id, t.lpath, t.disk_id, t.trash_path, t.op_id, t.size, t.blake3, t.reason, t.deleted_ns, t.expires_ns, COALESCE(o.file_key, '')
 		FROM trash t JOIN ops o ON o.id = t.op_id
-		WHERE o.state = 'done' AND (t.lpath, t.op_id) > (?, ?)
-		ORDER BY t.lpath, t.op_id
-		LIMIT ?`
+		WHERE o.state = 'done'`
+	// A page of the list, in the index's own order: no sort, and nothing read before the page.
+	trashPageSQL = trashEntrySQL + ` AND (t.lpath, t.op_id) > (?, ?) ORDER BY t.lpath, t.op_id LIMIT ?`
+	// A page of the entries from one path up to another, through trash_by_path: what a restore of a path reads, and
+	// nothing of the rest of the trash.
+	trashRangeSQL = trashEntrySQL + ` AND t.lpath >= ?1 AND t.lpath < ?2 AND (t.lpath, t.op_id) > (?3, ?4) ORDER BY t.lpath, t.op_id LIMIT ?5`
+	// A page of the entries whose time has come, through trash_by_expiry, which holds each row after its expiry: what
+	// a purge reads first, whatever else the trash holds.
+	trashExpiredSQL = trashEntrySQL + ` AND t.expires_ns <= ?1 AND (t.expires_ns, t.id) > (?2, ?3) ORDER BY t.expires_ns, t.id LIMIT ?4`
+	trashByRowSQL   = trashEntrySQL + ` AND t.id = ?`
+	trashDueSQL     = `SELECT EXISTS(SELECT 1 FROM trash t JOIN ops o ON o.id = t.op_id WHERE t.expires_ns <= ? AND o.state = 'done')`
 	// Every entry once, in the order the table holds them, which costs no sort.
 	trashWeightsSQL = `
-		SELECT t.disk_id, t.op_id, t.reason, t.size, t.deleted_ns, t.expires_ns
+		SELECT t.id, t.disk_id, t.op_id, t.reason, t.size, t.deleted_ns, t.expires_ns
 		FROM trash t JOIN ops o ON o.id = t.op_id
-		WHERE o.state = 'done'
+		WHERE o.state = 'done' AND (?1 = '' OR t.disk_id = ?1)
 		ORDER BY t.id`
 )
 
@@ -630,7 +669,12 @@ func EachTrashEntry(ctx context.Context, db *sql.DB, fn func(*TrashEntry) error)
 }
 
 func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]TrashEntry, error) {
-	rows, err := db.QueryContext(ctx, trashPageSQL, after, afterOp, trashPageSize)
+	return trashEntries(ctx, db, trashPageSQL, after, afterOp, trashPageSize)
+}
+
+// trashEntries reads the entries a query of trashEntrySQL gives.
+func trashEntries(ctx context.Context, db *sql.DB, query string, args ...any) ([]TrashEntry, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("trash: %w", err)
 	}
@@ -639,7 +683,7 @@ func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]
 	for rows.Next() {
 		var e TrashEntry
 		var path, trashPath []byte
-		if err := rows.Scan(&path, &e.Disk, &trashPath, &e.OpID, &e.Size, &e.Hash, &e.Reason, &e.DeletedNS, &e.ExpiresNS, &e.FileKey); err != nil {
+		if err := rows.Scan(&e.RowID, &path, &e.Disk, &trashPath, &e.OpID, &e.Size, &e.Hash, &e.Reason, &e.DeletedNS, &e.ExpiresNS, &e.FileKey); err != nil {
 			return nil, fmt.Errorf("trash: %w", err)
 		}
 		e.Path, e.TrashPath = string(path), string(trashPath)
@@ -649,6 +693,59 @@ func trashPage(ctx context.Context, db *sql.DB, after []byte, afterOp int64) ([]
 		return nil, fmt.Errorf("trash: %w", err)
 	}
 	return list, nil
+}
+
+// EachTrashEntryBelow gives each entry at a path or below it, by whole components, whose operation is done, by path in
+// byte order, then by operation: read through trash_by_path, a page at a time, and nothing of the rest of the trash.
+func EachTrashEntryBelow(ctx context.Context, db *sql.DB, under string, fn func(*TrashEntry) error) error {
+	// Between a path and what follows everything below it lie the names that begin as it does and go on with a byte
+	// before the slash: those are left aside.
+	lo, hi := []byte(under), []byte(under+"0")
+	after, afterOp := []byte{}, int64(0)
+	for {
+		page, err := trashEntries(ctx, db, trashRangeSQL, lo, hi, after, afterOp, trashPageSize)
+		if err != nil {
+			return err
+		}
+		if len(page) == 0 {
+			return nil
+		}
+		for i := range page {
+			e := &page[i]
+			if e.Path != under && !strings.HasPrefix(e.Path, under+"/") {
+				continue
+			}
+			if err := fn(e); err != nil {
+				return err
+			}
+		}
+		last := &page[len(page)-1]
+		after, afterOp = []byte(last.Path), last.OpID
+	}
+}
+
+// TrashExpired gives a page of the entries whose time has come by nowNS and whose operation is done, by expiry then
+// by row, after the entry of afterNS and afterRow: read through trash_by_expiry (specs.md §17).
+func TrashExpired(ctx context.Context, db *sql.DB, nowNS, afterNS, afterRow int64) ([]TrashEntry, error) {
+	return trashEntries(ctx, db, trashExpiredSQL, nowNS, afterNS, afterRow, trashPageSize)
+}
+
+// TrashEntryByRow gives the entry of a row, and false when it is gone, or its operation is not done.
+func TrashEntryByRow(ctx context.Context, db *sql.DB, row int64) (TrashEntry, bool, error) {
+	list, err := trashEntries(ctx, db, trashByRowSQL, row)
+	if err != nil || len(list) == 0 {
+		return TrashEntry{}, false, err
+	}
+	return list[0], true, nil
+}
+
+// TrashDue says whether an entry whose operation is done has reached its time by nowNS.
+func TrashDue(ctx context.Context, db *sql.DB, nowNS int64) (bool, error) {
+	var due bool
+	if err := db.QueryRowContext(ctx, trashDueSQL, nowNS).Scan(&due); err != nil {
+		return false, fmt.Errorf("trash: %w", err)
+	}
+	return due, nil
 }
 
 // TrashUsed gives, for each disk whose trash holds entries, the sum of their sizes, an entry of unknown size counting
@@ -693,6 +790,7 @@ func TrashEntries(ctx context.Context, db *sql.DB) ([]TrashEntry, error) {
 // TrashWeight is what choosing what a purge reaches needs of an entry of the trash: its disk, its operation, why and
 // when it came, and its size. No path.
 type TrashWeight struct {
+	RowID     int64
 	Disk      string
 	OpID      int64
 	Reason    string
@@ -705,7 +803,13 @@ type TrashWeight struct {
 // after each pass whether a purge is due: the paths of a large trash, in their order, are not for that (specs.md
 // §15.13, §26).
 func TrashWeights(ctx context.Context, db *sql.DB) ([]TrashWeight, error) {
-	rows, err := db.QueryContext(ctx, trashWeightsSQL)
+	return TrashWeightsOn(ctx, db, "")
+}
+
+// TrashWeightsOn gives that for the entries of one disk, or of all with "": a purge for room is chosen among the
+// entries of a disk whose trash holds too much, and of no other (specs.md §17).
+func TrashWeightsOn(ctx context.Context, db *sql.DB, disk string) ([]TrashWeight, error) {
+	rows, err := db.QueryContext(ctx, trashWeightsSQL, disk)
 	if err != nil {
 		return nil, fmt.Errorf("trash: %w", err)
 	}
@@ -713,7 +817,7 @@ func TrashWeights(ctx context.Context, db *sql.DB) ([]TrashWeight, error) {
 	list := []TrashWeight{}
 	for rows.Next() {
 		var w TrashWeight
-		if err := rows.Scan(&w.Disk, &w.OpID, &w.Reason, &w.Size, &w.DeletedNS, &w.ExpiresNS); err != nil {
+		if err := rows.Scan(&w.RowID, &w.Disk, &w.OpID, &w.Reason, &w.Size, &w.DeletedNS, &w.ExpiresNS); err != nil {
 			return nil, fmt.Errorf("trash: %w", err)
 		}
 		list = append(list, w)
@@ -804,4 +908,43 @@ func FinishRestore(ctx context.Context, db *sql.DB, op *Op, nowNS int64, c *NewC
 		return fmt.Errorf("%q: %w", op.Path, err)
 	}
 	return nil
+}
+
+// What a pass asks of the journal about a copy a walk no longer finds at its name (invariant 11): where the operations
+// on its disk put the file of that inode, through ops_by_key, and whether an operation is one of that disk's.
+const (
+	placesOfSQL = "SELECT path2 FROM ops WHERE disk_id = ?1 AND file_key = ?2 AND path2 IS NOT NULL ORDER BY id"
+	opOnDiskSQL = "SELECT EXISTS(SELECT 1 FROM ops WHERE id = ?1 AND disk_id = ?2)"
+)
+
+// PlacesOf gives where the journal says its operations on a disk put the file of an inode: the second path of each,
+// in the order of the operations. An operation is journaled before it runs (invariant 12), so a copy Atoll moved is at
+// one of them, or was moved on since.
+func PlacesOf(ctx context.Context, db *sql.DB, disk, fileKey string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, placesOfSQL, disk, fileKey)
+	if err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var list []string
+	for rows.Next() {
+		var place []byte
+		if err := rows.Scan(&place); err != nil {
+			return nil, fmt.Errorf("journal: %w", err)
+		}
+		list = append(list, string(place))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	return list, nil
+}
+
+// OpOnDisk says whether the journal holds an operation of that id on that disk.
+func OpOnDisk(ctx context.Context, db *sql.DB, disk string, id int64) (bool, error) {
+	var held bool
+	if err := db.QueryRowContext(ctx, opOnDiskSQL, id, disk).Scan(&held); err != nil {
+		return false, fmt.Errorf("journal: %w", err)
+	}
+	return held, nil
 }

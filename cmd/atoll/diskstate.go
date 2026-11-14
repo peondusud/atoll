@@ -32,15 +32,15 @@ const firstDepending = 10
 
 // diskChangeOutput is the output of api/schemas/disk-change.schema.json.
 type diskChangeOutput struct {
-	Disk              string   `json:"disk"`
-	Change            string   `json:"change"`
-	StateWas          string   `json:"state_was"`
-	Depending         int64    `json:"depending"`
-	DependingFirst    []string `json:"depending_first"`
-	OnlyThere         int64    `json:"only_there"`
-	PlannedOperations int64    `json:"planned_operations"`
-	Done              bool     `json:"done"`
-	Warnings          []string `json:"warnings"`
+	Disk              string     `json:"disk"`
+	Change            string     `json:"change"`
+	StateWas          string     `json:"state_was"`
+	Depending         int64      `json:"depending"`
+	DependingFirst    []pathItem `json:"depending_first"`
+	OnlyThere         int64      `json:"only_there"`
+	PlannedOperations int64      `json:"planned_operations"`
+	Done              bool       `json:"done"`
+	Warnings          []string   `json:"warnings"`
 }
 
 // diskIDArgs is the arguments of a disk command that names one disk: its id, and flags each given once.
@@ -151,7 +151,7 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 			return failure(stderr, fmt.Errorf("disk %s: %w", change, err))
 		}
 	}
-	out := diskChangeOutput{Disk: d.ID, Change: change, StateWas: stateName(d), DependingFirst: []string{}, Warnings: []string{}}
+	out := diskChangeOutput{Disk: d.ID, Change: change, StateWas: stateName(d), DependingFirst: []pathItem{}, Warnings: []string{}}
 	warn := func(kind, message string) {
 		out.Warnings = append(out.Warnings, kind)
 		report(stderr, "warning: "+message)
@@ -215,7 +215,7 @@ func readHolds(ctx context.Context, c *config.Config, id string, out *diskChange
 	}
 	out.Depending, out.OnlyThere, out.PlannedOperations = holds.Depending, holds.OnlyThere, holds.Planned
 	if holds.First != nil {
-		out.DependingFirst = holds.First
+		out.DependingFirst = pathItems(holds.First)
 	}
 	return nil
 }
@@ -243,10 +243,10 @@ func changedText(text []byte, d *config.Disk, change string, out *diskChangeOutp
 			return nil, fmt.Errorf(T("%d operations wait on it: mount it, and let the daemon or atoll daemon --until-idle end them"), out.PlannedOperations)
 		case d.State == config.DiskDraining && out.Depending > 0:
 			return nil, fmt.Errorf(T("it is draining, and %d files still depend on it, among them %s: remove it once none does (atoll disk show %s)"),
-				out.Depending, strings.Join(out.DependingFirst, ", "), d.ID)
+				out.Depending, shownPaths(out.DependingFirst), d.ID)
 		case d.State != config.DiskFailed && out.Depending > 0:
 			return nil, fmt.Errorf(T("%d files depend on it, among them %s: atoll disk remove %s --evacuate first, then remove it once none does"),
-				out.Depending, strings.Join(out.DependingFirst, ", "), d.ID)
+				out.Depending, shownPaths(out.DependingFirst), d.ID)
 		}
 		return config.RemoveDisk(text, d.ID) //nolint:wrapcheck // likewise
 	}
@@ -257,7 +257,7 @@ func diskChangeText(out *diskChangeOutput) string {
 	fmt.Fprintf(&b, T("disk %s, %s: %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n"),
 		out.Disk, out.StateWas, out.Depending, out.OnlyThere, out.PlannedOperations)
 	for _, p := range out.DependingFirst {
-		fmt.Fprintf(&b, "  %s\n", shownPath(p))
+		fmt.Fprintf(&b, "  %s\n", pathText(p))
 	}
 	switch {
 	case out.Done && out.Change == changeDrain:
@@ -291,7 +291,7 @@ type diskShowOutput struct {
 	TimePrecisionNS *int64           `json:"time_precision_ns"`
 	Copies          map[string]int64 `json:"copies"`
 	Depending       int64            `json:"depending"`
-	DependingFirst  []string         `json:"depending_first"`
+	DependingFirst  []pathItem       `json:"depending_first"`
 	OnlyThere       int64            `json:"only_there"`
 	Planned         int64            `json:"planned_operations"`
 	Marker          *diskShowMarker  `json:"marker"`
@@ -339,7 +339,7 @@ func diskShow(configPath string, args []string, stdout, stderr io.Writer) int {
 
 func showDisk(ctx context.Context, c *config.Config, m disks.Machine, d *config.Disk) (out *diskShowOutput, err error) {
 	out = &diskShowOutput{ID: d.ID, UUID: d.UUID, FS: string(d.FS), Mount: d.Mount, Root: d.Root, Workdir: d.Workdir, Role: d.Role,
-		Tags: append([]string{}, d.Tags...), Configured: stateName(d), DependingFirst: []string{}}
+		Tags: append([]string{}, d.Tags...), Configured: stateName(d), DependingFirst: []pathItem{}}
 	if d.Domain != "" {
 		out.Domain = &d.Domain
 	}
@@ -380,7 +380,7 @@ func showDisk(ctx context.Context, c *config.Config, m disks.Machine, d *config.
 	}
 	out.Copies, out.Depending, out.OnlyThere, out.Planned = holds.Copies, holds.Depending, holds.OnlyThere, holds.Planned
 	if holds.First != nil {
-		out.DependingFirst = holds.First
+		out.DependingFirst = pathItems(holds.First)
 	}
 	// The marker is read only from a disk its check finds there: a missing disk's folder may be its mount point.
 	if verdict.State != disks.Missing && d.State != config.DiskFailed {
@@ -417,7 +417,7 @@ func diskShowText(out *diskShowOutput) string {
 	fmt.Fprintf(&b, T("\n  copies: %s\n  %d files depend on it, %d have no copy elsewhere, %d operations wait on it\n"),
 		strings.Join(states, ", "), out.Depending, out.OnlyThere, out.Planned)
 	for _, p := range out.DependingFirst {
-		fmt.Fprintf(&b, "    %s\n", shownPath(p))
+		fmt.Fprintf(&b, "    %s\n", pathText(p))
 	}
 	return b.String()
 }
@@ -554,4 +554,13 @@ func splitReplace(args []string) (old string, rest []string, err error) {
 		return "", nil, errors.New(T("want <id> --with <mount point>"))
 	}
 	return old, append(rest, "--", with), nil
+}
+
+// shownPaths gives paths as a line of human output shows them, one after the other.
+func shownPaths(list []pathItem) string {
+	shown := make([]string, 0, len(list))
+	for _, p := range list {
+		shown = append(shown, pathText(p))
+	}
+	return strings.Join(shown, ", ")
 }

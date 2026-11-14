@@ -100,8 +100,12 @@
         "state_was": "in-service",
         "depending": 2,
         "depending_first": [
-          "a.mkv",
-          "b.mkv"
+          {
+            "path": "a.mkv"
+          },
+          {
+            "path": "b.mkv"
+          }
         ],
         "only_there": 0,
         "planned_operations": 0,
@@ -124,8 +128,12 @@
         "state_was": "draining",
         "depending": 2,
         "depending_first": [
-          "a.mkv",
-          "b.mkv"
+          {
+            "path": "a.mkv"
+          },
+          {
+            "path": "b.mkv"
+          }
         ],
         "only_there": 0,
         "planned_operations": 0,

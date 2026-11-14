@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -77,7 +78,29 @@ func Prepare(ctx context.Context, db *sql.DB, f *Facts, nowNS int64, write bool)
 	return due, nil
 }
 
-// Record writes, under the catalog's lock, what was sent: an alert not sent is tried again at a later pass.
+// Unsent gives what is left of what a pass left to send once the alerts of those keys went: the others, for another
+// try, each recorded as its pass worked it out once it goes.
+func (d *Due) Unsent(sent []string) *Due {
+	left := &Due{RemindNS: d.RemindNS, rows: d.rows}
+	for _, m := range d.Messages {
+		if !slices.Contains(sent, m.Key) {
+			left.Messages = append(left.Messages, m)
+		}
+	}
+	return left
+}
+
+// RetryAfter gives how long the daemon waits before it tries again, alone, alerts that could not be sent, after that
+// many tries in a row that left some unsent (specs.md §23): 5 minutes, then twice as long each time, up to an hour.
+func RetryAfter(tries int) time.Duration {
+	wait := 5 * time.Minute
+	for i := 1; i < tries && wait < time.Hour; i++ {
+		wait *= 2
+	}
+	return min(wait, time.Hour)
+}
+
+// Record writes, under the catalog's lock, what was sent: an alert not sent is tried again later.
 func Record(ctx context.Context, db *sql.DB, due *Due, sent []string) error {
 	put := make([]catalog.AlertRow, 0, len(sent))
 	for _, key := range sent {
