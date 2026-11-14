@@ -3736,3 +3736,37 @@ func TestAFolderHalfMadeTakesItsOwnerAtTheReprise(t *testing.T) {
 		t.Errorf("its entry says mode %s", got)
 	}
 }
+
+// A reprise that finds a name and its file's record disagreeing, as ntfs3 leaves them when a device fails between the
+// syncs of a move's two folders, concludes nothing and leaves the operation planned (specs.md §17.2): the disk's row
+// counts such operations, for the alert ntfs-names and atoll status, and counts 0 again once a reprise resolves them,
+// after a repair of the volume.
+func TestARepriseCountsNamesThatDisagree(t *testing.T) {
+	b := newBench(t)
+	b.plan("a")
+	// Both names lead to the file, and removing the old one answers ENOENT while it is still there: what ntfs3 does.
+	target := b.inTrash(1, "a")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(b.dirs["t3"], "media", "a"), target); err != nil {
+		t.Fatal(err)
+	}
+	b.failOn("t3", "unlink", syscall.ENOENT)
+	b.opened().Close()
+	if got := b.count("SELECT names_disagree FROM disks WHERE id = 't3'"); got != 1 {
+		t.Errorf("the disk counts %d", got)
+	}
+	if got := b.text("SELECT state FROM ops WHERE id = 1"); got != "planned" {
+		t.Errorf("the operation is %s", got)
+	}
+	// Repaired, the name goes: the move finishes, and nothing is counted any more.
+	delete(b.fail, b.dirs["t3"])
+	b.opened().Close()
+	if got := b.count("SELECT names_disagree FROM disks WHERE id = 't3'"); got != 0 {
+		t.Errorf("once resolved, the disk counts %d", got)
+	}
+	if got := b.text("SELECT state FROM ops WHERE id = 1"); got != "done" {
+		t.Errorf("once repaired, the operation is %s", got)
+	}
+}

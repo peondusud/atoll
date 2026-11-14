@@ -267,6 +267,11 @@ func (s *Session) recoverAll(ctx context.Context) error {
 		}
 		recovered, err := handle.Recover(ctx, s.db, planned, s.now, s.retention)
 		s.changed = s.changed || recovered.Finished
+		if !errors.Is(err, ops.ErrDiskLost) && !errors.Is(err, context.Canceled) {
+			if err := catalog.SetNamesDisagree(ctx, s.db, id, recovered.Disagree); err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+		}
 		for _, r := range recovered.Restored {
 			s.reprised[r.Path] = max(s.reprised[r.Path], r.Op)
 		}

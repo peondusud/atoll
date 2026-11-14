@@ -58,7 +58,12 @@
         "free_bytes": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }], "description": "null until a check has confirmed it." },
         "last_seen": { "$ref": "#/$defs/timeOrNull" },
         "copies": { "$ref": "#/$defs/count" },
-        "bytes": { "$ref": "#/$defs/count" }
+        "bytes": { "$ref": "#/$defs/count" },
+        "names_disagree": {
+          "description": "The operations the last reprise on the disk left planned as a name and its file's record disagree on its volume, as ntfs3 leaves them when a device fails during a move: only a repair of the volume resolves them (specs.md §17.2). Left out when there is none.",
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "file": {

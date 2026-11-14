@@ -209,6 +209,9 @@ type Disk struct {
 	// SmartJSON is the disk's last reading of SMART, as smart_json holds it: empty when none was recorded (specs.md
 	// §23). Disks gives it; SyncDisks keeps what is there.
 	SmartJSON string
+	// NamesDisagree counts the operations the last reprise on the disk left planned as a name and its file's record
+	// disagree there (specs.md §17.2).
+	NamesDisagree int
 }
 
 // SyncDisks rewrites the disks from the configuration, which wins (specs.md §9). A disk it no longer
@@ -397,6 +400,15 @@ func inTransaction(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) e
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// SetNamesDisagree records what a reprise on a disk found of names and records that disagree: the operations it left
+// planned for that, 0 once it resolved them all (specs.md §17.2).
+func SetNamesDisagree(ctx context.Context, db *sql.DB, disk string, ops int) error {
+	if _, err := db.ExecContext(ctx, "UPDATE disks SET names_disagree = ? WHERE id = ? AND names_disagree <> ?", ops, disk, ops); err != nil {
+		return fmt.Errorf("disk %s: %w", disk, err)
 	}
 	return nil
 }

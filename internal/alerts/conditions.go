@@ -33,6 +33,7 @@ const (
 	KeySmartFailing = "smart-failing:"
 	KeySmartSectors = "smart-sectors:"
 	KeyNTFSDirty    = "ntfs-dirty:"
+	KeyNTFSNames    = "ntfs-names:"
 	KeyNoAccess     = "no-access:"
 	KeyWorkdirOwner = "workdir-owner:"
 )
@@ -91,12 +92,21 @@ type Facts struct {
 	Smart []SmartLine
 	// Dirty holds the missing disks whose NTFS volume the daemon found marked dirty (specs.md §22).
 	Dirty []string
+	// Disagree holds the disks whose last reprise left operations planned as a name and its file's record disagree
+	// there, in the catalog's order of the disks (specs.md §17.2).
+	Disagree []NamesDisagree
 	// Foreign holds the disks whose work folder belongs to an account that is neither root's nor Atoll's, in the
 	// configuration's order (specs.md §10).
 	Foreign []ForeignWorkdir
 	// Unopened holds, by disk, the files a read of the daemon could not open, for a reason that says nothing of
 	// their disk, in byte order (specs.md §15.10): they count with the names a walk could not reach.
 	Unopened map[string][]string
+}
+
+// NamesDisagree is a disk whose volume holds names and records that disagree, and the operations left for that.
+type NamesDisagree struct {
+	ID  string
+	Ops int
 }
 
 // ForeignWorkdir is a disk's work folder, or the folder of its parts, of its links or of its trash, that another
@@ -148,6 +158,9 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 	for i := range list {
 		d := &list[i]
 		f.Smart = appendSmart(f.Smart, d)
+		if d.NamesDisagree > 0 && d.State != "retired" {
+			f.Disagree = append(f.Disagree, NamesDisagree{ID: d.ID, Ops: d.NamesDisagree})
+		}
 		if !slices.Contains([]string{"online", "standby", "readonly", "draining"}, d.State) {
 			continue
 		}
@@ -220,6 +233,9 @@ func Holdings(f *Facts) []Holding {
 	}
 	for _, id := range f.Dirty {
 		counts[KeyNTFSDirty+id] = 1
+	}
+	for _, d := range f.Disagree {
+		counts[KeyNTFSNames+d.ID] = int64(d.Ops)
 	}
 	for i := range f.Smart {
 		s := &f.Smart[i]
@@ -297,6 +313,14 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s is marked dirty", id)
 		m.Body = fmt.Sprintf("The disk %s is missing: its NTFS volume is marked dirty, as an unclean unplugging leaves it, and Linux "+
 			"mounts it only by force, which Atoll never does. Repair it with chkdsk /f on Windows, then plug it back.", id)
+	case strings.HasPrefix(h.Key, KeyNTFSNames):
+		id := strings.TrimPrefix(h.Key, KeyNTFSNames)
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s needs a repair", id)
+		m.Body = fmt.Sprintf("%d %s on disk %s stay planned: a name and its file's record disagree on its volume, as ntfs3 leaves "+
+			"them when the device fails during a move. Atoll concludes nothing of them, and every run on that disk exits with 4 "+
+			"until the volume is repaired. Repair it with chkdsk /f on Windows, then plug it back: the next run finishes them.",
+			h.Count, plural(h.Count, "operation", "operations"), id)
 	case strings.HasPrefix(h.Key, KeyNoAccess):
 		id := strings.TrimPrefix(h.Key, KeyNoAccess)
 		var first []string

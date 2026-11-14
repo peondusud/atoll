@@ -573,7 +573,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, fs_uuid, fs_type, mount_path, root, workdir, role, position, COALESCE(domain, ''), tags,
 			capacity_bytes IS NOT NULL, COALESCE(capacity_bytes, 0), COALESCE(free_bytes, 0), state, COALESCE(last_seen_ns, 0),
-			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, '')
+			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, ''), names_disagree
 		FROM disks ORDER BY position`)
 	if err != nil {
 		return nil, fmt.Errorf("disks: %w", err)
@@ -583,7 +583,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	for rows.Next() {
 		var d Disk
 		var tags string
-		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON); err != nil {
+		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON, &d.NamesDisagree); err != nil {
 			return nil, fmt.Errorf("disks: %w", err)
 		}
 		if err := json.Unmarshal([]byte(tags), &d.Tags); err != nil {

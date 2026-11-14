@@ -29,6 +29,8 @@ type Recovered struct {
 	// Trashed holds the operations it finished that sent a copy to the trash: those entries could
 	// not be seen until now, so the command that finished them must not purge them too.
 	Trashed []int64
+	// Disagree counts the operations it left planned as a name and its file's record disagree.
+	Disagree int
 }
 
 // RestoredPath is a restore a reprise finished.
@@ -56,6 +58,9 @@ func (d *Disk) Recover(ctx context.Context, db *sql.DB, list []Op, nowNS int64, 
 			}
 			slog.Warn("an operation stays planned", "disk", d.ID, "op", list[i].ID, "error", err)
 			stayed = errors.Join(stayed, err)
+			if errors.Is(err, ErrNamesDisagree) {
+				out.Disagree++
+			}
 		}
 	}
 	return out, stayed

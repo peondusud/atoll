@@ -2,6 +2,16 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers on the alpha, 2026-11-14 (specs.md §15.11, §17.1, §23)
+
+His answers to the points the alpha's lines left to decide (TODO.md), each done as any fix.
+
+- **A volume ntfs3 left with names that disagree is told of** ("Tell of an NTFS volume whose names and records disagree"). His answer: an alert, and a line in `atoll status`. A reprise that meets a name and its file's record disagreeing, as ntfs3 leaves them when a device fails during a move, leaves the operation planned and concludes nothing, as before; it now records how many it left so on the disk's row, `disks.names_disagree` (migration `0014`), and 0 once a reprise resolves them. The alert `ntfs-names:<id>` and a line of `atoll status`, `names_disagree` in its `--json`, say to repair the volume with `chkdsk /f` on Windows. Nothing changes in what is written. `TestARepriseCountsNamesThatDisagree`, through a reprise that meets them then resolves them once repaired.
+
+### Decided without the maintainer, to confirm
+
+- **A column of `disks`, set by each reprise**, rather than an event: `atoll status` reads the catalog only, and the count must end when a reprise resolves what it counted. **`names_disagree` is left out of `atoll status --json`** when it is 0, so that every other disk's line stays as it was; the alert is of priority 4, as a dirty volume's.
+
 ## The alpha's open lines (TODO.md, Phase 1a), 2026-11-14 (specs.md §9, §11.3, §13.3, §17)
 
 - **What the alpha already did is gone from TODO.md** ("Drop from TODO.md what the alpha already does"): `disk add` and `disk remove` editing the configuration (1df7bb1), the fallbacks of §12.2 for the modes, which the jobs act on (3943dc0, 8321808), `disk show` giving `time_precision_ns` (d9f875d), and the grouping of events per path (06a4b1b).

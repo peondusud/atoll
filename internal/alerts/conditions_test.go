@@ -63,6 +63,7 @@ func TestHoldings(t *testing.T) {
 		Capacity:  100,
 		TrashFull: []TrashFull{{ID: "t3", Used: 6, Capacity: 100}},
 		Dirty:     []string{"t7"},
+		Disagree:  []NamesDisagree{{ID: "t8", Ops: 2}},
 		Foreign:   []ForeignWorkdir{{ID: "t3", Path: "/mnt/t3/Atoll", UID: 1000, Want: 997}},
 		Smart: []SmartLine{
 			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2}}},
@@ -75,7 +76,7 @@ func TestHoldings(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s=%d", h.Key, h.Count))
 	}
 	want := []string{"disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
-		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "no-access:t3=5", "no-access:t9=1", "ntfs-dirty:t7=1", "pool-full=1", "smart-failing:t4=1",
+		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "no-access:t3=5", "no-access:t9=1", "ntfs-dirty:t7=1", "ntfs-names:t8=2", "pool-full=1", "smart-failing:t4=1",
 		"smart-sectors:t4=10", "smart-sectors:t6=3", "trash-full:t3=1", "workdir-owner:t3=1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)
@@ -302,6 +303,9 @@ func TestDescribe(t *testing.T) {
 			"atoll disk remove t4 --evacuate --dry-run"}},
 		{"smart-sectors:t4", 1, "Atoll: disk t4 has 1 bad sector", 3, nil},
 		{"ntfs-dirty:t6", 1, "Atoll: the NTFS volume of disk t6 is marked dirty", 4, []string{"The disk t6 is missing", "chkdsk /f on Windows"}},
+		// A volume whose names and records disagree, as ntfs3 leaves it when a device fails during a move (specs.md §17.2).
+		{"ntfs-names:t2", 2, "Atoll: the NTFS volume of disk t2 needs a repair", 4, []string{"2 operations on disk t2 stay planned",
+			"chkdsk /f on Windows"}},
 		{"no-access:t2", 12, "Atoll: 12 names of disk t2 refuse the account Atoll runs as", 3, []string{"\nalice\nbob/mnt\nand 10 more",
 			"nothing there is copied or verified"}},
 		{"no-access:t2", 1, "Atoll: 1 name of disk t2 refuses the account Atoll runs as", 3, nil},
