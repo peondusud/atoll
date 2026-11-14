@@ -66,6 +66,9 @@ type DiskLine struct {
 	// pass's output.
 	Refused      int64
 	RefusedFirst []string
+	// NewFolders holds the folders where its walk found copies new to the catalog, by path in byte order: what the
+	// daemon tells the media servers of (specs.md §21.5). No part of the pass's output either.
+	NewFolders []string
 }
 
 // RefusedShown is how many of the names that refused it a disk's line keeps: as many as an alert names.
@@ -351,6 +354,7 @@ func (p *pass) look(ctx context.Context) error {
 		line := DiskLine{ID: d.ID, Verdict: report.Verdict, Walked: report.Walked}
 		if report.Walked {
 			line.Refused, line.RefusedFirst = firstRefused(report.Refused)
+			line.NewFolders = slices.Sorted(slices.Values(report.NewFolders))
 		}
 		p.out.Disks = append(p.out.Disks, line)
 	}

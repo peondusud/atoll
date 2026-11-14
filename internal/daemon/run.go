@@ -676,7 +676,18 @@ type passSink struct {
 	folders               map[string]bool
 }
 
-func (s *passSink) Disks([]jobs.DiskLine) error { return nil }
+// Disks keeps the folders where the pass's walks found new copies: a file written straight to a disk, which no rename
+// or deletion tells the media servers of (specs.md §21.5).
+func (s *passSink) Disks(lines []jobs.DiskLine) error {
+	for i := range lines {
+		for _, folder := range lines[i].NewFolders {
+			if s.folders != nil {
+				s.folders[folder] = true
+			}
+		}
+	}
+	return nil
+}
 
 func (s *passSink) Decision(*jobs.Decision) error {
 	s.decisions++

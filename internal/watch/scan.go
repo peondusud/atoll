@@ -63,6 +63,10 @@ type Report struct {
 	// UnfoundFolders holds the folders found at neither name whose rows stay for the copies below them. What their
 	// rows say of a name is on its way out.
 	UnfoundFolders []string
+	// NewFolders holds the folders where the walk found copies new to the catalog, each once, in the walk's order, ""
+	// for the top of the root: the daemon tells the media servers of them (specs.md §21.5).
+	NewFolders []string
+	newFolders map[string]bool
 }
 
 // MovedCopy is a copy found at a new name.
@@ -502,6 +506,17 @@ func freshFile(c *config.Config, f *FoundFile, r *Report, out *catalog.Walk, top
 		UID: f.UID, GID: f.GID,
 	})
 	r.New++
+	folder := ""
+	if at := strings.LastIndexByte(f.Path, '/'); at >= 0 {
+		folder = f.Path[:at]
+	}
+	if !r.newFolders[folder] {
+		if r.newFolders == nil {
+			r.newFolders = map[string]bool{}
+		}
+		r.newFolders[folder] = true
+		r.NewFolders = append(r.NewFolders, folder)
+	}
 	found(f)
 }
 

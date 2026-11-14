@@ -1247,12 +1247,13 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
 - Batching: one notification per folder per 30-second window. A folder is told at once, then not again for 30 s; a change there in between is told when they end.
 - A media server's automatic scan sees changes made through the mount on the same host; Atoll notifies the others. The daemon that runs for good, after each pass, tells each server set of:
   - the folder that holds each path a ripe group of the watcher names (§15.1), when someone other than the view and Atoll made it, or the watcher cannot tell who, as with inotify, and it changed more than attributes;
-  - the folders of the pass's operations that change a name: both paths of a rename of a file or a folder, and the path of a copy moved to the trash.
+  - the folders of the pass's operations that change a name: both paths of a rename of a file or a folder, and the path of a copy moved to the trash;
+  - the folders where the pass's walks found copies new to the catalog: a file written straight to a disk, by hand or while the daemon was stopped, which no rename or deletion tells of. A pool walked for the first time names every folder it holds.
 
   A copy Atoll makes or repairs changes no name, and calls for nothing. A command tells no server; a daemon in shadow mode logs what it would tell, and tells nothing.
 - While a disk is missing, a folder below which a file has a copy on that disk, in any state, is held. It is told after a pass finds the disk back, or once the disk is `failed` (§21.4).
 - `atoll notify test` asks each server set something that changes nothing (§23).
-- The media server's periodic scan can then be disabled. A new file written straight to a disk while the daemon is stopped is found by its next walk, which renames and deletes nothing, so nothing tells the server of it: keep a periodic scan where that happens.
+- The media server's periodic scan can then be disabled: a new file written straight to a disk while the daemon is stopped is found by its next walk, which tells the server of its folder. `atoll scan`, a command, tells no server: what it records as new, the daemon's next pass finds known, so a scan run by hand leaves its new files to the server's own scan.
 
 ### 21.6 One disk awake
 
