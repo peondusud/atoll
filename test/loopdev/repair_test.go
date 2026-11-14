@@ -44,16 +44,23 @@ func physicalAt(t *testing.T, path string, offset int64) int64 {
 }
 
 // btrfsPhysical gives where a logical address of a btrfs filesystem lies on its one device: FIEMAP gives btrfs's
-// logical addresses, which its chunk tree maps to the device, as btrfs-map-logical reads it.
+// logical addresses, which its chunk tree maps to the device. A data chunk of the single profile, which mkfs gives one
+// device, has one stripe: the address lies as far into it as into the chunk. btrfs-map-logical found no extent at an
+// address inside the file's (btrfs-progs 6.14).
 func btrfsPhysical(t *testing.T, device string, logical int64) int64 {
 	t.Helper()
-	out := must(t, "btrfs-map-logical", "-l", strconv.FormatInt(logical, 10), device)
-	m := regexp.MustCompile(`physical (\d+)`).FindStringSubmatch(out)
-	if m == nil {
-		t.Fatalf("btrfs-map-logical says:\n%s", out)
+	out := must(t, "btrfs", "inspect-internal", "dump-tree", "-t", "chunk", device)
+	chunk := regexp.MustCompile(`CHUNK_ITEM (\d+)\)[^\n]*\n\s*length (\d+) [^\n]*type DATA\|single\n(?:[^\n]*\n)*?\s*stripe 0 devid \d+ offset (\d+)`)
+	for _, m := range chunk.FindAllStringSubmatch(out, -1) {
+		start, _ := strconv.ParseInt(m[1], 10, 64)
+		length, _ := strconv.ParseInt(m[2], 10, 64)
+		offset, _ := strconv.ParseInt(m[3], 10, 64)
+		if logical >= start && logical < start+length {
+			return offset + logical - start
+		}
 	}
-	physical, _ := strconv.ParseInt(m[1], 10, 64)
-	return physical
+	t.Fatalf("no data chunk holds %d:\n%s", logical, out)
+	return 0
 }
 
 // repairDrivers are the filesystems and drivers a chunk repair runs on. btrfs checks its own data, and answers a
@@ -107,10 +114,11 @@ func TestRepairOnEachDriver(t *testing.T) {
 			}
 			mountVolume(t, v, look, at, driverOptions(t, look)...)
 			offset := physicalAt(t, path, integrity.ChunkSize)
+			unmountWhenFree(t, at)
 			if tc.fs == names.Btrfs {
+				// Read once the volume is unmounted: its chunk tree is all on the device then.
 				offset = btrfsPhysical(t, v.device, offset)
 			}
-			unmountWhenFree(t, at)
 			dev, err := os.OpenFile(v.device, os.O_RDWR, 0)
 			mustDo(t, err)
 			_, err = dev.WriteAt([]byte{data[integrity.ChunkSize] ^ 0xff}, offset)

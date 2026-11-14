@@ -76,14 +76,6 @@ Four more, on what the measure of 10 showed, answered on 2026-11-14:
 
 Left as recommended, with no question put: the jobs read whole, the renames by rounds and the bound on a path's depth, the bursts of the watcher, `cannotLeave` and `GonePaths`; `guard list` is to write as it reads when the local API serves large pools.
 
-## The maintainer's answers on the alpha, 2026-11-14, to do
-
-Put to him with their options and what each costs; the option he chose is below. Each is done as any fix: a test that fails first, the spec, DONE.md.
-
-7. **btrfs in `TestRepairOnEachDriver`** (§16.1): a test, not a choice, as decision 1 makes a chunk btrfs cannot read on a disk that confirms corrupt; in qemu once no soak runs.
-
-5, passes that walk only what changed, waits for phase 2b (Later phases), and 9, SMART setting `standby`, stays as it is (Phase 1a, the alerts).
-
 ## What the review of the code found, still open (2026-11-13)
 
 Eight reads of the whole code, by area, for performance, security and conformance to the spec, at the commit of pull request #21. What follows was found by reading and is not fixed: each is to check in the code as it is now, then to fix after a test that fails without the fix. What was fixed is in DONE.md.
@@ -120,7 +112,6 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 - What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), were confirmed on 2026-11-12.
 - The rest of the trash (§17): a folder Atoll emptied in a run that was stopped before its end stays, as nothing records it (§17.5). A folder's attributes other than its mode and owner wait for the pipeline.
 - The scrub: `files.state` holds one state, so a file both `corrupt` and in conflict shows `corrupt`; once no copy is corrupt, the next pass finds the conflict again from the rows of its copies (§16).
-- The repair (§16.1): `TestRepairOnEachDriver` leaves out btrfs, which answers a read of a block that rotted with `EIO`, which Atoll takes for a disk that fails (§10): what a scrub of btrfs should make of a checksum error is still to decide: SMART, read now, tells of a disk, not of one block.
 - The settings of the openmediavault mergerfs plugin from `atoll mergerfs-config` (§21.1), which the maintainer left for later: the fstab line and `--json` are done.
 - The link guard (§17): measured at 200,000 files a disk (§26), where its passes hold up to 217.1 MiB, past the 200 MB: see the item on that limit above. A command that sends a copy to the trash leaves its link to the next pass.
 - `balance` (§12.4, §13.3): `atoll status` plans the whole pool to give `bytes_placed` whenever a strict setting exists: at 200,000 files a disk that doubles its time, 1 min 13 s for 35 s in qemu without KVM, and peaks at 192.5 MiB (§26). The local API's `/v1/status` does the same in the daemon's own process, beside its passes.
