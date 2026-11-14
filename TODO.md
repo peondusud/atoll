@@ -76,6 +76,20 @@ Four more, on what the measure of 10 showed, answered on 2026-11-14:
 
 Left as recommended, with no question put: the jobs read whole, the renames by rounds and the bound on a path's depth, the bursts of the watcher, `cannotLeave` and `GonePaths`; `guard list` is to write as it reads when the local API serves large pools.
 
+## The maintainer's answers on the alpha, 2026-11-14, to do
+
+Put to him with their options and what each costs; the option he chose is below. Each is done as any fix: a test that fails first, the spec, DONE.md.
+
+1. **`Atoll/disk.toml` read at each confirmation** (§10): a marker that names another pool, another disk or another filesystem makes the disk `readonly`, with a new reason, `other-marker`. A contract: §10's table, the reasons of the `--json` schemas, `disk_check.json`.
+2. **The topology of R-06 looked at each start** (§10, §13.4): two disks found on one physical disk raise an alert, and the plan counts them as one, so that it never places two copies of a file on them and moves the extra copy elsewhere; writes go on, as for the work folder. A contract: an alert kind, and one more input of the plan, with its vectors in `plan.json`.
+3. **A volume ntfs3 left with names that disagree** (§17.2): an alert, `ntfs-names:<disk>`, saying to repair the volume (`chkdsk /f`), and a line in `atoll status`. Nothing changes in what is written.
+4. **A link of the guard that nothing names** (§17): a line in `atoll status` and an alert, `link-unnamed:<disk>`; the data stays where it is.
+6. **`deletes.direct = "restore"`** (§15.5): the deleted copy is made again in its place, on that disk, from another copy, through the copy pipeline.
+7. **btrfs in `TestRepairOnEachDriver`** (§16.1): a test, not a choice, as decision 1 makes a chunk btrfs cannot read on a disk that confirms corrupt; in qemu once no soak runs.
+8. **A new file a walk finds is told to the media servers** (§21.5): the folder where a scan or a pass found new files is told to Plex, Jellyfin and Emby, as Atoll's own changes are.
+
+5, passes that walk only what changed, waits for phase 2b (Later phases), and 9, SMART setting `standby`, stays as it is (Phase 1a, the alerts).
+
 ## What the review of the code found, still open (2026-11-13)
 
 Eight reads of the whole code, by area, for performance, security and conformance to the spec, at the commit of pull request #21. What follows was found by reading and is not fixed: each is to check in the code as it is now, then to fix after a test that fails without the fix. What was fixed is in DONE.md.
@@ -110,7 +124,6 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 - What the daemon that runs for good (§15.13) leaves:
   - the watcher's limits: a folder that leaves the root under inotify and comes back in another read is watched again from scratch; a path past `PATH_MAX` cannot get a mark of its own on ntfs-3g; the process of an event already gone reads as `user`;
   - the remount after a USB reset of an ntfs-3g disk, through `mount.ntfs-3g`, as the dedicated user, is not tested.
-  - passes that walk every copy: under a change every second on 200,000 files they follow one another, about one core's worth on a machine, against the 5 % of §26 (DONE.md, the soak on 200,000 files). A pass that walks only what changed would answer that; the maintainer is to say whether it waits for phase 2b, which changes passes the same way to spare the disks' sleep.
 - What the copy pipeline leaves for later (§14): one copy at a time, in one pass, is all the daemon runs, so `max_parallel_per_disk` waits for its loop; the creation time set after the rename on Windows (§7).
 - What modifications leave as limits (§15.4, §15.12): a swap of two names whose other copies are on NTFS, whose drivers cannot exchange two names, and a copy replaced by anything but a regular file, which are only reported. `deletes.direct = "restore"` (§15.5), which the copy pipeline now allows, still propagates nothing.
 - What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), were confirmed on 2026-11-12.
@@ -122,10 +135,11 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 - The link guard (§17): measured at 200,000 files a disk (§26), where its passes hold up to 217.1 MiB, past the 200 MB: see the item on that limit above. A link nothing names only shows as a warning in the log: say so in `atoll status` or an alert. A command that sends a copy to the trash leaves its link to the next pass.
 - `balance` (§12.4, §13.3): `atoll status` plans the whole pool to give `bytes_placed` whenever a strict setting exists: at 200,000 files a disk that doubles its time, 1 min 13 s for 35 s in qemu without KVM, and peaks at 192.5 MiB (§26). The local API's `/v1/status` does the same in the daemon's own process, beside its passes.
 - The media-server notifications (§21.5) were checked against fake servers built from the documented APIs, never against a real Plex, Jellyfin or Emby: to try on the maintainer's Plex once its libraries read the merged view. A new file a walk finds is told to no server.
-- What the alerts leave (§23): nothing of phase 1b; SMART, Gotify, SMTP and a volume marked dirty are done. Without udev, as in a container, no `/dev/disk/by-uuid/` names the device, and a dirty volume is not seen. No reading of SMART sets the state `standby` yet (§4): one an hour old says nothing of now, and `smartctl -n standby` would have to be asked before each pass. The counts read the whole of `files` after each pass, with no index: to measure on 200,000 files, before an index on the states that alert.
+- What the alerts leave (§23): nothing of phase 1b; SMART, Gotify, SMTP and a volume marked dirty are done. Without udev, as in a container, no `/dev/disk/by-uuid/` names the device, and a dirty volume is not seen. No reading of SMART sets the state `standby` (§4), and none is to, as the maintainer decided on 2026-11-14: one an hour old says nothing of now, and `smartctl -n standby` would have to be asked before each pass. The counts read the whole of `files` after each pass, with no index: to measure on 200,000 files, before an index on the states that alert.
 - The operation journal (`ops`) covers the trash, the renames of propagation, files and folders, and the copies (`create`) so far (§14.2, §17.1, §17.2). Each new kind of operation needs its own reprise, with kill -9 at each step and fault injection.
 - The break-glass test runs in `test/loopdev` (`TestBreakGlass`), so in the CI's qemu job, on two disks and every driver. What it leaves: a pool of more disks, a disk away when Atoll goes, and, once Atoll's own view comes (phase 2a), comparing that view with plain mergerfs.
 
 ## Later phases (specs.md §28)
 
+- **Passes that walk only what changed, in phase 2b**, as the maintainer decided on 2026-11-14: under a change every second on 200,000 files, passes that walk every copy follow one another, about one core's worth on a machine, against the 5 % of §26 (DONE.md, the soak on 200,000 files). Phase 2b changes passes the same way to spare the disks' sleep.
 - **Observability, for phase 3 (the Rust rewrite)**, as the maintainer asked on 2026-11-12: OpenTelemetry, Vector, or both. OpenTelemetry would give the daemon's traces, metrics and logs over OTLP. Vector (vector.dev) would collect the logs and metrics and send them on. Phase 2b already brings Prometheus's `/metrics`; what the rewrite exports, and through which, is to decide then.
