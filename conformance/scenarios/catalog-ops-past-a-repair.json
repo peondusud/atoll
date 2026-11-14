@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a79, \u00a716.1, \u00a717, \u00a725",
-  "description": "A new catalog starts its operations past every id the disks' work folders name, the names of a repair included: the chunks it overwrote, trash/<date>/<op-id>.chunks/, and a chunk it was saving, tmp/<op-id>.<index>.part. init does so over a catalog that went missing, and catalog rebuild does. A name written otherwise than Atoll writes it, with a sign, a leading zero or anything after its suffix, names no operation and counts for nothing. What those folders hold is left as it is.",
+  "description": "A new catalog starts its operations past every id the disks' work folders name, the names of a repair included: the chunks it overwrote, trash/<date>/<op-id>.chunks/, and a chunk it was saving, tmp/<op-id>.<index>.part. init does so over a catalog that went missing, and catalog rebuild does. A name written otherwise than Atoll writes it, with a sign, a leading zero or anything after its suffix, names no operation and counts for nothing. catalog rebuild lists again the two entries of the trash, an operation's file and a repair's chunks, and no other name. What those folders hold is left as it is.",
   "disks": [
     {
       "id": "t1",
@@ -104,6 +104,7 @@
         "catalog": "${SANDBOX}/catalog.db",
         "set_aside": "${SANDBOX}/catalog.db.old-20260101T000000Z",
         "ops_after": 15,
+        "trash_listed": 2,
         "disks": [
           {
             "id": "t1",
@@ -151,6 +152,22 @@
         "conflicts": [],
         "done": true
       }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT op_id, CAST(trash_path AS TEXT), reason FROM trash ORDER BY op_id",
+      "rows": [
+        [
+          7,
+          "2026-01-01/7/old.mkv",
+          "unknown"
+        ],
+        [
+          15,
+          "2026-01-01/15.chunks/Films/x.mkv",
+          "repaired"
+        ]
+      ]
     },
     {
       "do": "expect_catalog",

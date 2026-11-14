@@ -79,3 +79,15 @@ func ChunkName(index int64) (string, error) {
 	}
 	return fmt.Sprintf("%08d", index), nil
 }
+
+// ChunkIndex reads a chunk's name as ChunkName writes it, and says whether it is one.
+func ChunkIndex(name string) (int64, bool) {
+	index, err := strconv.ParseInt(name, 10, 64)
+	if err != nil || index < 0 {
+		return 0, false
+	}
+	if want, _ := ChunkName(index); want != name {
+		return 0, false
+	}
+	return index, true
+}

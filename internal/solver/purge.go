@@ -22,15 +22,15 @@ const (
 
 // roomRank gives the order in which an entry goes for room, by the reason it reached the trash for: surplus and
 // rebalance first, then overwritten, repaired and quarantined. Deleted and renamed entries never go for room before
-// their time, as a renamed copy may be the file's only other copy (specs.md §17). ok is false for a reason outside
-// the closed list.
+// their time, as a renamed copy may be the file's only other copy (specs.md §17), nor do the ones a catalog rebuild
+// listed again, whose reason is unknown and may be either. ok is false for a reason outside the closed list.
 func roomRank(reason string) (rank int, room, ok bool) {
 	switch reason {
 	case "surplus", "rebalance":
 		return 0, true, true
 	case "overwritten", "repaired", "quarantined":
 		return 1, true, true
-	case "deleted", "renamed":
+	case "deleted", "renamed", "unknown":
 		return 0, false, true
 	default:
 		return 0, false, false

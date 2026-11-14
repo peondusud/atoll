@@ -11,6 +11,55 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 )
 
+// ReasonUnknown is the reason of an entry of the trash a catalog rebuild listed again: nothing on its disk says why it
+// went there (specs.md §9, §17).
+const ReasonUnknown = "unknown"
+
+// FoundTrash is an entry of a disk's trash a catalog rebuild lists again (specs.md §9, §17): the operation whose folder
+// it is, the chunks of a repair or one file, its logical path and its place in the trash, its size, and the inode of a
+// file. Deleted and Expires are its times.
+type FoundTrash struct {
+	OpID      int64
+	Chunks    bool
+	Path      string
+	TrashPath string
+	Size      int64
+	FileKey   string
+	DeletedNS int64
+	ExpiresNS int64
+}
+
+// ListTrashAgain records each entry a rebuild found on a disk's trash, in one transaction: its operation, done, with
+// the id its folder has, which no new operation is given (StartOpsAfter), and its entry, of the reason repaired for the
+// chunks of a repair and unknown otherwise, with no hash.
+func ListTrashAgain(ctx context.Context, db *sql.DB, disk string, list []FoundTrash) error {
+	if len(list) == 0 {
+		return nil
+	}
+	return inTransaction(ctx, db, func(tx *sql.Tx) error {
+		for i := range list {
+			e := &list[i]
+			kind, reason, key := OpTrash, ReasonUnknown, sql.NullString{String: e.FileKey, Valid: e.FileKey != ""}
+			if e.Chunks {
+				kind, reason, key = OpRepair, ReasonRepaired, sql.NullString{}
+			}
+			_, err := tx.ExecContext(ctx, "INSERT INTO ops(id, disk_id, kind, path, path2, file_key, started_ns, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'done')",
+				e.OpID, disk, kind, []byte(e.Path), []byte(e.TrashPath), key, e.DeletedNS)
+			if err != nil {
+				return fmt.Errorf("journal: operation %d: %w", e.OpID, err)
+			}
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, blake3, reason, deleted_ns, expires_ns)
+				VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+				[]byte(e.Path), disk, []byte(e.TrashPath), e.OpID, e.Size, reason, e.DeletedNS, e.ExpiresNS)
+			if err != nil {
+				return fmt.Errorf("trash: operation %d: %w", e.OpID, err)
+			}
+		}
+		return nil
+	})
+}
+
 // StartOpsAfter makes the next operation's id come after id, at the least: a rebuilt catalog's operations must not
 // meet the folders and parts the old ones left on the disks (specs.md §9, §17).
 func StartOpsAfter(ctx context.Context, db *sql.DB, id int64) error {

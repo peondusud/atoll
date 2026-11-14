@@ -5,7 +5,7 @@
   "description": "A new catalog from what the disks hold, the old one set aside (specs.md §9, §25). Without --yes, what it would do, done false.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["catalog", "set_aside", "ops_after", "disks", "conflicts", "done"],
+  "required": ["catalog", "set_aside", "ops_after", "trash_listed", "disks", "conflicts", "done"],
   "properties": {
     "catalog": { "type": "string", "minLength": 1 },
     "set_aside": {
@@ -14,6 +14,11 @@
     },
     "ops_after": {
       "description": "The highest operation id the disks' trash and tmp/ name: the new catalog's operations come after it.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "trash_listed": {
+      "description": "The entries of the disks' trash listed again, from trash/<date>/<op id>/: of the reason unknown, or repaired for the chunks of a repair (specs.md §9, §17). 0 when nothing was done.",
       "type": "integer",
       "minimum": 0
     },

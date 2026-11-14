@@ -1,0 +1,232 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §9, §17",
+  "description": "catalog rebuild lists the entries of each disk's trash again, from trash/<date>/<op id>/: a catalog made from the disks knew none of them, so that none was ever restored or purged. An operation's folder that holds one file is an entry, of the reason unknown, as nothing on the disk says why it went there; a repair's folder of chunks is one of the reason repaired. Its time is the end of its folder's date, or the time of the rebuild when that is earlier, so that nothing reads as older than it is, and it expires the retention after it. What is no operation's, or an operation's folder that holds more than one file, is left as it is, and so is everything on the disks. An entry listed again can be restored.",
+  "clock": "2026-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/films/old.mkv",
+          "text": "gone"
+        },
+        {
+          "path": "Atoll/trash/2025-12-30/5.chunks/b.mkv/00000000",
+          "text": "abc"
+        },
+        {
+          "path": "Atoll/trash/2025-12-30/5.chunks/b.mkv/00000003",
+          "text": "de"
+        },
+        {
+          "path": "Atoll/trash/2025-12-31/6/x",
+          "text": "1"
+        },
+        {
+          "path": "Atoll/trash/2025-12-31/6/y",
+          "text": "2"
+        },
+        {
+          "path": "Atoll/trash/2025-12-31/notes.txt",
+          "text": "mine"
+        },
+        {
+          "path": "Atoll/trash/keep/z",
+          "text": "mine too"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM trash",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT seq FROM sqlite_sequence WHERE name = 'ops'",
+      "rows": [
+        [
+          7
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, CAST(trash_path AS TEXT), op_id, size, blake3 IS NULL, reason, deleted_ns, expires_ns FROM trash ORDER BY op_id",
+      "rows": [
+        [
+          "b.mkv",
+          "t1",
+          "2025-12-30/5.chunks/b.mkv",
+          5,
+          5,
+          1,
+          "repaired",
+          1767139200000000000,
+          1769731200000000000
+        ],
+        [
+          "films/old.mkv",
+          "t1",
+          "2026-01-01/7/films/old.mkv",
+          7,
+          4,
+          1,
+          "unknown",
+          1767225600000000000,
+          1769817600000000000
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, disk_id, kind, CAST(path AS TEXT), CAST(path2 AS TEXT), state, file_key IS NOT NULL FROM ops ORDER BY id",
+      "rows": [
+        [
+          5,
+          "t1",
+          "repair",
+          "b.mkv",
+          "2025-12-30/5.chunks/b.mkv",
+          "done",
+          0
+        ],
+        [
+          7,
+          "t1",
+          "trash",
+          "films/old.mkv",
+          "2026-01-01/7/films/old.mkv",
+          "done",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "b.mkv",
+            "disk": "t1",
+            "reason": "repaired",
+            "size": 5,
+            "blake3": null,
+            "deleted": "2025-12-31T00:00:00.000000000Z",
+            "expires": "2026-01-30T00:00:00.000000000Z",
+            "op": 5
+          },
+          {
+            "path": "films/old.mkv",
+            "disk": "t1",
+            "reason": "unknown",
+            "size": 4,
+            "blake3": null,
+            "deleted": "2026-01-01T00:00:00.000000000Z",
+            "expires": "2026-01-31T00:00:00.000000000Z",
+            "op": 7
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "restore",
+        "films/old.mkv",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "media/films/old.mkv",
+          "text": "gone"
+        },
+        {
+          "path": "Atoll/trash/2025-12-30/5.chunks/b.mkv/00000000",
+          "text": "abc"
+        },
+        {
+          "path": "Atoll/trash/2025-12-30/5.chunks/b.mkv/00000003",
+          "text": "de"
+        },
+        {
+          "path": "Atoll/trash/2025-12-31/6/x",
+          "text": "1"
+        },
+        {
+          "path": "Atoll/trash/2025-12-31/6/y",
+          "text": "2"
+        },
+        {
+          "path": "Atoll/trash/2025-12-31/notes.txt",
+          "text": "mine"
+        },
+        {
+          "path": "Atoll/trash/keep/z",
+          "text": "mine too"
+        }
+      ]
+    }
+  ]
+}

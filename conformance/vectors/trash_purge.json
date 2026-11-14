@@ -436,6 +436,77 @@
         {
           "disk": "t1",
           "op": 1,
+          "reason": "unknown",
+          "size": 8000,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 3,
+          "reason": "surplus",
+          "size": 1000,
+          "deleted_ns": 5,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 3,
+          "why": "max-size"
+        }
+      ],
+      "full": [
+        "t1"
+      ],
+      "note": "an entry of the reason unknown, listed again by a catalog rebuild, never goes for room before its time either: it may be a deleted file's"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "unknown",
+          "size": 8000,
+          "deleted_ns": 0,
+          "expires_ns": 1000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "expired"
+        }
+      ],
+      "full": [],
+      "note": "and goes at its time"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
           "reason": "deleted",
           "size": 3000,
           "deleted_ns": 0,

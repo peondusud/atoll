@@ -67,7 +67,8 @@
             "quarantined",
             "surplus",
             "rebalance",
-            "renamed"
+            "renamed",
+            "unknown"
           ]
         },
         "size": {

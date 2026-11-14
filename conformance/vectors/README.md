@@ -248,7 +248,7 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `entries` | array of objects | the trash, in any order: `disk`, `op`, `reason`, `size` (null when unknown), `deleted_ns`, `expires_ns`, and `held` for an entry that reached the trash in this run's reprise |
 | `purge` | array of objects | what goes, by operation: `op` and `why`, one of `expired`, `older-than` and `max-size` |
 | `full` | array of strings | the disks whose trash still holds more than `max_size` of their capacity once those are gone, by id in byte order |
-| `error` | boolean | `true` when a reason is unknown, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
+| `error` | boolean | `true` when a reason is outside the closed list, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
 
 ### `link_guard.json` — what the link guard does with a disk's links (§17)
 

@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The alpha's open lines (TODO.md, Phase 1a), 2026-11-14 (specs.md §9, §17)
+
+- **What the alpha already did is gone from TODO.md** ("Drop from TODO.md what the alpha already does"): `disk add` and `disk remove` editing the configuration (1df7bb1), the fallbacks of §12.2 for the modes, which the jobs act on (3943dc0, 8321808), `disk show` giving `time_precision_ns` (d9f875d), and the grouping of events per path (06a4b1b).
+- **A catalog rebuild lists the disks' trash again** ("List the disks' trash again after a catalog rebuild"). A catalog made from the disks knew no entry of their trash: none was ever restored or purged, so a trash filled up until someone emptied it by hand, and the journal could not answer where a copy found gone went. Each operation's folder that holds one file is now an entry of the reason `unknown`, and each repair's folder of chunks one of the reason `repaired`, with an operation `done` of the id their folder has, before the full scan. Scenario `catalog-rebuild-trash.json`, two vectors in `trash_purge.json` and one in `catalog.json`; `catalog-rebuild.json` and `catalog-ops-past-a-repair.json` give the count.
+
+### Decided without the maintainer, to confirm
+
+- **A reason of its own, `unknown`**, a new value of `trash.reason` (migration `0013_trash_unknown`, which makes the table again, as SQLite changes a `CHECK` no other way) and of `api/schemas/trash-list.schema.json`, and **a field `trash_listed`** in `api/schemas/catalog-rebuild.schema.json`. `deleted` would have needed no contract, and would have said what nobody knows. An entry of the reason `unknown` never goes for room before its time, as a deleted or renamed one would not: it may be either.
+- **Its time is the end of its folder's date, or the rebuild's time when that is earlier**, and it expires the retention after it: never purged sooner than it would have been, by `--older-than` either; the date is all a disk says of it.
+- **What is not exactly an entry is left out**: an operation's folder with no file, two files, or anything but files and folders below it; a repair's whose chunks are not those of one file. They stay as they are, with a warning, and the journal's fallback still walks a trash that holds them (§15.5). So is a missing disk's trash, with a warning that says to rebuild again.
+- **No event** is written for an entry listed again: a rebuild loses the history anyway, and none was destroyed.
+
 ## Two more decisions of the maintainer, made on 2026-11-14 (specs.md §10, §15.4, §15.6)
 
 The measure of decision 10 showed more to decide; the maintainer answered on 2026-11-14 (TODO.md, 17 to 20).

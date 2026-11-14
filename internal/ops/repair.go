@@ -257,11 +257,8 @@ func (d *Disk) SavedChunks(op *Op) (map[int64]SavedChunk, error) {
 	saved := map[int64]SavedChunk{}
 	var buf []byte
 	for _, name := range listed {
-		index, err := strconv.ParseInt(name, 10, 64)
-		if err != nil || index < 0 {
-			continue
-		}
-		if want, _ := layout.ChunkName(index); want != name {
+		index, ok := layout.ChunkIndex(name)
+		if !ok {
 			continue
 		}
 		chunk, err := sumOf(dir.Dir, name, &buf)
