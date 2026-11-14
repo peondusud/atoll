@@ -3,6 +3,7 @@ package disks
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/vectors"
 )
@@ -173,22 +175,23 @@ type checkEntry struct {
 }
 
 type checkCase struct {
-	FS         *string     `json:"fs"`
-	UUID       *string     `json:"uuid"`
-	Mount      *string     `json:"mount"`
-	Path       *string     `json:"path"`
-	NoEntry    bool        `json:"no_entry"`
-	Entry      *checkEntry `json:"entry"`
-	Device     *string     `json:"device"`
-	NoMagic    bool        `json:"no_magic"`
-	ID         *string     `json:"id"`
-	Variant    string      `json:"variant"`
-	NoJournal  bool        `json:"no_journal"`
-	RootFolder *string     `json:"root_folder"`
-	OtherCase  bool        `json:"other_case"`
-	State      string      `json:"state"`
-	Reason     string      `json:"reason"`
-	Note       string      `json:"note"`
+	FS         *string         `json:"fs"`
+	UUID       *string         `json:"uuid"`
+	Mount      *string         `json:"mount"`
+	Path       *string         `json:"path"`
+	NoEntry    bool            `json:"no_entry"`
+	Entry      *checkEntry     `json:"entry"`
+	Device     *string         `json:"device"`
+	NoMagic    bool            `json:"no_magic"`
+	ID         *string         `json:"id"`
+	Variant    string          `json:"variant"`
+	NoJournal  bool            `json:"no_journal"`
+	RootFolder *string         `json:"root_folder"`
+	OtherCase  bool            `json:"other_case"`
+	Marker     json.RawMessage `json:"marker"`
+	State      string          `json:"state"`
+	Reason     string          `json:"reason"`
+	Note       string          `json:"note"`
 }
 
 func or[T any](p *T, fallback T) T {
@@ -259,6 +262,9 @@ func TestCheck(t *testing.T) {
 		c := &cases[i]
 		d, a := answersFor(c)
 		got := Check(a, d)
+		if c.Marker != nil {
+			got = MarkerVerdict(got, markerText(t, c.Marker), true, "p", d)
+		}
 		if string(got.State) != c.State || string(got.Reason) != c.Reason {
 			t.Errorf("case %d: got %s %q, want %s %q (%s)", i, got.State, got.Reason, c.State, c.Reason, c.Note)
 		}
@@ -347,4 +353,26 @@ func TestSwapCase(t *testing.T) {
 			t.Errorf("%q: got %q, want %q", in, got, want)
 		}
 	}
+}
+
+// markerText writes what a case's marker says the disk.toml holds.
+func markerText(t *testing.T, raw json.RawMessage) []byte {
+	t.Helper()
+	var odd string
+	if json.Unmarshal(raw, &odd) == nil {
+		return []byte("format_version = 9\n")
+	}
+	var m struct {
+		PoolID string `json:"pool_id"`
+		DiskID string `json:"disk_id"`
+		FSUUID string `json:"fs_uuid"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	text, err := layout.MarkerText(layout.Marker{PoolID: m.PoolID, DiskID: m.DiskID, FSUUID: m.FSUUID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []byte(text)
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 )
 
@@ -46,6 +47,7 @@ const (
 	Casefold          Reason = "casefold"
 	ASCIICI           Reason = "ascii-ci"
 	NoJournal         Reason = "no-journal"
+	OtherMarker       Reason = "other-marker"
 	ReadOnlyMount     Reason = "read-only-mount"
 )
 
@@ -284,4 +286,31 @@ func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string) Verdi
 	default:
 		return Verdict{State: Online}
 	}
+}
+
+// MarkerVerdict is what a confirmation makes of the disk's marker, <workdir>/disk.toml (specs.md §10): one that names
+// another pool, another disk of this pool or another filesystem, or a file there this version does not read, as disk
+// add refuses each, makes a disk online readonly, other-marker. What the check said otherwise stays: a missing disk is
+// missing, and a readonly one keeps its reason. No marker, or one that says the same, changes nothing.
+func MarkerVerdict(v Verdict, text []byte, found bool, poolID string, d *config.Disk) Verdict {
+	if !found || v.State != Online {
+		return v
+	}
+	m, err := layout.ParseMarker(text)
+	var why string
+	switch {
+	case err != nil:
+		why = fmt.Sprintf("its %s is not a marker this version reads: %v", layout.MarkerName, err)
+	case m.PoolID != poolID:
+		why = fmt.Sprintf("its marker says it is a disk of the pool %q", m.PoolID)
+	case m.DiskID != d.ID:
+		why = fmt.Sprintf("its marker says it is the disk %q of this pool", m.DiskID)
+	case m.FSUUID != d.UUID:
+		why = fmt.Sprintf("its marker names the filesystem %s, copied from another disk", m.FSUUID)
+	default:
+		return v
+	}
+	verdict := readOnly(OtherMarker, why)
+	verdict.TimePrecisionNS = v.TimePrecisionNS
+	return verdict
 }

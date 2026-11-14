@@ -629,6 +629,7 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `no_journal` | boolean | the head says that the ext4 keeps no journal |
 | `root_folder` | string | `ok` (when left out), `absent`, `not-a-folder`, `other-mount` or `io-error`: question 10 |
 | `other_case` | boolean | `<root>` also answers in the other case, with the same inode |
+| `marker` | object or string | what `<workdir>/disk.toml` holds, which a confirmation reads (§10): an object of `pool_id`, `disk_id` and `fs_uuid`, the pool being `p`, or `not-a-marker` for a file there that this version does not read; none when left out |
 | `state` | string | `online`, `readonly` or `missing` |
 | `reason` | string | the reason; left out when `online` |
 

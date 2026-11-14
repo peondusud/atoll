@@ -18,6 +18,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/solver"
@@ -3768,5 +3769,42 @@ func TestARepriseCountsNamesThatDisagree(t *testing.T) {
 	}
 	if got := b.text("SELECT state FROM ops WHERE id = 1"); got != "done" {
 		t.Errorf("once repaired, the operation is %s", got)
+	}
+}
+
+// A disk whose marker names another pool is written to no more: the confirmation that opens it to write reads the
+// marker, and the disk is readonly, other-marker, as disk add would have refused it (specs.md §10). One that says the
+// same is written to as before.
+func TestADiskOfAnotherPoolIsWrittenToNoMore(t *testing.T) {
+	for _, tc := range []struct {
+		pool  string
+		write bool
+	}{{"other", false}, {"p", true}} {
+		b := newBench(t)
+		text, err := layout.MarkerText(layout.Marker{PoolID: tc.pool, DiskID: "t3", FSUUID: b.config.Disks[2].UUID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(b.dirs["t3"], "Atoll"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b.dirs["t3"], "Atoll", layout.MarkerName), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		s := b.opened()
+		if _, err := s.open(t.Context(), "t3"); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.writable("t3"); got != tc.write {
+			t.Errorf("a marker of the pool %q: writable %v", tc.pool, got)
+		}
+		s.Close()
+		want := "online"
+		if !tc.write {
+			want = "readonly"
+		}
+		if got := b.text("SELECT state FROM disks WHERE id = 't3'"); got != want {
+			t.Errorf("a marker of the pool %q: the disk is %s", tc.pool, got)
+		}
 	}
 }

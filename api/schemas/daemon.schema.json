@@ -16,7 +16,7 @@
         "required": ["id", "state", "reason", "message", "walked"],
         "allOf": [
           { "if": { "properties": { "state": { "const": "online" } } }, "then": { "properties": { "reason": { "type": "null" }, "message": { "type": "null" } } } },
-          { "if": { "properties": { "state": { "const": "readonly" } } }, "then": { "properties": { "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "casefold", "ascii-ci", "no-journal", "ignore-case", "read-only-mount"] }, "message": { "type": "string" } } } },
+          { "if": { "properties": { "state": { "const": "readonly" } } }, "then": { "properties": { "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "casefold", "ascii-ci", "no-journal", "ignore-case", "read-only-mount", "other-marker"] }, "message": { "type": "string" } } } },
           { "if": { "properties": { "state": { "const": "missing" } } }, "then": { "properties": { "reason": { "enum": ["not-mounted", "io-error", "partial-mount", "wrong-filesystem", "device-gone", "device-unreadable", "wrong-identifier", "no-root"] }, "message": { "type": "string" } } } }
         ],
         "properties": {

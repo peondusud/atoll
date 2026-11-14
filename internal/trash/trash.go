@@ -325,6 +325,12 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 			handle.Close()
 			return nil, s.lose(ctx, id, fmt.Errorf("%s: %s", verdict.Reason, verdict.Message))
 		}
+		// A disk whose marker names another pool, disk or filesystem is written to no more (specs.md §10).
+		if text, found, err := handle.ReadMarker(); err != nil {
+			slog.Warn("the marker of a disk could not be read", "disk", id, "error", err)
+		} else if verdict = disks.MarkerVerdict(verdict, text, found, s.config.PoolID, sl.config); verdict.Reason == disks.OtherMarker {
+			slog.Warn("a disk is written to no more", "disk", id, "reason", verdict.Reason, "message", verdict.Message)
+		}
 		if err := handle.Verify(); err != nil {
 			handle.Close()
 			return nil, s.lose(ctx, id, err)

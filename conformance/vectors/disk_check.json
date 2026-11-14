@@ -102,6 +102,13 @@
     {"other_case": true, "entry": {"mount_options": ["ro"], "super_options": ["ro"]}, "state": "readonly", "reason": "ignore-case", "note": "before read-only-mount"},
     {"variant": "casefold", "entry": {"super_options": ["ro"]}, "state": "readonly", "reason": "casefold", "note": "before read-only-mount"},
     {"fs": "xfs", "variant": "ascii-ci", "entry": {"mount_options": ["ro"]}, "state": "readonly", "reason": "ascii-ci"},
-    {"fs": "ntfs", "entry": {"mount_options": ["ro"], "super_options": ["ro", "iocharset=utf8"]}, "state": "readonly", "reason": "read-only-mount"}
+    {"fs": "ntfs", "entry": {"mount_options": ["ro"], "super_options": ["ro", "iocharset=utf8"]}, "state": "readonly", "reason": "read-only-mount"},
+    {"marker": {"pool_id": "p", "disk_id": "t1", "fs_uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"}, "state": "online", "note": "a marker that says the same changes nothing"},
+    {"marker": {"pool_id": "q", "disk_id": "t1", "fs_uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"}, "state": "readonly", "reason": "other-marker", "note": "a marker of another pool"},
+    {"marker": {"pool_id": "p", "disk_id": "t2", "fs_uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"}, "state": "readonly", "reason": "other-marker", "note": "a marker of another disk of the pool"},
+    {"marker": {"pool_id": "p", "disk_id": "t1", "fs_uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"}, "state": "readonly", "reason": "other-marker", "note": "a marker of another filesystem, copied from another disk"},
+    {"marker": "not-a-marker", "state": "readonly", "reason": "other-marker", "note": "a file at the marker's name that this version does not read, as disk add refuses it"},
+    {"marker": {"pool_id": "q", "disk_id": "t1", "fs_uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"}, "entry": {"super_options": ["ro"]}, "state": "readonly", "reason": "read-only-mount", "note": "what the check says first stays: read-only is read-only"},
+    {"marker": {"pool_id": "q", "disk_id": "t1", "fs_uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"}, "device": "gone", "state": "missing", "reason": "device-gone", "note": "a missing disk is missing, whatever its marker"}
   ]
 }
