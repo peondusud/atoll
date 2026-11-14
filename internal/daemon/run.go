@@ -259,6 +259,7 @@ func Run(ctx context.Context, opt Options) error {
 	defer l.watcher.Close()
 	l.notify("READY=1")
 	l.check(ctx)
+	l.lookAtDevices(ctx)
 	for id, st := range l.disks {
 		if st.state != disks.Missing {
 			l.watch(ctx, id)
@@ -1149,4 +1150,22 @@ func ClosedPaths(ripe []watch.Group) []string {
 		out = append(out, g.Path)
 	}
 	return out
+}
+
+// lookAtDevices records, at each start, the physical disks each disk the check found mounted lives on (specs.md §10,
+// R-06). A dry run records nothing.
+func (l *loop) lookAtDevices(ctx context.Context) {
+	if !l.opt.Apply {
+		return
+	}
+	db, err := catalog.OpenPool(ctx, l.set.catalog, l.opt.Config.PoolID)
+	if err != nil {
+		l.log.Warn("the physical disks of the pool are not looked at", "error", err)
+		return
+	}
+	defer func() { _ = db.Close() }()
+	jobs.RecordDevices(ctx, db, l.opt.Config, l.opt.Machine, func(i int) bool {
+		st := l.disks[l.opt.Config.Disks[i].ID]
+		return st != nil && st.state != disks.Missing
+	})
 }

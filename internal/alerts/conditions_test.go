@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -65,6 +66,7 @@ func TestHoldings(t *testing.T) {
 		Dirty:     []string{"t7"},
 		Disagree:  []NamesDisagree{{ID: "t8", Ops: 2}},
 		Unnamed:   []UnnamedLinks{{ID: "t9", Links: 3}},
+		Shared:    []SharedDevice{{ID: "t5", Disks: []SharedDisk{{ID: "t5", Device: "sda"}, {ID: "t6", Device: "sda"}}}},
 		Foreign:   []ForeignWorkdir{{ID: "t3", Path: "/mnt/t3/Atoll", UID: 1000, Want: 997}},
 		Smart: []SmartLine{
 			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2}}},
@@ -77,7 +79,7 @@ func TestHoldings(t *testing.T) {
 		got = append(got, fmt.Sprintf("%s=%d", h.Key, h.Count))
 	}
 	want := []string{"disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
-		"guard-modifications:t3=1", "link-unnamed:t9=3", "manual-waiting=1", "name-refused=2", "no-access:t3=5", "no-access:t9=1", "ntfs-dirty:t7=1", "ntfs-names:t8=2", "pool-full=1", "smart-failing:t4=1",
+		"guard-modifications:t3=1", "link-unnamed:t9=3", "manual-waiting=1", "name-refused=2", "no-access:t3=5", "no-access:t9=1", "ntfs-dirty:t7=1", "ntfs-names:t8=2", "pool-full=1", "shared-device:t5=1", "smart-failing:t4=1",
 		"smart-sectors:t4=10", "smart-sectors:t6=3", "trash-full:t3=1", "workdir-owner:t3=1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)
@@ -102,6 +104,12 @@ func TestGather(t *testing.T) {
 	}
 	if err := catalog.SyncDisks(t.Context(), db, list); err != nil {
 		t.Fatal(err)
+	}
+	// The physical disks a start found each on: a, c and f meet on sda, c and f through sdb too; b and h are alone.
+	for id, physical := range map[string][]string{"a": {"sda"}, "b": {"sdc"}, "c": {"sda", "sdb"}, "f": {"sdb"}, "h": {"sdh"}} {
+		if err := catalog.SetDevice(t.Context(), db, id, physical); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// The last reading of SMART of each disk that has one, but a failed disk's, and one that does not decode.
 	for id, reading := range map[string]string{"a": `{"read_ns":7,"failing":false,"reallocated":8,"pending":0,"uncorrectable":0,"temperature":41}`,
@@ -129,6 +137,9 @@ func TestGather(t *testing.T) {
 		{ID: "e", SmartRecord: disks.SmartRecord{ReadNS: 6, Smart: disks.Smart{Failing: true}}}}
 	if !slices.Equal(f.Smart, smart) {
 		t.Errorf("SMART %+v", f.Smart)
+	}
+	if shared := []SharedDevice{{ID: "a", Disks: []SharedDisk{{"a", "sda"}, {"c", "sda,sdb"}, {"f", "sdb"}}}}; !reflect.DeepEqual(f.Shared, shared) {
+		t.Errorf("shared %+v", f.Shared)
 	}
 	// Seen an hour ago at most: not waiting yet.
 	if f, _ := Gather(t.Context(), db, c, hour-1, outcome, &Refused{}); f.Files.Manual != 0 {
@@ -271,6 +282,7 @@ func TestDescribe(t *testing.T) {
 		Used:     95,
 		Capacity: 100,
 		SeenByNS: 10, ManualAfter: "7d",
+		Shared: []SharedDevice{{ID: "t2", Disks: []SharedDisk{{"t2", "sda"}, {"t3", "sda,sdb"}, {"t4", "sdb"}}}},
 		Smart: []SmartLine{
 			{ID: "t3", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2, Uncorrectable: 1, Temperature: 52}}},
 			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Reallocated: 3}}},
@@ -309,6 +321,9 @@ func TestDescribe(t *testing.T) {
 			"chkdsk /f on Windows"}},
 		// A link of the guard whose data nothing names (specs.md §17).
 		{"link-unnamed:t2", 3, "Atoll: 3 links of disk t2 hold data nothing names", 3, []string{"Atoll/links", "nothing is removed"}},
+		// Disks a start found on one physical disk (specs.md §10, R-06).
+		{"shared-device:t2", 1, "Atoll: disks t2, t3 and t4 share a physical disk", 4, []string{"The disks t2 (sda), t3 (sda, sdb) and t4 (sdb) live on one",
+			"goes on writing", "atoll disk remove t4 --evacuate --dry-run"}},
 		{"no-access:t2", 12, "Atoll: 12 names of disk t2 refuse the account Atoll runs as", 3, []string{"\nalice\nbob/mnt\nand 10 more",
 			"nothing there is copied or verified"}},
 		{"no-access:t2", 1, "Atoll: 1 name of disk t2 refuses the account Atoll runs as", 3, nil},

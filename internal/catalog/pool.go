@@ -214,6 +214,9 @@ type Disk struct {
 	NamesDisagree int
 	// LinksUnnamed counts the links of the guard whose data nothing names, as the guard's last run found them (§17).
 	LinksUnnamed int
+	// Device holds the physical disks it lives on, as the last start found them, joined by a comma: empty until one
+	// did (R-06).
+	Device string
 }
 
 // SyncDisks rewrites the disks from the configuration, which wins (specs.md §9). A disk it no longer

@@ -41,6 +41,9 @@ type Disk struct {
 	Mount     string
 	Root      string
 	PastGrace bool // missing for longer than health.missing_grace
+	// Physical names the physical disk it lives on when another disk of the pool lives there too, and is empty
+	// otherwise: the plan counts such disks as one, so that no two copies of a file are on one physical disk (R-06).
+	Physical string
 }
 
 // Copy is one copy of a file.
@@ -247,6 +250,16 @@ type planDisk struct {
 	asked   map[string]bool    // on NTFS, what the catalog answered of each folder asked
 	last    *planFile          // on NTFS, the file last asked of, and what the catalog answered
 	taken   bool
+}
+
+// sharesWith says whether two disks live on one physical disk (R-06).
+func (d *planDisk) sharesWith(other *planDisk) bool {
+	return d != other && d.Physical != "" && d.Physical == other.Physical
+}
+
+// onPhysicalOf says whether a file holds a copy, or has one planned, on a disk that lives on one physical disk with d.
+func (f *planFile) onPhysicalOf(d *planDisk) bool {
+	return slices.ContainsFunc(f.holding, d.sharesWith)
 }
 
 func (d *planDisk) writable() bool {
@@ -563,13 +576,15 @@ func (f *planFile) keep(counted []countedCopy) {
 	}
 	if f.Placement.Spread == SpreadDomain {
 		for _, c := range byRank {
-			if len(f.counted) < f.level && !slices.Contains(f.covered, c.disk.domain) {
+			if len(f.counted) < f.level && !slices.Contains(f.covered, c.disk.domain) && !slices.ContainsFunc(f.counted, c.disk.sharesWith) {
 				take(c.disk)
 			}
 		}
 	}
+	// A copy beside one kept on the same physical disk counts for nothing (R-06).
+	besideKept := func(d *planDisk) bool { return slices.ContainsFunc(f.counted, d.sharesWith) }
 	for _, c := range byRank {
-		if len(f.counted) < f.level && !slices.Contains(f.counted, c.disk) {
+		if len(f.counted) < f.level && !slices.Contains(f.counted, c.disk) && !besideKept(c.disk) {
 			take(c.disk)
 		}
 	}
@@ -799,7 +814,12 @@ func (p *planner) refresh(f *planFile, jobs []Job) ([]Job, error) {
 		}
 	}
 	slices.SortFunc(stale, func(a, b *planDisk) int { return cmp.Compare(a.Position, b.Position) })
+	var refreshed []*planDisk
 	for _, d := range stale {
+		// A stale copy beside one that counts, or one refreshed, on one physical disk would count for nothing (R-06).
+		if slices.ContainsFunc(f.counted, d.sharesWith) || slices.ContainsFunc(refreshed, d.sharesWith) {
+			continue
+		}
 		refusal, err := p.checkName(f, d)
 		if err != nil {
 			return nil, err
@@ -807,6 +827,7 @@ func (p *planner) refresh(f *planFile, jobs []Job) ([]Job, error) {
 		f.stale.add(refusal)
 		if !refusal.any() && f.missing() > 0 && f.Size <= d.room {
 			f.place(d)
+			refreshed = append(refreshed, d)
 			jobs = append(jobs, Job{Kind: JobRefresh, Path: f.Path, Src: f.source.ID, Dst: d.ID})
 		}
 	}
@@ -956,7 +977,7 @@ func (p *planner) pick(f *planFile) (best *planDisk, overflow bool, err error) {
 	}
 	var bestListed, bestNew bool
 	for _, d := range p.disks {
-		if !d.writable() || slices.Contains(f.holding, d) {
+		if !d.writable() || slices.Contains(f.holding, d) || f.onPhysicalOf(d) {
 			continue
 		}
 		isListed := listed(d, place)

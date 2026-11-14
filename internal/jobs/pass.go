@@ -122,11 +122,13 @@ type PendingRead struct {
 }
 
 type pass struct {
-	db       *sql.DB
-	config   *config.Config
-	machine  disks.Machine
-	session  *trash.Session
-	apply    bool
+	db      *sql.DB
+	config  *config.Config
+	machine disks.Machine
+	session *trash.Session
+	apply   bool
+	// start says that the pass is a start of the daemon, which records the physical disks of each disk (R-06).
+	start    bool
 	now      int64
 	direct   string
 	debounce time.Duration
@@ -213,7 +215,10 @@ type Closed map[string]bool
 // RunTo does all the work that is due, once (specs.md §15.12), and tells a sink as it goes. Without
 // apply it writes nothing to a disk, and answers as if every difference it sees were due.
 func RunTo(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink) (*Outcome, error) {
-	return RunClosed(ctx, db, c, m, apply, sink, nil)
+	p := newPass(db, c, m, apply, sink, nil)
+	// atoll daemon --until-idle is a start of the daemon: it records the physical disks of each disk (R-06).
+	p.start = true
+	return p.run(ctx)
 }
 
 // RunClosed is RunTo for the daemon that runs for good, which tells it what its watcher saw closed.
@@ -318,6 +323,11 @@ func (p *pass) look(ctx context.Context) error {
 	planned, err := catalog.PlannedOps(ctx, p.db)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
+	}
+	if p.start && p.apply {
+		RecordDevices(ctx, p.db, p.config, p.machine, func(i int) bool {
+			return p.session.VerdictOf(i).State != disks.Missing && p.session.Readable(p.config.Disks[i].ID)
+		})
 	}
 	for i := range p.config.Disks {
 		d := &p.config.Disks[i]

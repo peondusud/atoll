@@ -43,6 +43,7 @@ type diskVector struct {
 	Mount     *string  `json:"mount"`
 	Root      *string  `json:"root"`
 	PastGrace bool     `json:"past_grace"`
+	Physical  string   `json:"physical"`
 }
 
 type copyVector struct {
@@ -130,7 +131,7 @@ func (v *planVector) input() (Input, error) {
 			ID: d.ID, Position: d.Position, Capacity: d.Capacity, Free: d.Free,
 			State: DiskState(or(d.State, "online")), Role: or(d.Role, "data"),
 			FS: names.Filesystem(or(d.FS, "ext4")), Domain: d.Domain, Tags: d.Tags,
-			Mount: or(d.Mount, "/mnt/"+d.ID), Root: or(d.Root, "media"), PastGrace: d.PastGrace,
+			Mount: or(d.Mount, "/mnt/"+d.ID), Root: or(d.Root, "media"), PastGrace: d.PastGrace, Physical: d.Physical,
 		})
 	}
 	for _, f := range v.Files {
@@ -331,7 +332,7 @@ func randomInput(x *xorshift) Input {
 			FS:     oneOf(x, names.Ext4, names.Ext4, names.NTFS, names.XFS),
 			Domain: oneOf(x, "", "a", "b", "c"),
 			Tags:   oneOf(x, nil, []string{"x"}, []string{"y"}, []string{"x", "y"}),
-			Mount:  "/mnt/d", Root: "media", PastGrace: x.intn(2) == 0,
+			Mount:  "/mnt/d", Root: "media", PastGrace: x.intn(2) == 0, Physical: oneOf(x, "", "", "", "sda", "sdb"),
 		})
 	}
 	paths := []string{"p", "P", "p/q", "p/r", "P/s", "t", "T", "t/u/v", "a:b", "w", "x", "y", "z/1", "z/2", "z/3"}
@@ -576,6 +577,19 @@ func checkPlan(t *testing.T, round int, in Input, plan Plan) {
 			t.Errorf("round %d: job %+v of an unknown kind", round, j)
 		}
 		checkNames(t, round, j.Path, d)
+		// Never a copy placed on a physical disk that holds one of the file's copies, or another copy planned (R-06).
+		if d.Physical != "" && j.Kind == JobReplicate {
+			for _, c := range f.Copies {
+				if other := disks[c.Disk]; other.ID != d.ID && other.Physical == d.Physical {
+					t.Errorf("round %d: job %+v beside the copy on %q, on one physical disk", round, j, other.ID)
+				}
+			}
+			for _, k := range plan.Jobs {
+				if k.Path == j.Path && k.Dst != j.Dst && disks[k.Dst].Physical == d.Physical {
+					t.Errorf("round %d: jobs %+v and %+v on one physical disk", round, j, k)
+				}
+			}
+		}
 		src := slices.IndexFunc(f.Copies, func(c Copy) bool { return c.Disk == j.Src })
 		if src < 0 || !isSource(&f.Copies[src], &planDisk{Disk: disks[j.Src]}) {
 			t.Errorf("round %d: job %+v reads from a copy that cannot be read", round, j)
@@ -672,6 +686,8 @@ func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Di
 	t.Helper()
 	counted, readable, readableUser := 0, 0, 0
 	surplusReadable, surplusUser := 0, 0
+	// The copies of a file on one physical disk count once (R-06).
+	physical := map[string]bool{}
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		d := &planDisk{Disk: disks[c.Disk]}
@@ -688,6 +704,12 @@ func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Di
 			continue
 		}
 		counted++
+		if p := disks[c.Disk].Physical; p != "" && !slices.Contains(r.Surplus, c.Disk) {
+			if physical[p] {
+				counted--
+			}
+			physical[p] = true
+		}
 		inHand := isSource(c, d)
 		user := c.CreatedBy == CreatedByUser
 		if inHand {

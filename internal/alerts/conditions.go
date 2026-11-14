@@ -35,6 +35,7 @@ const (
 	KeyNTFSDirty    = "ntfs-dirty:"
 	KeyNTFSNames    = "ntfs-names:"
 	KeyLinkUnnamed  = "link-unnamed:"
+	KeySharedDevice = "shared-device:"
 	KeyNoAccess     = "no-access:"
 	KeyWorkdirOwner = "workdir-owner:"
 )
@@ -99,12 +100,28 @@ type Facts struct {
 	// Unnamed holds the disks whose links of the guard hold data nothing names, as its last run found them, in the
 	// catalog's order of the disks (specs.md §17).
 	Unnamed []UnnamedLinks
+	// Shared holds the groups of disks a start found on one physical disk, by their first disk (specs.md §10, R-06),
+	// in the catalog's order of the disks.
+	Shared []SharedDevice
 	// Foreign holds the disks whose work folder belongs to an account that is neither root's nor Atoll's, in the
 	// configuration's order (specs.md §10).
 	Foreign []ForeignWorkdir
 	// Unopened holds, by disk, the files a read of the daemon could not open, for a reason that says nothing of
 	// their disk, in byte order (specs.md §15.10): they count with the names a walk could not reach.
 	Unopened map[string][]string
+}
+
+// SharedDevice is a group of disks of the pool on one physical disk, by its first disk: each disk of it in the
+// catalog's order, with the physical disks a start found it on.
+type SharedDevice struct {
+	ID    string
+	Disks []SharedDisk
+}
+
+// SharedDisk is a disk of such a group, and the physical disks it lives on, joined by a comma.
+type SharedDisk struct {
+	ID     string
+	Device string
 }
 
 // UnnamedLinks is a disk whose links of the guard hold data nothing names, and how many.
@@ -165,9 +182,19 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
+	shared := catalog.SharedDevices(list)
 	for i := range list {
 		d := &list[i]
 		f.Smart = appendSmart(f.Smart, d)
+		if shared[d.ID] == d.ID {
+			s := SharedDevice{ID: d.ID}
+			for j := range list {
+				if other := &list[j]; shared[other.ID] == d.ID {
+					s.Disks = append(s.Disks, SharedDisk{ID: other.ID, Device: other.Device})
+				}
+			}
+			f.Shared = append(f.Shared, s)
+		}
 		if d.NamesDisagree > 0 && d.State != "retired" {
 			f.Disagree = append(f.Disagree, NamesDisagree{ID: d.ID, Ops: d.NamesDisagree})
 		}
@@ -253,6 +280,9 @@ func Holdings(f *Facts) []Holding {
 	for _, d := range f.Unnamed {
 		counts[KeyLinkUnnamed+d.ID] = int64(d.Links)
 	}
+	for _, d := range f.Shared {
+		counts[KeySharedDevice+d.ID] = 1
+	}
 	for i := range f.Smart {
 		s := &f.Smart[i]
 		if s.Failing {
@@ -329,6 +359,26 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s is marked dirty", id)
 		m.Body = fmt.Sprintf("The disk %s is missing: its NTFS volume is marked dirty, as an unclean unplugging leaves it, and Linux "+
 			"mounts it only by force, which Atoll never does. Repair it with chkdsk /f on Windows, then plug it back.", id)
+	case strings.HasPrefix(h.Key, KeySharedDevice):
+		id := strings.TrimPrefix(h.Key, KeySharedDevice)
+		var ids, each []string
+		for i := range f.Shared {
+			if f.Shared[i].ID == id {
+				for _, d := range f.Shared[i].Disks {
+					ids = append(ids, d.ID)
+					each = append(each, fmt.Sprintf("%s (%s)", d.ID, strings.ReplaceAll(d.Device, ",", ", ")))
+				}
+			}
+		}
+		if len(ids) < 2 {
+			return nil, fmt.Errorf("alert %q: no such group of disks", h.Key)
+		}
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: disks %s share a physical disk", andList(ids))
+		m.Body = fmt.Sprintf("The disks %s live on one physical disk: one failure of it loses them all (R-06). Atoll counts them as one "+
+			"and places no two copies of a file on them, moving an extra copy it made elsewhere, and goes on writing to them. Put "+
+			"each on a physical disk of its own, or take one out of the pool: atoll disk remove %s --evacuate --dry-run.",
+			andList(each), ids[len(ids)-1])
 	case strings.HasPrefix(h.Key, KeyLinkUnnamed):
 		id := strings.TrimPrefix(h.Key, KeyLinkUnnamed)
 		m.Title = fmt.Sprintf("Atoll: %d %s of disk %s %s data nothing names", h.Count, plural(h.Count, "link", "links"), id,
@@ -495,4 +545,12 @@ func Shown(p string) string {
 		return p
 	}
 	return "(base64) " + base64.StdEncoding.EncodeToString([]byte(p))
+}
+
+// andList joins names as a sentence does: "a", "a and b", "a, b and c".
+func andList(list []string) string {
+	if len(list) < 2 {
+		return strings.Join(list, "")
+	}
+	return strings.Join(list[:len(list)-1], ", ") + " and " + list[len(list)-1]
 }

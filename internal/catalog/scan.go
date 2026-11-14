@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 // KnownCopy is what the catalog holds about one copy, to compare with a walk. Path is where it sits,
@@ -573,7 +575,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, fs_uuid, fs_type, mount_path, root, workdir, role, position, COALESCE(domain, ''), tags,
 			capacity_bytes IS NOT NULL, COALESCE(capacity_bytes, 0), COALESCE(free_bytes, 0), state, COALESCE(last_seen_ns, 0),
-			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, ''), names_disagree, links_unnamed
+			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, ''), names_disagree, links_unnamed, COALESCE(device, '')
 		FROM disks ORDER BY position`)
 	if err != nil {
 		return nil, fmt.Errorf("disks: %w", err)
@@ -583,7 +585,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	for rows.Next() {
 		var d Disk
 		var tags string
-		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON, &d.NamesDisagree, &d.LinksUnnamed); err != nil {
+		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON, &d.NamesDisagree, &d.LinksUnnamed, &d.Device); err != nil {
 			return nil, fmt.Errorf("disks: %w", err)
 		}
 		if err := json.Unmarshal([]byte(tags), &d.Tags); err != nil {
@@ -800,4 +802,71 @@ func SetLinksUnnamed(ctx context.Context, db *sql.DB, disk string, links int) er
 		return fmt.Errorf("disk %s: %w", disk, err)
 	}
 	return nil
+}
+
+// SetDevice records the physical disks a disk lives on, as a start found them, by name in byte order and joined by a
+// comma (specs.md §10, R-06).
+func SetDevice(ctx context.Context, db *sql.DB, disk string, physical []string) error {
+	text := JoinDevice(physical)
+	if _, err := db.ExecContext(ctx, "UPDATE disks SET device = NULLIF(?, '') WHERE id = ?", text, disk); err != nil {
+		return fmt.Errorf("disk %s: %w", disk, err)
+	}
+	return nil
+}
+
+// JoinDevice gives physical disks as disks.device holds them: joined by a comma, empty for none.
+func JoinDevice(physical []string) string {
+	return strings.Join(physical, ",")
+}
+
+// SharedDevices groups the disks a start found on one physical disk (R-06): each disk that shares one with another
+// gets the id of the first of its group by position, and the others get none. Two disks share when their physical
+// disks meet, and a group holds every disk that meets another of it. A retired disk holds nothing, and is no part of it.
+func SharedDevices(list []Disk) map[string]string {
+	physical := make([][]string, len(list))
+	for i := range list {
+		if list[i].Device != "" && list[i].State != "retired" {
+			physical[i] = strings.Split(list[i].Device, ",")
+		}
+	}
+	// Each disk leads its own group at first; two groups that meet join under the first disk by position.
+	lead := make([]int, len(list))
+	for i := range lead {
+		lead[i] = i
+	}
+	top := func(i int) int {
+		for lead[i] != i {
+			i = lead[i]
+		}
+		return i
+	}
+	first := func(a, b int) bool {
+		return list[a].Position < list[b].Position || list[a].Position == list[b].Position && list[a].ID < list[b].ID
+	}
+	for i := range list {
+		for j := i + 1; j < len(list); j++ {
+			if !slices.ContainsFunc(physical[i], func(name string) bool { return slices.Contains(physical[j], name) }) {
+				continue
+			}
+			a, b := top(i), top(j)
+			if a == b {
+				continue
+			}
+			if first(b, a) {
+				a, b = b, a
+			}
+			lead[b] = a
+		}
+	}
+	size := make([]int, len(list))
+	for i := range list {
+		size[top(i)]++
+	}
+	out := map[string]string{}
+	for i := range list {
+		if t := top(i); size[t] > 1 {
+			out[list[i].ID] = list[t].ID
+		}
+	}
+	return out
 }

@@ -721,6 +721,8 @@ func missingGraceOf(c *config.Config) (time.Duration, error) {
 
 func planDisks(list []catalog.Disk, now int64, grace time.Duration) []solver.Disk {
 	out := make([]solver.Disk, 0, len(list))
+	// Two disks on one physical disk count as one (R-06).
+	shared := catalog.SharedDevices(list)
 	for i := range list {
 		d := &list[i]
 		out = append(out, solver.Disk{
@@ -728,6 +730,7 @@ func planDisks(list []catalog.Disk, now int64, grace time.Duration) []solver.Dis
 			Capacity: d.Capacity, Free: d.Free, FS: names.Filesystem(d.FS), Domain: d.Domain, Tags: d.Tags, Mount: d.Mount, Root: d.Root,
 			// The plan looks at this only for a disk that is missing. A disk never seen holds nothing.
 			PastGrace: d.LastSeenNS > 0 && now-d.LastSeenNS > int64(grace),
+			Physical:  shared[d.ID],
 		})
 	}
 	return out

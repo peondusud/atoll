@@ -136,13 +136,22 @@ func levelOf(input *solver.Input, minFree value.MinFree, strict bool, k int) (Le
 			return Level{}, fmt.Errorf("disk %q: %w", d.ID, err)
 		}
 		reserved := d.Capacity - usable
-		whole[d.ID] = usable
-		left[d.ID] = max(d.Free-planned[d.ID]-reserved, 0)
+		// Disks on one physical disk hold no two copies of a file: the formula sees one disk of all their room, in the
+		// failure domain of the first of them it meets (R-06).
+		unit := d.ID
+		if d.Physical != "" {
+			unit = d.Physical
+		}
+		whole[unit] += usable
+		left[unit] += max(d.Free-planned[d.ID]-reserved, 0)
+		if _, ok := domainOf[unit]; ok {
+			continue
+		}
 		domain := d.Domain
 		if domain == "" {
 			domain = "\x00" + d.ID
 		}
-		domainOf[d.ID] = domain
+		domainOf[unit] = domain
 		if !slices.Contains(domains, domain) {
 			domains = append(domains, domain)
 		}
