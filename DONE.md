@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Two more decisions of the maintainer, made on 2026-11-14 (specs.md §10, §15.4, §15.6)
+
+The measure of decision 10 showed more to decide; the maintainer answered on 2026-11-14 (TODO.md, 17 to 20).
+
+- **An ext4 made without a journal is refused at `disk add`, and `readonly` when found later** ("Refuse an ext4 without a journal"), as `casefold` is (§10). The bit `0x4` of the compatible features at 1116, `has_journal`, is read with the superblock, a field `no_journal` of `superblock.json`, and the reason `no-journal` comes after `ascii-ci` in §10's table and in the closed lists of the `--json` outputs. Measured: an ext4 without its journal, a device failing right after a folder of 300 new names was synced, kept the names and the count of names of 1 file of 300, and needed `e2fsck`; removing one of those names frees a file another still leads to. `disk add` says why, and that `tune2fs -O has_journal` gives it one.
+
+### Decided without the maintainer, to confirm
+
+- **`no_journal` is read only of an ext4**, and a head of zeros at 1116 holds no journal: the ext4 cases of `superblock.json` written before, whose heads are zeros there, now say `no_journal`, and two of their notes say why. Two new cases are measured, from `mkfs.ext4` 1.47.2 with and without its journal (`0x103c` and `0x38`).
+- **`no-journal` comes after `casefold` and `ascii-ci`, and before `ignore-case` and `read-only-mount`**: what the superblock says, together. An ext4 with `casefold` and no journal is told of as `casefold`; either refuses it at `disk add`.
+- **Its refusal has a message of its own**, not the one of the name rules: "Atoll cannot make what it writes there durable".
+
 ## The review's sixteen decisions, made by the maintainer on 2026-11-13 (specs.md §9, §10, §12.4, §13.4, §15.4, §15.5, §15.6, §15.7, §15.10, §15.13, §16, §16.1, §17, §17.1, §23, §25, §26)
 
 Each point the review left to decide was put to the maintainer as a question, with its options and what each costs; TODO.md lists his sixteen answers. What follows is done, each after a test that fails without it.

@@ -581,6 +581,7 @@ The text of `/proc/self/mountinfo`, one line per mount: `id parent major:minor r
 | `bytes` | array of objects | what the head holds: `at`, an offset, and `hex`, the bytes |
 | `id` | string | the identifier |
 | `variant` | string | `casefold` or `ascii-ci`, when the superblock says so; left out otherwise |
+| `no_journal` | boolean | `true` for an ext4 whose head does not set the bit `0x4` of the little-endian 32-bit compatible features at 1116, `has_journal`: a head of zeros there holds no journal. Left out, `false`, for every other filesystem |
 | `error` | boolean | `true` when the head holds no such filesystem, or `fs` is unknown |
 
 ### `ntfs_dirty.json` — an NTFS volume marked dirty (§22, §23)
@@ -614,6 +615,7 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `no_magic` | boolean | the head does not hold the magic of `fs` |
 | `id` | string | the identifier in the head (`uuid` when left out) |
 | `variant` | string | `casefold` or `ascii-ci`, when the head says so |
+| `no_journal` | boolean | the head says that the ext4 keeps no journal |
 | `root_folder` | string | `ok` (when left out), `absent`, `not-a-folder`, `other-mount` or `io-error`: question 10 |
 | `other_case` | boolean | `<root>` also answers in the other case, with the same inode |
 | `state` | string | `online`, `readonly` or `missing` |

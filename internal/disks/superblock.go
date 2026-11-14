@@ -25,11 +25,13 @@ const (
 	VariantASCIICI  Variant = "ascii-ci"
 )
 
-// Identity is what the head of a device says about its filesystem. TimePrecisionNS is how finely it holds a
-// time, in nanoseconds (specs.md §9), 0 when nothing says.
+// Identity is what the head of a device says about its filesystem. NoJournal says that an ext4 keeps no journal,
+// so that a name made there is not durable once its folder is synced (specs.md §10, §17.1). TimePrecisionNS is how
+// finely it holds a time, in nanoseconds (specs.md §9), 0 when nothing says.
 type Identity struct {
 	ID              string
 	Variant         Variant
+	NoJournal       bool
 	TimePrecisionNS int64
 }
 
@@ -84,8 +86,10 @@ func readExt4(head []byte) (Identity, error) {
 		magicAt     = 1080
 		revisionAt  = 1100
 		inodeSizeAt = 1112
+		compatAt    = 1116
 		featuresAt  = 1120
 		uuidAt      = 1128
+		hasJournal  = 0x4
 		casefold    = 0x20000
 	)
 	if len(head) < uuidAt+16 || !bytes.Equal(head[magicAt:magicAt+2], []byte{0x53, 0xEF}) {
@@ -95,6 +99,9 @@ func readExt4(head []byte) (Identity, error) {
 	if binary.LittleEndian.Uint32(head[featuresAt:])&casefold != 0 {
 		id.Variant = VariantCasefold
 	}
+	// Measured with a device that fails right after a folder is synced: an ext4 without its journal kept the names
+	// and lost what they count, so that removing one name freed a file another still led to.
+	id.NoJournal = binary.LittleEndian.Uint32(head[compatAt:])&hasJournal == 0
 	// Revision 0 has 128-byte inodes, whatever the size field holds; an inode that small has no room for the
 	// nanoseconds of its times.
 	if binary.LittleEndian.Uint32(head[revisionAt:]) == 0 || binary.LittleEndian.Uint16(head[inodeSizeAt:]) <= oldInodeSize {

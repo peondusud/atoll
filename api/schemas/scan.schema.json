@@ -81,7 +81,7 @@
           "if": { "properties": { "state": { "const": "readonly" } } },
           "then": {
             "properties": {
-              "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "casefold", "ascii-ci", "ignore-case", "read-only-mount"] },
+              "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "casefold", "ascii-ci", "no-journal", "ignore-case", "read-only-mount"] },
               "message": { "type": "string" }
             }
           }

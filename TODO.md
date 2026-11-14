@@ -71,7 +71,6 @@ Each point the review left to decide was put to the maintainer as a question, wi
 
 Four more, on what the measure of 10 showed, answered on 2026-11-14:
 
-17. **An ext4 made without a journal** is refused at `disk add`, as `casefold` is, and is `readonly` when found later (§10): the bit `0x4` of the compatible features at 1116 is read with the superblock. A contract: a reason of §10's table and a field of `superblock.json`.
 18. **A changed copy whose change time did not move past its row's** is no user's change: its file is a `conflict`, both versions kept, for `conflicts resolve`, never `modified` (§15.4). That is a copy a power cut left empty or short, and a disk put back from an older image (§15.6). A contract: §15.4's table and `modification.json`.
 19. **`MakeLink` keeps the sync of each file it links**, as it is: the prepared change (`decision-10-prepared.patch`) is not applied. Half an hour once, when the guard is turned on; nothing for a pool of NTFS disks.
 20. **CLAUDE.md's invariant 4** says that a read that fails on a disk that confirms right after is the chunk's fault: the copy is `corrupt` (§16), as decision 1 has it. Done with this record.
@@ -84,7 +83,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Security
 
-- **An ext4 made without a journal is taken as any ext4.** Measured for the links of the guard (§17.1): once a device has failed, a folder that was synced there holds names their file does not count, 299 of 300, and the filesystem needs `e2fsck`; a name removed before that frees a file another name still leads to. What §17.1 rests on everywhere, a name durable once its folder is synced, does not hold there. To decide: read the bit with the superblock (`0x4` of the 32-bit compatible features at 1116) and refuse such a disk at `disk add`, `readonly` when found later, as `casefold` is (§10). Performance: none. Security: no operation journaled as `done` on a filesystem that cannot hold it. Functionality: a pool that has such a disk no longer writes there. Product: rare, a choice made at `mkfs`. **Recommended: refuse.** Decided so on 2026-11-14 (17 above).
 - **A work folder that becomes another account's after `disk add` is told of, and still written to** (§10), as the maintainer decided on 2026-11-13: an alert, and nothing stops unattended. What that leaves: the owner of a disk's top can rename `<workdir>` and make another, at any time, and reads what Atoll copies there until someone acts on the alert. The owners of `tmp/`, `links/` and `trash/` are looked at as `<workdir>`'s is, by the daemon alone, and `links/` and `tmp/` are closed to other accounts when found open.
 
 ### Data and conformance

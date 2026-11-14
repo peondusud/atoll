@@ -22,6 +22,8 @@ type fakeDisk struct {
 	fsType  string
 	options []string
 	variant disks.Variant
+	// noJournal says that the ext4 keeps no journal.
+	noJournal bool
 }
 
 func (f *fakeDisk) Mount(mount string) disks.MountSeen {
@@ -33,7 +35,7 @@ func (f *fakeDisk) Mount(mount string) disks.MountSeen {
 }
 
 func (f *fakeDisk) Device(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
-	return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d", Variant: f.variant, TimePrecisionNS: 1}}
+	return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d", Variant: f.variant, NoJournal: f.noJournal, TimePrecisionNS: 1}}
 }
 
 func (f *fakeDisk) Root(string, string) disks.RootSeen { return disks.RootSeen{Folder: disks.FolderOK} }
@@ -78,6 +80,8 @@ func TestDiskAddRefusesNameRules(t *testing.T) {
 		{"ntfs3 ads", &fakeDisk{mount: mount, fsType: "ntfs3", options: []string{"rw", "iocharset=utf8", "ads"}}, "ads", ""},
 		{"ext4 casefold", &fakeDisk{mount: mount, fsType: "ext4", options: []string{"rw"}, variant: disks.VariantCasefold}, "casefold", ""},
 		{"xfs ascii-ci", &fakeDisk{mount: mount, fsType: "xfs", options: []string{"rw"}, variant: disks.VariantASCIICI}, "ascii-ci", ""},
+		// A name made there is not durable once its folder is synced, which every operation of Atoll's rests on.
+		{"ext4 without a journal", &fakeDisk{mount: mount, fsType: "ext4", options: []string{"rw"}, noJournal: true}, "no-journal", ""},
 		{"read-only", &fakeDisk{mount: mount, fsType: "ext4", options: []string{"ro"}}, "", "readonly"},
 		{"exfat", &fakeDisk{mount: mount, fsType: "exfat", options: []string{"rw"}}, "exfat", ""},
 		{"ext4", &fakeDisk{mount: mount, fsType: "ext4", options: []string{"rw"}}, "", "online"},

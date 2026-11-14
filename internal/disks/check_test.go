@@ -86,6 +86,7 @@ type superblockCase struct {
 	} `json:"bytes"`
 	ID            string `json:"id"`
 	Variant       string `json:"variant"`
+	NoJournal     bool   `json:"no_journal"`
 	TimePrecision int64  `json:"time_precision_ns"`
 	Error         bool   `json:"error"`
 	Note          string `json:"note"`
@@ -121,8 +122,8 @@ func TestReadIdentity(t *testing.T) {
 			t.Errorf("%s: %v (%s)", c.FS, err, c.Note)
 			continue
 		}
-		if got.ID != c.ID || got.Variant != Variant(c.Variant) {
-			t.Errorf("%s: got %+v, want %s %q (%s)", c.FS, got, c.ID, c.Variant, c.Note)
+		if got.ID != c.ID || got.Variant != Variant(c.Variant) || got.NoJournal != c.NoJournal {
+			t.Errorf("%s: got %+v, want %s %q, no journal %v (%s)", c.FS, got, c.ID, c.Variant, c.NoJournal, c.Note)
 		}
 	}
 }
@@ -182,6 +183,7 @@ type checkCase struct {
 	NoMagic    bool        `json:"no_magic"`
 	ID         *string     `json:"id"`
 	Variant    string      `json:"variant"`
+	NoJournal  bool        `json:"no_journal"`
 	RootFolder *string     `json:"root_folder"`
 	OtherCase  bool        `json:"other_case"`
 	State      string      `json:"state"`
@@ -245,7 +247,7 @@ func answersFor(c *checkCase) (*config.Disk, *answers) {
 	a := &answers{seen: MountSeen{Path: PathAnswer(or(c.Path, "ok")), Entry: entry}}
 	a.device = DeviceSeen{Device: DeviceAnswer(or(c.Device, "ok"))}
 	if !c.NoMagic {
-		a.device.Identity = &Identity{ID: or(c.ID, uuid), Variant: Variant(c.Variant), TimePrecisionNS: 100}
+		a.device.Identity = &Identity{ID: or(c.ID, uuid), Variant: Variant(c.Variant), NoJournal: c.NoJournal, TimePrecisionNS: 100}
 	}
 	a.root = RootSeen{Folder: FolderAnswer(or(c.RootFolder, "ok")), OtherCase: c.OtherCase}
 	return d, a

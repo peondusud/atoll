@@ -364,6 +364,31 @@ func TestMountShapes(t *testing.T) {
 	})
 }
 
+// TestAnExt4WithoutAJournal: mkfs.ext4 -O ^has_journal makes a disk readonly, which disk add refuses, as a name made
+// there is not durable once its folder is synced (specs.md §10, §17.1). With its journal, the same disk is online.
+func TestAnExt4WithoutAJournal(t *testing.T) {
+	needRoot(t)
+	for _, tc := range []struct {
+		name  string
+		mkfs  []string
+		state disks.State
+		why   disks.Reason
+	}{
+		{"without", []string{"-O", "^has_journal"}, disks.Readonly, disks.NoJournal},
+		{"with", nil, disks.Online, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newVolume(t, names.Ext4, tc.mkfs...)
+			at := mountPoint(t)
+			mountVolume(t, v, "", at)
+			if err := os.Mkdir(filepath.Join(at, "media"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			want(t, check(t, diskOf(v, at)), tc.state, tc.why)
+		})
+	}
+}
+
 // TestNameVariants: what changes name rules makes a disk readonly (specs.md §10).
 func TestNameVariants(t *testing.T) {
 	needRoot(t)
