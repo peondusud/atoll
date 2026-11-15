@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"modernc.org/libc"
 
 	"github.com/peondusud/atoll/internal/daemon"
@@ -48,11 +49,15 @@ func sizedVolume(t *testing.T, files int) *volume {
 // daemonMemoryLimit is the soft memory limit cmd/atoll sets unless GOMEMLIMIT says otherwise (specs.md §26). The soak
 // and TestScale run the daemon in the test's own process, which must have it too to measure what the daemon holds:
 // without it, the collector lets the heap grow far past it between collections.
-const daemonMemoryLimit = 170 << 20
+const daemonMemoryLimit = 155 << 20
 
-// asTheBinary gives the test's process the memory limit of the daemon's, until the test ends.
+// asTheBinary gives the test's process the memory limit of the daemon's, until the test ends, and no transparent huge
+// pages, as cmd/atoll has none, for good: the flag cannot be undone without the process meeting huge pages again.
 func asTheBinary(t *testing.T) {
 	t.Helper()
+	if err := unix.Prctl(unix.PR_SET_THP_DISABLE, 1, 0, 0, 0); err != nil {
+		t.Fatalf("transparent huge pages: %v", err)
+	}
 	if os.Getenv("GOMEMLIMIT") == "" {
 		before := debug.SetMemoryLimit(daemonMemoryLimit)
 		t.Cleanup(func() { debug.SetMemoryLimit(before) })

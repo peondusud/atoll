@@ -47,7 +47,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 12 hours are, on the code of the review's decisions: 293 passes, its heap in use 3.6 to 3.9 MiB, with no growth. Days remain (72 hours), and bringing the most it holds back under the 200 MB of §26, which the soak's passes (220.4 MiB) and the link guard's (217.1 MiB) go past at that size (TODO.md).
+1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 12 hours are, on the code of the review's decisions: 293 passes, its heap in use 3.6 to 3.9 MiB, with no growth. Days remain (72 hours). The most it holds went past the 200 MB of §26 at that size, up to 220.4 MiB in the soak and 229.6 MiB in the link guard's passes, by transparent huge pages the kernel kept resident: with them off and a soft limit of 155 MiB, done on 2026-11-15, every step measured peaks at 181.6 MiB at most, which the soak is to confirm (TODO.md).
 
 ## Beta: phase 1b, the complete Linux MVP
 
@@ -58,7 +58,7 @@ The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "
 - **Conflicts.** Done: `atoll conflicts list` and `atoll conflicts resolve` (§15.7).
 - **Link guard.** Done: the optional link guard against deletions and replacements through mergerfs (§17).
 
-Every item of phase 1b is done. What the beta still needs is the alpha's: the memory of a daemon that runs for days, at 200,000 files. The link guard and `bytes_placed` are measured there (§26): a strict `atoll status` is under the 200 MB now, the guard's passes hold up to 217.1 MiB and the soak's up to 220.4 MiB, to bring under it (TODO.md).
+Every item of phase 1b is done. What the beta still needs is the alpha's: the memory of a daemon that runs for days, at 200,000 files. The link guard and `bytes_placed` are measured there (§26): with transparent huge pages off and a soft limit of 155 MiB, every step measured, the guard's passes and a strict `atoll status` included, peaks under the 200 MB, at 181.6 MiB at most (TODO.md).
 
 ## v0.1: phase 2a, Atoll's own view
 

@@ -10,6 +10,8 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
 )
@@ -34,15 +36,20 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// softMemoryLimit keeps a scan of 200,000 files under the 200 MB of specs.md §26. It costs no time
-// there, measured, as the collector only works harder near the limit. A larger pool goes past it
-// and is slowed down, not stopped: GOMEMLIMIT raises it.
-const softMemoryLimit = 170 << 20
+// softMemoryLimit keeps the process under the 200 MB of specs.md §26 at 200,000 files a disk, with what is outside
+// the Go heap: SQLite's own allocator, about 10 MiB, and the binary's pages, about 15. It costs no time there,
+// measured, as the collector only works harder near the limit. A larger pool goes past it and is slowed down, not
+// stopped: GOMEMLIMIT raises it.
+const softMemoryLimit = 155 << 20
 
+// limitMemory sets the soft limit, and turns transparent huge pages off for the process and what it starts: the
+// kernel kept in them memory the runtime had given back, up to 43 MiB past the limit at that size, and the peaks moved
+// by some 30 MiB from one run to the next (specs.md §26). A kernel that does not know the flag leaves them as they are.
 func limitMemory() {
 	if os.Getenv("GOMEMLIMIT") == "" {
 		debug.SetMemoryLimit(softMemoryLimit)
 	}
+	_ = unix.Prctl(unix.PR_SET_THP_DISABLE, 1, 0, 0, 0)
 }
 
 func run(args []string, stdout, stderr io.Writer) int {

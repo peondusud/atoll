@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Under the 200 MB of §26 at 200,000 files a disk, 2026-11-15 (specs.md §26)
+
+Commits "Say what a peak of memory is made of, and what brings it under the 200 MB" and "Turn huge pages off and keep 155 MiB for the Go heap", on `beta`. The maintainer asked to look for what the process held outside the Go heap, then to apply what was found.
+
+- **What a peak is made of.** `TestScale` and the soak now read, at the most resident they see the process, `/proc/self/smaps` and what the Go runtime and SQLite's allocator hold (the test built with the tag `memory.counters`, which `make qemu-build` gives it). A pass over 400,000 copies held the Go runtime up to its soft limit of 170 MiB, SQLite's allocator 10.2 MiB at every step, the binary's pages 14.5 MiB, and up to 43 MiB more that the kernel kept resident in transparent huge pages after the runtime gave it back, up to 146 MiB of the process being in them. That last share is what moved the peaks by some 30 MiB from one run to the next, and what had been read as a rise of the link guard's passes.
+- **The maintainer's decision: no huge pages, and 155 MiB.** Each command turns transparent huge pages off for its own process at start, and its soft limit goes from 170 to 155 MiB. Measured beforehand on copies of the code, two runs side by side: with huge pages off alone every step peaks under the 200 MB but the first pass with the link guard, at 191.8 MiB; with 155 MiB besides, every step peaks at 181.6 MiB at most, and no step took longer that the two runs tell apart. The tests that measure the daemon in their own process do the same as the binary.
+
+### Decided without the maintainer, to confirm
+
+- **The flag reaches what the daemon starts**, `smartctl`, `mount` and `umount`, as the kernel passes it on through `fork` and `exec`: none of them holds memory for long. **A kernel that does not know the flag**, before Linux 3.15, leaves the huge pages as they are, with no warning.
+- **`GOMEMLIMIT` sets the soft limit alone**: the huge pages stay off whatever it says.
+
 ## The maintainer's answers on the alpha, 2026-11-14 (specs.md §9, §10, §12.4, §13.1, §13.4, §15.5, §15.11, §17, §17.1, §21.5, §23)
 
 His answers to the points the alpha's lines left to decide (TODO.md), each done as any fix.
