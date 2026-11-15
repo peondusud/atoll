@@ -39,7 +39,7 @@ test-loopdev:
 qemu-build:
 	rm -rf bin/qemu
 	mkdir -p bin/qemu/repo
-	CGO_ENABLED=0 $(GO) test -c -tags loopdev -o bin/qemu/loopdev.test ./test/loopdev
+	CGO_ENABLED=0 $(GO) test -c -tags loopdev,memory.counters -o bin/qemu/loopdev.test ./test/loopdev
 	cp go.mod bin/qemu/repo/
 	cp -r conformance bin/qemu/repo/
 

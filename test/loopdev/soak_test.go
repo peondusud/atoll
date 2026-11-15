@@ -3,7 +3,6 @@
 package loopdev
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -20,6 +19,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"modernc.org/libc"
 
 	"github.com/peondusud/atoll/internal/daemon"
 	"github.com/peondusud/atoll/internal/names"
@@ -70,14 +71,101 @@ const soakGuards = "[deletes]\ndebounce = \"1s\"\n" +
 	"[deletes.mass_guard]\nfiles = 1000000000\npercent = \"100%\"\nwindow = \"1m\"\n" +
 	"[modifies.mass_guard]\nfiles = 1000000000\npercent = \"100%\"\nwindow = \"1m\"\n"
 
-// memorySample is the memory of the process at one moment, after a collection, and the size of the catalog. live and
-// held are what a goMemory saw at most since it was last asked.
+// memorySample is the memory of the process at one moment, after a collection, and the size of the catalog. live,
+// held and peak are what a goMemory saw since it was last asked.
 type memorySample struct {
 	at                time.Duration
 	heap, rss, hwm    uint64
 	live, held        uint64
+	peak              residentPeak
 	goroutines, files int
 	catalog           int64
+}
+
+// residentPeak is what the process held at the most resident a goMemory saw it, ten times a second, and of what, from
+// /proc/self/smaps read then: the Go runtime's own memory, which the soft limit bounds; SQLite's, which the C library
+// of modernc.org/sqlite maps itself, outside the Go heap; the rest of the anonymous memory; the pages of files mapped,
+// the binary's own first; and how much of it all was in transparent huge pages, which the kernel may keep resident
+// after the runtime gave them back. The kernel's peak (VmHWM) may be above it, by what lasted less than a tenth of a
+// second, or less than a MiB past the last peak seen.
+type residentPeak struct {
+	rss, runtime, sqlite uint64
+	// sqliteKnown says that the test was built with the tag memory.counters, without which modernc.org/memory counts
+	// nothing.
+	sqliteKnown bool
+	maps        residentMaps
+}
+
+// residentMaps sums what /proc/<pid>/smaps says of a process's mappings: the resident pages of anonymous memory, those
+// of files, and the transparent huge pages among them.
+type residentMaps struct {
+	anonymous, files, huge uint64
+}
+
+// readMaps reads /proc/<pid>/smaps.
+func readMaps(text string) residentMaps {
+	var m residentMaps
+	var anonymous bool
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		// A mapping's line starts with its range of addresses; each of its fields' lines, with a name and a colon. An
+		// anonymous mapping names no file: its inode is 0, and its name, when it has one, is in brackets.
+		if _, _, isRange := strings.Cut(fields[0], "-"); isRange && !strings.HasSuffix(fields[0], ":") {
+			anonymous = len(fields) < 6 || strings.HasPrefix(fields[5], "[")
+			continue
+		}
+		kb, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch {
+		case fields[0] == "Rss:" && anonymous:
+			m.anonymous += kb << 10
+		case fields[0] == "Rss:":
+			m.files += kb << 10
+		case fields[0] == "AnonHugePages:":
+			m.huge += kb << 10
+		}
+	}
+	return m
+}
+
+// String says it in MiB. What is anonymous and neither the runtime's nor SQLite's may be below zero, by what the
+// runtime has mapped and not yet touched.
+func (p residentPeak) String() string {
+	mib := func(n uint64) float64 { return float64(n) / (1 << 20) }
+	if p.rss == 0 {
+		return "no resident peak seen"
+	}
+	other := int64(p.maps.anonymous) - int64(p.runtime)
+	sqlite := "SQLite's allocator not counted (built without memory.counters)"
+	if p.sqliteKnown {
+		sqlite = fmt.Sprintf("SQLite's allocator %.1f", mib(p.sqlite))
+		other -= int64(p.sqlite)
+	}
+	return fmt.Sprintf("seen at most %.1f MiB resident: the Go runtime %.1f, %s, other anonymous memory %.1f, files mapped %.1f; of it all, %.1f in transparent huge pages",
+		mib(p.rss), mib(p.runtime), sqlite, float64(other)/(1<<20), mib(p.maps.files), mib(p.maps.huge))
+}
+
+// readStatus reads what /proc/<pid>/status says of a process's memory, in bytes: its resident size, and its peak.
+func readStatus(text string) (rss, hwm uint64) {
+	for _, line := range strings.Split(text, "\n") {
+		key, val, _ := strings.Cut(line, ":")
+		kb, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimSpace(val), " kB"), 10, 64)
+		if err != nil {
+			continue
+		}
+		switch key {
+		case "VmRSS":
+			rss = kb << 10
+		case "VmHWM":
+			hwm = kb << 10
+		}
+	}
+	return rss, hwm
 }
 
 // goMemory watches what the Go runtime holds: the most the heap held live after a collection, and the most the runtime
@@ -86,6 +174,8 @@ type memorySample struct {
 // needs, and no limit can lower it, or what the collector had not yet freed.
 type goMemory struct {
 	live, held atomic.Uint64
+	mu         sync.Mutex
+	peak       residentPeak
 }
 
 // watch samples ten times a second until ctx is done.
@@ -95,9 +185,25 @@ func (g *goMemory) watch(ctx context.Context) {
 	defer tick.Stop()
 	for {
 		metrics.Read(read)
+		var runtimeHeld uint64
 		if read[0].Value.Kind() == metrics.KindUint64 && read[1].Value.Kind() == metrics.KindUint64 && read[2].Value.Kind() == metrics.KindUint64 {
+			runtimeHeld = read[1].Value.Uint64() - read[2].Value.Uint64()
 			g.live.Store(max(g.live.Load(), read[0].Value.Uint64()))
-			g.held.Store(max(g.held.Load(), read[1].Value.Uint64()-read[2].Value.Uint64()))
+			g.held.Store(max(g.held.Load(), runtimeHeld))
+		}
+		if text, err := os.ReadFile("/proc/self/status"); err == nil {
+			rss, _ := readStatus(string(text))
+			g.mu.Lock()
+			// The mappings are read only at a peak a MiB past the last, as reading them costs the process too.
+			if g.peak.rss == 0 || rss > g.peak.rss+(1<<20) {
+				stat := libc.MemStat()
+				p := residentPeak{rss: rss, runtime: runtimeHeld, sqlite: uint64(max(stat.Bytes, 0)), sqliteKnown: stat.Bytes > 0 || stat.Mmaps > 0}
+				if smaps, err := os.ReadFile("/proc/self/smaps"); err == nil {
+					p.maps = readMaps(string(smaps))
+				}
+				g.peak = p
+			}
+			g.mu.Unlock()
 		}
 		select {
 		case <-ctx.Done():
@@ -112,6 +218,15 @@ func (g *goMemory) take() (live, held uint64) {
 	return g.live.Swap(0), g.held.Swap(0)
 }
 
+// takePeak gives what the process held at the most resident it was seen, which starts again.
+func (g *goMemory) takePeak() residentPeak {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	p := g.peak
+	g.peak = residentPeak{}
+	return p
+}
+
 // sampleMemory collects, then reads the heap in use, what the kernel says of the process, and the catalog's size
 // with its write-ahead log. It may run in any goroutine.
 func sampleMemory(t *testing.T, since time.Time, catalog string) memorySample {
@@ -120,23 +235,12 @@ func sampleMemory(t *testing.T, since time.Time, catalog string) memorySample {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	s := memorySample{at: time.Since(since).Round(time.Second), heap: ms.HeapInuse, goroutines: runtime.NumGoroutine()}
-	f, err := os.Open("/proc/self/status")
+	text, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		t.Error(err)
 		return s
 	}
-	defer func() { _ = f.Close() }()
-	lines := bufio.NewScanner(f)
-	for lines.Scan() {
-		key, val, _ := strings.Cut(lines.Text(), ":")
-		kb, _ := strconv.ParseUint(strings.TrimSuffix(strings.TrimSpace(val), " kB"), 10, 64)
-		switch key {
-		case "VmRSS":
-			s.rss = kb << 10
-		case "VmHWM":
-			s.hwm = kb << 10
-		}
-	}
+	s.rss, s.hwm = readStatus(string(text))
 	if entries, err := os.ReadDir("/proc/self/fd"); err == nil {
 		s.files = len(entries)
 	}
@@ -158,6 +262,24 @@ func soakWindow(start time.Time, lasts time.Duration) string {
 		to = from.Add(24*time.Hour - time.Minute)
 	}
 	return from.Format("15:04") + "-" + to.Format("15:04")
+}
+
+// What /proc/<pid>/status says of a process's memory is read in bytes, whatever its other lines say.
+func TestReadStatus(t *testing.T) {
+	rss, hwm := readStatus("Name:\tloopdev.test\nVmHWM:\t  225400 kB\nVmRSS:\t  180000 kB\nRssAnon:\t  160000 kB\nThreads:\t9\n")
+	if rss != 180000<<10 || hwm != 225400<<10 {
+		t.Errorf("%d %d", rss, hwm)
+	}
+}
+
+// What /proc/<pid>/smaps says is summed by kind: anonymous memory, its own name in brackets or none, and files.
+func TestReadMaps(t *testing.T) {
+	text := "c000000000-c004000000 rw-p 00000000 00:00 0 \nSize:  65536 kB\nRss:  40000 kB\nAnonHugePages:  20480 kB\n" +
+		"7f1000000000-7f1000100000 r-xp 00000000 08:01 1234  /init/loopdev.test\nRss:  9000 kB\nAnonHugePages:  0 kB\n" +
+		"7ffd00000000-7ffd00021000 rw-p 00000000 00:00 0  [stack]\nRss:  100 kB\n"
+	if m := readMaps(text); m != (residentMaps{anonymous: 40100 << 10, files: 9000 << 10, huge: 20480 << 10}) {
+		t.Errorf("%+v", m)
+	}
 }
 
 // A soak's window holds its whole run, whatever it lasts.
@@ -223,6 +345,7 @@ func TestDaemonSoak(t *testing.T) {
 		case reply := <-asked:
 			s := sampleMemory(t, start, b.catalog)
 			s.live, s.held = mem.take()
+			s.peak = mem.takePeak()
 			reply <- s
 			// Each sample's peak is its own: what the pass that just ended left resident goes back to the system, and
 			// the peak starts again from what the daemon keeps.
@@ -242,8 +365,8 @@ func TestDaemonSoak(t *testing.T) {
 	}
 	// The hook answers before the pass is sent.
 	s := <-firstPass
-	t.Logf("the first pass: heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, %d goroutines, %d open files, catalog %.1f MiB",
-		float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(s.held)/(1<<20), float64(s.live)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20))
+	t.Logf("the first pass: heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, %d goroutines, %d open files, catalog %.1f MiB; %v",
+		float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(s.held)/(1<<20), float64(s.live)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20), s.peak)
 	most := s.hwm
 	var mu sync.Mutex
 	count, held := 0, 0
@@ -289,8 +412,8 @@ func TestDaemonSoak(t *testing.T) {
 			before += n
 		}
 		tenths = append(tenths, passed-before)
-		t.Logf("after %v: %d passes, %d this tenth, heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, %d goroutines, %d open files, catalog %.1f MiB",
-			s.at, passed, passed-before, float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(s.held)/(1<<20), float64(s.live)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20))
+		t.Logf("after %v: %d passes, %d this tenth, heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, %d goroutines, %d open files, catalog %.1f MiB; %v",
+			s.at, passed, passed-before, float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(s.held)/(1<<20), float64(s.live)/(1<<20), s.goroutines, s.files, float64(s.catalog)/(1<<20), s.peak)
 		samples = append(samples, s)
 		most = max(most, s.hwm)
 	}
