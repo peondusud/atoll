@@ -33,6 +33,10 @@ type WatcherOptions struct {
 	Now func() int64
 	// Inotify takes inotify on every disk, as where fanotify cannot be had: for tests.
 	Inotify bool
+	// Opened, when set, is called with the path below the root of each folder that arrives under a watch folder by
+	// folder, once the folder is open and before it is marked: for tests, which hold the gap between the two open
+	// with it.
+	Opened func(path string)
 }
 
 // Watcher watches disks and says what changed on them: hints of where to look, never decisions (specs.md
@@ -116,7 +120,7 @@ func (w *Watcher) Events() <-chan Event {
 func (w *Watcher) Watch(ctx context.Context, d *config.Disk) (string, error) {
 	w.Stop(d.ID)
 	root := path.Join(d.Mount, d.Root)
-	src, how, err := openSource(ctx, root, w.opt.Inotify)
+	src, how, err := openSource(ctx, root, w.opt.Inotify, w.opt.Opened)
 	if err != nil {
 		return "", fmt.Errorf("watch %s: %w", d.ID, err)
 	}
@@ -390,7 +394,7 @@ func servesView(pid int, mount string) bool {
 }
 
 // openSource watches a disk's root the first way that works: a filesystem mark, a mark per folder, inotify.
-func openSource(ctx context.Context, root string, inotifyOnly bool) (source, string, error) {
+func openSource(ctx context.Context, root string, inotifyOnly bool, opened func(string)) (source, string, error) {
 	if !inotifyOnly {
 		src, err := openFilesystem(root)
 		if err == nil {
@@ -398,6 +402,7 @@ func openSource(ctx context.Context, root string, inotifyOnly bool) (source, str
 		}
 		folders, err := openFolders(ctx, root)
 		if err == nil {
+			folders.opened = opened
 			return folders, HowFolders, nil
 		}
 	}
@@ -405,6 +410,7 @@ func openSource(ctx context.Context, root string, inotifyOnly bool) (source, str
 	if err != nil {
 		return nil, "", err
 	}
+	src.opened = opened
 	return src, HowInotify, nil
 }
 
@@ -511,6 +517,8 @@ type foldersSource struct {
 	// rootDev and rootIno are the root's folder as it was marked.
 	rootDev, rootIno uint64
 	tree             *folderTree[string]
+	// opened is WatcherOptions.Opened.
+	opened func(path string)
 }
 
 func openFolders(ctx context.Context, root string) (*foldersSource, error) {
@@ -572,13 +580,21 @@ func (s *foldersSource) markBelow(ctx context.Context, dir fsx.Dir, node *folder
 	})
 }
 
-// eachEntry calls fn on each folder of a folder, open, but those of another mount, and, with found, lists every
-// name there as created: what a folder held before its mark came is known only so (specs.md §15.1). A name that
-// went in the meantime is skipped.
-func eachEntry(ctx context.Context, dir fsx.Dir, mountID uint64, prefix string, found *[]change, fn func(sub fsx.Dir, name, path string) error) error {
+// eachEntry calls fn on each folder of a folder its caller marked, open, but those of another mount, and, with found,
+// lists every name there as created: what a folder held before its mark came is known only so (specs.md §15.1). A
+// name that went in the meantime is skipped.
+func eachEntry(ctx context.Context, marked fsx.Dir, mountID uint64, prefix string, found *[]change, fn func(sub fsx.Dir, name, path string) error) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("watch: %w", err)
 	}
+	// The folder is listed through a descriptor opened once it is marked, never through the one the mark went on:
+	// btrfs lists a folder as it was when the descriptor was opened, so a file made between that open and the mark
+	// came neither in the listing nor as an event.
+	dir, err := marked.OpenDir(".")
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	defer func() { _ = dir.Close() }()
 	names, err := dir.Names()
 	if err != nil {
 		return fmt.Errorf("%w", err)
@@ -695,6 +711,9 @@ func (s *foldersSource) arrive(parent *folderNode[string], name string) []change
 		return nil
 	}
 	defer func() { _ = sub.Close() }()
+	if s.opened != nil {
+		s.opened(at)
+	}
 	fd, err := fsx.Descriptor(sub)
 	if err != nil {
 		return nil

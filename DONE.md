@@ -2,6 +2,12 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A watcher that missed a file made with its folder, on btrfs, 2026-11-16 (specs.md §15.1)
+
+Commit "List a folder that arrives through a descriptor opened after its mark", on `beta`, which the maintainer asked for.
+
+- The local CI of `47ab5f6` failed `TestWatcherOnEachDriver/btrfs/inotify` once more, on Linux 6.12, while another qemu run went on beside it: a file made with its folder reached the watcher as written, never as created. A folder that arrives was opened, then marked, then listed through the descriptor opened first, and btrfs lists a folder as it was when the descriptor was opened, since Linux 6.5: a file made between the open and the mark was in neither the listing nor the events. The side session had guessed so. A hook of the watcher's options, for tests, now holds that gap open, and the test makes a file in it: it failed on btrfs under inotify on both kernels, every time, and passes now, every driver and both kernels, three runs each. Each folder is listed through a descriptor opened once it is marked, under inotify and under the marks folder by folder alike, and so is every folder below it. Its write reached the watcher all the same, so a pass came: what was lost was the event saying the file was new.
+
 ## Under the 200 MB of §26 at 200,000 files a disk, 2026-11-15 (specs.md §26)
 
 Commits "Say what a peak of memory is made of, and what brings it under the 200 MB" and "Turn huge pages off and keep 155 MiB for the Go heap", on `beta`. The maintainer asked to look for what the process held outside the Go heap, then to apply what was found.

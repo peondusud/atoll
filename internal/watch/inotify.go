@@ -29,6 +29,8 @@ type inotifySource struct {
 	tree             *folderTree[int32]
 	// moved holds the folders that left their parent in this read, by cookie, until the other end comes.
 	moved map[uint32]*folderNode[int32]
+	// opened is WatcherOptions.Opened.
+	opened func(path string)
 }
 
 func openInotify(ctx context.Context, root string) (*inotifySource, error) {
@@ -197,6 +199,9 @@ func (s *inotifySource) arrive(parent *folderNode[int32], name string) []change 
 		return nil
 	}
 	defer func() { _ = sub.Close() }()
+	if s.opened != nil {
+		s.opened(at)
+	}
 	wd, err := s.watch(sub)
 	if err != nil {
 		return nil

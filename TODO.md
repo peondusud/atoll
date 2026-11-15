@@ -86,7 +86,6 @@ Eight reads of the whole code, by area, for performance, security and conformanc
 
 ### Data and conformance
 
-- **A file made right after its folder may reach the watcher as written but never as created, on btrfs under inotify** (`arrive`, `internal/watch/inotify.go`, and the same in `watcher.go` for the marks folder by folder). The folder that arrives is opened, then marked, then listed through the descriptor opened first, and since Linux 6.5 btrfs lists only the names a folder held when it was opened: a file made between the open and the mark is in neither the listing nor the events. `TestWatcherOnEachDriver/btrfs/inotify` fails so now and then on Linux 6.12, under load: once in the runs of 2026-11-14 after the soak of 12 hours, and in the local CI of `47ab5f6`, while another qemu run went on beside it; alone, 5 runs of 5 pass. Its write is seen, so a pass still comes. To fix: list the folder through a descriptor opened after the mark, with a test that holds the gap open.
 
 
 ### Performance, each to decide

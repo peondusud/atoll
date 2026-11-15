@@ -42,7 +42,15 @@ func TestWatcherOnEachDriver(t *testing.T) {
 				must(t, "mergerfs", "-o", "category.search=ff,category.action=epall,category.create=mfs,minfreespace=1M", filepath.Join(at, "media")+"=RW", pool)
 				t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "umount", pool).Run() })
 
-				w := watch.NewWatcher(watch.WatcherOptions{ViewMount: pool, Now: func() int64 { return time.Now().UnixNano() }, Inotify: inotify})
+				// A file made while the folder that holds it is open and not yet marked, as a process writing there at
+				// that instant makes it: neither the mark nor a listing through what was opened first sees it on btrfs,
+				// which lists a folder as it was when opened.
+				opened := func(path string) {
+					if path == "Gap" {
+						_ = os.WriteFile(filepath.Join(at, "media", "Gap", "late.mkv"), []byte("l"), 0o644)
+					}
+				}
+				w := watch.NewWatcher(watch.WatcherOptions{ViewMount: pool, Now: func() int64 { return time.Now().UnixNano() }, Inotify: inotify, Opened: opened})
 				defer w.Close()
 				how, err := w.Watch(t.Context(), diskOf(v, at))
 				if err != nil {
@@ -68,6 +76,10 @@ func TestWatcherOnEachDriver(t *testing.T) {
 				r.step("mkdir -p media/Films && printf a > media/Films/a.mkv", "", "", "")
 				r.wait("Films/a.mkv", watch.KindCreated, user, watch.OriginUnknown)
 				r.expect("Films", watch.KindCreated, true, user)
+				if how != watch.HowFilesystem {
+					r.step("mkdir media/Gap", "", "", "")
+					r.wait("Gap/late.mkv", watch.KindCreated, watch.OriginUnknown)
+				}
 				r.step("mv outside/Show media/Show", "Show", watch.KindMovedTo, user)
 				r.step("printf e > media/Show/S01/e01.mkv", "Show/S01/e01.mkv", watch.KindWritten, user)
 				r.step("mv media/Show 'media/Show (2020)'", "Show (2020)", watch.KindMovedTo, user)
