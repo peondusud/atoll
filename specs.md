@@ -1927,7 +1927,7 @@ port     = nonzero digit, at most 5 digits                          ; 1 to 65535
 
 ## 30. Risks and open questions
 
-- The FUSE library of Atoll's own view (§21.2, §29.7): cgofuse v1.6.0 loads `libfuse3.so.3` by that name alone, and libfuse 3.17 and later, in Debian 13, openmediavault 8, Fedora and Arch, is `libfuse3.so.4`, so the view does not mount there (measured in qemu, 2026-11-16). go-fuse v2 (`github.com/hanwen/go-fuse/v2`, BSD-3-Clause) speaks the kernel's protocol itself, as `fuser` does for the Rust version: no cgo, no libfuse. Both serve the read path in `test/loopdev` (DONE.md); the maintainer chooses.
+- The FUSE library of Atoll's own view (§21.2, §29.7): cgofuse v1.6.0 loads `libfuse3.so.3` by that name alone, and libfuse 3.17 and later, in Debian 13, openmediavault 8, Fedora and Arch, is `libfuse3.so.4`, so the view does not mount there (2026-11-16). go-fuse v2 (`github.com/hanwen/go-fuse/v2`, BSD-3-Clause) speaks the kernel's protocol itself, as `fuser` does for the Rust version: no cgo, no libfuse. Both serve the read path in `test/loopdev`; `docs/research/fuse-library.md` compares them, and the maintainer chooses.
 
 - How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)? Answered on 2026-11-12: each disk's folders, so its libraries move to the merged view before the first replica.
 - mergerfs behavior with a failing branch before Atoll removes it (I/O errors or fallback to the next branch): to verify with a USB drop simulation.
