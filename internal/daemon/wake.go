@@ -38,7 +38,7 @@ type WakeInput struct {
 	PassDueNS, GroupDueNS *int64
 	// RipeOrigins holds who made the groups ripe now.
 	RipeOrigins []string
-	// LastPassEndNS is when the last pass ended: nil before the first.
+	// LastPassEndNS is when the last pass that walked every disk ended: nil before the first.
 	LastPassEndNS *int64
 	RescanEveryNS int64
 	Window        value.Window

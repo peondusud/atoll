@@ -178,6 +178,12 @@ func (s *Session) MountOwner(id string) bool {
 	return false
 }
 
+// Opened says that this session opened a handle on a disk, to read or write it: the disk is awake.
+func (s *Session) Opened(id string) bool {
+	sl := s.slots[id]
+	return sl != nil && sl.handle != nil
+}
+
 // Handle gives a handle on a disk, confirmed if this session writes, and nil when it cannot be reached.
 func (s *Session) Handle(ctx context.Context, id string) (*ops.Disk, error) {
 	return s.open(ctx, id)

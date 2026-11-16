@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -61,6 +62,9 @@ type DiskLine struct {
 	ID      string
 	Verdict disks.Verdict
 	Walked  bool
+	// Spared says that a pass of the daemon left the disk unwalked, as nothing called for a look at it: its copies read
+	// as their rows say, and Verdict is its mount check's (specs.md §15.13). No part of the pass's output.
+	Spared bool
 	// Refused counts the names its walk could not reach as they refuse the account that asks, and RefusedFirst holds
 	// the first RefusedShown of them in byte order: what an alert says (specs.md §15.10, §23). They are no part of the
 	// pass's output.
@@ -111,7 +115,16 @@ type Outcome struct {
 	// ToRead holds the files a pass of the daemon left undecided, as their changed copies must be read first, by path
 	// in byte order: ReadChanged decides them, by slices (specs.md §15.13).
 	ToRead []PendingRead
+	// WaitDisks holds the disks where this pass's look found what the catalog does not hold yet, in the configuration's
+	// order: a later look must see it again, so the daemon walks them in its next pass (specs.md §15.13). Set by a pass
+	// that writes; no part of the pass's output.
+	WaitDisks []string
 }
+
+// Scope holds the disks a pass of the daemon is asked to walk, by id (specs.md §15.13). The pass walks those, and every
+// disk whose rows or operations call for a look whatever the scope says; it spares the others. A nil scope walks every
+// disk.
+type Scope map[string]bool
 
 // PendingRead is a file whose changed copies a pass left to read.
 type PendingRead struct {
@@ -131,6 +144,10 @@ type pass struct {
 	machine     disks.Machine
 	session     *trash.Session
 	apply       bool
+	// scope is the disks this pass is asked to walk, nil for every disk, and spared those it left unwalked as nothing
+	// called for a look at them: their copies read as their rows say (specs.md §15.13).
+	scope  Scope
+	spared map[string]bool
 	// start says that the pass is a start of the daemon, which records the physical disks of each disk (R-06).
 	start    bool
 	now      int64
@@ -234,15 +251,23 @@ func RunClosed(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 // §15.13): a file whose changed copies must be read to be decided is left in the outcome's ToRead, for ReadChanged. A
 // dry run records nothing, so it reads in its pass what it must to say what it would decide.
 func RunLater(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) (*Outcome, error) {
+	return RunLaterOn(ctx, db, c, m, apply, sink, closed, nil)
+}
+
+// RunLaterOn is RunLater for a pass that walks only some disks (specs.md §15.13): those of the scope, and those whose
+// rows or operations call for a look. It spares the others: no walk, no confirmation, and their copies read as their
+// rows say, as a walk of a disk where nothing changed since its last walk would find them. A nil scope walks every disk.
+func RunLaterOn(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed, scope Scope) (*Outcome, error) {
 	p := newPass(db, c, m, apply, sink, closed)
 	p.later = apply
+	p.scope = scope
 	return p.run(ctx)
 }
 
 func newPass(db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) *pass {
 	return &pass{
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink, closed: closed,
-		rows: map[string]int64{}, walked: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
+		rows: map[string]int64{}, walked: map[string]bool{}, spared: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
 		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, requeued: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
 		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
@@ -258,7 +283,7 @@ func (p *pass) run(ctx context.Context) (*Outcome, error) {
 	}
 	defer session.Close()
 	p.session = session
-	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.queueStale, p.work, p.cleanJobs, p.copies, p.finish} {
+	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.queueStale, p.work, p.cleanJobs, p.findWaits, p.copies, p.finish} {
 		if err := step(ctx); err != nil {
 			return nil, err
 		}
@@ -322,13 +347,18 @@ func (p *pass) readSettings() error {
 	return nil
 }
 
-// look walks each disk that is not missing, and gives each copy on it its verdict.
+// look walks each disk that is not missing, and gives each copy on it its verdict. A pass with a scope spares the disks
+// it need not walk.
 func (p *pass) look(ctx context.Context) error {
 	planned, err := catalog.PlannedOps(ctx, p.db)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
 	if err := p.readViewOps(ctx); err != nil {
+		return err
+	}
+	toWalk, err := p.toWalk(ctx, planned)
+	if err != nil {
 		return err
 	}
 	if p.start && p.apply {
@@ -354,6 +384,12 @@ func (p *pass) look(ctx context.Context) error {
 		// folders may have lost it.
 		look := &watch.Look{Write: p.apply, Own: p.ownFiles, Confirm: p.confirm, Planned: append(plannedOn(planned, d.ID), p.viewPlannedOn(d.ID)...)}
 		p.planned[d.ID] = look.Planned
+		if toWalk != nil && !toWalk[d.ID] && verdict.State != disks.Missing {
+			// Nothing called for a look at it: nothing reads it, and its copies read as their rows say (specs.md §15.13).
+			p.spared[d.ID] = true
+			p.out.Disks = append(p.out.Disks, DiskLine{ID: d.ID, Verdict: verdict, Spared: true})
+			continue
+		}
 		report, err := watch.LookAtDisk(ctx, p.db, p.config, p.machine, d, verdict, p.now, look)
 		if err != nil {
 			return fmt.Errorf("%w", err)
@@ -381,6 +417,51 @@ func (p *pass) look(ctx context.Context) error {
 		p.sinkErr = p.sink.Disks(p.out.Disks)
 	}
 	return nil
+}
+
+// toWalk gives the disks a pass with a scope walks, nil for every disk: those of its scope, and those a walk must see
+// again whatever the scope says (specs.md §15.13). A copy whose row says it went or moved has a clock that only a walk
+// lets run out; an operation of Atoll's own left planned is found again by a walk; and an operation of the view is
+// taken in once the walks of its disks find what it did, a folder removed on every disk that held it.
+func (p *pass) toWalk(ctx context.Context, planned []catalog.Op) (map[string]bool, error) {
+	if p.scope == nil {
+		return nil, nil
+	}
+	walk := maps.Clone(p.scope)
+	if walk == nil {
+		walk = map[string]bool{}
+	}
+	gone, err := catalog.DisksWithGoneCopies(ctx, p.db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	for _, id := range gone {
+		walk[id] = true
+	}
+	for i := range planned {
+		walk[planned[i].Disk] = true
+	}
+	for i := range p.viewOps {
+		v := &p.viewOps[i]
+		walk[v.Disk] = true
+		if v.Kind != catalog.ViewRmdir {
+			continue
+		}
+		held, err := catalog.FolderDisks(ctx, p.db, v.Path)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		for _, id := range held {
+			walk[id] = true
+		}
+	}
+	return walk, nil
+}
+
+// looked says that this pass knows what a disk holds: it walked it, or spared it, which reads its copies as their rows
+// say.
+func (p *pass) looked(id string) bool {
+	return p.walked[id] || p.spared[id]
 }
 
 // firstRefused counts the names that refused a walk, and gives the first RefusedShown of them in byte order.
@@ -469,7 +550,7 @@ func (p *pass) staleWithoutJob(ctx context.Context, disk string) ([]catalog.Stal
 			continue
 		}
 		at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == s.Disk })
-		if at < 0 || !isAsItsRow(p.verdictOf(f, &f.Copies[at])) && p.walked[s.Disk] {
+		if at < 0 || !isAsItsRow(p.verdictOf(f, &f.Copies[at])) && p.looked(s.Disk) {
 			continue
 		}
 		kept = append(kept, *s)
@@ -599,7 +680,7 @@ func (p *pass) countUnwritten(ctx context.Context, id string, read *catalog.Guar
 // stands, as this look wrote nothing of it.
 func (p *pass) isLeft(f *catalog.FileRow, c *catalog.CopyRow) bool {
 	v := p.verdictOf(f, c).Verdict
-	if v == solver.VerdictUnknown && p.walked[c.Disk] {
+	if v == solver.VerdictUnknown && p.looked(c.Disk) {
 		return !c.GoneKind.Valid
 	}
 	return !isGoneLike(v)
@@ -613,7 +694,7 @@ func isGoneLike(v solver.CopyVerdict) bool {
 // found them (specs.md §15.3, §15.12).
 func (p *pass) findWishes(ctx context.Context, d *config.Disk) (map[int64]bool, error) {
 	wishes := map[int64]bool{}
-	if !p.walked[d.ID] {
+	if !p.looked(d.ID) {
 		return wishes, nil
 	}
 	err := eachRefused(ctx, p.db, d, p.leavingOn(d.ID), func(r *catalog.RenameRow, f *catalog.FileRow) {
@@ -645,9 +726,10 @@ func (p *pass) heldBy(disk string, goneNS int64) bool {
 	return !g.read.UpTo.Valid || goneNS > g.read.UpTo.Int64
 }
 
-// verdictOf says what this pass found of one copy. A disk lost since its walk says nothing any more.
+// verdictOf says what this pass found of one copy. A disk lost since its walk says nothing any more, and one spared
+// holds its copies as their rows say.
 func (p *pass) verdictOf(f *catalog.FileRow, c *catalog.CopyRow) *watch.CopySeen {
-	if !p.walked[c.Disk] {
+	if !p.looked(c.Disk) {
 		return &watch.CopySeen{FileID: f.ID, Verdict: solver.VerdictUnknown}
 	}
 	if s := watch.SeenOf(p.seen[c.Disk], f.ID); s != nil {
@@ -1448,13 +1530,55 @@ func (p *pass) finish(ctx context.Context) error {
 	return nil
 }
 
-// linkGuard keeps the links of the guard of each disk the pass walked in step with its copies, once everything else of
-// the pass has run, and reports each link it sends to the trash as an operation (specs.md §17). With the guard off, it
-// removes what a guard on left.
-func (p *pass) linkGuard(ctx context.Context) error {
+// findWaits finds the disks where this pass's look found what the catalog does not hold yet, which a later look must
+// see again (specs.md §15.13): a changed copy whose row does not hold the change time its walk found, as one that waits
+// for settle, for its read or for an answer to a guard, or one replaced by what is no file; a folder found renamed and
+// left waiting, or found at neither name. It runs once the work is done, before the plan lets go of what the walks found.
+func (p *pass) findWaits(ctx context.Context) error {
+	if !p.apply {
+		return nil
+	}
 	for i := range p.config.Disks {
 		id := p.config.Disks[i].ID
 		if !p.walked[id] {
+			continue
+		}
+		waits := len(p.waited[id])+len(p.held[id])+len(p.unfound[id]) > 0
+		for j := 0; !waits && j < len(p.seen[id]); j++ {
+			s := &p.seen[id][j]
+			if s.Verdict != solver.VerdictEdited && s.Verdict != solver.VerdictReplaced {
+				continue
+			}
+			f, err := catalog.FileByID(ctx, p.db, s.FileID)
+			if err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+			waits = !holdsSeen(f, id, s)
+		}
+		if waits {
+			p.out.WaitDisks = append(p.out.WaitDisks, id)
+		}
+	}
+	return nil
+}
+
+// holdsSeen says that a file's row on a disk holds the change time a look found of a changed copy there.
+func holdsSeen(f *catalog.FileRow, disk string, s *watch.CopySeen) bool {
+	if f == nil || (s.Verdict == solver.VerdictReplaced && !s.Regular) {
+		return false
+	}
+	at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == disk })
+	return at >= 0 && f.Copies[at].CtimeNS.Valid && f.Copies[at].CtimeNS.Int64 == s.CtimeNS
+}
+
+// linkGuard keeps the links of the guard of each disk the pass walked in step with its copies, once everything else of
+// the pass has run, and reports each link it sends to the trash as an operation (specs.md §17). With the guard off, it
+// removes what a guard on left. A disk spared has its links kept in step too once the pass has read or written it, as
+// it is awake then: its replicas get their links at once, rather than at its next walk.
+func (p *pass) linkGuard(ctx context.Context) error {
+	for i := range p.config.Disks {
+		id := p.config.Disks[i].ID
+		if !p.walked[id] && (!p.spared[id] || !p.session.Opened(id)) {
 			continue
 		}
 		err := p.session.Guard(ctx, id, p.linkGuardOn, func(item *trash.LinkItem) error {

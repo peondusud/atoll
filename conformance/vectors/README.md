@@ -436,7 +436,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `pass_due_ns` | integer | the last pass's `next_due`; left out when none |
 | `group_due_ns` | integer | when a waiting group of the watcher ripens; left out when none |
 | `ripe_origins` | array of strings | who made the groups ripe now; left out when none is |
-| `last_pass_end_ns` | integer | when the last pass ended; left out before the first |
+| `last_pass_end_ns` | integer | when the last pass that walked every disk ended (specs.md §15.13); left out before the first |
 | `rescan_every_ns` | integer | `maintenance.rescan_every` |
 | `window`, `timezone` | string | `maintenance.window`, and the IANA zone its wall clock is in |
 | `reloaded` | boolean | the configuration was read again since the last pass |

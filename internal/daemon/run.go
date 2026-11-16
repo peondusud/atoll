@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os/exec"
 	"slices"
 	"syscall"
@@ -220,7 +221,16 @@ type loop struct {
 	// once ripe, so a turn of the loop that does something else first, as a check, must not lose what it asks for
 	// (specs.md §15.13).
 	origins []string
+	// eventDisks holds the disks of the ripe groups someone other than Atoll made, until a pass walks them, and waitDisks
+	// those where the last pass's look found what the catalog does not hold yet: a pass for events or next_due alone
+	// walks these, and the disks whose watch may have missed a change, and spares the others (specs.md §15.13).
+	eventDisks map[string]bool
+	waitDisks  []string
+	// lines holds, by disk, what the last pass that walked it said of it, for the alerts after a pass that spared it.
+	lines   map[string]jobs.DiskLine
 	lastEnd *int64
+	// lastFullEnd is when the last pass that walked every disk ended: rescan_every counts from it (specs.md §15.13).
+	lastFullEnd *int64
 	// smartDue is when the disks' SMART is next read: nil when it is not (specs.md §23).
 	smartDue *int64
 	// queues holds what each media server is to be told, by its name, and changed the folders ripe groups named,
@@ -262,7 +272,7 @@ func Run(ctx context.Context, opt Options) error {
 		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true, closed: jobs.Closed{},
 		watcher:  watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
 		smartDue: smartFirst(opt.Machine),
-		queues:   newQueues(set.servers, nil), changed: map[string]bool{},
+		queues:   newQueues(set.servers, nil), changed: map[string]bool{}, eventDisks: map[string]bool{}, lines: map[string]jobs.DiskLine{},
 	}
 	defer l.watcher.Close()
 	l.notify("READY=1")
@@ -310,6 +320,13 @@ func (l *loop) takeRipe(now int64) (groupNext int64, waiting bool) {
 				l.origins = append(l.origins, o)
 			}
 		}
+		// What Atoll did itself is in its journal and its catalog: no walk needs to find it.
+		if slices.ContainsFunc(g.Origins, func(o string) bool { return o != watch.OriginAtoll }) {
+			if l.eventDisks == nil {
+				l.eventDisks = map[string]bool{}
+			}
+			l.eventDisks[g.Disk] = true
+		}
 	}
 	return groupNext, waiting
 }
@@ -334,7 +351,7 @@ func (l *loop) run(ctx context.Context) error {
 		window := l.set.window.Opened(nowLocal)
 		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
 		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
-			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
+			RipeOrigins: l.origins, LastPassEndNS: l.lastFullEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
 			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending, AlertRetryDueNS: l.alertDue,
 			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
 			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
@@ -624,13 +641,43 @@ func (l *loop) walked(id string) {
 	}
 }
 
+// scope gives the disks a pass walks, nil for every disk (specs.md §15.13). A pass whose every reason is events or due
+// walks the disks of the ripe groups, those where the last pass found what the catalog does not hold yet, and those
+// whose watch may have missed a change: not watched all along since their last walk, or not walked since they were
+// found. It spares the others, watched all along and heard of nothing, whose copies are as the catalog says. Any other
+// reason walks every disk, and so does a daemon in shadow mode, which records nothing a later pass could start from.
+func (l *loop) scope(because []string) jobs.Scope {
+	if !l.opt.Apply || len(because) == 0 || slices.ContainsFunc(because, func(r string) bool { return r != BecauseEvents && r != BecauseDue }) {
+		return nil
+	}
+	scope := jobs.Scope{}
+	for id := range l.eventDisks {
+		scope[id] = true
+	}
+	for _, id := range l.waitDisks {
+		scope[id] = true
+	}
+	for i := range l.opt.Config.Disks {
+		id := l.opt.Config.Disks[i].ID
+		if st := l.disks[id]; st == nil || st.unheard || !st.watched || !st.walked {
+			scope[id] = true
+		}
+	}
+	return scope
+}
+
 // pass runs one pass of §15.12 under the catalog's lock, then puts the runtime branches right.
 func (l *loop) pass(ctx context.Context, because []string) {
 	start := l.opt.Machine.Now()
 	l.first, l.reloaded, l.gone, l.back = false, false, false, false
-	// The pass walks every disk, which takes in every change the ripe groups told of.
+	// The pass walks every disk a ripe group told of, which takes in every change those groups said.
 	l.origins = nil
-	l.log.Info("a pass begins", "because", because)
+	scope := l.scope(because)
+	if scope == nil {
+		l.log.Info("a pass begins", "because", because)
+	} else {
+		l.log.Info("a pass begins", "because", because, "walks", slices.Sorted(maps.Keys(scope)))
+	}
 	// The sink counts what the pass did instead of keeping each line: a pass over a whole pool would not fit in the
 	// memory of specs.md §26.
 	unheard := map[string]bool{}
@@ -643,14 +690,14 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		// A pass reads no file whole: what must be read to be decided is read after it, by slices (specs.md §15.13).
-		outcome, err := jobs.RunLater(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
+		outcome, err := jobs.RunLaterOn(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed, scope)
 		if err != nil {
 			return nil, err
 		}
 		for _, line := range outcome.Disks {
 			st := l.disks[line.ID]
 			switch {
-			case st == nil:
+			case st == nil, line.Spared:
 			case line.Walked:
 				l.walked(line.ID)
 			case line.Verdict.State == disks.Missing && st.state != disks.Missing:
@@ -663,7 +710,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		}
 		l.branches(ctx, db)
 		l.purge(ctx, db)
-		due = l.prepareAlerts(ctx, db, outcome, &sink.refused)
+		due = l.prepareAlerts(ctx, db, l.withLastLines(outcome), &sink.refused)
 		return outcome, nil
 	})
 	end := l.opt.Machine.Now()
@@ -676,6 +723,12 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		l.passDue = &retry
 		l.log.Error("the pass failed", "error", err)
 		return
+	}
+	// What the ripe groups told of, the pass walked; what its look left, the next one walks.
+	clear(l.eventDisks)
+	l.waitDisks = outcome.WaitDisks
+	if !slices.ContainsFunc(outcome.Disks, func(line jobs.DiskLine) bool { return line.Spared }) {
+		l.lastFullEnd = &end
 	}
 	// What the watcher saw closed served this pass, and what changed goes to the media servers.
 	l.closed = jobs.Closed{}
@@ -700,6 +753,36 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	if l.opt.OnPass != nil {
 		l.opt.OnPass(because, outcome)
 	}
+}
+
+// withLastLines gives the outcome the alerts are worked out from (specs.md §23): a disk the pass spared says what the
+// last pass that walked it said, the names its walk could not reach among them, with the verdict of its mount check now,
+// so that an alert holds until a walk says otherwise. It keeps what each walk said of a disk for later.
+func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
+	if l.lines == nil {
+		l.lines = map[string]jobs.DiskLine{}
+	}
+	spared := false
+	for _, line := range outcome.Disks {
+		if line.Spared {
+			spared = true
+			continue
+		}
+		l.lines[line.ID] = jobs.DiskLine{ID: line.ID, Verdict: line.Verdict, Walked: line.Walked, Refused: line.Refused, RefusedFirst: line.RefusedFirst}
+	}
+	if !spared {
+		return outcome
+	}
+	merged := *outcome
+	merged.Disks = make([]jobs.DiskLine, len(outcome.Disks))
+	for i, line := range outcome.Disks {
+		merged.Disks[i] = line
+		if last, ok := l.lines[line.ID]; ok && line.Spared {
+			last.Verdict = line.Verdict
+			merged.Disks[i] = last
+		}
+	}
+	return &merged
 }
 
 // passSink counts what a pass decided and did, and keeps the names a driver refused and the folders its operations

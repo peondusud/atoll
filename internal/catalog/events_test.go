@@ -156,3 +156,18 @@ func planOf(t *testing.T, db *sql.DB, name, query string) []string {
 	}
 	return plan
 }
+
+// The disks a light pass must walk for their gone copies are read through the partial index of those copies, which
+// holds them alone, at each pass (specs.md §15.13): never over every copy of the pool.
+func TestTheDisksWithGoneCopiesAreReadThroughTheirIndex(t *testing.T) {
+	b := openForOps(t)
+	plan := planOf(t, b.sql(), "gone", disksWithGoneSQL)
+	if len(plan) == 0 || !slices.ContainsFunc(plan, func(step string) bool { return strings.Contains(step, "INDEX copies_gone") }) {
+		t.Errorf("%q", plan)
+	}
+	for _, step := range plan {
+		if strings.Contains(step, "TEMP B-TREE") || step == "SCAN copies" {
+			t.Errorf("the copies are read or sorted whole: %q", plan)
+		}
+	}
+}

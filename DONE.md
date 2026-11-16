@@ -2,6 +2,21 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Passes that spare the disks' sleep, 2026-11-16 (specs.md §15.13)
+
+Commit "Walk only the disks a pass is called for", on `beta`, the second piece of phase 2b (G5); tests first.
+
+- **A pass whose every reason is `events` or `due`** walks the disks of the ripe groups someone other than Atoll made, those where the last pass's look found what the catalog does not hold yet (the outcome's `WaitDisks`: a changed copy whose row does not hold the change time its walk found, a folder renamed and left waiting, or found at neither name), and those whose watch may have missed a change, unheard since their last walk or not walked since found. Whatever the daemon asks, the pass adds the disks holding a copy whose row says it went or moved, those with an operation left planned, and those of an operation of the view not taken in. Any other reason walks every disk, as before.
+- **A disk spared** (`jobs.RunLaterOn` with a `Scope`) is neither walked nor confirmed: its copies read as their rows say, as a walk of a disk where nothing changed would find them, so a deletion, a rename or a modification on the disk walked reaches it, and a stale copy there gets its overwrite. The work step opens it, which confirms it and wakes it, only when a folder job, a rename or a trash job waits for it (`TestALightPassWalksOnlyTheDisksItIsGiven`: no walk, no read past the cache). Its line says `Spared`, with its mount check's verdict; the alerts read the last walk's line for it, so `no-access` does not come and go.
+- **`maintenance.rescan_every`** counts from the last pass that walked every disk, not from the last pass: light passes would otherwise put the rescan off for good.
+- Tests: 7 in `internal/jobs/light_test.go`, one in `internal/daemon/light_test.go` (a change on one folder disk, heard by inotify, calls for a pass that spares the other). Made to fail, each of 8 mutations was caught: a scope always nil, a disk spared read as unknown, the gone copies' disks not added, a disk spared opened with no work, no `WaitDisks`, the row's change time not compared, a missing disk spared.
+- **Decided without the maintainer, to confirm:**
+  - a daemon in shadow mode (`--dry-run`) walks every disk at every pass: it records nothing, so a later pass has nothing to start from;
+  - `rescan_every` counts from the last pass that walked every disk;
+  - a ripe group whose every event Atoll made calls for no walk of its disk, as its journal and its catalog hold what it did; one the view made does, as its operations are taken in by a walk;
+  - a disk where the last look found what the catalog does not hold yet is walked again by the next pass, whatever its reasons: a file in conflict whose changed copy waits for the user keeps its disk walked at each pass, as a pass of every disk did;
+  - a disk spared that the pass opened for its work has its links kept in step then (§17), rather than at its next walk.
+
 ## The colocate and new_files strategies, 2026-11-16 (specs.md §12.4, §13.4, §21.1, §21.2, §24.4)
 
 Commit "Place copies with colocate and new_files", on `beta`, the first piece of phase 2b (R-28), as the spec had it; vectors first.

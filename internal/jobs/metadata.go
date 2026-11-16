@@ -62,7 +62,7 @@ func (p *pass) metadataPlan(f *catalog.FileRow, in *solver.ModInput, looks map[s
 			c.Mtime, c.Ctime, c.LookMode, c.HasLookMode = look.MtimeNS, look.CtimeNS, look.Mode, true
 			c.LookOwner, c.HasLookOwner = solver.Owner{UID: int64(look.UID), GID: int64(look.GID)}, true
 		}
-		c.Reachable = p.walked[mc.Disk] && p.session.Writable(mc.Disk) && (c.Changed || mc.Verdict == solver.VerdictThere)
+		c.Reachable = p.looked(mc.Disk) && p.session.Writable(mc.Disk) && (c.Changed || mc.Verdict == solver.VerdictThere)
 		copies = append(copies, c)
 	}
 	plan, err := solver.MetadataPlan(copies)

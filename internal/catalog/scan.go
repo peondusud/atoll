@@ -190,6 +190,30 @@ func WriteWalk(ctx context.Context, db *sql.DB, disk string, nowNS int64, w *Wal
 	return nil
 }
 
+// DisksWithGoneCopies gives the disks holding a copy whose row says it went or moved, by id: the clock of each runs
+// out only as walks find it again (specs.md §15.12, §15.13). It reads the index copies_gone.
+func DisksWithGoneCopies(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, disksWithGoneSQL)
+	if err != nil {
+		return nil, fmt.Errorf("disks with gone copies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("disks with gone copies: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("disks with gone copies: %w", err)
+	}
+	return out, nil
+}
+
+const disksWithGoneSQL = `SELECT DISTINCT disk_id FROM copies WHERE gone_ns IS NOT NULL ORDER BY disk_id`
+
 // writeClocks starts or keeps the clock of what a name no longer holds, and clears the others.
 func writeClocks(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, clocks []CopyClock) error {
 	if len(clocks) == 0 {

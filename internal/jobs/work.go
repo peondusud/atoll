@@ -37,6 +37,16 @@ func (p *pass) work(ctx context.Context) error {
 			}
 			continue
 		}
+		if p.spared[d.ID] {
+			// A disk spared is opened, which confirms it and wakes it, only for work that waits for it (specs.md §15.13).
+			idle, err := p.idle(ctx, d.ID)
+			if err != nil {
+				return err
+			}
+			if idle {
+				continue
+			}
+		}
 		if !p.session.Writable(d.ID) {
 			if err := p.reportUnavailable(ctx, d.ID); err != nil {
 				return err
@@ -58,6 +68,24 @@ func (p *pass) work(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// idle says that no work of a pass waits for a disk: no folder to rename, no copy behind its file's name, nothing to
+// send to the trash.
+func (p *pass) idle(ctx context.Context, id string) (bool, error) {
+	folders, err := catalog.FolderJobs(ctx, p.db, id)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	renames, err := catalog.PendingRenames(ctx, p.db, id, "", 1)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	trashJobs, err := catalog.TrashJobs(ctx, p.db, id)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	return len(folders)+len(renames)+len(trashJobs) == 0, nil
 }
 
 func (p *pass) workOn(ctx context.Context, d *config.Disk, handle *ops.Disk) error {
@@ -508,7 +536,7 @@ func (p *pass) folderLike(ctx context.Context, skip, folder string, holders map[
 		if id == skip || (holders != nil && !holders[id]) {
 			continue
 		}
-		if !p.walked[id] {
+		if !p.looked(id) {
 			if away == "" {
 				away = id
 			}
@@ -904,7 +932,7 @@ func (p *pass) wantTrash(ctx context.Context, d *config.Disk, refused []catalog.
 func (p *pass) goodAtTarget(f *catalog.FileRow, skip string) bool {
 	for i := range f.Copies {
 		c := &f.Copies[i]
-		if c.Disk != skip && c.OldPath == nil && c.VerifiedNS.Valid && p.walked[c.Disk] && p.session.Readable(c.Disk) && p.verdictOf(f, c).Verdict == solver.VerdictThere {
+		if c.Disk != skip && c.OldPath == nil && c.VerifiedNS.Valid && p.looked(c.Disk) && p.session.Readable(c.Disk) && p.verdictOf(f, c).Verdict == solver.VerdictThere {
 			return true
 		}
 	}

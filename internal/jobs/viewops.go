@@ -78,7 +78,7 @@ func (p *pass) takeInViewOps(ctx context.Context) error {
 			return fmt.Errorf("catalog: %w", err)
 		}
 		for _, disk := range left {
-			if p.walked[disk] {
+			if p.looked(disk) {
 				if err := p.session.RemoveUserFolder(ctx, disk, v.Path); err != nil {
 					return fmt.Errorf("%w", err)
 				}
@@ -88,7 +88,7 @@ func (p *pass) takeInViewOps(ctx context.Context) error {
 	walkedAll := true
 	for i := range p.config.Disks {
 		d := &p.config.Disks[i]
-		if !p.walked[d.ID] && p.session.Readable(d.ID) {
+		if !p.looked(d.ID) && p.session.Readable(d.ID) {
 			walkedAll = false
 		}
 	}
@@ -102,9 +102,9 @@ func (p *pass) takeInViewOps(ctx context.Context) error {
 	return nil
 }
 
-// lookForView looks at a path on a disk this pass walked, for what the view presents of what it made there.
+// lookForView looks at a path on a disk this pass walked or spared, for what the view presents of what it made there.
 func (p *pass) lookForView(ctx context.Context, disk, path string) (*view.Node, bool, error) {
-	if !p.walked[disk] {
+	if !p.looked(disk) {
 		return nil, false, nil
 	}
 	handle, err := p.session.Handle(ctx, disk)

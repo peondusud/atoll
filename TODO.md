@@ -8,7 +8,7 @@ The work goes to the `develop` branch, with one pull request once the big work i
 
 - **Order:** the daemon that runs for good, then ntfy alerts, `atoll names check`, the disk commands, the scrub. The alpha also takes in `atoll catalog backup | verify | rebuild`, `atoll disk fail` and `disk replace`, the owner applied to the other copies, and the local API.
 - **The daemon:**
-  - **Passes.** A pass walks every disk, as `daemon --until-idle` does: each pass confirms every writable disk anyway, and sparing the disks' sleep is phase 2b.
+  - **Passes.** A pass walks every disk, as `daemon --until-idle` does: each pass confirms every writable disk anyway, and sparing the disks' sleep is phase 2b. Done there on 2026-11-16: a pass for events or `next_due` walks only the disks something calls for (§15.13).
   - **The lock.** The catalog's lock is taken for each pass, and a command that finds it taken waits for it, saying so, instead of exiting with 1.
   - **`--foreground`.** `atoll daemon` without it is the same as with it.
   - **The account.** A systemd unit runs it as a dedicated user `atoll`, with the capabilities `CAP_SYS_ADMIN`, `CAP_DAC_READ_SEARCH`, `CAP_DAC_OVERRIDE`, `CAP_CHOWN` and `CAP_FOWNER`, the group `disk` and `NoNewPrivileges`; no setting that gives it a mount namespace of its own, as its mounts must reach the host (`ProtectHome` and `PrivateTmp` went on 2026-11-16). Measured: so the user writes mergerfs's runtime branches, and runs `mount` and `umount`.
@@ -117,5 +117,5 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 
 ## Later phases (specs.md §28)
 
-- **Passes that walk only what changed, in phase 2b**, as the maintainer decided on 2026-11-14: under a change every second on 200,000 files, passes that walk every copy follow one another, about one core's worth on a machine, against the 5 % of §26 (DONE.md, the soak on 200,000 files). Phase 2b changes passes the same way to spare the disks' sleep.
+- **Passes that walk only what changed, in phase 2b**, as the maintainer decided on 2026-11-14: under a change every second on 200,000 files, passes that walk every copy follow one another, about one core's worth on a machine, against the 5 % of §26 (DONE.md, the soak on 200,000 files). Done by disk on 2026-11-16, to spare the disks' sleep (§15.13): a disk that nothing changed on is not walked. Still to do: a disk that changed is walked whole, every copy of it, so the soak's load, all on one disk, is the same; a walk of only the folders the watcher named would end it, with a rescan of the disk after an overflow as now.
 - **Observability, for phase 3 (the Rust rewrite)**, as the maintainer asked on 2026-11-12: OpenTelemetry, Vector, or both. OpenTelemetry would give the daemon's traces, metrics and logs over OTLP. Vector (vector.dev) would collect the logs and metrics and send them on. Phase 2b already brings Prometheus's `/metrics`; what the rewrite exports, and through which, is to decide then.

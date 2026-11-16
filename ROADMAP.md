@@ -75,4 +75,5 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
 ## Phase 2b, disk sleep
 
 - Done, the `colocate` and `new_files` strategies (R-28, DONE.md, 2026-11-16): a replica, and what is new through the view, goes where the other files of its folder or show are, then as `new_files` says, `ordered` filling the disks in order to `fill_to`, `percent` to the same share; the mergerfs line creates with `ff` or `pfrd` for them.
-- To do: sparing the disks' sleep in the passes, which disk spins and `read.policy = "prefer-spinning"` with `read.classes`; the SSD cache (§19, R-26); UPS through NUT (R-27); `balance.equalize`; Prometheus `/metrics`.
+- Done, passes that spare the disks' sleep (§15.13, DONE.md, 2026-11-16): a pass for events or `next_due` walks only the disks something calls for a look at, and neither walks nor confirms the others, which it opens only for work that waits there.
+- To do: which disk spins and `read.policy = "prefer-spinning"` with `read.classes`; the SSD cache (§19, R-26); UPS through NUT (R-27); `balance.equalize`; Prometheus `/metrics`; walks of only the folders that changed, for the CPU of a disk under constant changes (TODO.md).
