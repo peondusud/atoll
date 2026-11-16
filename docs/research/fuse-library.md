@@ -24,7 +24,7 @@ This report compares two Go libraries for Atoll's own view (`specs.md` §21.2) o
 | What the machine needs to mount | `libfuse3.so.3` | nothing: `mount(2)` with `CAP_SYS_ADMIN`, which the daemon's unit already gives, or `fusermount` |
 | Debian 13, openmediavault 8, Fedora, Arch | **does not mount**: libfuse 3.17 and later is `libfuse3.so.4` | mounts |
 | `TestViewMatchesMergerfs` | 12 of 12, once the guest's library was given the name cgofuse asks for | 60 of 60, five times on each driver and kernel |
-| `TestViewBrowsesNoDisk` | not run | 8 of 8 |
+| `TestViewBrowsesNoDisk` | not run | 40 of 40, five times on each driver and kernel |
 | Paths | the kernel's path of each request, as a string | inodes: the path is rebuilt from the tree of looked-up nodes (`Inode.Path`) |
 | The Rust version | — | the same protocol as `fuser`, which `specs.md` §29.7 plans for it |
 
@@ -37,7 +37,7 @@ This report compares two Go libraries for Atoll's own view (`specs.md` §21.2) o
 
 ## go-fuse and an interrupted request
 
-- go-fuse gives each request a context that it cancels when the kernel interrupts the request, as the kernel does when a signal reaches the process that waits on it. The Go runtime preempts its own threads with `SIGURG`: a test's `open` on the view was interrupted so, and the view, which passed the context to the catalog, answered `EIO`, which failed the open for good, in 4 of the first 12 runs. Answered `EINTR`, the kernel starts the call again, or gives the process `EINTR`; then 60 of 60 runs passed. cgofuse gives no context, and its side passes none.
+- go-fuse gives each request a context that it cancels when the kernel interrupts the request, as the kernel does when a signal reaches the process that waits on it. The Go runtime preempts its own threads with `SIGURG`: a test's `open` on the view was interrupted so, and the view, which passed the context to the catalog, answered `EIO`, which failed the open, in 4 of the first 12 runs. Answering `EINTR` passed 60 runs of 60, then failed a `statfs` in the CI with `EINTR`: the kernel does not start again a call a FUSE server answers `EINTR`, whatever `SA_RESTART` says, so the process gets the error. The view's requests now run to their end whatever the interrupt (`context.WithoutCancel`), as mergerfs and libfuse's high-level API do by default: the catalog's queries are short. So made, both view tests passed 100 times in 100, five times on each driver and kernel. cgofuse gives no context, and its side passes none.
 - go-fuse numbers inodes itself unless the file system gives each node a number. With a number of its own at each lookup, a name looked up again once the kernel's 1 s were over was another node to the kernel. Each path now has its own number, a hash of it, so that a name looked up again is the node the kernel holds; that was not what failed the open above.
 
 ## What neither changes

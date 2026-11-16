@@ -74,22 +74,27 @@ func fill(a *fuse.Attr, v *view.Node) {
 	a.SetTimes(&t, &t, &t)
 }
 
-// failed says what a request that failed answers: EINTR when the kernel interrupted it, as it does when a signal
-// reaches the process waiting on it, so that the kernel starts the call again or gives the process EINTR. The Go
-// runtime sends its threads SIGURG to preempt them, and an open answered EIO then failed for good.
-func failed(ctx context.Context, what, p string, err error) syscall.Errno {
-	if ctx.Err() != nil {
-		return syscall.EINTR
-	}
+// whole gives the work of a request a context the kernel's interrupts do not cancel: a request runs to its end, as
+// mergerfs and libfuse's high-level API do by default. go-fuse cancels the context of a request the kernel interrupts,
+// as it does when a signal reaches the process waiting on it, and the Go runtime preempts its threads with SIGURG.
+// Canceled, the catalog's query failed, and the open answered EIO failed for good; answered EINTR, the call fails
+// with EINTR in the process, as the kernel does not start it again, whatever SA_RESTART says. The catalog's queries
+// are short.
+func whole(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}
+
+// failed says what a request that failed answers, and logs why.
+func failed(what, p string, err error) syscall.Errno {
 	slog.Warn(what, "path", p, "error", err)
 	return syscall.EIO
 }
 
 func (n *node) lookup(ctx context.Context, p string) (*view.Node, syscall.Errno) {
-	v, err := n.tree.Lookup(ctx, p)
+	v, err := n.tree.Lookup(whole(ctx), p)
 	switch {
 	case err != nil:
-		return nil, failed(ctx, "the view cannot read the catalog", p, err)
+		return nil, failed("the view cannot read the catalog", p, err)
 	case v == nil:
 		return nil, syscall.ENOENT
 	}
@@ -128,9 +133,9 @@ func (n *node) Getattr(ctx context.Context, _ fs.FileHandle, out *fuse.AttrOut) 
 }
 
 func (n *node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	children, err := n.tree.List(ctx, n.logical())
+	children, err := n.tree.List(whole(ctx), n.logical())
 	if err != nil {
-		return nil, failed(ctx, "the view cannot list a folder", n.logical(), err)
+		return nil, failed("the view cannot list a folder", n.logical(), err)
 	}
 	entries := make([]fuse.DirEntry, 0, len(children))
 	for i := range children {
@@ -151,9 +156,9 @@ func (n *node) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 }
 
 func (n *node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
-	s, err := n.tree.Statfs(ctx)
+	s, err := n.tree.Statfs(whole(ctx))
 	if err != nil {
-		return failed(ctx, "the view cannot read the catalog", "", err)
+		return failed("the view cannot read the catalog", "", err)
 	}
 	*out = fuse.StatfsOut{Blocks: s.Blocks, Bfree: s.Bfree, Bavail: s.Bavail, Bsize: uint32(s.Bsize), Frsize: uint32(s.Bsize), NameLen: uint32(s.Namemax)}
 	return 0
@@ -186,7 +191,7 @@ func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 	case errors.Is(err, syscall.ENOENT):
 		return nil, 0, syscall.ENOENT
 	case err != nil:
-		return nil, 0, failed(ctx, "the view cannot open a copy", p, err)
+		return nil, 0, failed("the view cannot open a copy", p, err)
 	}
 	return &file{f: f}, 0, 0
 }
