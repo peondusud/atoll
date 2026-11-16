@@ -226,3 +226,33 @@ func OpByID(ctx context.Context, db *sql.DB, id int64) (Op, bool, error) {
 	op.Path, op.Path2 = string(path), string(path2)
 	return op, true, nil
 }
+
+// FolderDisks gives the disks whose entry says a folder is at a path, in byte order.
+func FolderDisks(ctx context.Context, db *sql.DB, path string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, "SELECT disk_id FROM entries WHERE lpath = ? AND kind = 'dir' ORDER BY disk_id", []byte(path))
+	if err != nil {
+		return nil, fmt.Errorf("entries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var disk string
+		if err := rows.Scan(&disk); err != nil {
+			return nil, fmt.Errorf("entries: %w", err)
+		}
+		out = append(out, disk)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("entries: %w", err)
+	}
+	return out, nil
+}
+
+// IsViewOp says whether an operation of the journal is one of Atoll's own view's.
+func IsViewOp(ctx context.Context, db *sql.DB, opID int64) (bool, error) {
+	var is bool
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM view_ops WHERE op_id = ?)", opID).Scan(&is); err != nil {
+		return false, fmt.Errorf("view journal: %w", err)
+	}
+	return is, nil
+}

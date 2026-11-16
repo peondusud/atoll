@@ -122,11 +122,15 @@ type PendingRead struct {
 }
 
 type pass struct {
-	db      *sql.DB
-	config  *config.Config
-	machine disks.Machine
-	session *trash.Session
-	apply   bool
+	// viewOps are the operations of Atoll's own view no pass has taken in, and throughView the copies, by disk and
+	// inode, it sent to the trash (specs.md §21.2).
+	viewOps     []catalog.ViewOp
+	throughView map[string]bool
+	db          *sql.DB
+	config      *config.Config
+	machine     disks.Machine
+	session     *trash.Session
+	apply       bool
 	// start says that the pass is a start of the daemon, which records the physical disks of each disk (R-06).
 	start    bool
 	now      int64
@@ -324,6 +328,9 @@ func (p *pass) look(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
+	if err := p.readViewOps(ctx); err != nil {
+		return err
+	}
 	if p.start && p.apply {
 		RecordDevices(ctx, p.db, p.config, p.machine, func(i int) bool {
 			return p.session.VerdictOf(i).State != disks.Missing && p.session.Readable(p.config.Disks[i].ID)
@@ -345,7 +352,7 @@ func (p *pass) look(ctx context.Context) error {
 		}
 		// A dry run confirms nothing, and asks only whether this session still holds the disk: a look at its own
 		// folders may have lost it.
-		look := &watch.Look{Write: p.apply, Own: p.ownFiles, Confirm: p.confirm, Planned: plannedOn(planned, d.ID)}
+		look := &watch.Look{Write: p.apply, Own: p.ownFiles, Confirm: p.confirm, Planned: append(plannedOn(planned, d.ID), p.viewPlannedOn(d.ID)...)}
 		p.planned[d.ID] = look.Planned
 		report, err := watch.LookAtDisk(ctx, p.db, p.config, p.machine, d, verdict, p.now, look)
 		if err != nil {
@@ -686,7 +693,7 @@ func (p *pass) propFile(f *catalog.FileRow, follow string, positions map[string]
 		file.Copies = append(file.Copies, solver.PropCopy{
 			Disk: c.Disk, Position: positions[c.Disk], Verdict: verdict, Target: s.Target, Due: due, GoneNS: gone,
 			CreatedBy: c.CreatedBy, FirstSeenNS: c.FirstSeenNS, Verified: c.VerifiedNS.Valid, OldPath: c.OldPath,
-			GuardHeld: p.heldBy(c.Disk, gone), Size: c.Size.Int64,
+			GuardHeld: p.heldBy(c.Disk, gone), Size: c.Size.Int64, ThroughView: p.wentThroughView(c.Disk, c.FileKey.String),
 		})
 	}
 	return file
@@ -1419,6 +1426,9 @@ func (p *pass) finish(ctx context.Context) error {
 	p.seen, p.moves = nil, nil
 	if err := p.session.RemoveEmptied(ctx); err != nil {
 		return fmt.Errorf("%w", err)
+	}
+	if err := p.takeInViewOps(ctx); err != nil {
+		return err
 	}
 	if err := p.linkGuard(ctx); err != nil {
 		return err

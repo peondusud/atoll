@@ -96,6 +96,25 @@ func (s *Session) RemoveEmptied(ctx context.Context) error {
 	return nil
 }
 
+// RemoveUserFolder removes from a disk an empty folder that a user removed through Atoll's own view where it was empty
+// then, once the catalog holds nothing of that disk below it (specs.md §21.2). One that still holds something stays, for
+// a later pass.
+func (s *Session) RemoveUserFolder(ctx context.Context, id, folder string) error {
+	if !s.apply || !s.writable(id) {
+		return nil
+	}
+	key, err := catalog.FolderKey(ctx, s.db, id, folder)
+	if err != nil || key == "" {
+		return wrapCatalog(err)
+	}
+	empty, err := catalog.NothingBelow(ctx, s.db, id, folder)
+	if err != nil || !empty {
+		return wrapCatalog(err)
+	}
+	_, _, err = s.removeKnownFolder(ctx, id, folder, key)
+	return err
+}
+
 // removeFolder removes one folder, when its row says Atoll made it and the catalog holds nothing of its disk below
 // it, and says whether it went, and whether it was looked at: a folder of a disk that cannot be written to, or that
 // is lost, was not.
@@ -111,6 +130,11 @@ func (s *Session) removeFolder(ctx context.Context, id, folder string) (removed,
 	if err != nil || !empty {
 		return false, true, wrapCatalog(err)
 	}
+	return s.removeKnownFolder(ctx, id, folder, key)
+}
+
+// removeKnownFolder removes a folder whose row records that inode, as an operation of its own.
+func (s *Session) removeKnownFolder(ctx context.Context, id, folder, key string) (removed, looked bool, err error) {
 	handle, err := s.open(ctx, id)
 	if err != nil {
 		return false, false, err

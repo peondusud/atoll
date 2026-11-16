@@ -61,8 +61,15 @@ func TestTheTrashIsReadThroughItsIndexes(t *testing.T) {
 // over the whole journal, which holds an operation for each copy ever made (specs.md §9).
 func TestTheJournalIsAskedByInode(t *testing.T) {
 	b := openForOps(t)
-	if plan := planOf(t, b.sql(), "places", placesOfSQL); len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INDEX ops_by_key (disk_id=? AND file_key=?)") {
+	// What Atoll's own view sent to the trash is left out through view_ops's index of its operations (specs.md §21.2).
+	plan := planOf(t, b.sql(), "places", placesOfSQL)
+	if len(plan) == 0 || !strings.HasPrefix(plan[0], "SEARCH ops USING INDEX ops_by_key (disk_id=? AND file_key=?)") {
 		t.Errorf("%q", plan)
+	}
+	for _, step := range plan[1:] {
+		if !strings.HasPrefix(step, "CORRELATED SCALAR SUBQUERY") && !strings.HasPrefix(step, "SEARCH v USING COVERING INDEX view_ops_by_op") {
+			t.Errorf("the view's operations are not asked through their index: %q", plan)
+		}
 	}
 	if plan := planOf(t, b.sql(), "on disk", opOnDiskSQL); !slices.ContainsFunc(plan, func(step string) bool {
 		return strings.HasPrefix(step, "SEARCH ops USING INTEGER PRIMARY KEY (rowid=?)")

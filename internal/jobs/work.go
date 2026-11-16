@@ -1017,7 +1017,7 @@ func (p *pass) jobStands(ctx context.Context, d *config.Disk, job *catalog.Trash
 		v := p.verdictOf(f, &o).Verdict
 		return !slices.Contains(covered, o.Disk) || (o.Disk != d.ID && (v == solver.VerdictMoved || p.isMovedOutOfReach(&o, v)))
 	})
-	return p.direct == "propagate" && !bad && !gained, nil
+	return (p.direct == "propagate" || p.deletedThroughView(f.Path)) && !bad && !gained, nil
 }
 
 // stillStands says whether a job stands, and removes what does not.

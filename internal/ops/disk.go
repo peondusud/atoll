@@ -1016,7 +1016,7 @@ func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, 
 // the journal, as after a catalog rebuild, or on a disk that came with its work folder.
 func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool) (map[string][]solver.FileLook, error) {
 	out := map[string][]solver.FileLook{}
-	if err := d.walkOwn(ctx, layout.TmpFolder, inodes, out); err != nil {
+	if err := d.walkOwn(ctx, layout.TmpFolder, inodes, out, nil); err != nil {
 		return nil, err
 	}
 	asked := false
@@ -1054,14 +1054,38 @@ func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool)
 			left[key] = true
 		}
 	}
-	if err := d.walkOwn(ctx, layout.TrashFolder, left, out); err != nil {
+	// What Atoll's own view sent there is no interrupted operation of Atoll's: a user deleted it, through the view
+	// (specs.md §21.2).
+	viewTrash := func(place string) (bool, error) {
+		id, ok := trashOpOf(place)
+		if !ok {
+			return false, nil
+		}
+		is, err := catalog.IsViewOp(ctx, db, id)
+		if err != nil {
+			return false, fmt.Errorf("catalog: %w", err)
+		}
+		return is, nil
+	}
+	if err := d.walkOwn(ctx, layout.TrashFolder, left, out, viewTrash); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// walkOwn walks one of the work folder's folders whole, and adds what it holds of those inodes.
-func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]bool, out map[string][]solver.FileLook) error {
+// trashOpOf gives the operation whose folder of the trash holds a place, <date>/<op-id>/...
+func trashOpOf(place string) (int64, bool) {
+	parts := strings.SplitN(place, "/", 3)
+	if len(parts) < 3 {
+		return 0, false
+	}
+	id, chunks, ok := layout.TrashOp(parts[1])
+	return id, ok && !chunks
+}
+
+// walkOwn walks one of the work folder's folders whole, and adds what it holds of those inodes, but for what skip, when
+// given, leaves out.
+func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]bool, out map[string][]solver.FileLook, skip func(string) (bool, error)) error {
 	dir, err := d.open(components(d.config.Workdir, folder))
 	switch {
 	case fsx.IsAbsent(err):
@@ -1076,9 +1100,19 @@ func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]boo
 		return fmt.Errorf("%w: %w", ErrDiskLost, err)
 	}
 	for i := range walked.Files {
-		if f := &walked.Files[i]; inodes[f.FileKey] {
-			out[f.FileKey] = append(out[f.FileKey], watch.FoundLook(f))
+		f := &walked.Files[i]
+		if !inodes[f.FileKey] {
+			continue
 		}
+		if skip != nil {
+			if left, err := skip(f.Path); err != nil || left {
+				if err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		out[f.FileKey] = append(out[f.FileKey], watch.FoundLook(f))
 	}
 	return nil
 }

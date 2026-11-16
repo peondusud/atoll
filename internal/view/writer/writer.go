@@ -183,7 +183,7 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Owner
 	if err := w.finish(ctx, v, err); err != nil {
 		return nil, nil, err
 	}
-	return &File{WritableFile: f, Disk: disk, Path: path}, nodeOf(disk, &st, ""), nil
+	return &File{WritableFile: f, Disk: disk, Path: path}, view.NodeOfStat(disk, &st, ""), nil
 }
 
 // Mkdir makes a new folder, where a new file would go.
@@ -210,7 +210,7 @@ func (w *Writer) Mkdir(ctx context.Context, path string, mode uint32, who Owner)
 	if err := w.finish(ctx, v, err); err != nil {
 		return nil, err
 	}
-	return nodeOf(disk, &st, ""), nil
+	return view.NodeOfStat(disk, &st, ""), nil
 }
 
 // Symlink makes a new symbolic link, where a new file would go.
@@ -237,7 +237,7 @@ func (w *Writer) Symlink(ctx context.Context, path, target string, who Owner) (*
 	if err := w.finish(ctx, v, err); err != nil {
 		return nil, err
 	}
-	return nodeOf(disk, &st, target), nil
+	return view.NodeOfStat(disk, &st, target), nil
 }
 
 // free says that a path's folder presents a folder, and that nothing presents at the path.
@@ -442,7 +442,7 @@ func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.
 	if n.Kind == view.NodeSymlink {
 		target = n.Target
 	}
-	return nodeOf(targets[0], first, target), nil
+	return view.NodeOfStat(targets[0], first, target), nil
 }
 
 // Unlink deletes what a path presents, but a folder: a file goes to the trash from the disk it is presented from,
@@ -837,18 +837,4 @@ func sortedKeys(set map[string]bool) []string {
 	}
 	slices.Sort(out)
 	return out
-}
-
-// nodeOf presents what a look found on a disk, as the view presents what it made (specs.md §21.2).
-func nodeOf(disk string, st *fsx.Stat, target string) *view.Node {
-	n := &view.Node{Kind: view.NodeFile, Disk: disk, Mode: st.Mode, UID: st.Uid, GID: st.Gid, Size: st.Size,
-		MtimeNS: st.Mtime.Sec*1_000_000_000 + st.Mtime.Nsec, Nlink: int64(st.Nlink)}
-	switch st.Kind {
-	case fsx.KindDir:
-		n.Kind, n.Nlink = view.NodeDir, 1
-	case fsx.KindSymlink:
-		n.Kind, n.Target, n.Size = view.NodeSymlink, target, int64(len(target))
-	case fsx.KindFile, fsx.KindOther:
-	}
-	return n
 }

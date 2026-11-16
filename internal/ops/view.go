@@ -457,3 +457,18 @@ func (d *Disk) setFolderAttrs(parent fsx.Dir, name string, a *UserAttrs, uid, gi
 func (d *Disk) StatTrash(trashPath string) (fsx.Stat, bool, error) {
 	return d.stat(d.trashPlace(trashPath))
 }
+
+// ReadLinkRoot gives the target of the symbolic link at a logical path.
+func (d *Disk) ReadLinkRoot(logical string) (string, error) {
+	path := d.rootPlace(logical)
+	parent, err := d.open(path[:len(path)-1])
+	if err != nil {
+		return "", classify(err)
+	}
+	defer parent.close()
+	target, err := parent.ReadLink(path[len(path)-1])
+	if err != nil {
+		return "", classify(err)
+	}
+	return target, nil
+}

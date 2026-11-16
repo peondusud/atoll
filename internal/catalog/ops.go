@@ -930,12 +930,15 @@ func FinishRestore(ctx context.Context, db *sql.DB, op *Op, nowNS int64, c *NewC
 // What a pass asks of the journal about a copy a walk no longer finds at its name (invariant 11): where the operations
 // on its disk put the file of that inode, through ops_by_key, and whether an operation is one of that disk's.
 const (
-	placesOfSQL = "SELECT path2 FROM ops WHERE disk_id = ?1 AND file_key = ?2 AND path2 IS NOT NULL ORDER BY id"
+	placesOfSQL = `
+		SELECT path2 FROM ops WHERE disk_id = ?1 AND file_key = ?2 AND path2 IS NOT NULL
+		AND NOT EXISTS(SELECT 1 FROM view_ops v WHERE v.op_id = ops.id) ORDER BY id`
 	opOnDiskSQL = "SELECT EXISTS(SELECT 1 FROM ops WHERE id = ?1 AND disk_id = ?2)"
 )
 
 // PlacesOf gives where the journal says its operations on a disk put the file of an inode: the second path of each,
-// in the order of the operations. An operation is journaled before it runs (invariant 12), so a copy Atoll moved is at
+// in the order of the operations. What Atoll's own view sent to the trash is no part of it: a user deleted it, through
+// the view (specs.md §21.2). An operation is journaled before it runs (invariant 12), so a copy Atoll moved is at
 // one of them, or was moved on since.
 func PlacesOf(ctx context.Context, db *sql.DB, disk, fileKey string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, placesOfSQL, disk, fileKey)

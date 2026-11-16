@@ -106,20 +106,13 @@ func (t *Tree) look(disk, path string) (*Node, error) {
 			if err != nil {
 				return fmt.Errorf("%w", err)
 			}
-			n = &Node{Kind: NodeFile, Disk: disk, Mode: st.Mode, UID: st.Uid, GID: st.Gid, Size: st.Size,
-				MtimeNS: st.Mtime.Sec*1_000_000_000 + st.Mtime.Nsec, Nlink: int64(st.Nlink)}
-			switch st.Kind {
-			case fsx.KindDir:
-				n.Kind, n.Nlink = NodeDir, 1
-			case fsx.KindSymlink:
-				target, err := dir.ReadLink(name)
-				if err != nil {
+			target := ""
+			if st.Kind == fsx.KindSymlink {
+				if target, err = dir.ReadLink(name); err != nil {
 					return fmt.Errorf("%w", err)
 				}
-				n.Kind, n.Target, n.Size = NodeSymlink, target, int64(len(target))
-			case fsx.KindFile, fsx.KindOther:
-				// A file, or what is neither file, folder nor symlink, as a FIFO, presents as a file.
 			}
+			n = NodeOfStat(disk, &st, target)
 			return nil
 		})
 	})

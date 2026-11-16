@@ -121,6 +121,9 @@ type PropCopy struct {
 	OldPath     *string // where it sits, when that is not its file's path
 	GuardHeld   bool    // the guard of its disk holds what is gone there
 	Size        int64
+	// ThroughView says that the copy went through Atoll's own view, to the trash: the user deleted the file, which
+	// propagates whatever deletes.direct says (specs.md §21.2).
+	ThroughView bool
 }
 
 // PropFile is one file to decide about. Follow is the new path it takes because a folder above it was
@@ -443,7 +446,7 @@ func decideRest(f *PropFile, direct string) PropDecision {
 		return PropDecision{Path: f.Path, Kind: PropHeld, Copies: everyCopy(f, ActStay)}
 	case len(left) == 0:
 		return PropDecision{Path: f.Path, Kind: PropGone, Copies: everyCopy(f, ActDrop)}
-	case direct == "propagate" && isDeletion(f, gone, left):
+	case (direct == "propagate" || slices.ContainsFunc(gone, isThroughView)) && isDeletion(f, gone, left):
 		d := PropDecision{Path: f.Path, Kind: PropDeletion, Src: gone[0].Disk}
 		for i := range f.Copies {
 			action := ActTrash
@@ -474,6 +477,8 @@ func decideRest(f *PropFile, direct string) PropDecision {
 	}
 	return d
 }
+
+func isThroughView(c *PropCopy) bool { return c.ThroughView }
 
 func mustWait(f *PropFile) bool {
 	return slices.ContainsFunc(f.Copies, func(c PropCopy) bool { return (goneLike(c.Verdict) || c.Verdict == VerdictMoved) && !c.Due })
