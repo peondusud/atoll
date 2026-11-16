@@ -1230,7 +1230,7 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
   - The first disk that holds something at a path says what the path is, as mergerfs's `ff` does: a file, a folder, a symlink, or an ignored file, which presents as a file. A path that no disk holds anything at is absent, as it is from mergerfs once the branches of its disks are removed: a file none of whose copies can be presented is not listed, rather than listed and failing to read.
   - A file presents its original (§7), or, when no copy is eligible, the first copy `ok` or `surplus` on a `failed` disk, as mergerfs reads a `failed` disk's branch last. Its size, modification time, mode, owner and number of links are that copy's, as the catalog holds them, and its access and change times are its modification time. Its data is read from that copy.
   - A folder, a symlink or an ignored file presents the entry of the first disk that holds one of that kind at the path: its mode, owner, size and modification time, its access and change times its modification time, and the target of a symlink. A folder presents one link, as btrfs does, so that no program counts its subfolders from it.
-  - What a row lacks, as one a catalog made before it recorded it (§9): a mode of 0755 for a folder and a symlink and 0644 for a file, the owner of the view's own process, a size of 0, or the length of its target for a symlink.
+  - What a row lacks, as one a catalog made before it recorded it (§9): a mode of 0755 for a folder and a symlink and 0644 for a file, the owner of the view's own process, a size of 0, or the length of its target for a symlink, and a time of 0. A copy that lacks its size or its modification time presents the file's, and one that lacks its number of links presents one.
   - `<root>` presents as a folder with the mode 0755, the owner of the view's own process and the time the view was mounted: the catalog holds no entry of it.
   - A folder's listing gives each name directly below it that presents something, once, with what it presents, in byte order.
 - **`statfs`** is served from the catalog, with vectors in `conformance/vectors/view_statfs.json`: blocks of 4096 bytes; the size and the free space are the sums of `capacity_bytes` and `free_bytes` over the data disks that present, each rounded down to whole blocks, the free space also the space available, as mergerfs sums its branches; names of up to 255 bytes; no count of inodes, 0. A disk with no capacity or free space recorded yet counts for 0.
@@ -1921,11 +1921,13 @@ port     = nonzero digit, at most 5 digits                          ; 1 to 65535
 | Glob | in-house | in-house, same vectors |
 | CLI | standard library or cobra | `clap` |
 | System calls (`statx`, `renameat2`, `openat`, fanotify, inotify) | `golang.org/x/sys/unix` | `rustix` or `nix` |
-| Filesystem view | cgofuse (FUSE) | `fuser` (Linux), `winfsp` crate (Windows, GPL-3.0) |
+| Filesystem view | cgofuse (FUSE), to choose against go-fuse (§30) | `fuser` (Linux), `winfsp` crate (Windows, GPL-3.0) |
 | Local API | `net/http` | `axum` or `hyper` |
 | Windows service and watcher | — | `windows-service`, `windows` crate |
 
 ## 30. Risks and open questions
+
+- The FUSE library of Atoll's own view (§21.2, §29.7): cgofuse v1.6.0 loads `libfuse3.so.3` by that name alone, and libfuse 3.17 and later, in Debian 13, openmediavault 8, Fedora and Arch, is `libfuse3.so.4`, so the view does not mount there (measured in qemu, 2026-11-16). go-fuse v2 (`github.com/hanwen/go-fuse/v2`, BSD-3-Clause) speaks the kernel's protocol itself, as `fuser` does for the Rust version: no cgo, no libfuse. Both serve the read path in `test/loopdev` (DONE.md); the maintainer chooses.
 
 - How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)? Answered on 2026-11-12: each disk's folders, so its libraries move to the merged view before the first replica.
 - mergerfs behavior with a failing branch before Atoll removes it (I/O errors or fallback to the next branch): to verify with a USB drop simulation.

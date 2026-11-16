@@ -361,6 +361,23 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `original` | string | the disk of the original; empty when no copy is eligible |
 | `error` | boolean | `true` when a state is unknown, a disk has no name, or a disk or position appears twice |
 
+### `view_node.json` — what a path of Atoll's own view presents (§21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disks` | array of objects | the disks: `id`, `position` and `state`, as `original.json` has them |
+| `file` | object | optional: the file at the path, as its row holds it: `state`, `size`, `mtime_ns` and `copies`, all required; `original`, the disk `files.original_disk` names, when it names one; and `conflict_held`, `true` when the file holds a conflict (§4) |
+| `file.copies` | array of objects | its copies: `disk`, `state` and `first_seen_ns`, required; `size`, `mtime_ns`, `mode`, `uid`, `gid`, `nlink` and `creation_ns`, each left out when its row holds none |
+| `entries` | array of objects | optional: the entries at the path, one a disk: `disk` and `kind` (`dir`, `symlink` or `ignored`), required; `mode`, `uid`, `gid`, `size`, `mtime_ns` and `target`, each left out when its row holds none |
+| `node` | object or null | what the path presents, null when it is absent: `kind` (`file`, `dir` or `symlink`), `disk`, the disk whose copy or entry it presents, `mode`, `uid`, `gid`, `size`, `mtime_ns` and `nlink`; `target` for a symlink, and `ignored`, `true` for an ignored file. The view's own process is owned by 4242:4343 in every case |
+
+### `view_statfs.json` — `statfs` of Atoll's own view (§21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disks` | array of objects | the disks: `id`, `position` and `state`; `role`, `data` when left out; `capacity` and `free`, in bytes, each left out when the catalog holds none |
+| `statfs` | object | `bsize`, `blocks`, `bfree`, `bavail` and `namemax` |
+
 ### `creation_time.json` — a creation time into `btime_ns` (§7)
 
 | Field | Type | Meaning |
