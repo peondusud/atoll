@@ -88,6 +88,14 @@ func TestRepairStatesReadFromTheirID(t *testing.T) {
 	}
 }
 
+// What earlier runs left is read by the range of the journal's ids, never over all of it.
+func TestLeftSinceReadsItsRange(t *testing.T) {
+	plan := planOf(t, openForOps(t).sql(), "left since", leftSinceQuery)
+	if len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)") {
+		t.Errorf("%q", plan)
+	}
+}
+
 // The files a plan reads as leaving are looked for over its page of paths, and their jobs by file, never over the
 // whole catalog or every job: a plan reads every file at each pass (specs.md §13.4).
 func TestLeavingReadsItsPage(t *testing.T) {

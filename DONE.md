@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The folders a run stopped before its end left, 2026-11-16 (specs.md §9, §17.5)
+
+Commit "Look at the folders a run stopped before its end left", on `beta`. The maintainer asked for it among the alpha's known limits.
+
+- A folder Atoll made goes once Atoll's own operations leave it empty, at the end of the command or pass. A run stopped before that, by kill -9 or a power cut, or that lost the disk while it removed it, left the folder there for good, as nothing recorded which folders its operations had left: the next run looked only at the folders of its own operations (`TestTheFoldersARunStoppedOnGoAtTheNext`, which failed so). The journal already names the place every move to the trash and every rename left, so each command or pass that writes now looks too at the folders that the operations done since the last look left, and `meta` keeps that last operation, `folders_tidied_op`. A folder still Atoll's and empty goes; one the user filled stays, as before.
+
+### Decided without the maintainer, to confirm
+
+- **`schema/migrations/0016_folders_tidied.sql`**, a new migration, and a new key of `meta`, `folders_tidied_op`. A catalog made before it starts its look from its last operation: what its earlier runs left stays as it was.
+- **The look moves forward only once every folder was looked at on a disk that could be written to**: a disk missing or lost during the look leaves the same operations to the next run, which looks at all of them again, those already decided included. An Atoll folder that a run could not remove then, and that the user emptied before the next run, goes.
+- **A folder looked at again that is no longer Atoll's** costs one more operation `rmdir`, undone with no event, as a folder of the run itself would.
+- **A scenario changed**: `daemon-removes-own-folders-crash-journaled.json` said that the folder stays after a pass killed once its removal was journaled; it now goes at the next run.
+
 ## The remount of an ntfs-3g disk, and the owner its mount gives, 2026-11-16 (specs.md §10, §15.4, §15.13)
 
 Commit "Take the owner an ntfs-3g mount gives for the mount's, and test the remount as the daemon's account", on `beta`. The maintainer asked for the remount of an ntfs-3g disk after a USB reset to be tested, as the dedicated user.

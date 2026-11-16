@@ -38,7 +38,7 @@ func TestCreateMayRunAgain(t *testing.T) {
 	if _, err := Create(t.Context(), file, "other"); err == nil || !strings.Contains(err.Error(), "other") {
 		t.Errorf("another pool: %v", err)
 	}
-	if got := countOf(t, db, "SELECT count(*) FROM meta"); got != 2 {
+	if got := countOf(t, db, "SELECT count(*) FROM meta"); got != 3 {
 		t.Errorf("%d rows in meta", got)
 	}
 	// Through Open, as OpenPool would write the right version itself.

@@ -79,8 +79,12 @@ type Session struct {
 	reprised map[string]int64
 	// repriseTrashed holds the operations whose copy reached the trash in this run's reprise.
 	repriseTrashed map[int64]bool
-	// emptied holds, by disk, the folders a copy left in this run through Atoll's own operation (specs.md §17.5).
+	// emptied holds, by disk, the folders a copy left in this run through Atoll's own operation, and those a run stopped
+	// before its end left, as the journal says (specs.md §17.5).
 	emptied map[string]map[string]bool
+	// tidying says that this run took in the folders earlier runs left, so that its look at them may be recorded, and
+	// untidy that a folder of a disk it could not write to was left unlooked at, by any of its looks.
+	tidying, untidy bool
 	// full holds the disks that had no room for a move to their trash in this run (Full).
 	full map[string]bool
 }
@@ -128,6 +132,12 @@ func openSession(ctx context.Context, db *sql.DB, c *config.Config, m disks.Mach
 		if err := s.recoverAll(ctx); err != nil {
 			s.Close()
 			return nil, err
+		}
+		if apply {
+			if err := s.leftByEarlierRuns(ctx); err != nil {
+				s.Close()
+				return nil, err
+			}
 		}
 	}
 	return s, nil

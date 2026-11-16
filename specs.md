@@ -218,7 +218,7 @@ The catalog schema is `schema/migrations/`: plain SQL, with a comment on why eac
 
 | Table | Holds |
 |---|---|
-| `meta` | `pool_id`, and `lpath_key_version`: what computed `lpath_key` (§15.8): the language, the normalization library, its release and its Unicode version, such as `go golang.org/x/text v0.43.0 17.0.0` or `rust unicode-normalization 0.1.25 17.0.0`; compared for equality only |
+| `meta` | `pool_id`, and `lpath_key_version`: what computed `lpath_key` (§15.8): the language, the normalization library, its release and its Unicode version, such as `go golang.org/x/text v0.43.0 17.0.0` or `rust unicode-normalization 0.1.25 17.0.0`; compared for equality only; and `folders_tidied_op`, the last operation whose folders a run looked at for Atoll's own empty folders (§17.5), in decimal |
 | `disks` | a copy of the disks of the configuration, plus state, free space and SMART |
 | `files` | one row per managed file: its current version, level, rule, mode and state |
 | `file_chunks` | the chunk hashes of a file (§16) |
@@ -1153,7 +1153,7 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
 - At the end of each command and pass that writes, for each folder a copy left in that run, sent to the trash or renamed away by Atoll, then for each folder above it that this left empty, the root never included: when its row says it is Atoll's, and the catalog holds nothing of that disk below it, neither a copy, at its file's path or behind, nor an entry, ignored files included.
 - One operation for each, `kind = rmdir`, `path` the folder, `file_key` the inode its row records, journaled with an `rmdir` event. The name must still hold that folder, compared by inode. The time of its parent is read, the folder removed (`unlinkat` with `AT_REMOVEDIR`, which only an empty folder passes), the parent's time restored and the parent synced; then, in one transaction, the operation is `done` and the folder's row goes.
 - A folder that is not empty, `ENOTEMPTY` or `EEXIST`, gone, or no longer that folder, stays, with the folders above it: the operation is `undone`. An error that makes a disk `missing` follows §17.1; another leaves the folder, with a line of the log.
-- A folder the user emptied, or one a run left empty before it was stopped, stays: Atoll removes only what its own operations of that run emptied, as an empty folder the user kept may be one they want. A command's output does not list these operations: the journal and the events hold them.
+- A folder the user emptied stays: Atoll removes only what its own operations emptied, as an empty folder the user kept may be one they want. A run stopped before its end, or that could not write to a disk then, leaves its folders to the next command or pass that writes: that one also looks at the folders every operation `trash` or `rename` done after `meta.folders_tidied_op` left (§9), as the journal names them, the deepest first, then records the last operation there was when its own look began, once it looked at every folder on a disk it could write to. A command's output does not list these operations: the journal and the events hold them.
 
 ## 18. Disk lifecycle
 
