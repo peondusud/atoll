@@ -39,7 +39,7 @@ test-loopdev:
 qemu-build:
 	rm -rf bin/qemu
 	mkdir -p bin/qemu/repo
-	CGO_ENABLED=0 $(GO) test -c -tags loopdev,memory.counters,gofuse -o bin/qemu/loopdev.test ./test/loopdev
+	CGO_ENABLED=0 $(GO) test -c -tags loopdev,memory.counters -o bin/qemu/loopdev.test ./test/loopdev
 	cp go.mod bin/qemu/repo/
 	cp -r conformance bin/qemu/repo/
 
@@ -49,10 +49,9 @@ test-qemu: qemu-build
 	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e COUNT -e VERBOSE \
 		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
 
-# The view's build and the conformance build hold code the delivered binary does not, so each gets a run of its own.
+# The conformance build holds code the delivered binary does not, so it gets a run of its own.
 lint:
 	$(GOLANGCI_LINT) run ./...
-	$(GOLANGCI_LINT) run --build-tags gofuse ./internal/view/...
 	$(GOLANGCI_LINT) run --build-tags conformance ./cmd/... ./internal/disks/...
 
 clean:

@@ -1218,7 +1218,7 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
 
 ### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)
 
-- Mounted at the same mount point as mergerfs, through cgofuse.
+- Mounted at the same mount point as mergerfs, through go-fuse, which speaks the kernel's FUSE protocol itself: no cgo and no libfuse, as the maintainer chose on 2026-11-16 (`docs/research/fuse-library.md`).
 - Presents the original (§7), never a stale, corrupt or unavailable copy.
 - Every entry (files, ignored files, folders, symlinks) and `statfs` is served from the catalog: browsing wakes no disk, and the listing matches what mergerfs would show.
 - Writes: new files placed by the solver or on the SSD cache. On ENOSPC during a write, the view moves the partial file to a disk with enough space and retries.
@@ -1772,7 +1772,7 @@ A milestone is reached when its phase and every phase before it are done: the al
 ### 29.1 Go first
 
 - Go, latest stable release, for phases 1 and 2 (Linux only):
-  - a mature FUSE layer (cgofuse, used by rclone);
+  - a mature FUSE layer (go-fuse, used by rclone and gocryptfs);
   - reference code in Go (Syncthing, rclone);
   - fast builds and easy review for a single maintainer.
 - License: GPL-3.0-or-later.
@@ -1921,13 +1921,12 @@ port     = nonzero digit, at most 5 digits                          ; 1 to 65535
 | Glob | in-house | in-house, same vectors |
 | CLI | standard library or cobra | `clap` |
 | System calls (`statx`, `renameat2`, `openat`, fanotify, inotify) | `golang.org/x/sys/unix` | `rustix` or `nix` |
-| Filesystem view | cgofuse (FUSE), to choose against go-fuse (§30) | `fuser` (Linux), `winfsp` crate (Windows, GPL-3.0) |
+| Filesystem view | `github.com/hanwen/go-fuse/v2`, v2.12.1 or later: the kernel's FUSE protocol, no cgo, no libfuse | `fuser` (Linux), `winfsp` crate (Windows, GPL-3.0) |
 | Local API | `net/http` | `axum` or `hyper` |
 | Windows service and watcher | — | `windows-service`, `windows` crate |
 
 ## 30. Risks and open questions
 
-- The FUSE library of Atoll's own view (§21.2, §29.7): cgofuse v1.6.0 loads `libfuse3.so.3` by that name alone, and libfuse 3.17 and later, in Debian 13, openmediavault 8, Fedora and Arch, is `libfuse3.so.4`, so the view does not mount there (2026-11-16). go-fuse v2 (`github.com/hanwen/go-fuse/v2`, BSD-3-Clause) speaks the kernel's protocol itself, as `fuser` does for the Rust version: no cgo, no libfuse. Both serve the read path in `test/loopdev`; `docs/research/fuse-library.md` compares them, and the maintainer chooses.
 
 - How does Plex read the media today: a mergerfs mount, or each disk's folders (§21.4)? Answered on 2026-11-12: each disk's folders, so its libraries move to the merged view before the first replica.
 - mergerfs behavior with a failing branch before Atoll removes it (I/O errors or fallback to the next branch): to verify with a USB drop simulation.

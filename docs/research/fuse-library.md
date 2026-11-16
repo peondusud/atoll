@@ -46,6 +46,10 @@ This report compares two Go libraries for Atoll's own view (`specs.md` §21.2) o
 - Both mount with `ro`, `default_permissions` and `allow_other`, and the kernel keeps attributes and names for 1 s and no absent name, as for mergerfs.
 - Writes, renames and deletions through the view are to do on either.
 
+## Decision
+
+The maintainer chose go-fuse on 2026-11-16. The cgofuse side went from the code: it is in the history, at `b8c4e74`.
+
 ## Recommendation
 
 go-fuse: it mounts where Atoll is to be installed, keeps the binary static and free of a library the machine must hold, and speaks the protocol the Rust version's `fuser` will. cgofuse needs a copy of its own to mount on Debian 13, and cgo for the whole binary.

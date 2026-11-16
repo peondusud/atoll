@@ -64,6 +64,6 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
 
 - **Atoll's FUSE view.**
   - Done, the read path, read only (DONE.md, 2026-11-16): it presents the original of each file, never a stale, corrupt or unavailable copy, and serves every entry and `statfs` from the catalog, so that browsing wakes no disk. Mounted beside mergerfs over the same disks in qemu, on every driver and both kernels, it lists and reads what mergerfs does, but the original where a replica differs.
-  - To choose: the FUSE library (specs.md §30). cgofuse, which the spec names, does not mount where libfuse is 3.17 or later, Debian 13 included; go-fuse, pure Go, serves the same read path.
-  - To do: writes, renames and deletions through the view, deletions to the trash, new files placed by the solver; the daemon mounting it at `view.mount` with `view.engine = "atoll"`, in place of mergerfs.
+  - Chosen on 2026-11-16: go-fuse, pure Go, as cgofuse does not mount where libfuse is 3.17 or later, Debian 13 included; and first the view read only, beside mergerfs, for the media servers (`view.readonly_mount`, served by `atoll view`), with mergerfs as the engine that writes.
+  - To do: writes, renames and deletions through the view, deletions to the trash, new files placed by the solver; the view at `view.mount` with `view.engine = "atoll"`, in place of mergerfs.
 - **The contracts frozen at format version 1**: catalog schema, on-disk layout, configuration keys, local API, `--json` schemas and exit codes. This is what the Rust rewrite (phase 3) must keep.

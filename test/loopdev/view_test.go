@@ -1,4 +1,4 @@
-//go:build loopdev && ((cgo && fuse3) || gofuse)
+//go:build loopdev
 
 package loopdev
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/view"
+	"github.com/peondusud/atoll/internal/view/fusefs"
 )
 
 type viewRoots map[string]fsx.Dir
@@ -63,7 +64,7 @@ func TestViewMatchesMergerfs(t *testing.T) {
 			own := mountPoint(t)
 			mustDo(t, os.MkdirAll(own, 0o755))
 			tree := view.NewTree(b.db, roots, view.Owner{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}, time.Now().UnixNano())
-			m, err := mountOwn(tree, own)
+			m, err := fusefs.Mount(tree, own)
 			mustDo(t, err)
 			t.Cleanup(func() { _ = m.Unmount() })
 
@@ -147,7 +148,7 @@ func TestViewBrowsesNoDisk(t *testing.T) {
 			own := mountPoint(t)
 			mustDo(t, os.MkdirAll(own, 0o755))
 			tree := view.NewTree(b.db, roots, view.Owner{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}, time.Now().UnixNano())
-			mounted, err := mountOwn(tree, own)
+			mounted, err := fusefs.Mount(tree, own)
 			mustDo(t, err)
 			t.Cleanup(func() { _ = mounted.Unmount() })
 			before := listedOnly(t, own)

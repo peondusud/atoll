@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## go-fuse for Atoll's own view, 2026-11-16 (specs.md §21.2, §29.1, §29.7)
+
+Commit "Serve the view through go-fuse alone", on `beta`. The maintainer chose go-fuse ("soit mergerfs soit go-fuse", 2026-11-16), as `docs/research/fuse-library.md` recommended.
+
+- The view's package, `internal/view/fusefs`, is go-fuse's side, in every build: no tag, no cgo, no libfuse. The cgofuse side, its dependency and the CI's lint of it went; they are in the history, at `b8c4e74`.
+- `make qemu-build` and the CI's lint take no tag of the view's any more: `TestViewMatchesMergerfs` and `TestViewBrowsesNoDisk` are loop-device tests like the others.
+- specs.md §21.2, §29.1 and §29.7, CLAUDE.md's stack, ROADMAP.md and the report say go-fuse; the question of §30 is closed.
+
 ## The daemon's mounts reach the host, 2026-11-16 (specs.md §15.13, deploy/)
 
 Commit "Let the daemon's mounts reach the host", on `beta`. Found while designing the read-only view; the maintainer chose to drop the settings on 2026-11-16.
