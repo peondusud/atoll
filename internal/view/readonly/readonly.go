@@ -15,8 +15,10 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/view"
 	"github.com/peondusud/atoll/internal/view/fusefs"
+	"github.com/peondusud/atoll/internal/view/writer"
 )
 
 // CheckEvery is the time between two checks of the disks' mounts (specs.md §21.2).
@@ -34,6 +36,9 @@ type Options struct {
 	// Ready, when set, is called once the view is mounted.
 	Ready func()
 	Log   *slog.Logger
+	// Writes says that the view writes on a user's behalf, at view.mount in place of mergerfs, through a handle on each
+	// disk its check finds online (specs.md §21.2).
+	Writes bool
 }
 
 // ErrUnmounted says that the view was unmounted by something else than Run.
@@ -61,13 +66,31 @@ func Run(ctx context.Context, o Options) error {
 	roots := view.NewDiskRoots()
 	defer roots.Close()
 	c := &checker{o: o, roots: roots, readable: map[string]bool{}}
+	if o.Writes {
+		c.handles = writer.NewHandles()
+		defer c.handles.Close()
+	}
 	c.check()
 	tree := view.NewTree(o.DB, roots, view.Owner{UID: uint32(unix.Geteuid()), GID: uint32(unix.Getegid())}, o.Machine.Now())
-	m, err := fusefs.Mount(tree, o.Point, nil)
+	var w *writer.Writer
+	if o.Writes {
+		if w, err = writer.New(o.DB, o.Config, o.Machine, tree, c.handles, o.Log); err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		// What a stop left planned is resolved before anything reads through the view (specs.md §21.2).
+		if err := w.Reprise(ctx); err != nil {
+			return fmt.Errorf("%w", err)
+		}
+	}
+	m, err := fusefs.Mount(tree, o.Point, w)
 	if err != nil {
 		return fmt.Errorf("mount at %s: %w", o.Point, err)
 	}
-	o.Log.Info("the view is mounted, read only", "point", o.Point)
+	if o.Writes {
+		o.Log.Info("the view is mounted, and writes", "point", o.Point)
+	} else {
+		o.Log.Info("the view is mounted, read only", "point", o.Point)
+	}
 	if o.Ready != nil {
 		o.Ready()
 	}
@@ -137,10 +160,12 @@ func gone(point string) bool {
 	return fsx.IsNotConnected(err)
 }
 
-// checker keeps the root of each disk as its last mount check found it.
+// checker keeps the root of each disk as its last mount check found it, and for a view that writes a handle on the top
+// of each disk it found online.
 type checker struct {
-	o     Options
-	roots *view.DiskRoots
+	o       Options
+	roots   *view.DiskRoots
+	handles *writer.Handles
 	// readable says which disks the last check gave a root, to log a change only.
 	readable map[string]bool
 }
@@ -151,6 +176,9 @@ func (c *checker) check() {
 	for i := range c.o.Config.Disks {
 		d := &c.o.Config.Disks[i]
 		root, why := c.rootOf(d)
+		if c.handles != nil {
+			c.handleOf(d, root != nil)
+		}
 		if root == nil {
 			c.roots.Drop(d.ID)
 			if was, seen := c.readable[d.ID]; was || !seen {
@@ -165,6 +193,27 @@ func (c *checker) check() {
 		}
 		c.readable[d.ID] = true
 	}
+}
+
+// handleOf opens a handle on the top of a disk its check found online, and confirms it there (invariant 3); a disk the
+// view cannot write to has none, and what the view writes there fails with EROFS.
+func (c *checker) handleOf(d *config.Disk, readable bool) {
+	if !readable || d.State == config.DiskFailed || disks.Check(c.o.Machine, d).State != disks.Online {
+		c.handles.Drop(d.ID)
+		return
+	}
+	h, err := ops.Open(c.o.Machine, d, 0)
+	if err == nil {
+		if err = h.Verify(); err != nil {
+			h.Close()
+		}
+	}
+	if err != nil {
+		c.o.Log.Warn("the view cannot write to a disk", "disk", d.ID, "error", err)
+		c.handles.Drop(d.ID)
+		return
+	}
+	c.handles.Set(d.ID, h)
 }
 
 // rootOf opens the root of a disk its check finds online or readonly, or says why it does not.

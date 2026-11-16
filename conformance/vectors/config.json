@@ -264,6 +264,7 @@
     {"note": "placement.overflow deny", "toml": "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[placement]\noverflow = \"deny\"\n", "effective": [{"key": "placement.overflow", "value": "deny"}]},
     {"note": "placement.overflow off", "toml": "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[placement]\noverflow = \"off\"\n", "errors": ["placement.overflow"]},
     {"note": "view.engine mergerfs", "toml": "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\nengine = \"mergerfs\"\n", "effective": [{"key": "view.engine", "value": "mergerfs"}]},
+    {"note": "view.engine atoll: Atoll's own view at view.mount, in place of mergerfs, since phase 2a (§21.2)", "toml": "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\nengine = \"atoll\"\n", "effective": [{"key": "view.engine", "value": "atoll"}]},
     {"note": "view.engine fuse", "toml": "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\nengine = \"fuse\"\n", "errors": ["view.engine"]},
     {"note": "read.policy prefer-spinning", "toml": "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[read]\npolicy = \"prefer-spinning\"\n", "effective": [{"key": "read.policy", "value": "prefer-spinning"}]},
     {"note": "read.policy fastest", "toml": "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[read]\npolicy = \"fastest\"\n", "errors": ["read.policy"]},

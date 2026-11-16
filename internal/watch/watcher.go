@@ -352,6 +352,10 @@ func (w *Watcher) origin(pid int) string {
 	}
 	o := OriginUser
 	switch {
+	case w.exe != "" && procExe(pid) == w.exe && servesAtollView(pid):
+		// Atoll's own view writes on a user's behalf: what it does is a user's change, as through mergerfs (specs.md
+		// §15.1, §21.2).
+		o = OriginView
 	case w.exe != "" && procExe(pid) == w.exe:
 		o = OriginAtoll
 	case view != "" && servesView(pid, view):
@@ -375,6 +379,31 @@ func procExe(pid int) string {
 }
 
 // servesView says whether a process is mergerfs with the view's mount point among its arguments.
+// servesAtollView says whether a process of Atoll's own executable is atoll mount, which serves Atoll's own view.
+func servesAtollView(pid int) bool {
+	cmdline, err := fsx.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil {
+		return false
+	}
+	return IsMountCommand(cmdline)
+}
+
+// IsMountCommand says whether a command line, as /proc gives it, runs atoll mount: its command after --config, if any.
+func IsMountCommand(cmdline []byte) bool {
+	args := strings.Split(strings.TrimSuffix(string(cmdline), "\x00"), "\x00")
+	if len(args) < 2 {
+		return false
+	}
+	args = args[1:]
+	switch {
+	case args[0] == "--config" && len(args) > 2:
+		args = args[2:]
+	case strings.HasPrefix(args[0], "--config="):
+		args = args[1:]
+	}
+	return len(args) > 0 && args[0] == "mount"
+}
+
 func servesView(pid int, mount string) bool {
 	comm, err := fsx.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
 	if err != nil || strings.TrimSpace(string(comm)) != "mergerfs" {

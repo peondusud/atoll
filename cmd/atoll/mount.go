@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -16,7 +17,14 @@ import (
 	"github.com/peondusud/atoll/internal/view/readonly"
 )
 
-// runMount serves Atoll's own view, read only, at a point beside mergerfs, until SIGTERM or SIGINT (specs.md §21.2).
+// mountPoint is a point atoll mount serves the view at, and whether the view writes there.
+type mountPoint struct {
+	path   string
+	writes bool
+}
+
+// runMount serves Atoll's own view until SIGTERM or SIGINT (specs.md §21.2): read only at a point given, and otherwise
+// at view.mount, where it writes, with view.engine = "atoll", and read only at view.readonly_mount when it is set.
 func runMount(configPath string, args []string, stderr io.Writer) (code int) {
 	point := ""
 	for _, a := range args {
@@ -33,12 +41,22 @@ func runMount(configPath string, args []string, stderr io.Writer) (code int) {
 	if err != nil {
 		return failure(stderr, err)
 	}
+	var points []mountPoint
 	if point == "" {
-		if point, _ = c.Effective()["view.readonly_mount"].(string); point == "" {
-			return usage(stderr, T("mount: no point: give one, or set view.readonly_mount"))
+		if engine, _ := c.Effective()["view.engine"].(string); engine == "atoll" {
+			mount, _ := c.Effective()["view.mount"].(string)
+			points = append(points, mountPoint{path: mount, writes: true})
+		}
+		if readonly, _ := c.Effective()["view.readonly_mount"].(string); readonly != "" {
+			points = append(points, mountPoint{path: readonly})
+		}
+		if len(points) == 0 {
+			return usage(stderr, T("mount: no point: give one, set view.readonly_mount, or view.engine = \"atoll\""))
 		}
 	} else if err := config.CheckReadonlyMount(c, point); err != nil {
 		return usage(stderr, "mount: "+err.Error())
+	} else {
+		points = append(points, mountPoint{path: point})
 	}
 	machine, err := disks.NewMachine()
 	if err != nil {
@@ -59,13 +77,36 @@ func runMount(configPath string, args []string, stderr io.Writer) (code int) {
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 	// What the view logs of a read, through the default logger, goes the same way.
 	slog.SetDefault(log)
+	// systemd is told once every point is mounted; one that fails or is unmounted stops the others.
+	var mounted atomic.Int32
 	ready := func() {
+		if int(mounted.Add(1)) < len(points) {
+			return
+		}
 		if err := daemon.Notify("READY=1"); err != nil {
 			log.Warn("systemd was not told the view is ready", "error", err)
 		}
 	}
-	if err := readonly.Run(ctx, readonly.Options{Config: c, DB: db, Machine: machine, Point: point, Ready: ready, Log: log}); err != nil {
-		return failure(stderr, err)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ended := make(chan error, len(points))
+	for _, p := range points {
+		go func() {
+			err := readonly.Run(ctx, readonly.Options{Config: c, DB: db, Machine: machine, Point: p.path, Writes: p.writes, Ready: ready, Log: log})
+			if err != nil {
+				cancel()
+			}
+			ended <- err
+		}()
+	}
+	var failed error
+	for range points {
+		if err := <-ended; err != nil && failed == nil {
+			failed = err
+		}
+	}
+	if failed != nil {
+		return failure(stderr, failed)
 	}
 	return exitOK
 }

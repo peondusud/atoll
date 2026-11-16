@@ -67,8 +67,10 @@ var ErrStartup = errors.New("the daemon cannot start")
 
 // settings is what the loop reads of the configuration.
 type settings struct {
-	catalog     string
-	viewMount   string
+	catalog   string
+	viewMount string
+	// ownView says that view.engine is "atoll": atoll mount serves the view, and no mergerfs runs (specs.md §21.2).
+	ownView     bool
 	debounce    time.Duration
 	rescanEvery time.Duration
 	window      value.Window
@@ -101,6 +103,8 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 		resetReasons: []disks.Reason{disks.DeviceGone, disks.DeviceUnread, disks.IOError}}
 	s.catalog, _ = e["catalog"].(string)
 	s.viewMount, _ = e["view.mount"].(string)
+	engine, _ := e["view.engine"].(string)
+	s.ownView = engine == "atoll"
 	s.remount, _ = e["health.remount_after_reset"].(bool)
 	if s.checkEvery <= 0 {
 		s.checkEvery = checkEvery
@@ -1132,7 +1136,7 @@ func (l *loop) locked(ctx context.Context, fn func(db *sql.DB) (*jobs.Outcome, e
 // branches writes mergerfs's runtime branches when they should change: every branch of the configuration but
 // those of the disks missing, or not walked since they came back (specs.md §15.13).
 func (l *loop) branches(ctx context.Context, db *sql.DB) {
-	if !l.opt.Apply || l.set.viewMount == "" {
+	if !l.opt.Apply || l.set.viewMount == "" || l.set.ownView {
 		return
 	}
 	current, err := view.ReadBranches(l.set.viewMount)

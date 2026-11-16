@@ -10,7 +10,7 @@ A milestone is reached when its phase and every phase before it are done.
 |---|---|---|---|
 | **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 98 % |
 | **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 98 % |
-| **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 45 % |
+| **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 70 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
 | — | 3 — Rust rewrite | the same contracts and conformance suite, switched to without migrating data | |
 | — | 4 — Windows | a Windows service and a WinFsp pool drive, in Rust | |
@@ -66,5 +66,6 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
   - Done, the read path, read only (DONE.md, 2026-11-16): it presents the original of each file, never a stale, corrupt or unavailable copy, and serves every entry and `statfs` from the catalog, so that browsing wakes no disk. Mounted beside mergerfs over the same disks in qemu, on every driver and both kernels, it lists and reads what mergerfs does, but the original where a replica differs.
   - Chosen on 2026-11-16: go-fuse, pure Go, as cgofuse does not mount where libfuse is 3.17 or later, Debian 13 included; and first the view read only, beside mergerfs, for the media servers, with mergerfs as the engine that writes.
   - Done, that view beside mergerfs (DONE.md, 2026-11-16): `atoll mount` serves it at `view.readonly_mount`, as a process of its own, `deploy/atoll-mount.service`, and checks the disks' mounts every 30 s. Measured in qemu on both kernels, as root and as the unit's user with its two capabilities alone.
-  - To do: writes, renames and deletions through the view, deletions to the trash, new files placed by the solver; the view at `view.mount` with `view.engine = "atoll"`, in place of mergerfs.
+  - Done, the writes (DONE.md, 2026-11-16): with `view.engine = "atoll"`, `atoll mount` serves the view at `view.mount` in place of mergerfs. Each operation reaches one disk, a folder's every disk that holds it, and the passes take it to the other copies; a deletion goes to the trash. Measured in qemu with Sonarr's own kinds of operations, then break glass with plain mergerfs.
+  - To do, beyond phase 2a's list: a write that meets `ENOSPC` moved to another disk, hard links, extended attributes, copies written in parallel in `immediate` mode.
 - **The contracts frozen at format version 1**: catalog schema, on-disk layout, configuration keys, local API, `--json` schemas and exit codes. This is what the Rust rewrite (phase 3) must keep.

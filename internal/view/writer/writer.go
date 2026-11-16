@@ -811,8 +811,9 @@ func (w *Writer) folderHolders(ctx context.Context, path string) ([]string, erro
 	return sortedKeys(set), nil
 }
 
-// resolved gives the catalog paths a path resolves to, none when it resolves to a disk or nothing, with the view's
-// open operations.
+// resolved gives the catalog paths whose rows hold what a path presents, with the view's open operations: those it
+// resolves to, and for one the view made or wrote on a disk the path itself, whose rows hold the other copies still on
+// their disks until a pass takes the change to them; none for one that presents nothing.
 func (w *Writer) resolved(ctx context.Context, path string) ([]string, []view.Op, error) {
 	rows, err := catalog.OpenViewOps(ctx, w.db)
 	if err != nil {
@@ -823,11 +824,14 @@ func (w *Writer) resolved(ctx context.Context, path string) ([]string, []view.Op
 		r := &rows[i]
 		open = append(open, view.Op{Kind: r.Kind, Disk: r.Disk, Path: r.Path, Path2: r.Path2, Folder: r.Folder})
 	}
-	s := view.Resolve(open, path)
-	if s.Kind != view.FromCatalog {
-		return nil, open, nil
+	switch s := view.Resolve(open, path); s.Kind {
+	case view.FromCatalog:
+		return s.Paths, open, nil
+	case view.FromDisk:
+		return []string{path}, open, nil
+	case view.Absent:
 	}
-	return s.Paths, open, nil
+	return nil, open, nil
 }
 
 func sortedKeys(set map[string]bool) []string {

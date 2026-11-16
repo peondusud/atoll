@@ -5,12 +5,9 @@ import (
 	"regexp"
 )
 
-// laterPhaseErrors holds the one setting a later phase needs that cannot fall back
-// (specs.md §24.4). It goes when phase 2a brings Atoll's own view.
-func laterPhaseErrors(tree map[string]any) []Problem {
-	if text(table(tree, "view"), "engine") == "atoll" {
-		return []Problem{{Key: "view.engine", Message: "Atoll's own view arrives in phase 2a; there would be no merged view"}}
-	}
+// laterPhaseErrors holds the settings a later phase needs that cannot fall back (specs.md §24.4): none since phase 2a
+// brought Atoll's own view, view.engine = "atoll", which was the one.
+func laterPhaseErrors(map[string]any) []Problem {
 	return nil
 }
 

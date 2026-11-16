@@ -69,7 +69,7 @@ func commandHelps() []commandHelp {
 		{"mergerfs-config", []string{"atoll mergerfs-config [--json]"},
 			"print the mergerfs line that presents the pool"},
 		{"mount", []string{"atoll mount [<point>]"},
-			"serve Atoll's own view, read only, at a point or view.readonly_mount, until stopped"},
+			"serve Atoll's own view until stopped: at view.mount, where it writes, and read only at view.readonly_mount or a point"},
 		{"notify", []string{"atoll notify test [--json]"},
 			"send a test alert through each channel that is set"},
 		{"catalog", []string{"atoll catalog backup [--json]", "atoll catalog verify [--json]", "atoll catalog rebuild [--dry-run] [--yes] [--json]"},

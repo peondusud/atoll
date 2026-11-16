@@ -111,7 +111,7 @@ func TestReadonlyMount(t *testing.T) {
 }
 
 // mountCapabilities are those deploy/atoll-mount.service gives the dedicated user, and no others.
-const mountCapabilities = "-all,+sys_admin,+dac_read_search"
+const mountCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown,+fowner"
 
 // childEnv names the configuration TestReadonlyMountChild serves the view of, at the point childPointEnv names.
 const (
@@ -278,11 +278,18 @@ func (s *served) wait() error {
 // or returns.
 func serveReadonly(t *testing.T, b *passBench, point string) (*served, error) {
 	t.Helper()
+	return serveView(t, b, point, false)
+}
+
+// serveView runs readonly.Run at the point, a view that writes when writes says so, until it says the view is mounted,
+// or returns.
+func serveView(t *testing.T, b *passBench, point string, writes bool) (*served, error) {
+	t.Helper()
 	ctx, stop := context.WithCancel(context.Background())
 	s := &served{stop: stop, done: make(chan error, 1)}
 	ready := make(chan struct{})
 	opts := readonly.Options{
-		Config: b.config, DB: b.db, Machine: b.machine, Point: point, Every: 100 * time.Millisecond,
+		Config: b.config, DB: b.db, Machine: b.machine, Point: point, Every: 100 * time.Millisecond, Writes: writes,
 		Ready: func() { close(ready) }, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
 	go func() { s.done <- readonly.Run(ctx, opts) }()

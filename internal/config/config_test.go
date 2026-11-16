@@ -394,12 +394,14 @@ func TestEffectiveTypes(t *testing.T) {
 	}
 }
 
-func TestViewEngineAtollWaitsForItsPhase(t *testing.T) {
-	_, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\nengine = \"atoll\"\n"))
-	var e *Error
-	// The message tells it from a value the schema does not know.
-	if !errors.As(err, &e) || len(e.Problems) != 1 || e.Problems[0].Key != "view.engine" || !strings.Contains(e.Problems[0].Message, "phase 2a") {
-		t.Errorf("got %v, want a problem at view.engine that names phase 2a", err)
+// view.engine = "atoll" is Atoll's own view at view.mount, in place of mergerfs, since phase 2a (specs.md §21.2, §24.4).
+func TestViewEngineAtoll(t *testing.T) {
+	c, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\nengine = \"atoll\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engine, _ := c.Effective()["view.engine"].(string); engine != "atoll" {
+		t.Errorf("view.engine %q", engine)
 	}
 }
 

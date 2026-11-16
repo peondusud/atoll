@@ -280,6 +280,22 @@ func TestWriterRefusesANameADiskRefuses(t *testing.T) {
 	if err := b.w.Rename(t.Context(), "Films", "Fi:lms", false); !errors.Is(err, ErrRefused) {
 		t.Errorf("a folder name NTFS refuses: %v", err)
 	}
+	// Written through the view, the file presents its original alone, while its other copy, on NTFS, is still on its
+	// disk until a pass: that copy refuses the name all the same. The original is t1's, on ext4.
+	if _, err := b.w.db.ExecContext(t.Context(), "UPDATE copies SET btime_ns = 50 WHERE disk_id = 't1'"); err != nil {
+		t.Fatal(err)
+	}
+	if n := b.lookup("Films/a.mkv"); n == nil || n.Disk != "t1" {
+		t.Fatalf("the original: %+v", n)
+	}
+	f, err := b.w.Open(t.Context(), "Films/a.mkv", b.lookup("Films/a.mkv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	if err := b.w.Rename(t.Context(), "Films/a.mkv", "Films/a:b.mkv", false); !errors.Is(err, ErrRefused) {
+		t.Errorf("a name NTFS refuses, once written through the view: %v", err)
+	}
 }
 
 // What the view left planned is resolved before it mounts (specs.md §21.2): a file made is done, one that never was

@@ -2,6 +2,27 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Atoll's own view writes, 2026-11-16 (specs.md §6.1, §9, §15.1, §15.5, §17, §21.2, §24.4)
+
+Commits "Journal what the view does in view_ops", "Present the view's own operations over the catalog", "Make what the view writes on a disk", "Write through the view on a user's behalf", "Take the view's operations in at each pass" and "Serve the view that writes at view.mount", on `beta`, from the maintainer's four answers (above). `view.engine = "atoll"` is accepted: `atoll mount` serves the view at `view.mount`, in place of mergerfs, and it writes.
+
+- **One disk at once.** A file is changed on the disk the view presents it from, or for something new on the disk with the most room past `min_free`, as mergerfs's `mfs`; a folder is renamed or removed on every disk that holds it. The passes take each change to the other copies as a change made on that disk (§15.3–§15.5), and the guards count it so.
+- **The journal**, `view_ops` (migration 0019, 9 vectors in `catalog.json`): each operation journaled before it runs; a deletion or a replacement is also a `trash` operation of `ops`, so that `atoll trash` lists and restores what the view deleted; only `atoll mount`'s reprise resolves them.
+- **What the view presents** over the catalog until a pass takes an operation in: a pure function, `view.Resolve`, with 43 vectors in `view_resolve.json`; what it made or wrote is looked at on its disk.
+- **On the disk** (`ops`): a file, folder or symbolic link made with the folders missing on the way, as the view presents them; a rename that replaces nothing, the rename that ntfs-3g refuses done by a link; each name durable before its operation is said done; the folders' times left as a user's change leaves them, so that a media server sees the folder changed.
+- **The writer** (`internal/view/writer`): names a disk holding a copy refuses, as NTFS refuses `:`, give `EINVAL`, and nothing changes; a rename onto a name presented from the same disk sends that copy to the trash, `overwritten`, then renames, as an atomic save does; onto another disk's, `EXDEV`, so that a program copies instead; a hard link `EXDEV`, extended attributes `ENOTSUP`.
+- **The passes** wait at the paths of the view's operations under way; a copy the view sent to the trash is gone by the user, not an interrupted operation of Atoll's, and its deletion propagates under `deletes.direct = "restore"` too (3 vectors in `propagation.json`); an empty folder the view removed goes from the disks where it was not empty yet; and each operation is taken in once the catalog alone presents what the view presents with it.
+- **The watcher** counts what `atoll mount` does as the view's, as what mergerfs does, so that it wakes a pass; it counted it as Atoll's own, which wakes none (§15.1).
+- **The daemon** runs no mergerfs branches with `view.engine = "atoll"`.
+- **`deploy/atoll-mount.service`** gains `CAP_DAC_OVERRIDE`, `CAP_CHOWN` and `CAP_FOWNER`, as the daemon has, to write on a user's behalf where the library's owners allow `atoll` nothing.
+- Found on the way: by the linter, before any test ran, an `err` shadowed in the making of a folder on the way, which would have taken a folder just made for absent; and by `TestViewWrites` on ntfs-3g, a rename to a name NTFS refuses let through once the file had been written through the view, as the writer then looked at its original's disk alone, on ext4, and not at its other copy, still on the NTFS disk until a pass. It reads the catalog's rows at the path too now (`TestWriterRefusesANameADiskRefuses`, which failed first).
+- Tests: `TestViewOps`, `TestResolveVectors`, `TestTreeOverTheViewsOperations`, `TestUserOperations` (ext4, and the rename ntfs-3g refuses), `TestWriter`, `TestWriterRefusesANameADiskRefuses`, `TestWriterReprise`, `TestAPassTakesInADeletionThroughTheView` (propagate and restore), `TestAPassTakesInWhatTheViewMade`, `TestIsMountCommand`, `TestViewEngineAtoll`; in `test/loopdev`, `TestViewWrites`, on ext4 and ntfs-3g: a file and a folder made, a rename, an atomic save, a file written in place and given a time and a mode, a folder renamed, a file deleted, an empty folder removed, a hard link and a refused name; then the passes, after which the view presents the same from the catalog alone; then break glass, plain mergerfs at the same point presenting the same. It passes on both drivers in qemu, on Linux 6.12.117 and 7.3.1, with `TestReadonlyMount`, `TestReadonlyMountAsTheUnit` and `TestViewMatchesMergerfs` again.
+- **Decided without the maintainer, to confirm** (besides those of the decisions, above):
+  - a write is journaled once for a file, from its open until a pass takes it in;
+  - `atoll mount` with no point serves both the view that writes and the read-only one when both are set, in one process, and one that fails stops both;
+  - the view's operations on a disk the view cannot write to now fail with `EROFS`.
+- Not done, as specs.md §21.2 says: a write that meets `ENOSPC`, hard links, extended attributes, copies written in parallel in `immediate` mode, and the SSD cache (phase 2b).
+
 ## How Atoll's own view writes, decided 2026-11-16 (specs.md §6.1, §9, §17, §21.2)
 
 The maintainer answered the four questions the write path waited on, each with the option recommended:
