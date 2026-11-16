@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Break glass with a disk away, 2026-11-16 (CLAUDE.md, break glass; specs.md §21.1, §27)
+
+Commit "Break glass with a disk away", on `beta`, an item of TODO.md.
+
+- `TestBreakGlassWithADiskAway`, in `test/loopdev`, on every driver in qemu on both kernels: a library replicated on two disks, then Atoll stopped and removed, its catalog gone, while one disk is away, not mounted, its `<root>` gone with it. Plain mergerfs mounted from the line `atoll mergerfs-config` printed, at the same mount point, mounts with that branch missing and lists and holds the whole library from the disk that stayed. So the break-glass line needs nothing for a disk that is away when Atoll goes.
+- TODO.md keeps a pool of more disks for the break-glass test.
+
 ## Phase 2a, Atoll's own view: browsing reads no disk, 2026-11-16 (specs.md §21.2, §21.6)
 
 Commit "Show that browsing the view reads no disk", on `beta`.
