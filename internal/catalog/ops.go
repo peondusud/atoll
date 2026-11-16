@@ -96,33 +96,44 @@ func writeEventData(ctx context.Context, tx *sql.Tx, nowNS int64, level, kind st
 // BeginTrash journals sending a copy to the trash, before anything is written to a disk. Until its
 // operation is done, a trash row says nothing of what the trash holds (specs.md §17.1).
 func BeginTrash(ctx context.Context, db *sql.DB, s *TrashStart) (*Op, error) {
-	op := &Op{Disk: s.Disk, Kind: OpTrash, Path: s.Path, FileKey: s.FileKey, Link: s.Link}
+	var op *Op
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, file_key, started_ns, state, link) VALUES (?, 'trash', ?, ?, ?, 'planned', ?)",
-			s.Disk, []byte(s.Path), s.FileKey, s.NowNS, linkOf(s.Link))
-		if err != nil {
-			return fmt.Errorf("journal: %w", err)
-		}
-		if op.ID, err = result.LastInsertId(); err != nil {
-			return fmt.Errorf("journal: %w", err)
-		}
-		if op.Path2, err = layout.TrashPath(s.NowNS, op.ID, s.Path); err != nil {
-			return fmt.Errorf("journal: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE ops SET path2 = ? WHERE id = ?", []byte(op.Path2), op.ID); err != nil {
-			return fmt.Errorf("journal: %w", err)
-		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, blake3, reason, deleted_ns, expires_ns)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			[]byte(s.Path), s.Disk, []byte(op.Path2), op.ID, s.Size, s.Hash, s.Reason, s.NowNS, s.ExpiresNS)
-		if err != nil {
-			return fmt.Errorf("trash: %w", err)
-		}
-		return writeEvent(ctx, tx, s.NowNS, "info", "trash", op, s.Reason)
+		var err error
+		op, err = beginTrashTx(ctx, tx, s)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%q: %w", s.Path, err)
+	}
+	return op, nil
+}
+
+// beginTrashTx journals sending a copy to the trash within a transaction: the operation, the trash row and the event.
+func beginTrashTx(ctx context.Context, tx *sql.Tx, s *TrashStart) (*Op, error) {
+	op := &Op{Disk: s.Disk, Kind: OpTrash, Path: s.Path, FileKey: s.FileKey, Link: s.Link}
+	result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, file_key, started_ns, state, link) VALUES (?, 'trash', ?, ?, ?, 'planned', ?)",
+		s.Disk, []byte(s.Path), s.FileKey, s.NowNS, linkOf(s.Link))
+	if err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	if op.ID, err = result.LastInsertId(); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	if op.Path2, err = layout.TrashPath(s.NowNS, op.ID, s.Path); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE ops SET path2 = ? WHERE id = ?", []byte(op.Path2), op.ID); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, blake3, reason, deleted_ns, expires_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[]byte(s.Path), s.Disk, []byte(op.Path2), op.ID, s.Size, s.Hash, s.Reason, s.NowNS, s.ExpiresNS)
+	if err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	if err := writeEvent(ctx, tx, s.NowNS, "info", "trash", op, s.Reason); err != nil {
+		return nil, err
 	}
 	return op, nil
 }
@@ -560,9 +571,14 @@ func Undo(ctx context.Context, db *sql.DB, op *Op, warn bool, nowNS int64) error
 	return nil
 }
 
-// PlannedOps gives the operations left planned, by id.
+// plannedOpsSQL leaves out the operations of Atoll's own view, which only its own reprise resolves (specs.md §21.2).
+const plannedOpsSQL = `
+	SELECT id, disk_id, kind, path, COALESCE(path2, x''), COALESCE(file_key, ''), COALESCE(link, 0) FROM ops
+	WHERE state = 'planned' AND NOT EXISTS(SELECT 1 FROM view_ops v WHERE v.op_id = ops.id) ORDER BY id`
+
+// PlannedOps gives the operations left planned, by id, but for those of Atoll's own view.
 func PlannedOps(ctx context.Context, db *sql.DB) ([]Op, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, disk_id, kind, path, COALESCE(path2, x''), COALESCE(file_key, ''), COALESCE(link, 0) FROM ops WHERE state = 'planned' ORDER BY id")
+	rows, err := db.QueryContext(ctx, plannedOpsSQL)
 	if err != nil {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
