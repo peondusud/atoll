@@ -316,6 +316,33 @@ func TestTheUnitClosesTheCatalogsFolder(t *testing.T) {
 	}
 }
 
+// No unit of deploy/ gives its service a mount namespace of its own: in one, what the service mounts stays its own,
+// and the host never sees it, whatever MountFlags says (systemd.exec(5)). The daemon's remount after a USB reset then
+// mounted the disk again for Atoll alone, mergerfs and the media servers keeping the dead mount, and atoll view's
+// mount would reach no one (specs.md §15.13, §21.2). Each of these settings makes such a namespace.
+func TestNoUnitKeepsItsMountsToItself(t *testing.T) {
+	units, err := filepath.Glob(filepath.Join("..", "..", "deploy", "*.service"))
+	if err != nil || len(units) == 0 {
+		t.Fatalf("units %v, %v", units, err)
+	}
+	namespacing := []string{"PrivateTmp", "PrivateMounts", "PrivateDevices", "ProtectHome", "ProtectSystem", "ProtectKernelTunables",
+		"ProtectKernelModules", "ProtectKernelLogs", "ProtectControlGroups", "ProtectClock", "ProtectProc", "ProcSubset", "ReadOnlyPaths",
+		"ReadWritePaths", "InaccessiblePaths", "ExecPaths", "NoExecPaths", "TemporaryFileSystem", "BindPaths", "BindReadOnlyPaths",
+		"RootDirectory", "RootImage", "MountFlags", "MountAPIVFS", "PrivateNetwork", "PrivateIPC", "PrivateUsers", "NetworkNamespacePath"}
+	for _, unit := range units {
+		data, err := os.ReadFile(unit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			key, _, ok := strings.Cut(strings.TrimSpace(line), "=")
+			if ok && slices.Contains(namespacing, key) {
+				t.Errorf("%s: %q gives the service a mount namespace of its own", filepath.Base(unit), line)
+			}
+		}
+	}
+}
+
 // serve asks a handler for a path, with a request of that context, and gives the status of its answer.
 func serve(ctx context.Context, h http.Handler, path string) int {
 	w := httptest.NewRecorder()

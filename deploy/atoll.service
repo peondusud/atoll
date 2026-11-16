@@ -23,8 +23,9 @@ SupplementaryGroups=disk
 AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_RAWIO
 CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_RAWIO
 NoNewPrivileges=yes
-ProtectHome=read-only
-PrivateTmp=yes
+# No PrivateTmp, ProtectHome, ProtectSystem or other setting that gives the service a mount namespace of its own: in
+# one, what the daemon mounts, as a disk again after a USB reset, stays its own, and the host, mergerfs and the media
+# servers keep the dead mount, whatever MountFlags says (systemd.exec(5)). A test forbids them.
 # The catalog in /var/lib/atoll, the configuration in /etc/atoll, the local API's socket in /run/atoll.
 StateDirectory=atoll
 # The catalog lists every path of the library, its trash and its history: its folder is closed to other accounts, as

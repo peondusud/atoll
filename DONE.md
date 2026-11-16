@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The daemon's mounts reach the host, 2026-11-16 (specs.md §15.13, deploy/)
+
+Commit "Let the daemon's mounts reach the host", on `beta`. Found while designing the read-only view; the maintainer chose to drop the settings on 2026-11-16.
+
+- `deploy/atoll.service` had `PrivateTmp=yes` and `ProtectHome=read-only`. Either gives the service a mount namespace of its own, and then what it mounts stays its own: the host never sees it, and `MountFlags=shared` cannot bring it back, as those settings make the mounts `slave` first (systemd.exec(5)). So the remount after a USB reset, as the unit ran it, mounted the disk again for Atoll alone, while mergerfs, the media servers and the host kept the dead mount. The test of the remount ran the daemon as its user with `setpriv`, never under systemd, and could not see it.
+- Both settings went, and `TestNoUnitKeepsItsMountsToItself` forbids, in every unit of `deploy/`, each setting that makes such a namespace. `deploy/README.md`, §15.13 and TODO.md say why. `NoNewPrivileges` and the capabilities stay.
+
 ## What a review of the night's code found, 2026-11-16 (specs.md §4, §13.4, §15.12, §16, §21.2)
 
 Commit "Correct what a review of the night's code found", on `beta`. An agent read the commits from `d44b573` to `25fc1be` afresh, for correctness. What it found and was so, each with a test that failed first:
