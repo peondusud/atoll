@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## What mergerfs does with a refused rename, pinned, 2026-11-16 (specs.md §15.2, §15.3)
+
+Commit "Pin what mergerfs does when one branch refuses a rename", on `beta`, an item of TODO.md.
+
+- `TestMergerfsRenameARefusedName`, in `test/loopdev`, in qemu on both kernels, with an ext4 branch and an NTFS one that ntfs-3g mounts with `windows_names`, in both orders, and the options of the line `atoll mergerfs-config` prints. What `docs/research/name-compatibility.md` measured by hand, now a test that a mergerfs release changing it fails: a file on both renamed to a name NTFS refuses succeeds, and mergerfs removes the NTFS copy, with no trash; a folder on both stays on NTFS with its files, and the view shows both folders; a file only on NTFS gets `EINVAL`, and nothing changes; a name both accept reaches both copies. Each look at a branch comes through a cold cache.
+- What it leaves, in TODO.md: ntfs3 with `ads`, where the driver accepts the name and a rename onto `m:n` can overwrite `m`, which only the mainline kernel of the qemu guest has on by default.
+
 ## Break glass with a disk away, 2026-11-16 (CLAUDE.md, break glass; specs.md §21.1, §27)
 
 Commit "Break glass with a disk away", on `beta`, an item of TODO.md.
