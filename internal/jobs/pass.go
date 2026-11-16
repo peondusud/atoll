@@ -667,7 +667,7 @@ func (p *pass) isDue(c *catalog.CopyRow) bool {
 }
 
 func (p *pass) propFile(f *catalog.FileRow, follow string, positions map[string]int) solver.PropFile {
-	file := solver.PropFile{Path: f.Path, State: solver.State(f.State), Follow: follow}
+	file := solver.PropFile{Path: f.Path, State: solver.State(f.State), ConflictHeld: f.ConflictHeld, Follow: follow}
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		// A pending copy is nothing on its disk yet: it neither moves nor goes, and its job finds the
@@ -996,8 +996,10 @@ func (p *pass) changeOf(d *solver.PropDecision, f *catalog.FileRow) catalog.File
 				continue
 			}
 			change.Own = append(change.Own, catalog.OwnFile{
-				// In a conflict the hash may be another version's: it goes with a copy read against it, and with no other.
-				Path: a.Target, Disks: []string{a.Disk}, WithHash: f.State != string(solver.StateConflict) || c.VerifiedNS.Valid, Size: c.Size.Int64, MtimeNS: c.MtimeNS.Int64, First: f.FirstSeenNS,
+				// In a conflict, or one a corrupt file holds, the hash may be another version's: it goes with a copy read
+				// against it, and with no other (specs.md §4).
+				Path: a.Target, Disks: []string{a.Disk}, WithHash: (f.State != string(solver.StateConflict) && !f.ConflictHeld) || c.VerifiedNS.Valid,
+				Size: c.Size.Int64, MtimeNS: c.MtimeNS.Int64, First: f.FirstSeenNS,
 				Follow: []catalog.RowChange{followed},
 			})
 			continue

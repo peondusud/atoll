@@ -123,10 +123,59 @@ func TestAScrubHoldsAConflictFoundOnACorruptFile(t *testing.T) {
 		if tc.after != "corrupt 1" {
 			continue
 		}
+		// While the file holds the conflict, no scrub reads its copies again, as for a conflict: the one never
+		// verified was read first by every scrub, to find the same.
+		again := b.scrub(ScrubOptions{Apply: true})
+		if t3 := diskOf(again, "t3"); t3.Read != 0 || len(t3.Conflict) != 0 {
+			t.Errorf("%q, a second scrub: %+v", tc.config, *t3)
+		}
 		b.repair(RepairOptions{Apply: true})
 		if got := b.text("SELECT state || ' ' || conflict_held FROM files"); got != "conflict 0" {
 			t.Errorf("%q, repaired: the file is %s", tc.config, got)
 		}
+	}
+}
+
+// The copies of a file corrupt that holds a conflict renamed to two names, on their own disks: the one that moves to
+// the other name makes a file of its own, which takes the file's hash only when it was read against it, as in a
+// conflict, as the hash may be another version's (specs.md §4, §15.12); and the file, left with one version, lets go of
+// the conflict it held. The other version took the hash, and each copy made from it failed its check, again and
+// again; the file held the conflict, and would have been one once repaired.
+func TestACopyOfAHeldConflictRenamedTakesNoHash(t *testing.T) {
+	b := newBenchWith(t, "[integrity]\nauto_repair = false\n", "t1", "t2", "t3")
+	b.write("t1", "a.mkv", "a film")
+	b.write("t2", "a.mkv", "a film")
+	b.scan(true)
+	b.write("t3", "a.mkv", "A FILM")
+	b.scan(false)
+	b.now += int64(month)
+	b.rot("t2", "a.mkv", "a FILM")
+	b.scrub(ScrubOptions{Apply: true})
+	if got := b.text("SELECT state || ' ' || conflict_held FROM files"); got != "corrupt 1" {
+		t.Fatalf("the file is %s", got)
+	}
+	b.rename("t1", "a.mkv", "x.mkv")
+	b.rename("t3", "a.mkv", "y.mkv")
+	b.settle()
+	// x.mkv keeps the file and version A; y.mkv, where t3's copy went, is version B, a file of its own, read afresh, its
+	// copy made and verified. With the other version's hash, it stayed pending, its copy failing its check at each try.
+	rows := func(name string) string {
+		t.Helper()
+		return b.text(`SELECT f.state || ' ' || f.conflict_held || ' ' || (SELECT group_concat(d, ' ') FROM (SELECT c.disk_id || '/' || c.state || '/' ||
+			(c.verified_ns IS NOT NULL) AS d FROM copies c WHERE c.file_id = f.id ORDER BY c.disk_id)) FROM files f WHERE CAST(f.lpath AS TEXT) = ?`, name)
+	}
+	if got := rows("y.mkv"); got != "ok 0 t1/ok/1 t3/ok/1" {
+		t.Errorf("y.mkv, version B: %s", got)
+	}
+	if got := b.read("t3", "y.mkv"); got != "A FILM" {
+		t.Errorf("y.mkv on t3 holds %q", got)
+	}
+	// x.mkv, left with version A alone, holds no conflict any more, as a conflict would clear, and gets its replica.
+	if got := rows("x.mkv"); got != "corrupt 0 t1/ok/1 t2/corrupt/0 t3/ok/1" {
+		t.Errorf("x.mkv, version A: %s", got)
+	}
+	if got := b.read("t3", "x.mkv"); got != "a film" {
+		t.Errorf("x.mkv on t3 holds %q", got)
 	}
 }
 

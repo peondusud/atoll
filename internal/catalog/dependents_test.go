@@ -31,6 +31,9 @@ func TestReadDiskHolds(t *testing.T) {
 	file("b/one-short", "degraded", 1, map[string]string{"x": "ok", "on": "ok"})
 	file("c/elsewhere-leaving", "ok", 1, map[string]string{"x": "ok", "dr": "ok", "gone": "ok", "on": "ok"})
 	file("d/conflict", "conflict", 0, map[string]string{"x": "ok", "on": "ok", "ro": "ok"})
+	// Corrupt, and holding a conflict: the disk may hold one of its versions too (specs.md §4).
+	file("da/held", "corrupt", 0, map[string]string{"x": "ok", "on": "ok", "ro": "corrupt"})
+	exec(t, db, "UPDATE files SET conflict_held = 1 WHERE lpath = x'64612f68656c64'")
 	file("e/stale-here", "ok", 0, map[string]string{"x": "stale", "on": "ok"})
 	file("f/surplus-here", "ok", 0, map[string]string{"x": "surplus", "on": "ok"})
 	file("g/only-here", "unprotected", 0, map[string]string{"x": "ok"})
@@ -42,16 +45,16 @@ func TestReadDiskHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Depending != 5 || !slices.Equal(h.First, []string{"b/one-short", "c/elsewhere-leaving", "d/conflict"}) {
+	if h.Depending != 6 || !slices.Equal(h.First, []string{"b/one-short", "c/elsewhere-leaving", "d/conflict"}) {
 		t.Errorf("depending %d: %q", h.Depending, h.First)
 	}
-	if all, _ := ReadDiskHolds(ctx, db, "x", 10); !slices.Equal(all.First, []string{"b/one-short", "c/elsewhere-leaving", "d/conflict", "g/only-here", "h/unavailable-here"}) {
+	if all, _ := ReadDiskHolds(ctx, db, "x", 10); !slices.Equal(all.First, []string{"b/one-short", "c/elsewhere-leaving", "d/conflict", "da/held", "g/only-here", "h/unavailable-here"}) {
 		t.Errorf("all depending: %q", all.First)
 	}
 	if h.OnlyThere != 2 || h.Planned != 1 {
 		t.Errorf("only there %d, planned %d", h.OnlyThere, h.Planned)
 	}
-	if want := map[string]int64{"ok": 6, "stale": 1, "surplus": 1, "unavailable": 1}; !maps.Equal(h.Copies, want) {
+	if want := map[string]int64{"ok": 7, "stale": 1, "surplus": 1, "unavailable": 1}; !maps.Equal(h.Copies, want) {
 		t.Errorf("copies %v", h.Copies)
 	}
 	if h, _ := ReadDiskHolds(ctx, db, "nothing", 3); h.Depending != 0 || h.First != nil || len(h.Copies) != 0 {

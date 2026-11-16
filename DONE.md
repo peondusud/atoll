@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## What a review of the night's code found, 2026-11-16 (specs.md §4, §13.4, §15.12, §16, §21.2)
+
+Commit "Correct what a review of the night's code found", on `beta`. An agent read the commits from `d44b573` to `25fc1be` afresh, for correctness. What it found and was so, each with a test that failed first:
+
+- **The view presented copies that are not at their path.** A copy whose clock runs, its last look not having found it at its name, or one that has not followed its file's rename yet, and sits at its old name, still read `ok`, and could be the original: a swap of two names on one disk served the other file's content, a rename served `ENOENT` until its job ran, and a file deleted while the guard held it stayed listed. The copies that hold a file at its path are now the sources of §13.4, and the original is the oldest of them; 4 vectors in `view_node.json`, and `TestTree`. A cache disk presented too, which mergerfs's line leaves out until phase 2b; 2 vectors.
+- **A corrupt file that holds a conflict was a conflict nowhere else**:
+  - a copy that left it for a file row of its own took its hash, which may be another version's: the copies made from it failed their check at every try (`TestACopyOfAHeldConflictRenamedTakesNoHash`, where the file of version B stayed `pending`);
+  - left with one version, by a deletion or a copy leaving, it kept the conflict, and would have been one once repaired: it now lets go of it as a conflict clears (`clearsConflict`, 3 vectors in `propagation.json`, and the same test);
+  - a disk holding one of its copies was not one it depends on (`TestReadDiskHolds`), and every scrub read its copy never verified whole, to find the same conflict again (`TestAScrubHoldsAConflictFoundOnACorruptFile`).
+- **The cgofuse side was built by no CI job**: the CI's lint job now installs libfuse3's headers and lints it with cgo and `-tags fuse3`.
+- Left as they are, and said in the morning report: the view answers `EIO` when the disk of the copy it presents cannot be read, where another copy could be (a design question for the write path); and go-fuse's inode numbers, a 64-bit hash of the path, could in theory name two paths alike, about one chance in a billion at 200,000 paths.
+
 ## What ntfs3 with ads does with a rename onto a stream, pinned, 2026-11-16 (specs.md §10, §15.8)
 
 Commit "Pin what ntfs3 with ads does with a rename onto a stream", on `beta`, the rest of a TODO item.

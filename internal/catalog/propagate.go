@@ -306,8 +306,10 @@ func applyFile(ctx context.Context, tx *sql.Tx, nowNS int64, c *FileChange) erro
 		}
 	}
 	if c.ClearConflict {
-		// What comes next gives it its state, as a file in conflict keeps that one otherwise.
-		if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'pending', updated_ns = ? WHERE id = ? AND state = 'conflict'", nowNS, c.ID); err != nil {
+		// What comes next gives it its state, as a file in conflict keeps that one otherwise; a corrupt file lets go of
+		// the conflict it holds, and stays corrupt (specs.md §4).
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET state = CASE state WHEN 'conflict' THEN 'pending' ELSE state END, conflict_held = 0, updated_ns = ?
+			WHERE id = ? AND (state = 'conflict' OR conflict_held)`, nowNS, c.ID); err != nil {
 			return fmt.Errorf("state: %w", err)
 		}
 	}

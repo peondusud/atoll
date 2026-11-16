@@ -107,7 +107,12 @@ job_integration() { go_job integration 'make test-integration'; }
 job_conformance() { go_job conformance 'make conformance'; }
 # make lint covers the delivered build, the view's and the conformance build; the loopdev tests, with the view's, are a
 # fourth.
-job_lint() { go_job lint 'make lint && golangci-lint run --build-tags loopdev,gofuse ./test/loopdev/...'; }
+# The cgofuse side of the view needs cgo and libfuse3's headers, which only this job installs.
+job_lint() {
+	go_job lint 'make lint && golangci-lint run --build-tags loopdev,gofuse ./test/loopdev/... &&
+		apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends libfuse3-dev >/dev/null 2>&1 &&
+		CGO_ENABLED=1 golangci-lint run --build-tags fuse3 ./internal/view/...'
+}
 job_qemu() {
 	go_job qemu-build 'make qemu-build && cp -r bin/qemu/. /qemu/' -v "$built:/qemu" || return 2
 	local kvm=()

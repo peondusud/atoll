@@ -27,6 +27,8 @@ type viewCopyVector struct {
 	Nlink       *int64           `json:"nlink"`
 	CreationNS  *int64           `json:"creation_ns"`
 	FirstSeenNS int64            `json:"first_seen_ns"`
+	GoneKind    string           `json:"gone_kind"`
+	OldPath     string           `json:"old_path"`
 }
 
 type viewFileVector struct {

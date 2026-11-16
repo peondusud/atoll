@@ -320,7 +320,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `direct` | string | `deletes.direct` |
-| `files` | array of objects | `path`, `state` (one of §4), `follow` when a folder renamed gives it a new path, and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held` and `size`, 0 when absent |
+| `files` | array of objects | `path`, `state` (one of §4), `conflict_held`, `true` for a corrupt file that holds a conflict (§4), `follow` when a folder renamed gives it a new path, and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held` and `size`, 0 when absent |
 | `taken` | array of strings | optional: the paths held by files outside this step |
 | `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone`, `trash` or `restore`), with `target` for `other-target`; `restore`, with `deletes.direct = "restore"`, makes a copy gone again in its place, from the copy `src` names |
 | `error` | boolean | `true` on an unknown word, a path that appears twice, a disk or a position that appears twice in one file, or a `moved` with no target |
@@ -365,9 +365,9 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
-| `disks` | array of objects | the disks: `id`, `position` and `state`, as `original.json` has them |
+| `disks` | array of objects | the disks: `id`, `position` and `state`, as `original.json` has them; `role`, `data` when left out |
 | `file` | object | optional: the file at the path, as its row holds it: `state`, `size`, `mtime_ns` and `copies`, all required; `original`, the disk `files.original_disk` names, when it names one; and `conflict_held`, `true` when the file holds a conflict (§4) |
-| `file.copies` | array of objects | its copies: `disk`, `state` and `first_seen_ns`, required; `size`, `mtime_ns`, `mode`, `uid`, `gid`, `nlink` and `creation_ns`, each left out when its row holds none |
+| `file.copies` | array of objects | its copies: `disk`, `state` and `first_seen_ns`, required; `size`, `mtime_ns`, `mode`, `uid`, `gid`, `nlink` and `creation_ns`, each left out when its row holds none; `gone_kind`, what the last look found when the copy's clock runs (`moved`, `gone`, `uncertain` or `own`), and `old_path`, the name it sits at when it has not followed its file's rename, each left out otherwise |
 | `entries` | array of objects | optional: the entries at the path, one a disk: `disk` and `kind` (`dir`, `symlink` or `ignored`), required; `mode`, `uid`, `gid`, `size`, `mtime_ns` and `target`, each left out when its row holds none |
 | `node` | object or null | what the path presents, null when it is absent: `kind` (`file`, `dir` or `symlink`), `disk`, the disk whose copy or entry it presents, `mode`, `uid`, `gid`, `size`, `mtime_ns` and `nlink`; `target` for a symlink, and `ignored`, `true` for an ignored file. The view's own process is owned by 4242:4343 in every case |
 

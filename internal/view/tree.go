@@ -170,6 +170,7 @@ func fileOf(f *catalog.ViewFile) *File {
 		out.Copies = append(out.Copies, Copy{
 			Disk: c.Disk, State: solver.CopyState(c.State), Size: int64Of(c.Size), MtimeNS: int64Of(c.MtimeNS), Nlink: int64Of(c.Nlink),
 			Mode: uint32Of(c.Mode), UID: uint32Of(c.UID), GID: uint32Of(c.GID), CreationNS: int64Of(c.BtimeNS), FirstSeenNS: c.FirstSeenNS,
+			GoneKind: c.GoneKind, OldPath: c.OldPath,
 		})
 	}
 	return out

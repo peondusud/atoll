@@ -29,6 +29,11 @@ type Copy struct {
 	Nlink         *int64
 	CreationNS    *int64
 	FirstSeenNS   int64
+	// GoneKind is what the last look found when the copy's clock runs (copies.gone_kind), "" when it does not; OldPath
+	// is where the copy sits when it has not followed its file's rename (copies.old_lpath), "" otherwise. Either way,
+	// it holds nothing at the path (specs.md §9, §13.4).
+	GoneKind string
+	OldPath  string
 }
 
 // File is the file at a path, as its row holds it.
@@ -90,10 +95,13 @@ const (
 
 // presentOrder gives each disk that presents its rank: those online, standby, readonly or draining, by position, then
 // those failed, by position, as mergerfs reads its branches (specs.md §21.1, §21.2). A disk missing or retired has
-// none.
+// none, and nor has a cache disk, which mergerfs's line leaves out until phase 2b.
 func presentOrder(disks []Disk) map[string]int {
 	var first, last []Disk
 	for _, d := range disks {
+		if d.Cache {
+			continue
+		}
 		switch d.State {
 		case solver.DiskOnline, solver.DiskStandby, solver.DiskReadOnly, solver.DiskDraining:
 			first = append(first, d)
@@ -113,9 +121,11 @@ func presentOrder(disks []Disk) map[string]int {
 	return rank
 }
 
-// holds says whether a copy holds its file on its disk, for the view: one ok or surplus does.
+// holds says whether a copy holds its file at its path on its disk, for the view: one ok or surplus does, its clock not
+// running and its file's rename followed, as a source of the plan (specs.md §13.4). A copy its last look did not find
+// at its name, or that sits at an old one, has nothing to read there.
 func holds(c *Copy) bool {
-	return c.State == solver.CopyOK || c.State == solver.CopySurplus
+	return (c.State == solver.CopyOK || c.State == solver.CopySurplus) && c.GoneKind == "" && c.OldPath == ""
 }
 
 // Present says what a path presents, from the catalog's rows for it: nil when it is absent (specs.md §21.2). The first
@@ -157,7 +167,7 @@ func presentFile(disks []Disk, rank map[string]int, file *File, self Owner) (*No
 	candidates := make([]solver.Candidate, 0, len(file.Copies))
 	for _, c := range file.Copies {
 		dstate, ok := state[c.Disk]
-		if !ok {
+		if _, ranked := rank[c.Disk]; !ok || !ranked || !holds(&c) {
 			continue
 		}
 		candidates = append(candidates, solver.Candidate{Disk: c.Disk, Position: position[c.Disk], State: c.State, DiskState: dstate,
@@ -177,7 +187,7 @@ func presentFile(disks []Disk, rank map[string]int, file *File, self Owner) (*No
 		r, ok := rank[c.Disk]
 		switch {
 		case original != "":
-			if c.Disk == original {
+			if c.Disk == original && holds(c) {
 				chosen = c
 			}
 		case ok && holds(c) && (chosen == nil || r < rank[chosen.Disk]):

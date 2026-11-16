@@ -93,6 +93,22 @@ func TestTree(t *testing.T) {
 	if gone, err := tree.Lookup(t.Context(), "Films/stale.mkv"); err != nil || gone != nil {
 		t.Errorf("a file with only a stale copy: %+v, %v", gone, err)
 	}
+	// The original that has not followed its file's rename sits at its old name, and the other copy presents; once
+	// found again and its clock running, the same (specs.md §13.4).
+	for _, q := range []string{
+		"UPDATE copies SET old_lpath = x'612e6d6b76' WHERE file_id = 1 AND disk_id = 't2'",
+		"UPDATE copies SET old_lpath = NULL, gone_ns = 3, gone_kind = 'moved' WHERE file_id = 1 AND disk_id = 't2'",
+	} {
+		if _, err := db.ExecContext(t.Context(), q); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := tree.Lookup(t.Context(), "Films/a.mkv"); err != nil || got == nil || got.Disk != "t1" {
+			t.Errorf("%s: presents %+v, %v", q, got, err)
+		}
+	}
+	if _, err := db.ExecContext(t.Context(), "UPDATE copies SET gone_ns = NULL, gone_kind = NULL WHERE file_id = 1 AND disk_id = 't2'"); err != nil {
+		t.Fatal(err)
+	}
 	if s, err := tree.Statfs(t.Context()); err != nil || s.Blocks != 4 || s.Bfree != 2 {
 		t.Errorf("statfs: %+v, %v", s, err)
 	}

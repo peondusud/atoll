@@ -12,7 +12,7 @@ type DiskHolds struct {
 	Copies map[string]int64
 	// Depending counts the files that depend on the disk, and First gives up to n of them by path in byte order: a
 	// file with a copy there, ok or unavailable, that has fewer copies ok on disks online, in standby or read-only
-	// than its level, or that is in conflict, as the disk may hold one of its versions.
+	// than its level, or that is in conflict, or corrupt and holding one, as the disk may hold one of its versions.
 	Depending int64
 	First     []string
 	// OnlyThere counts the files with a copy there and none ok or surplus anywhere else.
@@ -24,7 +24,7 @@ type DiskHolds struct {
 // dependsWhere is the condition of a file f that depends on the disk ?1.
 const dependsWhere = `
 	EXISTS (SELECT 1 FROM copies c WHERE c.file_id = f.id AND c.disk_id = ?1 AND c.state IN ('ok', 'unavailable'))
-	AND (f.state = 'conflict' OR (
+	AND (f.state = 'conflict' OR f.conflict_held OR (
 		SELECT count(*) FROM copies o JOIN disks d ON d.id = o.disk_id
 		WHERE o.file_id = f.id AND o.disk_id <> ?1 AND o.state = 'ok' AND d.state IN ('online', 'standby', 'readonly')
 	) < f.replicas_target + 1)`

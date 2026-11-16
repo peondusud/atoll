@@ -47,6 +47,9 @@ type ViewCopy struct {
 	Mode, UID, GID       sql.NullInt64
 	BtimeNS              sql.NullInt64
 	FirstSeenNS          int64
+	// GoneKind is copies.gone_kind while the copy's clock runs, and OldPath copies.old_lpath while it has not followed
+	// its file's rename: "" otherwise.
+	GoneKind, OldPath string
 }
 
 // ViewFile is the file at a path, for the view.
@@ -107,7 +110,8 @@ func ViewRowsOf(ctx context.Context, db *sql.DB, paths []string) (map[string]Vie
 
 func viewFiles(ctx context.Context, db *sql.DB, marks string, args []any, out map[string]ViewAt) error {
 	rows, err := db.QueryContext(ctx, `SELECT f.lpath, f.state, coalesce(f.original_disk, ''), f.conflict_held, f.size, f.mtime_ns,
-			c.disk_id, c.state, c.size, c.mtime_ns, c.nlink, c.mode, c.uid, c.gid, c.btime_ns, c.first_seen_ns
+			c.disk_id, c.state, c.size, c.mtime_ns, c.nlink, c.mode, c.uid, c.gid, c.btime_ns, c.first_seen_ns,
+			CASE WHEN c.gone_ns IS NULL THEN '' ELSE coalesce(c.gone_kind, 'gone') END, coalesce(c.old_lpath, x'')
 		FROM files f LEFT JOIN copies c ON c.file_id = f.id WHERE f.lpath IN (`+marks+`) ORDER BY f.lpath, c.disk_id`, args...)
 	if err != nil {
 		return fmt.Errorf("files: %w", err)
@@ -117,10 +121,11 @@ func viewFiles(ctx context.Context, db *sql.DB, marks string, args []any, out ma
 		var path []byte
 		var f ViewFile
 		var c ViewCopy
-		var disk, state sql.NullString
+		var disk, state, goneKind sql.NullString
 		var firstSeen sql.NullInt64
+		var oldPath []byte
 		if err := rows.Scan(&path, &f.State, &f.Original, &f.ConflictHeld, &f.Size, &f.MtimeNS, &disk, &state, &c.Size, &c.MtimeNS, &c.Nlink, &c.Mode, &c.UID,
-			&c.GID, &c.BtimeNS, &firstSeen); err != nil {
+			&c.GID, &c.BtimeNS, &firstSeen, &goneKind, &oldPath); err != nil {
 			return fmt.Errorf("files: %w", err)
 		}
 		at := out[string(path)]
@@ -128,7 +133,7 @@ func viewFiles(ctx context.Context, db *sql.DB, marks string, args []any, out ma
 			at.File = &f
 		}
 		if disk.Valid {
-			c.Disk, c.State, c.FirstSeenNS = disk.String, state.String, firstSeen.Int64
+			c.Disk, c.State, c.FirstSeenNS, c.GoneKind, c.OldPath = disk.String, state.String, firstSeen.Int64, goneKind.String, string(oldPath)
 			at.File.Copies = append(at.File.Copies, c)
 		}
 		out[string(path)] = at

@@ -126,10 +126,13 @@ type PropCopy struct {
 // PropFile is one file to decide about. Follow is the new path it takes because a folder above it was
 // renamed on a disk that holds no copy of it.
 type PropFile struct {
-	Path   string
-	State  State
-	Follow string
-	Copies []PropCopy
+	Path  string
+	State State
+	// ConflictHeld says that the file, corrupt, holds a conflict (specs.md §4): what is left of it clears that, as it
+	// clears a conflict.
+	ConflictHeld bool
+	Follow       string
+	Copies       []PropCopy
 }
 
 // PropInput is what the decisions need. Taken lists the paths held by file rows that are not among the
@@ -411,10 +414,10 @@ func everyCopy(f *PropFile, action PropAction) []PropCopyAction {
 	return out
 }
 
-// clearsConflict says that what remains of a file in conflict can no longer differ by what is known:
-// the next --full finds any difference of content again (specs.md §15.12).
+// clearsConflict says that what remains of a file in conflict, or of a corrupt one that holds a conflict, can no
+// longer differ by what is known: the next --full finds any difference of content again (specs.md §4, §15.12).
 func clearsConflict(f *PropFile, left []*PropCopy) bool {
-	if f.State != StateConflict || len(left) == len(f.Copies) || len(left) == 0 {
+	if (f.State != StateConflict && !f.ConflictHeld) || len(left) == len(f.Copies) || len(left) == 0 {
 		return false
 	}
 	return !slices.ContainsFunc(left, func(c *PropCopy) bool { return c.Size != left[0].Size })
