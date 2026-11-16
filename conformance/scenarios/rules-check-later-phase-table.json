@@ -41,16 +41,6 @@
             "message": "${ANY}"
           },
           {
-            "key": "placement.colocate",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "placement.new_files",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "read.classes",
             "later_phase": true,
             "message": "${ANY}"
@@ -67,11 +57,6 @@
           },
           {
             "key": "rule[0].cache_min_age",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "rule[0].colocate",
             "later_phase": true,
             "message": "${ANY}"
           },
