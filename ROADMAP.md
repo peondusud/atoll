@@ -47,7 +47,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 12 hours are, on the code of the review's decisions: 293 passes, its heap in use 3.6 to 3.9 MiB, with no growth. Days remain (72 hours). The most it holds went past the 200 MB of §26 at that size, up to 220.4 MiB in the soak and 229.6 MiB in the link guard's passes, by transparent huge pages the kernel kept resident: with them off and a soft limit of 155 MiB, done on 2026-11-15, every step measured peaks at 181.6 MiB at most, which the soak is to confirm (TODO.md).
+1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 12 hours are, on the code of the review's decisions: 293 passes, its heap in use 3.6 to 3.9 MiB, with no growth. Days remain: a soak of 24 hours, after phase 2b unless the maintainer asks sooner (2026-11-16). The most it holds went past the 200 MB of §26 at that size, up to 220.4 MiB in the soak and 229.6 MiB in the link guard's passes, by transparent huge pages the kernel kept resident: with them off and a soft limit of 155 MiB, done on 2026-11-15, every step measured peaks at 181.6 MiB at most, which the soak is to confirm (TODO.md).
 
 ## Beta: phase 1b, the complete Linux MVP
 
