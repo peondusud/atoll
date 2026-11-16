@@ -1829,6 +1829,16 @@ A milestone is reached when its phase and every phase before it are done: the al
 - Determinism: every list the solver or the CLI outputs is sorted by a documented key; no dependence on map iteration order or random seeds.
 - Exit codes: 0 success; 1 error; 2 usage error; 3 confirmation required or guard triggered; 4 partial success.
 
+**Format version 1.** The maintainer froze these contracts at format version 1 on 2026-11-16, for v0.1. From then on a change to one of them keeps what version 1 holds, so that a catalog, a disk, a configuration and a script made for version 1 work with every later version of either implementation. A change that cannot is format version 2, with a migration of its own, and is the maintainer's to decide. `conformance/frozen/v1.json` pins what version 1 holds, and a test fails on a change that does not keep it:
+
+- Catalog schema: the migrations 0001 to 0019 are never edited; the schema changes only through new migrations, which both versions apply after them, in order.
+- On-disk layout: `disk.toml` with `format_version = 1`; in the work folder, `trash/<YYYY-MM-DD>/<op-id>/<logical path>` and `<op-id>.chunks/`, `tmp/<op-id>.part` and `<op-id>.<index>.part`, `links/<file id>` and `catalog/`; below the root, nothing but the library (§6, §17).
+- Configuration: each key of version 1 keeps its name, what it takes and what it means. A value it took is still taken, a key that was optional stays optional, and a new key has a default that changes nothing.
+- Value grammars: what version 1 accepts is still accepted, with the same meaning.
+- Local API: each path and method stays. Each field of a response keeps its name and its type, and one that was always there stays always there; a field may be added.
+- CLI: each command and flag stays, with its meaning. Each field of a `--json` output keeps its name and its type, one that was always there stays always there, and each value of a closed list keeps its meaning; a field, a command, a flag or a value of a closed list may be added. The exit codes are those above.
+- Hashes, and the closed lists of states, kinds and reasons: each value keeps its meaning, and none goes.
+
 ### 29.4 Shared conformance suite
 
 - `conformance/` at the repository root, independent of the implementation language:

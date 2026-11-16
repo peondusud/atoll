@@ -98,6 +98,7 @@ docs/research/         research reports behind open design decisions (not contra
 18. Only the `solver` decides placement. No other module moves files on its own initiative.
 
 ## Rust-rewrite readiness
+- The contracts are frozen at format version 1 (specs.md §29.3): `conformance/frozen/v1.json` pins them and `TestContractsKeepFormatVersion1` checks it. Never write that file again, never edit migrations 0001–0019; a change that does not keep version 1 is format version 2, the maintainer's decision.
 - Persisted and exchanged formats follow specs.md §29.3: SQL migration files, TOML configuration with a JSON Schema, OpenAPI for the local API, JSON schemas for `--json`, documented exit codes. Never `gob` or any other language-specific encoding.
 - Paths are BLOBs in SQLite; times are integer Unix nanoseconds UTC; in JSON, `path` or `path_b64`.
 - Pure core packages (`config`, `rules`, `glob`, `names`, `solver`, `value`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.

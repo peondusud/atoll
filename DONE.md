@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The contracts frozen at format version 1, 2026-11-16 (specs.md §29.3)
+
+Commit "Freeze the contracts at format version 1", on `beta`. The maintainer chose to freeze them now, by the rules recommended ("Geler maintenant"), and confirmed every choice DONE.md still listed as to confirm, 50 sections ("Tout confirmer"): each says so now.
+
+- specs.md §29.3 says what format version 1 holds and what a later version keeps: the migrations 0001 to 0019 never edited, the schema changed only by new ones; the on-disk layout as it is; each key of the configuration, each field of a `--json` output and of the local API, each command, flag and exit code kept, with what it takes and means; values of a closed list added, never taken away. A change that cannot keep them is format version 2, and the maintainer's.
+- `conformance/frozen/v1.json` pins it: the SHA-256 of each of the 19 migrations; the shape of 149 places of the configuration and of 483 of the 31 `--json` outputs, their types, closed lists, formats and whether each is always there; the 6 routes of the local API; the exit codes; the names of the on-disk layout. `TestContractsKeepFormatVersion1` checks it. Made to fail on a copy, it caught a migration edited, a value taken from `view.engine`'s list, and a field of `atoll status --json` no longer always there.
+- **Decided without the maintainer, to confirm:** a configuration key may take more types and values than it did, and an output field may gain values in a closed list, as both keep what a version 1 user relies on; an output field keeps exactly its types.
+
 ## Atoll's own view writes, 2026-11-16 (specs.md §6.1, §9, §15.1, §15.5, §17, §21.2, §24.4)
 
 Commits "Journal what the view does in view_ops", "Present the view's own operations over the catalog", "Make what the view writes on a disk", "Write through the view on a user's behalf", "Take the view's operations in at each pass" and "Serve the view that writes at view.mount", on `beta`, from the maintainer's four answers (above). `view.engine = "atoll"` is accepted: `atoll mount` serves the view at `view.mount`, in place of mergerfs, and it writes.
@@ -135,7 +143,7 @@ Commit "Serve the read path of Atoll's own view through FUSE", on `beta`.
   - `internal/view/gofusefs`, through go-fuse v2.12.1 (`github.com/hanwen/go-fuse/v2`, BSD-3-Clause), which speaks the kernel's protocol itself, as the Rust version's `fuser` does: no cgo and no libfuse, mounted by `mount(2)`, which the daemon's `CAP_SYS_ADMIN` allows. Built with `-tags gofuse`. A prototype, beside the other, for the maintainer to choose.
 - **`TestViewMatchesMergerfs`**, in `test/loopdev`, on every driver in qemu on both kernels, through either side: a library replicated on two disks, mounted by mergerfs from the line `atoll mergerfs-config` prints and by Atoll's view from the catalog alone, lists the same names with the same kind, mode, owner, size, time, target and content; where a replica rots, the view reads the user's original while mergerfs reads its first branch; nothing is written through the view; `statfs` answers. Through cgofuse it passes on the six drivers and both kernels, the library renamed in the guest; through go-fuse it passes 60 times in 60, five times on each driver and kernel, once a request runs to its end whatever the kernel's interrupt, as with mergerfs and libfuse: go-fuse cancels the context of an interrupted request, which the Go runtime's own `SIGURG` to a waiting thread brings about, and an open whose catalog query was canceled failed with `EIO`, in 4 of the first 12 runs. Answering `EINTR` instead, pushed first, failed a `statfs` with `EINTR` in the CI's qemu job on `b8c4e74`: the kernel does not start such a call again. So made, both view tests passed 100 times in 100, five times on each driver and kernel. The loop-device build of `make qemu-build` takes the `gofuse` tag, so that the CI runs it, with no library in the guest.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **Two new dependencies, both behind a build tag**: `github.com/winfsp/cgofuse` v1.6.0 (MIT), which CLAUDE.md names, and `github.com/hanwen/go-fuse/v2` v2.12.1 (BSD-3-Clause), for the choice above. The delivered binary holds neither: the view is in no build without a tag until the daemon mounts it (`view.engine = "atoll"`). Once the maintainer has chosen, the other side and its dependency go.
 - **The mount's options**: `ro` for the read path, `default_permissions` and `allow_other`, and the caches of mergerfs's line. No `use_ino` with cgofuse: libfuse numbers the inodes, which no media server relies on; go-fuse numbers each path by a hash of it, so that a name looked up again is the node the kernel holds.
@@ -147,7 +155,7 @@ Commit "Record the size and owner of each entry, for Atoll's own view", on `beta
 - Atoll's own view serves every entry from the catalog, so that browsing wakes no disk (§21.2). The catalog held a folder's, a symlink's and an ignored file's mode and modification time, never its owner, nor an ignored file's size: a listing could not say who owns a folder, nor how long an ignored file is, without looking at the disk. A walk now records the size and the owner of each entry, and so does the folder Atoll makes for a replica (`scan-entry-attributes.json`).
 - §21.2 now says what the view's read path presents: a path is what the first disk that holds something there says, as mergerfs's `ff` reads it; a file presents its original, and an entry its first disk's row; what a row lacks has a default; `statfs` sums the disks from the catalog. The read path comes first, mounted read only, and `view.engine = "atoll"` stays an error until the view writes.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **`schema/migrations/0018_entry_attributes.sql`**: three columns of `entries`, `size`, `uid` and `gid`, NULL in a row a catalog made before, until a walk finds the entry again.
 - **What the read path presents**, as §21.2 now writes it, where the spec said only "the original" and "every entry from the catalog": the order of the disks, mergerfs's, with `failed` ones last; a file none of whose copies can be presented is absent rather than unreadable; one link for a folder; the defaults for what a row lacks, and for `<root>`, which the catalog holds no entry of; `statfs` as mergerfs sums its branches; the kernel's caches of 1 s, as mergerfs's.
@@ -161,7 +169,7 @@ Commit "Wait for the other end of a folder's rename, and watch a path past PATH_
 - **A path past `PATH_MAX` on ntfs-3g.** No limit any more: a mark per folder goes on a descriptor opened one name at a time, and the path of an event comes from the tree of the folders marked, never from `/proc`, since the commits that opened folders from the root. `TestWatcherOnEachDriver` now makes a file 4,230 bytes deep on every driver, by each way it can be watched, and finds it at its path through a watch per folder, fanotify or inotify. Through a filesystem mark, on ext4, XFS, btrfs and ntfs3, it comes at `""`, and the disk is looked at whole, as `/proc` names no folder past `PATH_MAX`: a cost, not a loss, and Atoll never writes such a path (§15.8). Left in TODO.md.
 - **The process of an event already gone** reads as `user`, and stays so. Calling it `unknown` was tried and measured wrong: a user's command, `mv`, `cp`, a shell, has mostly ended by the time its event is read, so in qemu nearly every event of a user became `unknown` (`TestWatcherOnEachDriver`, on both kernels). The view's mergerfs and the daemon outlive their events, so only an Atoll command that ended reads as `user`; its events wake a pass, which finds its operations in the journal, and tell a media server of a folder that did change. No decision differs between `user` and `unknown`. `FAN_REPORT_PIDFD` says only that a process is gone, never who it was. Recommended: leave; written in §15.1.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **The wait, 10 ms**, once a read, and only when a folder left with no other end.
 
@@ -173,7 +181,7 @@ Commit "Hold a conflict found on a corrupt file", on `beta`. The maintainer aske
 - Each place that finds a conflict goes through one statement, which holds it on a file corrupt; the list that the repair kept of such files, for the end of its run, goes, as the catalog holds them now. A file that holds a conflict is not queued, and keeps its original, as a conflict does.
 - No conformance scenario: none can make a copy rot, as a write moves the change time and rot is a mismatch with the size and both times unchanged. The unit tests of `catalog` and `jobs` hold it.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **`schema/migrations/0017_conflict_held.sql`**, a new migration: a column of `files`, `conflict_held`, 0 or 1, 1 only while the file is `corrupt`. A catalog made before holds nothing, as nothing told it of a conflict lost.
 - **`api/schemas/conflicts-list.schema.json`**: `corrupt`, `true`, present on a file corrupt that holds a conflict; such a file is listed. The output of `atoll scan` still lists the files whose state is `conflict` only.
@@ -185,7 +193,7 @@ Commit "Look at the folders a run stopped before its end left", on `beta`. The m
 
 - A folder Atoll made goes once Atoll's own operations leave it empty, at the end of the command or pass. A run stopped before that, by kill -9 or a power cut, or that lost the disk while it removed it, left the folder there for good, as nothing recorded which folders its operations had left: the next run looked only at the folders of its own operations (`TestTheFoldersARunStoppedOnGoAtTheNext`, which failed so). The journal already names the place every move to the trash and every rename left, so each command or pass that writes now looks too at the folders that the operations done since the last look left, and `meta` keeps that last operation, `folders_tidied_op`. A folder still Atoll's and empty goes; one the user filled stays, as before.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **`schema/migrations/0016_folders_tidied.sql`**, a new migration, and a new key of `meta`, `folders_tidied_op`. A catalog made before it starts its look from its last operation: what its earlier runs left stays as it was.
 - **The look moves forward only once every folder was looked at on a disk that could be written to**: a disk missing or lost during the look leaves the same operations to the next run, which looks at all of them again, those already decided included. An Atoll folder that a run could not remove then, and that the user emptied before the next run, goes.
@@ -200,7 +208,7 @@ Commit "Take the owner an ntfs-3g mount gives for the mount's, and test the remo
 - **But ntfs-3g mounts again, as that account, only on a mount point it may write to**: `mount.ntfs-3g` refuses one that root alone owns. `deploy/README.md` says to give each ntfs-3g disk's mount point to `atoll`. Nothing in Atoll can do it for the administrator.
 - **And the volume then shows every file as that account's.** ntfs-3g keeps no owner of its own for a file: every file shows the mount's, and a mount by `atoll` makes them all `atoll`'s. A pass found nothing to do at once, as no change time moved; but the next change of any of those files, a date set by Radarr for one, carried the owner `atoll` to the copies of the other disks, as a `chown` (`TestAnNTFSDiskMountedAgainByAnotherAccount`, which failed so before the fix). The mount check now says, from the mount table, when a disk is mounted through FUSE, as ntfs-3g and lowntfs-3g mount NTFS (`fuseblk`), and such a copy gives neither its owner nor its mode to the others: the date still goes. ntfs3 keeps an owner and a mode for each file, measured, and gives them as before.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **Every disk mounted through FUSE gives no owner and no mode**, ntfs-3g with its `permissions` option or a user mapping included, which Atoll cannot see in the mount table: a real `chown` made there does not reach the other disks. The other way would carry a mount's owner to every copy of the pool.
 - **`conformance/vectors/disk_check.json` has a new field, `mount_owner`**, and `metadata.json` one too, for a copy whose disk gives its mount's owner.
@@ -218,7 +226,7 @@ Commits "Say what a peak of memory is made of, and what brings it under the 200 
 - **What a peak is made of.** `TestScale` and the soak now read, at the most resident they see the process, `/proc/self/smaps` and what the Go runtime and SQLite's allocator hold (the test built with the tag `memory.counters`, which `make qemu-build` gives it). A pass over 400,000 copies held the Go runtime up to its soft limit of 170 MiB, SQLite's allocator 10.2 MiB at every step, the binary's pages 14.5 MiB, and up to 43 MiB more that the kernel kept resident in transparent huge pages after the runtime gave it back, up to 146 MiB of the process being in them. That last share is what moved the peaks by some 30 MiB from one run to the next, and what had been read as a rise of the link guard's passes.
 - **The maintainer's decision: no huge pages, and 155 MiB.** Each command turns transparent huge pages off for its own process at start, and its soft limit goes from 170 to 155 MiB. Measured beforehand on copies of the code, two runs side by side: with huge pages off alone every step peaks under the 200 MB but the first pass with the link guard, at 191.8 MiB; with 155 MiB besides, every step peaks at 181.6 MiB at most, and no step took longer that the two runs tell apart. The tests that measure the daemon in their own process do the same as the binary. Measured on the commit itself, `47ab5f6`: every step of `TestScale` peaks at 183.8 MiB at most by the kernel's own count, for 190.7 MiB allowed, with SQLite's allocator at 10.2 MiB, the binary's pages at 14.4 MiB and 2 MiB in huge pages, and every step takes the time it took before.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **The flag reaches what the daemon starts**, `smartctl`, `mount` and `umount`, as the kernel passes it on through `fork` and `exec`: none of them holds memory for long. **A kernel that does not know the flag**, before Linux 3.15, leaves the huge pages as they are, with no warning.
 - **`GOMEMLIMIT` sets the soft limit alone**: the huge pages stay off whatever it says.
@@ -235,7 +243,7 @@ His answers to the points the alpha's lines left to decide (TODO.md), each done 
 - **The topology of R-06 is looked at each start** ("Count two disks on one physical disk as one, from each start"). His answer: an alert, and they count as one. `disk add` refused a disk on a physical disk another lived on, and nothing looked again: a repartition or a change of device-mapper later went unseen, and the plan could put two copies of a file there. Each start of the daemon, the one that runs for good and each `--until-idle`, now asks every disk it finds mounted and records the whole disks in `disks.device` (there since migration 0001, never written). The plan takes one more input, `physical` on each disk in `plan.json` (five vectors): of the copies on one physical disk only one counts, the others go `surplus` and one is made elsewhere, and no disk of that group is a candidate. The capacity counts the group as one disk, and the alert `shared-device:<id>` names it; writes go on. How it sits beside the failure domains of a rule's tags: a domain stays a preference with `spread_mode = "prefer"` and a requirement only with `strict`, and is what the maintainer configures; `physical` is what the machine says, always a hard constraint, R-06 being a MUST, so it is a separate input rather than a domain. Both apply at once: a group takes the domain of its first disk in the capacity. `TestSetDevice`, `TestSharedDevices`, `TestLookAtDevices`, the property tests of the plan, and the scenario `daemon-shared-device.json`.
 - **btrfs in `TestRepairOnEachDriver`** ("Repair a chunk btrfs cannot read, in the test of each driver", "Map a btrfs address through its chunk tree in the repair test"). His answer: a test. btrfs answers a read of the rotted block with `EIO`, and since a chunk that cannot be read on a disk that confirms is its copy's fault, the scrub finds the copy corrupt and the repair writes over the chunk, the copy keeping its inode and its time, its trash an empty file for the chunk. The rot goes where the chunk tree puts the address FIEMAP gives, a btrfs logical address: `btrfs-map-logical` found no extent at an address inside the file's. Passed in qemu on Linux 6.12 and 7.3, with the five other drivers.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **R-06 at each start, the details**: a group is every disk whose physical disks meet another's of it, through a third if need be, led by its first disk by position; a `retired` disk is in none, a `failed` one is not asked. **One alert per group**, not per disk. **A dry run records nothing**, so that its plan sees what the last real start found. **A disk that cannot be asked keeps what was found before**, as does every disk on a machine that cannot tell. **A copy beside a kept one is `surplus`, a user copy too**, as any copy beyond the level: nothing is removed, the file gets a copy on another physical disk, and only `atoll prune` sends an Atoll one to the trash, never the last user copy (§17.3). **In the capacity, a group spread over two failure domains** takes the domain of its first disk.
 - **Restored where a deletion would have been decided, and only there**: copies `gone` with no `old_lpath`, of a file in neither `conflict` nor `corrupt`, the others peers, as §15.12 asks of a deletion; anything else drops its row as before. **No `copy-gone` is written** for it, so the mass-deletion guard does not count what is made again. **Its job is queued right after the decisions are written**, in a second transaction: a crash between leaves the file below its level, which the plan places as any. **A disk with no room for it** cancels the pending copy as §13.4 does any, and the plan places it elsewhere.
@@ -251,7 +259,7 @@ His answers to the points the alpha's lines left to decide (TODO.md), each done 
 - **A plain `atoll balance` says what `--move-originals` would move** ("Say what --move-originals would move in a plain balance"): it counted only the Atoll copies, and a user copy that breaks a strict setting, which only `--move-originals` moves, went unsaid, though §13.4 says the solver suggests it. It now counts them, `originals` in its `--json`, with a line of its text; the balance scenarios give the count of each run.
 - **`atoll rules check` tells of the rules an earlier one hides and the rules no file reaches** ("Tell of the rules no file reaches and the rules an earlier one hides"), as §11.3 said it would once it could read the catalog: `hidden` and `unreached` in its `--json`, a line each in its text. The pure part is in `internal/rules` (`Hidden`, `Reach`), with `conformance/vectors/rules_check.json`; scenario `rules-check-catalog.json`, and every scenario of `rules check` gives the two fields.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **What "simple cases" are**: an earlier rule's conditions each written the same in the later one, or holding for every file, and its size range around the later's; `Films/**` before `Films/Action/**` is left to `unreached`, which the catalog answers. Two new fields of `api/schemas/rules-check.schema.json`, required: `hidden`, and `unreached`, `null` when the catalog cannot be read. A file a rule ignores has no size in the catalog, so it counts as reaching each rule that may match it before the first with no size condition: a rule is never told unreached when a file may reach it. **The catalog is read without its lock**, as `names check` reads it: a command writing meanwhile changes a file more or less.
 - **A count, not a list**: `originals` counts the user copies; their paths are what `atoll balance --move-originals --dry-run` lists, as moves. A field of `api/schemas/balance.schema.json`, required, as each other is; **no exit code changes** for it, as nothing a plain run can do moves them; and it is counted on every plain run, `--yes` included, at the price of one more plan of the pool.
@@ -267,7 +275,7 @@ The measure of decision 10 showed more to decide; the maintainer answered on 202
 - **An ext4 made without a journal is refused at `disk add`, and `readonly` when found later** ("Refuse an ext4 without a journal"), as `casefold` is (§10). The bit `0x4` of the compatible features at 1116, `has_journal`, is read with the superblock, a field `no_journal` of `superblock.json`, and the reason `no-journal` comes after `ascii-ci` in §10's table and in the closed lists of the `--json` outputs. Measured: an ext4 without its journal, a device failing right after a folder of 300 new names was synced, kept the names and the count of names of 1 file of 300, and needed `e2fsck`; removing one of those names frees a file another still leads to. `disk add` says why, and that `tune2fs -O has_journal` gives it one.
 - **A changed copy whose change time did not move past its row's makes its file a `conflict`** ("Call a copy no user changed a conflict"). As decided: no user's change, as any change moves the change time forward and no program sets it back; a power cut that left a file empty or short, or a disk put back from an older image. Its file is a `conflict`, every version kept, for `conflicts resolve`, never `modified`, which made the other copies stale and copied over them what no user wrote. A row of §15.4's table, after the one of a stale copy, and a field `ctime_not_later` of each changed copy in `modification.json`, nine cases more. Through a real pass (`TestACopyNoUserChangedIsAConflict`), and on each driver a disk put back from an image taken before a change (`TestADiskPutBackFromAnOlderImage`, loop-device suite).
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **The change time is compared exactly, and "not later" includes equal**: a copy's row and its look come from the same disk. Linux 6.12 can leave a change time the same within a clock tick, so a change made within the tick of the look that recorded the row reads as no user's and makes a `conflict`: a question to the user, never a loss.
 - **It holds with no other copy too**, a file `x1` left empty by a power cut: nothing says that what it holds is the file's, and the alert of `files-conflict` tells of it, where a `modified` said nothing. And **it holds whatever a read would say**: nothing is read, the content of the reference included, so a copy of an older image whose content is the file's, as one whose mode alone changed since, is a conflict too.
@@ -302,7 +310,7 @@ Each point the review left to decide was put to the maintainer as a question, wi
   - **The owners of `tmp/`, `links/` and `trash/` are looked at as `<workdir>`'s is** ("Look at who owns tmp/, links/ and trash/, as at the work folder"). The daemon looked at the owner of `<workdir>` alone, once a pass. Each of the three below it has an owner of its own: an account that owns `tmp/` or `links/` reads what Atoll copies through it, and one that owns `trash/` removes what it holds, whoever owns `<workdir>`. The three are now looked at after it, each itself, through a handle on `<workdir>` that follows no link, and the first of the four that is another account's raises the same alert `workdir-owner:<id>`, which names that folder and the `chown -R` that gives it back. Nothing is stopped: the daemon goes on writing there.
   - **A scrub that only verified copies works no state out** ("Work the states out only after a scrub that changed one"). Each scrub ended by a plan of the whole pool, also when it had only verified copies, which changes no state; the daemon scrubs by slices of 30 s, so a night of slices paid for the pool again and again. The states are now worked out after a scrub that found a copy corrupt or in conflict, repaired or moved one, or lost a disk.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **The sync of each file stays on ext4, XFS and btrfs**, which the decision left to the measure. The review's entry said that leaving it out changed nothing a user sees; the measure found that it does, the content of a file just written, and a second condition, the journal of an ext4. A change that keeps both, the sync left out for a file that changed more than an hour ago, is written and tested but for reading the journal's bit, and is kept out of the repository, in the sessions' notes (`decision-10-prepared.patch`): it changes what the guard does on a pool that is not of NTFS disks, and rests on the kernel's writeback, which is his to accept.
 - **What no row of the catalog answers for, the plan still holds**, with the folders above it: what it planned earlier in the same plan; the folder above a copy that is pending or away, which may not be on the disk, so no entry says it; and the name a copy is to take while it sits at its old one. That is what "if the lookups cover what the table holds" asked for: the lookups alone would let `show/ep2` go to a disk where `Show/ep1` waits to be copied. Those are as many as the copies that wait, not as the names of the disk. **A folder is asked once in a plan and a file once for each disk**, whatever the number of files below the folder or of searches for a disk.
@@ -407,7 +415,7 @@ Commits "Find an entry of the trash through an index", "Give the remount its tim
   - **A disk that stopped being heard was never watched again** ("Watch again a disk whose watch ended"). The daemon kept a disk for watched from the moment its watch started until the disk went `missing`. A watch that ended by an error said so once, with an overflow, and that was all. And a disk unmounted and mounted again between two mount checks, which find it mounted both times, lost its watch without a word: the kernel drops the marks with the filesystem that goes. Either way nothing more was heard of that disk until the daemon started again, so that a file put on it waited for a pass brought by something else, a week at most (`maintenance.rescan_every`). The daemon now asks at each check whether each watch still hears its disk, watches again one that does not, and has the disk looked at whole. Not replayed on a device that fails under its mount: the test in qemu unmounts and mounts a disk, on XFS for the filesystem mark and on ntfs-3g for the marks folder by folder.
   - **What a repair left in `tmp/` stayed for good, and its names counted for nothing** ("Take the names of a repair for an operation's"). A chunk a repair saves goes through `tmp/` as `<op-id>.<index>.part`, and what cleans `tmp/` knew only `<op-id>.part`: a repair that stopped while it saved a chunk, for want of room or at a power cut, left up to 4 MiB there that nothing ever removed, once more each time a scrub tried again. Such a part now goes when a command that writes next opens the disk, once its repair is `done` or `undone`; and `tmp/` is cleaned again after the reprise, as §14.2 says, where it was cleaned only before it. A new catalog started its operations past the ids of `trash/<date>/<op-id>/` and `tmp/<op-id>.part` alone: after `catalog rebuild`, a repair could take the id of one whose `<op-id>.chunks` the trash still held, and find its chunk's place taken or count the other's chunks as its own. Those names count now, each read only as Atoll writes it, where a folder named `050` counted for the id 50; and a date of the trash that cannot be read is the warning of §25, where it was passed over without a word.
   - **The folder of the parts open to all** ("Close the folder of the parts, and give a part its owner before its mode"): a part carries its source's mode and owner while it is read again, in a folder made 0755. And the mode was set before the owner, which took the setuid and setgid bits off the copy of a file that has them.
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **A new folder is adopted only when it holds nothing**: one that does was put there in its place, and keeps its mode and owner; the caller logs it and goes on, as when a driver refuses.
 - **What is neither a file nor a folder is not synced after a move** (§17.1): it is not what was moved there. A failed sync of a file or a folder is still a disk lost.
@@ -467,7 +475,7 @@ Commits "Hear the watcher between the daemon's steps, and give the others a turn
   A step's peak starts from what the process holds when the step begins, which is what the step before left: the hashes and `atoll status` held less than that, and how much less is not measured. The catalog is 125 MiB after the first pass, 140 MiB with the hashes, and 197 MiB after the guard's 800,000 operations, which the journal keeps. The first soak's first tenth, after 7 h 13 min: 218 passes, 3.6 MiB of heap in use, 7 goroutines, 14 open files, a catalog of 98.5 MiB, 171.2 MiB resident at the end of a pass, and 222.8 MiB at most since its start.
 - **What the soak measures at that scale.** `TestDaemonSoak` and `TestScale` now set the binary's soft memory limit, 170 MiB unless `GOMEMLIMIT` says otherwise, which the test's process lacked: the peaks they log are now the daemon's. The soak samples each tenth's memory at the end of the pass that follows it, in the daemon's own goroutine. A pass over 400,000 copies holds over a hundred MiB while it runs, and a sample taken in its middle would say how far the pass had gone rather than what the daemon keeps. The pass count the soak requires shrinks with the pool: a pass a minute on 2,000 files a disk, a hundred times fewer on a hundred times as many, and at least 10. It compares the passes of the second tenth with the last only when the second holds at least 4.
 
-### Decided without the maintainer, to confirm
+### Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")
 
 - **`schema/migrations/0009_copies_by_inode.sql`**, a new migration: `CREATE INDEX copies_by_inode ON copies(disk_id, file_key) WHERE file_key IS NOT NULL`. Partial, as a pending copy has no inode, and so that a query that names no inode can never take it for an index of the disk, where `copies_by_disk` already serves. It costs every copy an entry: the size it adds to the catalog is in §26.
 - **The turn after a pass.** Another step due runs before a pass for `events` or `due` alone. It does not run before a pass for `start`, `reload`, `gone`, `back` or `rescan`. The first two reasons are routine: they already wait for their group to ripen or their time to come. The others say that the pool itself changed, or that the window asked for a rescan. A check does not count as a turn.
@@ -496,7 +504,7 @@ Commit "Move user copies with balance --move-originals, and count the bytes corr
   - the 13 status scenarios, which now give `bytes_placed`, and `balance-tags`, whose dry run with `--move-originals` shows a user copy with no other usb disk to go to.
   - unit tests of the hand-over, of the measure `balance.trigger` takes, which leaves user copies out, and of the daemon's balancing, which never moves one (`BalanceAtoll`);
   - 19 mutants of the new code, all caught.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - **The user copy's part moves with it.** The copy made in its place becomes the user copy, so that invariant 2 (never remove the last user copy) holds through the move. Otherwise a file whose only user copy moved would be left with Atoll copies alone.
   - **The hand-over with no copy**, when the file's well-placed copies already reach its level. Without it, such a user copy would stay misplaced forever, as `no-target`.
   - **The contracts:** the `replaces` field of a replicate job's payload; `bytes_placed`, required, in `api/schemas/status.schema.json`.
@@ -516,7 +524,7 @@ Commit "Keep what a deletion through mergerfs removes, with the link guard", on 
   - unit tests with EIO, EPERM and ENOSPC on each call, a link that is the last name of its data, and a trash with no room;
   - 31 mutants of the new code, all caught but one that changes nothing: a trash from a link that looks for a copy row to remove, which none can match;
   - `TestTheLinkGuardThroughMergerfs` in qemu on Linux 6.12 and 7.3, on ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g: a rename then a deletion through a real mergerfs, the data in each disk's trash, and a restore through the view, all of it through a cold cache.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - **Invariant 11, as written.** A copy whose data only its link holds was removed by someone else: a deletion like any other, propagated, whose data goes to the trash from the link. Looking in `links/` as in `trash/` and `tmp/`, for an operation of Atoll's, would have kept every deletion through mergerfs from propagating.
   - **The contracts:**
     - the column `ops.link` (migration 0008), the file id whose link an operation is about;
@@ -535,7 +543,7 @@ Commit "Alert on an NTFS volume marked dirty", on `beta`.
 - When an NTFS disk is missing, the daemon reads its volume once, as soon as its device is plugged in, through the name `/dev/disk/by-uuid/` gives its serial. It reads the boot sector and `$Volume`, the fourth record of the MFT, update sequence applied, for the flag `VOLUME_IS_DIRTY`.
 - A volume found dirty raises `ntfs-dirty:<id>`, saying to repair it with `chkdsk /f` on Windows, and is never remounted after a USB reset, as Linux mounts it only by force.
 - Verified: the 14 vectors of `conformance/vectors/ntfs_dirty.json`, on images built from the on-disk layout (several cluster, sector and record sizes, a torn record, no volume information); `TestProbeNTFSDirty`, `TestProbeDirty` and the alert's cases in `TestHoldings` and `TestDescribe`; `TestNTFSDirtyOnARealVolume` in qemu on Linux 6.12 and 7.3, on a volume `mkntfs` made. It reads clean once made, and still clean while ntfs3 has it mounted for writing, as ntfs3 does not mark it. Marked dirty as Windows marks it, it reads dirty and ntfs3 refuses to mount it. Once `ntfsfix -d` clears it, it reads clean and mounts again. A first run of that test expected ntfs3 to mark the volume while mounted: it does not, so the spec says what was measured. 14 mutants, each caught.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - **Read once per absence**, once the device is there, so an unplugged disk is never woken.
   - **Found through udev's `/dev/disk/by-uuid/`.** Without udev, as in a container, a dirty volume is not seen (TODO.md).
   - **Priority 4**, beside the disk's own `disk-missing`.
@@ -549,7 +557,7 @@ Commit "Balance from the daemon, as balance.schedule says", on `beta`.
 - The trigger holds when the share of bytes correctly placed falls below `ratio_below`, compared exactly by the new `Percent.Below`, or when more than `or_more_than` bytes are to move. `balance.schedule` no longer warns of a later phase.
 - A run stopped at its budget, or by a crash after a copy was made, is taken on by the next run: its plan makes no second copy, and the old copy, marked surplus by then, goes to the trash.
 - Verified: 8 `percent.json` vectors of `below`; 3 `daemon_wake.json` vectors; `TestBalanceDue`, `TestBalanceHolds`, `TestBalanceChecksAnHour`, `TestBalanceStopsAtItsTime`; the scenario `balance-resume`, with a crash between the copy and the trash; `rules-check-preset-warnings` now on the preset `energy`, as `safety` no longer asks for a later phase; 15 mutants, each caught but two equivalent.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - **When to check:** at most once an hour with `immediate`, per the maintainer's answer. With a window, once per stretch.
   - **The bytes to move:** a file's size once for each misplaced copy.
   - **The order:** after notifications and SMART, before reading hashes.
@@ -564,7 +572,7 @@ Commit "Move the copies a strict setting no longer allows", on `beta`.
 - `atoll balance` moves the copies Atoll made that break a strict setting of their file, as a change of rule or of a disk's tags or domain leaves them.
 - How: the plan of the pool, made with such a copy counting for nothing, places a replacement where the setting wants it. The copy pipeline makes it. The plan, made again, marks the old copy surplus, and only then does it go to the trash, as `rebalance`. A file never has fewer copies than it had during a move, and a user copy never moves.
 - Verified: 12 `plan.json` vectors of the plan's `balance` mode; the scenarios `balance-tags`, `balance-no-target` and `balance-spread`; `TestRetireKeepsWhatThePlanKeeps` and `TestBalanceMoveOriginals`; 17 mutants, each caught but one equivalent (a plan of balance writes nothing of its results, which `DryRun` also ensures).
-- **Decided without the maintainer, to confirm**, the safest reading of a short paragraph of the spec:
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")**, the safest reading of a short paragraph of the spec:
   - **What is misplaced:** only what breaks a strict setting. That is a disk the lists no longer allow, where only listed disks are candidates, or a failure domain doubled up while another is uncovered, with `spread_mode = "strict"`. A copy that overflowed in `prefer` mode stays.
   - **By hand only.** The daemon's balancing inside `balance.schedule`, its hysteresis and the share of bytes correctly placed come later (TODO.md), and `balance.schedule` still warns of a later phase.
   - **`--move-originals` comes later:** for now it is refused, with exit 2.
@@ -584,7 +592,7 @@ Commit "Say what the pool can hold at 1, 2 and 3 copies", on `beta`.
 
 - `atoll capacity` gives, for 1, 2 and 3 copies of every file, the formula of §13.1 over the disks the solver can write to. Beside it comes what the plan reaches without moving a copy: the files that reach that many copies, and the formula over the free space the plan leaves. With `spread_mode = "strict"`, both use the failure domains. It reads the catalog alone and wakes no disk.
 - Verified: the scenarios `capacity`, `capacity-short`, `capacity-strict` and `capacity-planned`, each value worked out by hand; 7 mutants, each caught.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - **What counts as reaching k copies:** a file the plan does not leave `degraded`, `unavailable`, `name-incompatible` or `name-collision`. Files in `manual` mode are planned as any other.
   - **`api/schemas/capacity.schema.json`**, a new contract: per level, `theoretical`, `reachable`, `stored` and `short`, with `spread_mode`.
   - **The free space and states are the last scan's**, so the command wakes no disk.
@@ -595,7 +603,7 @@ Commit "Place copies by the rules' tags and domains", on `beta`.
 
 - The plan already knew a rule's tags and domains, `tags_mode` and `spread_mode` in strict mode, and `overflow = "deny"`. The scan now gives them to it, rather than `prefer` and `allow` with no list, and these settings no longer warn of a later phase. A copy goes only to a listed disk when the rule says so, and a file that must cover another failure domain waits for it rather than doubling up on its own. Either way the file is `degraded` when that cannot be met, or with `overflow = "allow"` its copy goes to another disk.
 - Verified: the scenarios `placement-tags-strict`, `placement-tags-full` and `placement-spread-strict`, which each fail without the change; `scan-later-phase` became `scan-strict-unmet`, whose file is now `degraded`; the warning scenarios updated; 5 mutants, each caught.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - Copies already placed stay where they are when a rule's lists change: only new copies follow them, until `atoll balance` moves the others (§13.3).
 
 ## Conflicts list and resolve (specs.md §15.7)
@@ -606,7 +614,7 @@ Commit "List the files in conflict, and keep one version of one", on `beta`.
 - `atoll conflicts resolve <path> --keep <disk>` keeps that disk's copy and sends the others to the trash, `--dry-run` and `--yes` as for every command that moves things. The file then takes the kept copy's size and time, its hash is read again, and the next pass makes its replicas from it.
 - A walk leaves the copies of a file in conflict as it found them: a scan never records an edit to one. So the command looks at each copy again rather than trusting its row; otherwise the version a user just edited, the one most likely to be kept, could never be.
 - Verified: the scenarios `conflicts-list`, `conflicts-resolve`, `conflicts-resolve-refused`, `conflicts-resolve-disk-away`, `conflicts-resolve-as-it-is`, `conflicts-resolve-gone-only` and `conflicts-resolve-kept-gone`; `TestConflictRows`, `TestConflictsResolveUnknownDisk`; 20 mutants, each caught.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - **Reason `overwritten`** for the versions that go, as the trash table's reasons are a contract (§29.3) and none other fits: a version another replaced.
   - **Every other copy goes**, even one that holds the same bytes as the kept copy: telling them apart would mean reading both whole, and the next pass makes the replica again.
   - **A copy changed since the last walk** goes as it is now; the kept copy is kept as it is now. A copy no longer on its disk loses its row. Only a disk that cannot be reached keeps the file in conflict.
@@ -621,7 +629,7 @@ Commit "Tell Plex, Jellyfin and Emby of the folders that changed", on `beta`.
 - `atoll notify test` also reaches each media server set, with a request that changes nothing, to check its URL and its token or key.
 - The `notify.*.url` keys no longer warn of a later phase.
 - Verified: the 10 vectors of `conformance/vectors/path_map.json`; 3 new `daemon_wake.json` vectors; `TestQueue`, `TestPlexScan`, `TestPlexRefuses`, `TestMediaBrowserScan`, `TestServers`, `TestMediaServers`, `TestFoldersWithCopiesOn`, `TestChangedFolders`, `TestOperationFolders`, `TestTell`, `TestTellShadow` and `TestNotifyTestMediaServers`; `TestNotifyMediaServer` in qemu on Linux 6.12 and 7.3, against a fake Plex, with 24 mutants, each caught. The qemu guest now brings its loopback up, for the tests that answer as a local server would.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - **What is told.** A folder whose change someone other than the view and Atoll made, or with inotify, whoever made it, and that changed more than attributes. And the folders of a pass's renames and of its copies moved to the trash. A copy Atoll makes changes no name, so the initial replication tells nothing.
   - **The window.** A folder is told at once, then not again for 30 s; what changes in between is told when they end.
   - **Held folders.** While a disk is missing, a folder is held if any file below it has a copy on that disk, in any state, even when the view still shows it from another disk. That is broader than needed, and safe.
@@ -637,7 +645,7 @@ Commit "Alert on a disk that SMART says is failing", on `beta`.
 
 - The daemon that runs for good reads SMART once an hour with `smartctl -j -n standby`, which leaves a sleeping disk asleep, on each whole disk below each mount, again with `-d sat` behind a USB bridge it does not know. It keeps the reading of a disk awake in `disks.smart_json`. Two conditions come from it: `smart-failing:<id>` and `smart-sectors:<id>`. A reading that tells of more trouble than the one before brings a pass, so that the alert goes at once rather than at the next pass.
 - Verified: the 13 vectors of `conformance/vectors/smart.json`; 4 new `daemon_wake.json` vectors; `TestReadSmart` (one device, a USB bridge, two devices, asleep, no `smartctl`), `TestReadSmartRecords`, `TestReadSmartShadowAndSilent`, `TestSetSmart`, and the SMART cases of `TestHoldings`, `TestGather` and `TestDescribe`; 17 mutants, each caught. Not verified on a real disk: no disk in qemu answers SMART.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - **Two conditions** rather than one "degrading SMART". A failed health check is count 1 at priority 4. Bad sectors count reallocated, pending and uncorrectable sectors together, so the alert comes again when the count grows. Their priority is 4 when some are pending or uncorrectable, which cannot be read now, and 3 for reallocated ones alone.
   - **A disk with a few reallocated sectors that never grow is reminded every 24 h**, as any condition that lasts. A baseline that alerts only on growth would need a key or a command to accept the count.
   - **Thresholds.** The temperature is recorded, with no alert, as no key sets a threshold. Once an hour, fixed, with no key.
@@ -653,7 +661,7 @@ Commit "Copy a file in immediate mode once it is closed", on `develop`.
 
 - With it, the beta's replication modes are complete. The daemon that runs for good hands each pass the paths its watcher saw closed after a write, by anyone but Atoll, then left alone for `deletes.debounce`. A file in `immediate` mode at one of them is copied at once, without waiting for its `settle`. A file no such group told of, as one a walk finds, and every file of `daemon --until-idle`, which watches nothing, waits for its `settle`, as in `deferred`. No mode warns of a later phase any more.
 - Verified: `TestImmediateCopiesOnceClosed`; `TestClosedPaths`; the scenario `daemon-immediate-without-watcher.json`; `TestImmediateCopiesOnClose` in qemu on Linux 6.12 and 7.3, where a file written through mergerfs is copied in under 3 s with a `settle` of an hour, while the file in `deferred` mode beside it waits; four mutants, each caught.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - What the watcher saw closed serves the next pass only: a copy that pass could not queue waits for its `settle` then.
   - A close by Atoll's own process never counts; one by mergerfs does, as that is how a user writes in phase 1.
 
@@ -664,7 +672,7 @@ Commit "Send alerts by mail", on `develop`.
 - The beta's second new channel, beside ntfy and Gotify. `alerts.smtp` is `smtp://[user@]host[:port]?from=<address>&to=<address>`, one `from` and one `to` or more, or `smtps://` for TLS from the first byte; the port is 587 or 465 when left out. `smtp` takes `STARTTLS` when the server offers it, and must when a user is given: the password, read at each send from `alerts.smtp_password_file`, never goes in clear, nor in the address. The subject is the alert's title, RFC 2047 when it is not ASCII; the text is in UTF-8, quoted-printable; `X-Priority: 1` marks what ntfy sends at 4.
 - Only Go's standard library: `net/smtp`, `crypto/tls`, `mime`.
 - Verified: against a fake mail server with a certificate of its own, over `STARTTLS` with `AUTH PLAIN` to two recipients, over TLS from the first byte, a password kept out of clear text, a recipient refused; `TestSMTPAddress`, twelve forms of the address; two vectors of `config.json`; the scenario `notify-test-smtp-unreachable.json`.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - The form of `alerts.smtp`, with `from` and `to` in its query, and a new key, `alerts.smtp_password_file`.
   - `STARTTLS` is required only when a user is given: a relay that takes mail without a password, on the same network, may be reached in clear.
   - A server's refusal, such as `550` for a recipient, is its answer, as an HTTP refusal is for ntfy and Gotify.
@@ -676,7 +684,7 @@ Commit "Send alerts through Gotify", on `develop`.
 - The first of the beta's two new channels, beside ntfy, as the maintainer asked. An alert is an HTTP `POST` to `<alerts.gotify>/message` of a JSON object, `title`, `message` and `priority`: 8 where ntfy's priority is 4, which Gotify's clients sound, and 5 otherwise. The application token is read at each send from the file `alerts.gotify_token_file` names, and goes in `X-Gotify-Key`, so that it stays out of the configuration.
 - `atoll notify test` covers it, and `alerts.gotify` no longer warns that it does nothing.
 - Verified: `TestGotifySends` and `TestGotifyFails` against a fake server; two vectors of `config.json`; the scenario `notify-test-gotify-unreachable.json`.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - A new configuration key, `alerts.gotify_token_file`, as ntfy has `alerts.ntfy_token_file`; `alerts.gotify` is the server's address, with no path.
   - Gotify's priorities 8 and 5.
   - A channel with no token file never goes, and says why, rather than refusing the configuration.
@@ -688,7 +696,7 @@ Commit "Run scheduled copies inside replication.window", on `develop`.
 - The beta's third piece. A file in `scheduled` mode is queued as before, once its `settle` has passed, and its copy runs only inside `[replication].window`, in the time zone of `timezone`. Outside it, the job waits in the queue, counts in `waiting`, and `next_due` says when the window opens, which wakes the daemon then. `atoll replicate --now` runs it whatever the time, and a dry run lists only what it would copy now.
 - `scheduled` no longer warns that it works as `deferred`; `immediate` still does. Two scenarios of `rules check` keep their later-phase rows with `immediate`.
 - Verified: `TestScheduledCopiesWaitForTheirWindow`; the scenario `daemon-scheduled.json`; two mutants, each caught by both.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - A pass judges every copy at its own time: a copy that starts inside the window runs to its end, even past it.
   - A file in `scheduled` mode waits for the window whatever its size; a rule can give a file another mode.
 
@@ -698,7 +706,7 @@ Commit "Report the files that hold the same content", on `develop`.
 
 - R-15, the beta's second piece. `atoll dupes [--path <path>] [--min-size <size>]` groups the files that hold the same content under different logical paths, from the catalog alone: it reads no disk and takes no lock. A group is two files or more of one size and one BLAKE3. It never holds an empty file, nor one not hashed yet, which `unhashed` counts. Groups go by the bytes they hold more than once, the most first.
 - Verified: the scenario `dupes.json`, with a quick scan then a full one, each filter and the order; eight mutants, each caught.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - A group is listed when one of its files is at or below `--path`, with all its files, so that a folder's duplicates elsewhere show.
   - An empty file is never a duplicate; two hard links of one file are, as each logical path is a file.
   - `--min-size` takes a size with its unit, `10B`, as the configuration writes it; 1 byte by default.
@@ -716,7 +724,7 @@ Commit "Repair a corrupt copy from a healthy one", on `develop`.
 - An entry of chunks is listed, never restored (`not-a-copy`), and purged whole.
 - Without `auto_repair`, the scrub quarantines as before, and also when a repair found no room, as a move to the trash takes only folders.
 - Verified: 14 unit tests. They cover a repair in place, by the scrub and by the command; an edit never overwritten; a crash at each of 6 points, and its reprise; no room; a whole file; a copy that reads right after all; no healthy copy; the trash entry; a hard-linked copy; a healthy copy that changes; and a disk that reads it wrong. Also the reprise's vectors and a property over every combination of four chunks; 13 mutants, each caught by a test; the scenarios `repair-usage.json` and `repair-nothing.json`; and `TestRepairOnEachDriver` in qemu on Linux 6.12 and 7.3, rot written on the device below ext4, XFS, ntfs3, ntfs-3g and lowntfs-3g, with a name of 255 bytes: each repaired in place, inode and time kept.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - A repair that stops ends its operation `done` when a chunk reached the trash and `undone` when none did. Its event `repair-stopped` says why.
   - In an entry of chunks, the folder named like the file is its owner's alone, mode 0700, and each chunk takes the copy's mode and owner.
   - A copy found corrupt that reads right after all, read whole by `atoll repair`, is recorded `ok` and verified: the outcome `verified`.
@@ -740,7 +748,7 @@ Commit "Copy nothing of a file whose deletion waits", on `develop`.
 - The plan now takes a file with a trash job queued for a deletion as leaving: it gets no job, neither a copy nor a refresh, and its pending copies are canceled. It shows `degraded` while it waits, as it holds fewer copies than its level.
 - A plan reads which files are leaving a page of paths at a time, each file's jobs through their index (`TestLeavingReadsItsPage`): a join walked every job.
 - Verified: five plan vectors, with `leaving`, a new field of `plan.json`; the property test, which never sees a job for a leaving file nor a pending copy kept for one; the scenario `daemon-trash-full.json`, where nothing comes back to the disk the files were deleted from ten minutes on; four mutants, each caught.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - A file leaving shows `degraded`, the state its copies give it, rather than a state of its own.
   - Only a deletion makes a file leaving: a trash job for another reason leaves the plan as it was.
 
@@ -753,7 +761,7 @@ Commit "Send nothing more to the trash of a full disk", on `develop`.
 - The conformance runner gains `full` on an `atoll` step: the disks it names have no room left for that run, `mkdir` and the creation of a file giving `ENOSPC` there (`conformance/scenarios/README.md`).
 - The soak's trash turns over every ten minutes, so that it measures a daemon at work rather than a full disk.
 - Verified: `TestAFullDiskTakesNoMoreForItsTrash`, three moves to a trash with no room, one of them tried, then all three once room comes back; the scenario `daemon-trash-full.json`; two mutants, each caught by both.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - While a disk is full, one move to its trash is tried per session, journaled and undone: what it costs to notice that room came back, with no table that remembers the disk full.
   - `full`, on an `atoll` step and on a disk of the control file, is a new field of the conformance contract.
 
@@ -765,7 +773,7 @@ Commit "Refuse the short name of another entry on NTFS", on `develop`.
 - On a disk the configuration says is `ntfs`, the looks before a copy, a rename and the folders they make refuse a name of the short form (`names.ShortForm`, 21 vectors in `short_form.json`) that its folder does not list, when a look at it or at it in capitals finds an entry: `name-refused`, before anything is written. A folder renamed there goes one copy at a time, each refused.
 - Measured in qemu on Linux 6.12 and 7.3, with real short names set by ntfs-3g: ntfs3, ntfs-3g and lowntfs-3g refuse both a copy through the folder's short name and one at the file's in small letters. The first run of that test showed the copy in small letters made on ntfs-3g and lowntfs-3g, against the research's table, which led to the look in capitals; the research says so.
 - Verified: `TestAShortNameIsNoWayIn`, with ntfs3's and ntfs-3g's answers; `TestShortNamesOnEachNTFSDriver`; six mutants, each failing one of them.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - Only names of the form Windows gives are looked for, as reading a folder at each look costs: a short name a tool set otherwise is not.
   - A copy refused so is queued again at each pass and refused again, with nothing written; no table remembers it.
   - A restore through such a name is a look that fails, `io-error`, with nothing written.
@@ -777,7 +785,7 @@ Commit "Hold back what lands in the old name of a folder that waits", on `develo
 - `mv Dx N; mv D Dx` while `Dx` waits, for a copy below it on another disk whose clock runs, for the guard or for a look that cannot get there: the files of `D` took the name `Dx` at once, the next look read `Dx` as a folder made at `N`, and what only other disks held below `Dx` stayed in the folder that took its name. Before the files of a pass are decided, the folders that wait for what no decision of the pass ends are now worked out, and a copy that moved to a name at or below the old name of one of them waits for it; a folder renamed to below that name waits with its copies. Once the wait ends, the folder that waited leaves first, what only other disks hold follows it, and the rest lands.
 - Only such a wait holds anything back, so that nothing waits for itself, which a cycle would otherwise.
 - Verified: the scenario of that rotation, which now ends with the file only other disks hold at `N`; scenarios of a chain (`mv Dx N; mv D Dx; mv E D`), of a folder renamed below the old name (`mkdir Dx; mv D Dx/D`), and of two folders swapped, which no walk reads as folders renamed, pinned as the limit it is; two mutants, nothing held and no copy held, each failing three of them.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - A copy held so waits with no line of its own, as one whose debounce runs does.
   - Two folders that swap their names stay a limit: no walk reads them as renamed, as each name still holds a row, and what only other disks hold below them stays at its path.
 
@@ -789,7 +797,7 @@ Commit "Exchange two names that wait for each other", on `develop`.
 - The reprise read the row of a copy by its place alone, and while an exchange is half recorded two rows say they sit at one place: a crash right after the exchange undid the second rename against the wrong row. It now takes the row with the operation's inode.
 - ext4, XFS and btrfs exchange two names; ntfs3, ntfs-3g and lowntfs-3g give `EINVAL` (measured on Linux 6.12 and 7.3), so a disk declared `ntfs` is not asked, and its copies wait as before.
 - Verified: scenarios for two names across a dry run and a pass, three names round, an NTFS disk, and a crash once journaled and once moved; the scenario of a page of decisions, whose swap now ends; `TestFindSwap`; `TestASwapOnEachDriver` in qemu on Linux 6.12 and 7.3, on ext4, XFS, btrfs, ntfs3, ntfs-3g and lowntfs-3g, with the inodes kept through a cold cache.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - An exchange is two renames in the journal, not an operation of a kind of its own, so that the reprise needs nothing new. After a crash before the exchange both are undone, with an `op-undone` event each, as each target holds the other copy.
   - A disk is asked for an exchange by its filesystem in the configuration, not by trying: trying on NTFS would journal and undo two renames at every pass.
 
@@ -799,7 +807,7 @@ Commit "Propagate an overwriting move", on `develop`.
 
 - `mv a b` over `b` on one disk was a limit: `a` was reported `path-taken` at every pass, and the other disks kept the old `a` and `b` for good. The copy of `b` the move overwrote is now `gone`, as its file is nowhere: the walk tells it from a replacement, as the name holds the target of another row's copy `moved` there. So `b` is decided as any deletion, after its debounce, its other copies going to the trash as `deleted`, under the guard as any other; once its row has gone, `a` takes the name, its other copies renamed there with nothing copied again, a pass later at the earliest.
 - Verified: four scenarios, with copies read (the deletion, then the rename), with copies no scan read (`b` kept, and `a` waits), over a file with no other copy (`gone`, then the rename), and under a tripped guard (both wait for `guard confirm`); a unit test of the walk, which fails without the change. The code that set such a copy aside from the modifications went with it.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - An overwriting move is a deletion of what it overwrote, not a modification of it: its other copies go to the trash as `deleted`, kept for their whole retention, and count for the deletion guard.
   - Where the other copies of `b` are no peers, two user copies no scan has read, `b` is kept and `a` waits for its name. `b`, then below its level, is copied again to the disk of the move at each pass once `settle` has gone by, which the look before the copy refuses as `conflict`, with nothing written.
 
@@ -846,7 +854,7 @@ Commit "Give no job to a file whose only source is gone", on `develop`.
 - A source is a copy whose clock does not run (§13.4): one its last look found `moved`, `gone`, `uncertain` or `own` still counts toward its file's level, and is no source until its file is decided. A job queued before its source went goes with its pending copy as `changed`, and the next plan queues none.
 - A copy that starts from nothing looks at its source before anything is journaled (§14.2): one gone, or no longer what its row says, ends the run as `changed` with no operation, event or part, and waits `settle`. That also covers a source changed while the mass-modification guard holds it, which no row says.
 - Verified: a scenario, a file's only copy gone under a tripped guard, two passes an hour apart that queue and journal nothing, then the copy back and replicated; five plan vectors with copies `away`; unit tests for a job whose source went, and for a source changed or gone before the copy.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - A copy found `moved` is no source either, until its rename is decided, a debounce at most: a file with no other copy shows `unavailable` meanwhile.
   - A copy that resumes from its part still journals before it reads its source, as dropping that part needs its operation.
 
@@ -865,7 +873,7 @@ Commit "Restore an entry of the trash to another disk", on `develop`.
 - The reprise of a `create` with no job and a `restore` event records the copy as a restored one, never as a replica of what the path holds; it also removes a part made before its inode could be recorded, whose name, of the operation's id, is the operation's alone.
 - `api/schemas/trash-restore.schema.json`: `to` on each entry with `--to`, for review.
 - Verified: three scenarios, the copy with the entry left in its trash, the move back to its own disk, a disk the configuration does not list, a path taken, a dry run, and kill -9 once copied and once moved; unit tests with EIO on the trash's read, a file of the trash replaced, a part whose sync fails, a target that cannot be written to.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - The entry stays in its trash once copied, to expire as any other: a copy never takes away what it copies from.
   - An entry on a `readonly` or `draining` disk may be copied from, as its trash can be read; the target must be `online` or `standby`.
   - The copy is unverified, as a restored copy is, though it was read back.
@@ -878,7 +886,7 @@ Commit "Give the CLI its help and its French", on `develop`.
 - What the CLI writes for people is in French when the first of `LC_ALL`, `LC_MESSAGES` and `LANG` that is set starts with `fr`: 175 messages and the help, through `T()`, whose key is the English text. A test reads every `T("…")` of the sources and requires its French, with the same verbs in the same order and the same line breaks, and no French nothing asks for. The JSON outputs, the words they share with the human output, names, paths, keys, the daemon's log and the details of an error from below the CLI stay in English.
 - `atoll rules explain` writes a time as the configuration does, `settle = 10m`, never in nanoseconds (`value.FormatDuration`, read back by `ParseDuration`).
 - `guard confirm` and `reject` say their answer in a sentence of their own, rather than with the English verb inside it.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - The outcomes, reasons, states and decisions the JSON shares stay in English in the human output too, as a search reads them; so do the synopses' placeholders, such as `<path>`.
   - A duration is written in days rather than weeks: `7d`, not `1w`.
   - French typography puts a space before a colon, a plain one, as a terminal shows it.
@@ -891,7 +899,7 @@ Commit "Answer questions over a local API", on `develop`, as the maintainer chos
 - On the Unix socket `api.socket` (`/run/atoll/atoll.sock`), made with mode 0660, never wider for a moment, in the folder the unit's `RuntimeDirectory` makes; a socket an earlier run left is replaced, anything else stays. Over TCP on `api.listen`, a loopback address or one of the Tailscale network, every request carries the Bearer token `api.token_file` holds, read again at each request and compared in constant time.
 - Configuration: `[api]` with `socket`, `listen` and `token_file`; `api.listen` follows a grammar of its own (§29.5), with 37 vectors in `listen.json`, parsed in-house so that the Rust version can match it; `listen` without `token_file` is refused. 12 cases in `config.json`.
 - Verified: each answer equals its command's output byte for byte; 405 for any method but GET, 404 for another path or disk, 503 for a catalog that cannot be used; the token missing, wrong, changed, empty or gone; the socket's mode, a stale socket replaced, a file at its path left alone, the socket gone at the stop; a round trip over TCP.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - The alpha's API only answers: moving and deleting stay with the CLI, which takes the catalog's lock.
   - A socket or a TCP address that cannot be opened leaves that side off, with a line of the log, rather than stopping the daemon.
   - The token is read at each request, so that a new one takes effect without a reload; HEAD is refused like any method but GET.
@@ -907,7 +915,7 @@ Commit "Apply the owner of a metadata change to the other copies", on `develop`,
 - `api/schemas/daemon.schema.json`: the operation `chown`, with `kept`.
 - The conformance runner: `root`, for a scenario that gives files away, which anyone else skips and says so, never counting it as a success; a step `chown`; `uid` and `gid` in trees. Six `daemon-metadata-chown-*` scenarios, root only, run by the CI's containers. Five unit tests in `jobs`: applied, kept, a disk lost, a reprise, and an owner the look records.
 - Measured in qemu on Linux 6.12.116 and 7.3.1: ext4, XFS, btrfs and ntfs3 keep the owner given; ntfs-3g and lowntfs-3g answer `fchown` and keep `0:0`, which the row records, and the next pass applies nothing; the reprise after a crash at `owner-set` is quiet on all six. The mode tests pass again on both.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - The owner is an operation `chown` of its own, which needed the journal made again; folding it into `chmod` would have spared that.
   - A refused owner is `kept`, not an error: otherwise each pass would read the whole file again, and fail again. The copy pipeline already leaves a copy another owner so.
   - The owner scenarios run only as root, and the runner says how many it skipped.
@@ -921,7 +929,7 @@ Commit "Remove the empty folders Atoll made", on `develop`.
 - Reprise: nothing at the name finishes it; the folder, by inode, undoes it; anything else undoes it with an event. Three more cases in `op_recovery.json`.
 - Verified: five scenarios, a folder removed while the one above it keeps a folder the user made there, then stays once the user empties it, and kill -9 after the journal, after the removal, after the sync, and with a file made at the name before the reprise; unit tests with EIO on the removal and on the parent's sync, something new in the folder, another folder at its name, and a dry run.
 - Fixed on the way: a disk lost while the scrub moves a copy to the trash now makes the scrub partial.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - Only what Atoll's own operations of that run emptied goes: a folder the user emptied stays, as an empty folder they kept may be one they want, and so does one a run left empty before it was stopped; nothing tries those again.
   - These operations are not in a command's output: the journal and the events hold them.
 
@@ -933,7 +941,7 @@ Commit "Purge the trash for room, and from the daemon", on `develop`.
 - `atoll trash purge` says why each entry goes (`expired`, `max-size`, `older-than`) and which disks' trash stays full (`full`). New fields of `api/schemas/trash-purge.schema.json`, for review; the 17 scenarios that read that output take them.
 - The daemon purges after each pass, under the same lock, as `trash purge --yes` does, and works out the alerts after it: `trash-full:<id>` for a disk whose trash is still full.
 - Verified: the vectors; a scenario where a disk's trash past 0.5 % loses its surplus copies, then an overwritten one, keeps a deleted one until its time, and stays `full` until then, and where `--older-than` purges nothing for room; unit tests of the alert and of the daemon's purge, with and without `--dry-run`.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - A trash is counted as the sizes of its entries in the catalog, not by the disk's free space; an entry of unknown size counts for nothing and never goes for room; a hard-linked one counts with its size.
   - The capacity is the one the catalog last recorded; a disk with none recorded is never purged for room, nor full.
   - "Reached" is read as "more than": at the limit exactly, nothing goes.
@@ -948,7 +956,7 @@ Commit "Rebuild the catalog from the disks", on `develop`.
 - A new catalog is made beside the old one, its operations started past the highest id the disks' `trash/` and `tmp/` name, then filled by a full scan, which reads every copy whole; copies with different hashes at one path are a conflict. The old catalog, its log moved into it or set aside with it, trades names with the new one in one step (`RENAME_EXCHANGE`), and is kept as `<catalog>.old-<UTC time>`. It works when the old catalog cannot be opened.
 - Without `--yes` it says what it would do (exit 3); `--dry-run` likewise with 0.
 - Verified: unit tests of the swap, the log set aside and the operation ids; a scenario: a conflict found again, ids past the trash and `tmp/`, the disks' folders left as they are, and `verify` finding the new catalog in step.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - The old catalog is set aside beside the new one, never removed, under that name.
   - The disks' trash entries are not listed in the new catalog: they stay on the disks, and `trash list` does not show them. Listing them again needs their reasons, which only the old catalog knew.
   - A disk whose trash and `tmp/` cannot be read is a warning: a new operation may then meet an old one there once, which costs it an `io-error`.
@@ -959,7 +967,7 @@ Commit "Compare the disks with the catalog in catalog verify", on `develop`.
 
 - After SQLite's checks, `catalog verify` walks each disk not failed and compares it with the catalog as a scan would (`watch.Compare`), each disk confirmed past the cache first, writing nothing. Each disk comes out as `atoll scan --json` gives it, and a difference is exit 4.
 - A scenario: a disk in step with the catalog, then a file added, one changed and one deleted, which verify reports and the catalog still does not know.
-- **Decided without the maintainer, to confirm:** `verify` takes no lock, as other read-only commands; a catalog SQLite finds damaged is not compared with the disks; a name that cannot be read counts as a difference.
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):** `verify` takes no lock, as other read-only commands; a catalog SQLite finds damaged is not compared with the disks; a name that cannot be read counts as a difference.
 
 ## The daemon's daily catalog backup (specs.md §9, §15.13)
 
@@ -967,7 +975,7 @@ Commit "Back the catalog up every night", on `develop`.
 
 - Once for each stretch of `maintenance.window`, after the new files' hashes and before the scrub, the daemon backs the catalog up under its lock, through `jobs.BackupCatalog`, which `atoll catalog backup` now shares. `Wake` says when, with four more vectors in `daemon_wake.json`.
 - `TestRunBacksUp`: a window around now, one backup after the first pass, and none more for a pass in the same stretch.
-- **Decided without the maintainer, to confirm:** a backup that fails is not tried again before the next stretch, with a line of the log; no alert says it yet.
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):** a backup that fails is not tried again before the next stretch, with a line of the log; no alert says it yet.
 
 ## A nested btrfs subvolume is another mount (specs.md §15.10)
 
@@ -984,7 +992,7 @@ Commit "Back the catalog up, and check it", on `develop`.
 - **`catalog verify`**: SQLite's integrity and foreign key checks on the catalog, exit 4 when they find anything.
 - **Verified**: a unit test of the backups kept and checked, and a scenario of both commands, their usage errors, and a missing catalog.
 - **Left for later, in TODO.md**: the daemon's daily backup, the read-only comparison of the catalog with the disks in `verify`, and `catalog rebuild`.
-- **Decided without the maintainer, to confirm**: the names and the place of the backups, the copy on a disk replaced whole each time, and `verify` without the disk comparison for now.
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer")**: the names and the place of the backups, the copy on a disk replaced whole each time, and `verify` without the disk comparison for now.
 
 ## A correction: the qemu runs of this night (test/qemu/run.sh)
 
@@ -1004,7 +1012,7 @@ Commit "Scrub the copies, and quarantine the corrupt ones", on `develop`.
 - **In the daemon.** With no hash to read, inside `integrity.window`, it scrubs by slices of 30 s under the lock, within `scrub_budget` per stretch of the window, and quarantines, as starting it is the consent; a corrupt copy brings a pass, for the alert and the copy made again. `Wake` says when, with ten more vectors in `daemon_wake.json`, and `value.Window.Opened` tells a stretch from the next, with six more in `window.json`. `TestScrubFindsRot`, in qemu on Linux 6.12 and 7.3, changes a byte of an ext4 copy on the device itself: the scrub finds it, quarantines it, and the next pass makes it again.
 - **`atoll scrub [--disk] [--path] [--budget] [--dry-run] [--yes]`**: without `--yes` it records and says what it would move, exit 3; `--dry-run` records nothing. Output `api/schemas/scrub.schema.json`. `fsx.File` gained `DropCache`, for the second read.
 - **Verified.** Unit tests rot a copy as a disk would, same size and the catalog none the wiser: quarantined, then made again by the next pass; two copies rotted, both kept and the file `corrupt`; a copy changed left for the pass; a dry scrub writes nothing; a budget run out in the middle of a 8 MiB file resumes at its second chunk and reads only the rest; `--path` by whole components. Two scenarios: copies due after `scrub_every`, `--disk`, `--path`, `--dry-run`, a changed copy never called corrupt, and the usage errors. A conformance build cannot rot a file, so corruption is judged by the unit tests only.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - The CLI quarantines only with `--yes`, as it moves copies; without, it records the corruption and exits with 3. The daemon, which takes no `--yes`, will quarantine.
   - A chunk that reads right the second time, past the cache, is a bad read, not corruption: a line of the log.
   - The budget counts from the start of the scrub, across disks; the disks after the one where it ran out are listed, not scrubbed.
@@ -1018,7 +1026,7 @@ Commit "Drain, fail, replace and show a disk", on `develop`.
 - **What depends on a disk.** A file with a copy there, `ok` or `unavailable`, that has fewer copies `ok` on the disks `online`, in `standby` or `readonly` than its level, or that is in `conflict`, as the disk may hold one of its versions (`catalog.ReadDiskHolds`, with what the disk holds by copy state, the files with no copy elsewhere, and the operations left planned there).
 - **`disk remove <id> --evacuate`** marks the disk `draining`, with no `--yes`: it adds copies and removes nothing. **`disk remove <id>`** takes out of the configuration a disk nothing depends on, or a failed one, and refuses one with planned operations. **`disk fail <id>`** marks it `failed`. Both need `--yes`, and without it say what they would do and exit with 3. **`disk replace <id> --with <mount>`** adds the new disk with the old one's domain and tags, and marks the old one draining in the same edit. **`disk show <id>`** gives the disk's configuration, its mount check, what the catalog knows of it and its marker.
 - **Verified.** `TestBranchModes`, in qemu on Linux 6.12 and 7.3: mergerfs takes `NC` and `RO` at runtime, a new file lands on neither, and a file only on the `RO` branch is still read. Four scenarios run each cycle through `daemon --until-idle`: a disk refused at `remove`, evacuated, its copies made on the third disk, then taken out and `retired`, what it held still on it; a disk failed, its replica made elsewhere from the other copy, `show` saying so, then taken out; a disk replaced, the new one with the old one's domain and tags; and the usage errors. A unit test pins what depends on a disk, case by case.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - What "nothing depends on it" means, above: the catalog's view, refreshed by each scan or pass. Copies on a disk draining, failed or missing do not count, nor a stale or surplus copy on the disk itself.
   - `disk remove` of a disk in service that nothing depends on, such as an empty one, is allowed without `--evacuate`.
   - `disk replace` leaves the old disk `draining`: `disk remove` takes it out once drained, rather than the daemon editing the configuration. `--domain` and `--tags` are refused there, as the new disk takes the old one's.
@@ -1031,7 +1039,7 @@ Commits "Keep a disk draining or failed in the configuration", "Edit a disk in t
 - **The configuration's edits.** `config.AppendDisk`, `RemoveDisk` and `SetDiskState` keep every other byte, comments included, follow the file's line ends, and refuse an edit that would change anything else, or disks written as inline tables. 21 vectors in `config_edit.json`, written from the spec before the code ran.
 - **`atoll disk add`.** It reads the mount and the head, runs the mount check, and refuses what §10 and §18 refuse: an id or a mount the pool has, a disk missing, an identifier the pool or the catalog knows, the variants that change the rules of names, a physical disk another disk lives on (R-06), a marker of another pool, disk or filesystem. Then it appends the disk to the configuration, written whole through `<file>.new` and a rename, records the disks in the catalog, writes `Atoll/disk.toml` through a confirmed handle, and sends `SIGHUP` to the daemon. `--dry-run` writes nothing. Five scenarios; the conformance build tells a scenario's disks apart by a new `device` field, and says whether a mount point is immutable by `immutable`.
 - **Found while writing it.** A session that confirmed a draining disk wrote the mount check's `online` over `draining`, which would have made it a target again; it now keeps `draining`. A test that said a draining disk is never opened predated evacuation, which reads it: changed.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - The administrative state lives in the configuration, as the key `state` of a `[[disk]]`, `draining` or `failed`; the catalog can be rebuilt, and a disk declared failed must stay so.
   - mergerfs: `NC` for a draining disk, `RO` and last for a failed one, rather than leaving their branches out, so that no file only they hold leaves the view.
   - A draining disk mounted read-only is `readonly`: its copies count again and its evacuation waits until it is mounted read-write.
@@ -1059,7 +1067,7 @@ Commit "Send alerts through ntfy", on `develop`.
 - **Sending.** The daemon lets go of the lock to send, then takes it again to record what went. ntfy gets an HTTP `POST`, with the title, the priority and the tag `warning`, and the token of `alerts.ntfy_token_file`, a new key, read at each send.
 - **`atoll notify test`** sends a test alert through each channel set: exit 0 when each went, 4 when one did not, 1 with none set, 2 on a usage error (`api/schemas/notify-test.schema.json`, three scenarios).
 - **The pass's memory.** The daemon now counts a pass's decisions and operations through a sink instead of keeping each one, so a pass over a whole pool no longer holds them all.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-16 ("Tout confirmer"):**
   - With no channel set, the daemon works out no alert and leaves the table as it is, so that a channel set later hears of what holds then.
   - A daemon in shadow mode (`--dry-run`) logs the alerts due, and sends and records none.
   - An alert that could not go brings a pass within 5 minutes, instead of waiting for whatever pass comes next, which could be hours away. A channel that cannot be reached is not tried again for the other alerts of that pass, each of which would wait its 10 s; one whose server answered with a refusal is, as the refusal may be that message's own.

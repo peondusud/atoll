@@ -10,7 +10,7 @@ A milestone is reached when its phase and every phase before it are done.
 |---|---|---|---|
 | **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 98 % |
 | **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 98 % |
-| **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 70 % |
+| **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 98 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
 | — | 3 — Rust rewrite | the same contracts and conformance suite, switched to without migrating data | |
 | — | 4 — Windows | a Windows service and a WinFsp pool drive, in Rust | |
@@ -69,3 +69,5 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
   - Done, the writes (DONE.md, 2026-11-16): with `view.engine = "atoll"`, `atoll mount` serves the view at `view.mount` in place of mergerfs. Each operation reaches one disk, a folder's every disk that holds it, and the passes take it to the other copies; a deletion goes to the trash. Measured in qemu with Sonarr's own kinds of operations, then break glass with plain mergerfs.
   - To do, beyond phase 2a's list: a write that meets `ENOSPC` moved to another disk, hard links, extended attributes, copies written in parallel in `immediate` mode.
 - **The contracts frozen at format version 1**: catalog schema, on-disk layout, configuration keys, local API, `--json` schemas and exit codes. This is what the Rust rewrite (phase 3) must keep.
+  - Done on 2026-11-16, as the maintainer chose: specs.md §29.3 says what a later version keeps, and `conformance/frozen/v1.json` pins it, which a test checks (DONE.md). Every choice DONE.md listed as to confirm was confirmed the same day.
+- Phase 2a is done. What v0.1 still needs is the alpha's: the memory of a daemon that runs for days, the soak of 24 hours, after phase 2b unless the maintainer asks sooner.
