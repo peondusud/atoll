@@ -60,6 +60,7 @@ overflow       = "allow"                # allow | deny (never relaxes strict set
 [view]
 engine = "mergerfs"                     # mergerfs (phase 1) | atoll (phase 2a)
 mount  = "/srv/pool"
+# readonly_mount = "/srv/pool-ro"       # atoll mount: Atoll's own view, read only, for the media servers (§21.2)
 
 [read]                                  # Atoll's own view (phase 2a)
 policy   = "oldest"                     # oldest | prefer-spinning

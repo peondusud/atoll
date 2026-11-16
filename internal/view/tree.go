@@ -22,12 +22,6 @@ type Tree struct {
 	mountedNS int64
 }
 
-// Roots gives the root folder of a disk, `<mount>/<root>`, as the mount check confirmed it in this session, and false
-// for a disk that cannot be read now (specs.md §10).
-type Roots interface {
-	Root(disk string) (fsx.Dir, bool)
-}
-
 // NewTree makes the tree of a view, mounted at mountedNS, whose own process is owned by self.
 func NewTree(db *sql.DB, roots Roots, self Owner, mountedNS int64) *Tree {
 	return &Tree{db: db, self: self, roots: roots, mountedNS: mountedNS}
@@ -115,28 +109,32 @@ func (t *Tree) Statfs(ctx context.Context) (Statfs, error) {
 // Open opens the data of a file node for reading, from the disk it presents, one name at a time below the root and
 // following no symlink.
 func (t *Tree) Open(path string, n *Node) (fsx.File, error) {
-	root, ok := t.roots.Root(n.Disk)
-	if !ok {
-		return nil, ErrUnreadable
-	}
-	parts := strings.Split(path, "/")
-	dir := root
-	for i, name := range parts[:len(parts)-1] {
-		next, err := dir.OpenDir(name)
-		if i > 0 {
+	var f fsx.File
+	err := t.roots.Root(n.Disk, func(root fsx.Dir) error {
+		parts := strings.Split(path, "/")
+		dir := root
+		for i, name := range parts[:len(parts)-1] {
+			next, err := dir.OpenDir(name)
+			if i > 0 {
+				_ = dir.Close()
+			}
+			if err != nil {
+				return fmt.Errorf("%w", err)
+			}
+			dir = next
+		}
+		opened, err := dir.OpenFile(parts[len(parts)-1])
+		if len(parts) > 1 {
 			_ = dir.Close()
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%w", err)
+			return fmt.Errorf("%w", err)
 		}
-		dir = next
-	}
-	f, err := dir.OpenFile(parts[len(parts)-1])
-	if len(parts) > 1 {
-		_ = dir.Close()
-	}
+		f = opened
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 	return f, nil
 }

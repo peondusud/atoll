@@ -4,6 +4,7 @@
 |---|---|
 | `atoll.toml` | A sample configuration: the example of `specs.md` §24.1, byte for byte. A test compares the two, and loads it. |
 | `atoll.service` | The systemd unit of the daemon that runs for good (`specs.md` §15.13): `Type=notify`, as the dedicated user `atoll`. |
+| `atoll-mount.service` | The systemd unit of `atoll mount` (`specs.md` §21.2): Atoll's own view, read only, at `view.readonly_mount`, beside mergerfs, as the same user. |
 
 ## The account
 
@@ -30,3 +31,20 @@ The catalog's folder (`/var/lib/atoll`) and the configuration's (`/etc/atoll`) b
 Each disk's work folder, `Atoll/` at its top, must belong to root or to `atoll` (`specs.md` §10): `atoll disk add` refuses one that another account owns, on ext4, XFS and btrfs, and says the `chown` that gives it back, which a disk needs when it comes from a machine where `atoll` has another number. Keep the top of each disk closed to the accounts that must not read every file of the library: whoever owns it can make that folder again.
 
 The catalog's folder is closed to other accounts (`StateDirectoryMode=0750`). The catalog and its backups list every path of the library, its trash and its history, which the local API gives only through its socket, of mode 0660, or with its token (§25.1): a folder anyone could read would give them to every account of the machine. A member of the group `atoll` reads them, and may ask the socket.
+
+## The read-only view
+
+`atoll mount` serves Atoll's own view, read only, at `view.readonly_mount`, while mergerfs stays the view that writes, at `view.mount` (`specs.md` §21.2). Browsing it reads the catalog alone, and wakes no disk; each file reads from its original. It runs as a service of its own, `atoll-mount.service`, so that the view stays while the daemon stops or starts again.
+
+- Set `view.readonly_mount`, such as `/srv/pool-ro`, and make that folder: Atoll makes none outside its disks.
+- The unit gives `atoll` `CAP_SYS_ADMIN`, for `mount(2)`, and `CAP_DAC_READ_SEARCH`, to open each copy whatever its mode. `/dev/fuse` must be open to it: udev gives it mode 0666 on every system that has udev, Debian and openmediavault included; `atoll mount` says so when it is not. It has no setting that gives it a mount namespace of its own, or no other process would see the view; the test that holds `atoll.service` to that holds this unit too.
+- Point the media server's libraries at the view, and tell its scans of folders as it sees them: `path_map = { "/srv/pool" = "/srv/pool-ro" }` in its table of `[notify]` (`specs.md` §21.5). Let it start after the view, with a drop-in of its own unit (`systemctl edit plexmediaserver`):
+
+  ```ini
+  [Unit]
+  Wants=atoll-mount.service
+  After=atoll-mount.service
+  ```
+
+- What the view presents follows the disks' states the catalog holds, which the daemon keeps. A disk whose mount check fails, which `atoll mount` runs every 30 s, is read from no more: a read of a copy there fails with `EIO` until the disk is back.
+- A stop unmounts the view. A view still read from is detached, as `umount -l` does, and what is open there fails. A view whose process stopped short is detached at the next start; anything else mounted at the point is refused.

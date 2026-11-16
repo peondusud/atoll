@@ -11,13 +11,6 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 )
 
-type rootsOf map[string]fsx.Dir
-
-func (r rootsOf) Root(disk string) (fsx.Dir, bool) {
-	d, ok := r[disk]
-	return d, ok
-}
-
 // A tree from a catalog: the root, a listing that holds each name once and leaves out what presents nothing, a file
 // read from the copy it presents, and statfs; a disk that cannot be read now fails only the read (specs.md §21.2).
 func TestTree(t *testing.T) {
@@ -31,7 +24,8 @@ func TestTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	roots := rootsOf{}
+	roots := NewDiskRoots()
+	defer roots.Close()
 	var list []catalog.Disk
 	for i, id := range []string{"t1", "t2"} {
 		dir := filepath.Join(top, id)
@@ -45,8 +39,7 @@ func TestTree(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer func() { _ = root.Close() }()
-		roots[id] = root
+		roots.Set(id, root)
 		list = append(list, catalog.Disk{ID: id, UUID: "u-" + id, FS: "ext4", Mount: "/mnt/" + id, Root: "media", Workdir: "Atoll", Role: "data", Position: i, State: "online"})
 	}
 	if err := catalog.SyncDisks(t.Context(), db, list); err != nil {
@@ -112,7 +105,7 @@ func TestTree(t *testing.T) {
 	if s, err := tree.Statfs(t.Context()); err != nil || s.Blocks != 4 || s.Bfree != 2 {
 		t.Errorf("statfs: %+v, %v", s, err)
 	}
-	delete(roots, "t2")
+	roots.Drop("t2")
 	if _, err := tree.Open("Films/a.mkv", &n); !errors.Is(err, ErrUnreadable) {
 		t.Errorf("a disk that cannot be read: %v", err)
 	}

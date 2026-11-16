@@ -3,6 +3,7 @@ package fusefs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"io"
 	"log/slog"
@@ -207,31 +208,59 @@ func (f *file) Release(context.Context) syscall.Errno {
 // Mounted is a view being served.
 type Mounted struct {
 	server *fuse.Server
+	point  string
+	done   chan struct{}
 }
 
-// Mount serves the view at mount, read only, until Unmount: mounted by mount(2), as the daemon holds CAP_SYS_ADMIN,
-// with no fusermount.
+// Type is the type of the view's mounts in the mount table.
+const Type = "fuse.atoll"
+
+// device is the kernel's FUSE device, which mount(2) and fusermount both open as the account that mounts.
+const device = "/dev/fuse"
+
+// Mount serves the view at mount, read only, until Unmount: mounted by mount(2) when the process holds CAP_SYS_ADMIN,
+// as its units give it, and by fusermount otherwise.
 func Mount(tree *view.Tree, mount string) (*Mounted, error) {
+	// Said here: go-fuse would say only that fusermount failed, once mount(2) had.
+	if err := fsx.CanReadWrite(device); err != nil {
+		return nil, fmt.Errorf("%w: FUSE needs it readable and writable by this account, as udev makes it (mode 0666)", err)
+	}
 	second := time.Second
 	none := time.Duration(0)
 	server, err := fs.Mount(mount, &node{tree: tree}, &fs.Options{
 		EntryTimeout: &second, AttrTimeout: &second, NegativeTimeout: &none,
 		MountOptions: fuse.MountOptions{
-			AllowOther: true, FsName: "atoll", Name: "atoll", DirectMountStrict: true,
+			AllowOther: true, FsName: "atoll", Name: "atoll", DirectMount: true,
 			Options: []string{"ro", "default_permissions"},
 		},
 	})
 	if err != nil {
 		return nil, err //nolint:wrapcheck // go-fuse says what failed
 	}
-	return &Mounted{server: server}, nil
+	m := &Mounted{server: server, point: mount, done: make(chan struct{})}
+	go func() {
+		server.Wait()
+		close(m.done)
+	}()
+	return m, nil
 }
 
-// Unmount stops serving the view, and waits until it has.
+// Done is closed once the view is served no more: unmounted by Unmount, or by anything else.
+func (m *Mounted) Done() <-chan struct{} {
+	return m.done
+}
+
+// Unmount stops serving the view, and waits until it has. A view a process still reads from, which the kernel does
+// not unmount, is detached instead, as umount -l does: what is open there fails from then on, and Unmount waits for
+// nothing.
 func (m *Mounted) Unmount() error {
-	if err := m.server.Unmount(); err != nil {
-		return err //nolint:wrapcheck // go-fuse says what failed
+	err := m.server.Unmount()
+	if err == nil {
+		<-m.done
+		return nil
 	}
-	m.server.Wait()
+	if detached := fsx.DetachMount(m.point); detached != nil {
+		return errors.Join(err, detached)
+	}
 	return nil
 }

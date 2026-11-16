@@ -2,6 +2,26 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Atoll's own view, read only, beside mergerfs, 2026-11-16 (specs.md §21.2, §24, §25, deploy/)
+
+Commit "Serve the view read only beside mergerfs", on `beta`. The maintainer asked for it ("Oui, ajoute-la", 2026-11-16), as a process of its own ("Processus à part"): mergerfs stays the view that writes, at `view.mount`, and Atoll's own view serves the media servers, read only, at another point, so that browsing wakes no disk and each file reads from its original.
+
+- **`view.readonly_mount`**, an absolute path, and its relations (§24.3): never on, inside or around `view.mount` or a disk's mount, and the catalog never on or inside it. 9 vectors in `config.json`; the schema and the sample configuration, which stays the spec's example byte for byte.
+- **`atoll mount [<point>]`**, the name §25 had kept for the view, serves it at `<point>` or `view.readonly_mount` until `SIGTERM` or `SIGINT` (`internal/view/readonly`). It opens the catalog and only reads it, checks every disk's mount at its start and every 30 s, and reads a copy only through the root of a disk its last check found online or readonly; a disk mounted again, after a USB reset, is read from its new mount within a check. It tells systemd it is ready once mounted. Exits: 0 once stopped, 1 when it cannot start or another process unmounts the view, 2 on a usage error, a point that breaks the relations included (`config.CheckReadonlyMount`).
+- **The disks' roots** (`view.DiskRoots`) are shared by the checks and the reads: a root is replaced or dropped only once no open through it is under way, so that a descriptor is never closed, and its number given to another file, under a read. Each disk has a lock of its own: with one for all, an open that hung on a disk in trouble held the next check's replacement back, and every new open, on every disk, waited behind it (`TestDiskRoots`, which failed first, with `-race`).
+- **go-fuse** mounts by `mount(2)` when the process holds `CAP_SYS_ADMIN`, and with `fusermount` otherwise (it was `mount(2)` alone). A stop that finds the view still read from detaches it, as `umount -l` does, rather than wait. Both ways open `/dev/fuse`, which udev opens to every account: where it is not, `atoll mount` says so, where go-fuse said only that fusermount failed.
+- What qemu taught, each a test that failed first: a view whose process was killed still answered a `stat` of its root for a second, from the kernel's cache, so whether a process serves a view is asked by opening its root; Linux 7.3 answers `ECONNREFUSED`, not `ENOTCONN`, for a view whose process died before answering its first request; and the guest of `test/qemu`, which has no udev, gives `/dev/fuse` to root alone.
+- **`deploy/atoll-mount.service`**: `Type=notify`, the user `atoll`, the group `disk`, `CAP_SYS_ADMIN` and `CAP_DAC_READ_SEARCH` alone, no mount namespace (`TestNoUnitKeepsItsMountsToItself` holds it too), `Restart=on-failure`. `deploy/README.md` says how a media server reads it: its libraries at the point, `path_map`, and a drop-in that starts it after the view.
+- Tests: `TestMountRefuses` (`cmd/atoll`), `TestCheckReadonlyMount`; in `test/loopdev`, `TestReadonlyMount` (views left mounted by a process that died before answering and by one killed while it served, each detached; reads from the originals; a second view at the point refused; a disk unmounted then mounted again; a stop; an unmount by another process; a tmpfs at the point refused) and `TestReadonlyMountAsTheUnit` (the view served as the unit's user with its two capabilities alone: `mount(2)`, a copy of mode 0600 read for root and refused to another account, `SIGTERM`). Both passed three times in three in qemu, on Linux 6.12.117 and 7.3.1, with `TestViewMatchesMergerfs` and `TestViewBrowsesNoDisk` once more.
+- **Decided without the maintainer, to confirm:**
+  - the command is `atoll mount`, the name §25 already gave the view, rather than a new `atoll view`;
+  - the disks' mounts are checked every 30 s, and each root is opened again at every check rather than kept while its device stays the same;
+  - only a mount of the type `fuse.atoll` that the kernel answers `ENOTCONN` for is detached at the start; a view another process still serves is refused, as anything else is, so that two `atoll mount` never take the point from each other;
+  - a view unmounted by another process ends `atoll mount` with 1, and systemd starts it again 10 s later;
+  - the view's root, and an entry the catalog lacks attributes for, belong to the account that serves it, `atoll` under the unit;
+  - the unit's `TimeoutStopSec` is 30 s, its `RestartSec` 10 s.
+- Not done: the media servers' own units are the user's to order (`deploy/README.md` gives the drop-in); the view at `view.mount`, which writes, is the rest of phase 2a.
+
 ## go-fuse for Atoll's own view, 2026-11-16 (specs.md §21.2, §29.1, §29.7)
 
 Commit "Serve the view through go-fuse alone", on `beta`. The maintainer chose go-fuse ("soit mergerfs soit go-fuse", 2026-11-16), as `docs/research/fuse-library.md` recommended.

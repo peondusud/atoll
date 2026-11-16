@@ -9,7 +9,7 @@ Atoll adds file-level redundancy to heterogeneous disks (SATA, USB DAS) that hol
 ## How it works
 
 - **Copies.** Each file under a disk's `media/` folder can have 0 to 2 full copies on other disks, at the same relative path and under the same name. Every disk stays a normal folder tree, readable on its own.
-- **The merged view.** A merged view presents each file once: mergerfs in phase 1, Atoll's own FUSE view from phase 2a. Media servers read that view.
+- **The merged view.** A merged view presents each file once: mergerfs in phase 1, Atoll's own FUSE view from phase 2a. Media servers read that view. Atoll's own view already serves them read only beside mergerfs (`atoll mount`): browsing it wakes no disk, and each file reads from its original copy.
 - **Break glass.** Stopping or uninstalling Atoll breaks nothing. Existing paths stay as they were, no disk holds a hidden file, and plain mergerfs, mounted from the line `atoll mergerfs-config` prints, gives the same view.
 - **No data lost.** Atoll never deletes or overwrites the last verified copy of a file. What it replaces goes to a trash on the same disk first. When in doubt, it keeps both versions and reports a conflict.
 - **Checked.** Every copy is verified by a BLAKE3 hash before it takes its place.
@@ -29,7 +29,7 @@ The Go version runs on Linux, amd64 and arm64. A Rust rewrite with the same cont
 | [docs/research/](docs/research/) | The measurements behind open design decisions |
 | [conformance/](conformance/README.md) | Vectors and scenarios shared by the Go and Rust versions |
 | [api/](api/README.md) | The `--json` schemas of the command line |
-| [deploy/](deploy/) | A sample configuration |
+| [deploy/](deploy/) | A sample configuration, and the systemd units |
 
 ## Building and testing
 

@@ -133,7 +133,7 @@ func checkFolders(key string, d, layout map[string]any, fs names.Filesystem, fou
 	return root, workdir
 }
 
-// checkMounts checks that no mount, view.mount or catalog sits inside another one.
+// checkMounts checks that no mount, view.mount, view.readonly_mount or catalog sits inside another one.
 func checkMounts(tree map[string]any, disks []map[string]any, found *problems) {
 	for i, d := range disks {
 		mount := text(d, "mount")
@@ -144,19 +144,67 @@ func checkMounts(tree map[string]any, disks []map[string]any, found *problems) {
 		}
 	}
 	view := text(table(tree, "view"), "mount")
+	readonly := text(table(tree, "view"), "readonly_mount")
 	catalog := text(tree, "catalog")
 	if inside(catalog, view) || catalog == view {
 		found.add("catalog", "inside view.mount")
 	}
+	mounts := make([]diskMount, 0, len(disks))
 	for _, d := range disks {
 		mount := text(d, "mount")
-		if view == mount || inside(view, mount) || inside(mount, view) {
+		mounts = append(mounts, diskMount{id: text(d, "id"), mount: mount})
+		if overlaps(view, mount) {
 			found.add("view.mount", "on, inside or around the mount of disk %s", text(d, "id"))
 		}
 		if catalog == mount || inside(catalog, mount) {
 			found.add("catalog", "inside the mount of disk %s", text(d, "id"))
 		}
 	}
+	if readonly != "" {
+		checkReadonlyMount(readonly, view, catalog, mounts, found)
+	}
+}
+
+// diskMount is a disk's id and mount.
+type diskMount struct{ id, mount string }
+
+// checkReadonlyMount checks view.readonly_mount against view.mount, the disks' mounts and the catalog (specs.md
+// §24.3).
+func checkReadonlyMount(readonly, view, catalog string, mounts []diskMount, found *problems) {
+	if inside(catalog, readonly) || catalog == readonly {
+		found.add("catalog", "inside view.readonly_mount")
+	}
+	if overlaps(readonly, view) {
+		found.add("view.readonly_mount", "on, inside or around view.mount")
+	}
+	for _, d := range mounts {
+		if overlaps(readonly, d.mount) {
+			found.add("view.readonly_mount", "on, inside or around the mount of disk %s", d.id)
+		}
+	}
+}
+
+// CheckReadonlyMount checks a point given to atoll mount on its command line as view.readonly_mount would be: an
+// absolute path, apart from view.mount, from the disks' mounts and from the catalog (specs.md §21.2, §24.3).
+func CheckReadonlyMount(c *Config, point string) error {
+	found := &problems{}
+	if err := checkAbsolutePath(point); err != nil {
+		found.add("view.readonly_mount", "%s", err)
+		return found.err()
+	}
+	view, _ := c.effective["view.mount"].(string)
+	catalog, _ := c.effective["catalog"].(string)
+	mounts := make([]diskMount, 0, len(c.Disks))
+	for _, d := range c.Disks {
+		mounts = append(mounts, diskMount{id: d.ID, mount: d.Mount})
+	}
+	checkReadonlyMount(point, view, catalog, mounts, found)
+	return found.err()
+}
+
+// overlaps reports whether two paths are the same, or one is inside the other.
+func overlaps(a, b string) bool {
+	return a == b || inside(a, b) || inside(b, a)
 }
 
 // inside reports whether path is strictly below parent, by whole components.

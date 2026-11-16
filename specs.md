@@ -1236,6 +1236,14 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
 - **`statfs`** is served from the catalog, with vectors in `conformance/vectors/view_statfs.json`: blocks of 4096 bytes; the size and the free space are the sums of `capacity_bytes` and `free_bytes` over the data disks that present, each rounded down to whole blocks, the free space also the space available, as mergerfs sums its branches; names of up to 255 bytes; no count of inodes, 0. A disk with no capacity or free space recorded yet counts for 0.
 - The kernel keeps what the view answers for 1 s, attributes and names, and keeps no name the view found absent, as for mergerfs (§21.1).
 - The read path comes first: the view is mounted read only, and a write of any kind fails with `EROFS`. `view.engine = "atoll"` stays an error (§24.4) until the view writes, as a merged view that takes no new file would stop Sonarr, Radarr and every user.
+- **Beside mergerfs, read only.** With `view.readonly_mount`, an absolute path, `atoll mount` serves Atoll's own view there, read only, while mergerfs stays the view that writes, at `view.mount`, as the maintainer chose on 2026-11-16. A media server reads it: browsing it wakes no disk, and each file reads from its original. Its scans are told of folders as it sees them through `path_map` (§21.5), such as `{ "/srv/pool" = "/srv/pool-ro" }` for Plex.
+  - `atoll mount [<point>]` mounts the view at `<point>`, or at `view.readonly_mount` when there is none; with neither, it is a usage error. `<point>` follows the relations of `view.readonly_mount` (§24.3), or it is a usage error too. It must be a folder that exists: Atoll makes none outside its disks.
+  - It runs as a process of its own, never in the daemon, so that the view stays while the daemon stops or starts again: a media server that scans while its library is gone may take it out (§30). `deploy/atoll-mount.service` runs it.
+  - It opens the catalog as every command does, then only reads it: it takes no lock, and writes nothing to the catalog or to a disk. What it presents follows the disks' states the catalog holds, which the daemon keeps (§15.13).
+  - It checks each disk's mount as the daemon does (§10), at its start and every 30 s. The `<root>` of a disk its check finds `online` or `readonly` is open for reading; a disk it finds otherwise has none, and a read of a copy there fails with `EIO`.
+  - At its start, a mount of Atoll's own view that a process stopped short left at the point, of the type `fuse.atoll`, which the kernel answers `ENOTCONN` for (or `ECONNREFUSED`, on Linux 7.3, when the process never answered its first request), is detached first (`umount -l`). Anything else mounted there is refused, a view another process still serves included.
+  - It tells systemd it is ready once the view is mounted, as the daemon does. `SIGTERM` or `SIGINT` unmounts the view, and it exits with 0; a view still read from then is detached (`umount -l`), and what is open there fails. It exits with 1 when it cannot start (the configuration, the catalog, the point or the mount), or when another process unmounts the view, so that systemd starts it again; and with 2 on a usage error.
+  - The mount is made by `mount(2)`, as the process holds `CAP_SYS_ADMIN`, and with `fusermount` otherwise; both open `/dev/fuse`, which udev opens to every account (mode 0666). Its unit, as the daemon's, gives it no mount namespace of its own, or no other process would see the view.
 
 ### 21.3 Phase 4: Windows
 
@@ -1414,6 +1422,7 @@ overflow       = "allow"                # allow | deny (never relaxes strict set
 [view]
 engine = "mergerfs"                     # mergerfs (phase 1) | atoll (phase 2a)
 mount  = "/srv/pool"
+# readonly_mount = "/srv/pool-ro"       # atoll mount: Atoll's own view, read only, for the media servers (§21.2)
 
 [read]                                  # Atoll's own view (phase 2a)
 policy   = "oldest"                     # oldest | prefer-spinning
@@ -1592,7 +1601,7 @@ Loading takes three steps. A `timezone` is then looked up among the time zones o
 3. **Relations.** Only when step 2 found no problem, and after the values of §24.2 are applied:
    - two disks never have the same `id`, `uuid` or `mount`, and the later one is reported;
    - a `uuid` is 8-4-4-4-12 lowercase hexadecimal digits on ext4, XFS and btrfs, and 16 uppercase hexadecimal digits on NTFS;
-   - a disk's `mount` is never inside another disk's. `view.mount` is never equal to a disk's `mount`, inside it, or around it. `catalog`, its default included, is never equal to a disk's `mount` or `view.mount`, or inside either. "Inside" compares whole components: `/mnt/ab` is not inside `/mnt/a`. The inner `mount`, `view.mount` or `catalog` is reported;
+   - a disk's `mount` is never inside another disk's. `view.mount` is never equal to a disk's `mount`, inside it, or around it. Nor is `view.readonly_mount`, which is never equal to `view.mount`, inside it, or around it either. `catalog`, its default included, is never equal to a disk's `mount`, `view.mount` or `view.readonly_mount`, or inside one of them. "Inside" compares whole components: `/mnt/ab` is not inside `/mnt/a`. The inner `mount`, `view.mount` or `catalog` is reported;
    - a disk's `root` and `workdir`, as §24.2 gives them to that disk, are names its `fs` accepts (§15.8), and differ from each other: by their exact bytes, and on NTFS by `lpath_key` too. So a name in `[layout]` is not checked for a disk that sets its own. `layout.root` and `layout.workdir` differ even with no disk. A name is reported at the disk's key when the disk sets it, otherwise at the key in `[layout]`; two names that do not differ are reported at `workdir`, or at `root` when the disk sets only that;
    - `spread = "none"` never goes with `spread_mode = "strict"`, in `[placement]` (reported at `placement.spread`) and for each rule that sets either (reported at the rule's `spread`, or its `spread_mode` when it sets only that);
    - `ups.enabled = true` needs `ups.nut`, reported at `ups.nut`;
@@ -1648,7 +1657,7 @@ atoll balance [--dry-run] [--yes]        Atoll's copies a strict setting no long
 atoll notify test [--json]               a test alert through each channel set, and a request to each media server (§21.5, §23)
 atoll catalog backup | verify | rebuild  verify: SQLite integrity check, then catalog vs disks (read-only)
 atoll mergerfs-config                    (phase 1 and break glass)
-atoll mount <point>                      (phase 2a on Linux, phase 4 on Windows)
+atoll mount [<point>]                    Atoll's own view, read only, at <point> or view.readonly_mount, until stopped (§21.2)
 atoll daemon [--foreground] [--until-idle] [--dry-run]
 ```
 

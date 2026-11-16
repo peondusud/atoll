@@ -403,6 +403,30 @@ func TestViewEngineAtollWaitsForItsPhase(t *testing.T) {
 	}
 }
 
+// A point given to atoll mount on its command line follows the relations of view.readonly_mount (specs.md §21.2,
+// §24.3), which the vectors pin for the key itself.
+func TestCheckReadonlyMount(t *testing.T) {
+	c, err := Parse([]byte("pool_id = \"p\"\ncatalog = \"/var/lib/atoll/catalog.db\"\n[view]\nmount = \"/srv/pool\"\n" +
+		"[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"/mnt/t1\"\nfs = \"ext4\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for point, key := range map[string]string{
+		"/srv/pool-ro": "", "/srv/pool": "view.readonly_mount", "/srv": "view.readonly_mount", "/srv/pool/ro": "view.readonly_mount",
+		"/mnt/t1/x": "view.readonly_mount", "/mnt": "view.readonly_mount", "srv/ro": "view.readonly_mount", "/srv/ro/": "view.readonly_mount",
+		"/srv/./ro": "view.readonly_mount", "/var/lib/atoll": "catalog",
+	} {
+		err := CheckReadonlyMount(c, point)
+		var e *Error
+		switch {
+		case key == "" && err != nil:
+			t.Errorf("%s: %v", point, err)
+		case key != "" && (!errors.As(err, &e) || len(e.Problems) != 1 || e.Problems[0].Key != key):
+			t.Errorf("%s: got %v, want a problem at %s", point, err, key)
+		}
+	}
+}
+
 func TestErrorMessage(t *testing.T) {
 	_, err := Parse([]byte("pool_id = 1\nfoo = 2\n[view]\nmount = \"/srv/pool\"\n"))
 	if err == nil || !strings.Contains(err.Error(), "pool_id: ") || !strings.Contains(err.Error(), "foo: unknown key") {

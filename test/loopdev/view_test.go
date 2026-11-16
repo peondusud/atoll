@@ -19,13 +19,6 @@ import (
 	"github.com/peondusud/atoll/internal/view/fusefs"
 )
 
-type viewRoots map[string]fsx.Dir
-
-func (r viewRoots) Root(disk string) (fsx.Dir, bool) {
-	d, ok := r[disk]
-	return d, ok
-}
-
 // TestViewMatchesMergerfs: on each driver, a library replicated on two disks, then mounted by mergerfs from the line
 // atoll mergerfs-config prints, and by Atoll's own view from the catalog alone, read only. Both list the same names,
 // with the same kind, mode, owner, size, modification time, symlink target and content (specs.md §21.2: "the
@@ -54,12 +47,12 @@ func TestViewMatchesMergerfs(t *testing.T) {
 
 			line, merged := fstabLine(b)
 			mountView(t, line, merged)
-			roots := viewRoots{}
+			roots := view.NewDiskRoots()
+			t.Cleanup(roots.Close)
 			for id, top := range map[string]string{"k": b.keep, "v": b.at} {
 				dir, err := fsx.OpenDir(filepath.Join(top, "media"))
 				mustDo(t, err)
-				t.Cleanup(func() { _ = dir.Close() })
-				roots[id] = dir
+				roots.Set(id, dir)
 			}
 			own := mountPoint(t)
 			mustDo(t, os.MkdirAll(own, 0o755))
@@ -138,12 +131,12 @@ func TestViewBrowsesNoDisk(t *testing.T) {
 			b.scan(false)
 			catchUp(b)
 			b.scan(false)
-			roots := viewRoots{}
+			roots := view.NewDiskRoots()
+			t.Cleanup(roots.Close)
 			for id, top := range map[string]string{"k": b.keep, "v": b.at} {
 				dir, err := fsx.OpenDir(filepath.Join(top, "media"))
 				mustDo(t, err)
-				t.Cleanup(func() { _ = dir.Close() })
-				roots[id] = dir
+				roots.Set(id, dir)
 			}
 			own := mountPoint(t)
 			mustDo(t, os.MkdirAll(own, 0o755))

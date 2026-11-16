@@ -55,6 +55,32 @@ func IsDeviceGone(err error) bool {
 	return IsAbsent(err) || errors.Is(err, unix.ENXIO) || errors.Is(err, unix.ENODEV)
 }
 
+// IsNotConnected says that a path is the mount of a FUSE filesystem whose process has gone: the kernel answers
+// ENOTCONN for it until it is unmounted, and Linux 7.3 ECONNREFUSED when the process never answered its first
+// request (measured).
+func IsNotConnected(err error) bool {
+	return errors.Is(err, unix.ENOTCONN) || errors.Is(err, unix.ECONNREFUSED)
+}
+
+// DetachMount detaches the mount at a path at once, as umount -l does: what is open there stays usable until closed.
+// It takes CAP_SYS_ADMIN.
+func DetachMount(path string) error {
+	if err := unix.Unmount(path, unix.MNT_DETACH); err != nil {
+		return fmt.Errorf("umount -l %q: %w", path, err)
+	}
+	return nil
+}
+
+// CanReadWrite says whether this process may open a file for reading and writing: it opens it so, and closes it.
+func CanReadWrite(path string) error {
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open %q: %w", path, err)
+	}
+	_ = unix.Close(fd)
+	return nil
+}
+
 // ReadMountTable reads the mount table of this process.
 func ReadMountTable() ([]byte, error) {
 	data, err := os.ReadFile("/proc/self/mountinfo")

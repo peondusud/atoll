@@ -90,7 +90,8 @@
       "required": ["mount"],
       "properties": {
         "engine": { "enum": ["mergerfs", "atoll"], "default": "mergerfs" },
-        "mount": { "$ref": "#/$defs/absolute_path" }
+        "mount": { "$ref": "#/$defs/absolute_path" },
+        "readonly_mount": { "$ref": "#/$defs/absolute_path" }
       }
     },
     "read": {

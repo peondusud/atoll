@@ -96,7 +96,7 @@ func scaleCatalog(tb testing.TB) *sql.DB {
 // listing of the folder of the shows, 2,000 names over 200,000 paths below them, and the listing of one season.
 func BenchmarkTreeAtScale(b *testing.B) {
 	db := scaleCatalog(b)
-	tree := NewTree(db, rootsOf{}, Owner{}, 0)
+	tree := NewTree(db, NewDiskRoots(), Owner{}, 0)
 	ctx := context.Background()
 	b.Run("lookup", func(b *testing.B) {
 		for i := 0; b.Loop(); i++ {
