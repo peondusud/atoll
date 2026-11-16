@@ -51,7 +51,11 @@ func Capacity(ctx context.Context, db *sql.DB, c *config.Config, now int64) ([]L
 	}
 	taken, done := catalog.KeysTaken(ctx, db)
 	defer done()
-	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Taken: taken}
+	newFiles, fillTo, err := NewFilesOf(c)
+	if err != nil {
+		return nil, err
+	}
+	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Taken: taken, NewFiles: newFiles, FillTo: fillTo}
 	if _, err := filesForPlan(ctx, db, c, diskList, &input, nil); err != nil {
 		return nil, err
 	}

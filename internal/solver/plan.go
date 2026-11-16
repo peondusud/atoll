@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"slices"
 	"strings"
 
@@ -68,7 +69,21 @@ type Placement struct {
 	Spread     string
 	SpreadMode string
 	Overflow   string
+	// Colocate is none, folder, season or show: the copies of the files of one folder, or of one show, go to the
+	// same disks (specs.md §12.4). Empty is none.
+	Colocate string
 }
+
+// The values of colocate, and of placement.new_files (specs.md §12.4).
+const (
+	ColocateNone   = "none"
+	ColocateFolder = "folder"
+	ColocateSeason = "season"
+	ColocateShow   = "show"
+	NewMostFree    = "most-free"
+	NewOrdered     = "ordered"
+	NewPercent     = "percent"
+)
 
 // File is one managed file of the pool. Hold says it waits for atoll replicate, and Leaving that its deletion is
 // decided and waits for a trash job: it gets no job and keeps no pending copy, as a copy made now would end its
@@ -105,6 +120,10 @@ type Input struct {
 	Files   []File
 	Entries []Entry
 	MinFree value.MinFree
+	// NewFiles is placement.new_files, most-free when empty, and FillTo placement.fill_to, what ordered fills each disk
+	// to (specs.md §12.4).
+	NewFiles string
+	FillTo   value.Percent
 	// Balance makes the plan of atoll balance (specs.md §13.3): an Atoll copy that breaks a strict setting of its
 	// file counts for nothing, so that one is made where the setting wants it. It stays a source, and its disk still
 	// holds a copy; its result names it.
@@ -243,6 +262,7 @@ type planDisk struct {
 	*Disk
 	domain  string // its failure domain: a disk with no domain forms its own
 	room    int64  // what can still be filled: free space, minus min_free, pending and planned
+	used    int64  // what the disk holds, with what the plan placed: its capacity less its free space, and more
 	folders map[string]bool
 	others  map[string]bool    // symlinks and ignored files
 	old     map[string]bool    // the names copies that have not followed a rename still sit at, made when there is one
@@ -327,10 +347,17 @@ type planner struct {
 	originals bool
 	// taken is Input.Taken.
 	taken func(disk, path string) (bool, error)
+	// newFiles and fillTo are Input.NewFiles and Input.FillTo.
+	newFiles string
+	fillTo   value.Percent
+	// groups counts, for each group of colocate, the files with a copy on each disk, in any state, or one the plan
+	// placed there (specs.md §12.4).
+	groups map[string]map[*planDisk]int
 }
 
 func newPlanner(in Input) (*planner, error) {
 	p := &planner{byID: map[string]*planDisk{}, byPath: map[string]*planFile{}, entries: in.Entries, balance: in.Balance,
+		newFiles: in.NewFiles, fillTo: in.FillTo, groups: map[string]map[*planDisk]int{},
 		originals: in.Balance && in.MoveOriginals, taken: in.Taken}
 	if err := p.addDisks(in); err != nil {
 		return nil, err
@@ -360,7 +387,7 @@ func (p *planner) addDisks(in Input) error {
 		if d.Domain == "" {
 			domain = "disk " + d.ID
 		}
-		pd := &planDisk{Disk: d, domain: domain, room: d.Free - reserved, folders: map[string]bool{}, others: map[string]bool{}}
+		pd := &planDisk{Disk: d, domain: domain, room: d.Free - reserved, used: d.Capacity - d.Free, folders: map[string]bool{}, others: map[string]bool{}}
 		p.byID[d.ID] = pd
 		p.disks = append(p.disks, pd)
 	}
@@ -406,8 +433,23 @@ func (p *planner) addFiles(in Input) error {
 		if err := p.addCopies(pf); err != nil {
 			return err
 		}
+		for _, d := range pf.holding {
+			p.holds(pf, d)
+		}
 	}
 	return nil
+}
+
+// holds counts a file's copy on a disk in its group of colocate, if it has one.
+func (p *planner) holds(f *planFile, d *planDisk) {
+	group := groupOf(f.Path, f.Placement.Colocate)
+	if group == "" {
+		return
+	}
+	if p.groups[group] == nil {
+		p.groups[group] = map[*planDisk]int{}
+	}
+	p.groups[group][d]++
 }
 
 func checkFile(f *File) error {
@@ -799,6 +841,7 @@ func (f *planFile) missing() int {
 func (f *planFile) place(d *planDisk) {
 	f.jobs++
 	d.room = subtract(d.room, f.Size)
+	d.used += f.Size
 	f.covered = appendNew(f.covered, d.domain)
 }
 
@@ -850,6 +893,7 @@ func (p *planner) create(f *planFile, jobs []Job) ([]Job, error) {
 		f.overflow = f.overflow || overflow
 		f.place(d)
 		f.holding = append(f.holding, d)
+		p.holds(f, d)
 		addParents(d, f.Path)
 		if d.names != nil {
 			if err := d.names.Add(f.Path); err != nil {
@@ -976,6 +1020,7 @@ func (p *planner) pick(f *planFile) (best *planDisk, overflow bool, err error) {
 		mustCover = left > 0 && left >= f.missing()
 	}
 	var bestListed, bestNew bool
+	bestTogether := 0
 	for _, d := range p.disks {
 		if !d.writable() || slices.Contains(f.holding, d) || f.onPhysicalOf(d) {
 			continue
@@ -1000,17 +1045,107 @@ func (p *planner) pick(f *planFile) (best *planDisk, overflow bool, err error) {
 			continue
 		}
 		wantsNew := place.Spread == SpreadDomain && isNew
+		together := p.together(f, d)
 		if best == nil || cmp.Or(
 			boolRank(!isListed, !bestListed),
 			boolRank(!wantsNew, !bestNew),
-			cmp.Compare(best.room, d.room),
+			cmp.Compare(bestTogether, together),
+			p.compareNew(f, d, best),
 			boolRank(d.State != DiskOnline, best.State != DiskOnline),
 			cmp.Compare(d.Position, best.Position),
 		) < 0 {
-			best, bestListed, bestNew = d, isListed, wantsNew
+			best, bestListed, bestNew, bestTogether = d, isListed, wantsNew, together
 		}
 	}
 	return best, best != nil && !bestListed, nil
+}
+
+// GroupFolder gives the folder whose files a file's copies go with (specs.md §12.4): its folder with colocate = folder
+// or season, and the folder above it with show; false with none, or for a file too near the root to have it.
+func GroupFolder(path, colocate string) (string, bool) {
+	group := groupOf(path, colocate)
+	if group == "" {
+		return "", false
+	}
+	_, folder, _ := strings.Cut(group, "\x00")
+	return folder, true
+}
+
+// groupOf gives the group a file's copies go with: GroupFolder's, after colocate, so that two settings never share
+// one; "" for none.
+func groupOf(path, colocate string) string {
+	levels := 0
+	switch colocate {
+	case ColocateFolder, ColocateSeason:
+		levels = 1
+	case ColocateShow:
+		levels = 2
+	}
+	group := path
+	for range levels {
+		i := strings.LastIndexByte(group, '/')
+		if i < 0 {
+			return ""
+		}
+		group = group[:i]
+	}
+	if levels == 0 {
+		return ""
+	}
+	return colocate + "\x00" + group
+}
+
+// together says how many other files of a file's group hold a copy on a disk, in any state, or have one the plan
+// placed there: with colocate, the disk that holds the most of them is the best (specs.md §12.4).
+func (p *planner) together(f *planFile, d *planDisk) int {
+	// A candidate holds no copy of the file itself: what the group counts there is the others'.
+	group := groupOf(f.Path, f.Placement.Colocate)
+	if group == "" {
+		return 0
+	}
+	return p.groups[group][d]
+}
+
+// compareNew orders two candidates as placement.new_files does, d before best when below 0.
+func (p *planner) compareNew(f *planFile, d, best *planDisk) int {
+	return CompareNew(p.newFiles, p.fillTo, f.Size, Fill{Room: d.room, Used: d.used, Capacity: d.Capacity, Position: d.Position},
+		Fill{Room: best.room, Used: best.used, Capacity: best.Capacity, Position: best.Position})
+}
+
+// Fill is what placement.new_files weighs of a disk: the room it has after min_free, what it holds, its capacity and
+// its position.
+type Fill struct {
+	Room, Used, Capacity int64
+	Position             int
+}
+
+// CompareNew orders two disks for something of a size as placement.new_files does (specs.md §12.4), a before b when
+// below 0: most-free, the most room after min_free; ordered, a disk below fill_to once it holds that size, the lowest
+// position first, then the most room; percent, the most room as a share of the disk's capacity, compared exactly.
+func CompareNew(newFiles string, fillTo value.Percent, size int64, a, b Fill) int {
+	switch newFiles {
+	case NewOrdered:
+		aBelow, bBelow := !fillTo.Exceeded(a.Used+size, a.Capacity), !fillTo.Exceeded(b.Used+size, b.Capacity)
+		if c := boolRank(!aBelow, !bBelow); c != 0 || aBelow {
+			return cmp.Or(c, cmp.Compare(a.Position, b.Position))
+		}
+	case NewPercent:
+		return compareShares(b.Room, b.Capacity, a.Room, a.Capacity)
+	}
+	return cmp.Compare(b.Room, a.Room)
+}
+
+// compareShares compares a/b with c/d exactly, a share with no capacity counting as none.
+func compareShares(a, b, c, d int64) int {
+	share := func(x, y int64) (*big.Int, *big.Int) {
+		if y <= 0 || x < 0 {
+			return big.NewInt(0), big.NewInt(1)
+		}
+		return big.NewInt(x), big.NewInt(y)
+	}
+	an, ad := share(a, b)
+	cn, cd := share(c, d)
+	return new(big.Int).Mul(an, cd).Cmp(new(big.Int).Mul(cn, ad))
 }
 
 // checkName says whether a disk can hold a file's name.

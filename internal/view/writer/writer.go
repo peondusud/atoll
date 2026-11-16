@@ -258,22 +258,36 @@ func (w *Writer) free(ctx context.Context, path string) error {
 	return nil
 }
 
-// candidate is a disk a new file may go to, with the room it has past min_free.
+// candidate is a disk a new file may go to: the room it has past min_free and what it holds, for new_files, and how many
+// files of its group it holds, for colocate.
 type candidate struct {
 	id       string
-	room     int64
+	fill     solver.Fill
+	together int
 	standby  bool
-	position int
 }
 
-// place picks the disk of something new, as placement.new_files does for a replica's target (specs.md §12.4): a data
-// disk the view may write to now, online or standby and neither readonly, draining nor failed, with room past
-// min_free, whose filesystem takes the name with no collision and whose branch reaches it; the most free, online
-// before standby, then by position.
+// place picks the disk of something new, as for a replica's target (specs.md §12.4): a data disk the view may write to
+// now, online or standby and neither readonly, draining nor failed, with room past min_free, whose filesystem takes the
+// name with no collision and whose branch reaches it; the one that holds the most files of its group with colocate,
+// then as placement.new_files says, online before standby, then by position.
 func (w *Writer) place(ctx context.Context, path string) (string, error) {
 	rows, err := catalog.ViewDisks(ctx, w.db)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
+	}
+	newFiles, fillTo, err := watch.NewFilesOf(w.config)
+	if err != nil {
+		return "", fmt.Errorf("%w", err)
+	}
+	together := map[string]int{}
+	colocate := w.config.Policy(path, nil).Colocate
+	if folder, ok := solver.GroupFolder(path, colocate); ok {
+		// A file counts with its own rule's colocate, as in the plan.
+		same := func(other string) bool { return w.config.Policy(other, nil).Colocate == colocate }
+		if together, err = catalog.GroupHolders(ctx, w.db, folder, colocate == solver.ColocateShow, same); err != nil {
+			return "", fmt.Errorf("%w", err)
+		}
 	}
 	state := map[string]catalog.ViewDisk{}
 	for _, r := range rows {
@@ -306,14 +320,18 @@ func (w *Writer) place(ctx context.Context, path string) (string, error) {
 			return "", fmt.Errorf("%w", err)
 		}
 		if room := free - reserved; room > 0 {
-			list = append(list, candidate{id: d.ID, room: room, standby: r.State == string(solver.DiskStandby), position: r.Position})
+			list = append(list, candidate{id: d.ID, fill: solver.Fill{Room: room, Used: capacity - free, Capacity: capacity, Position: r.Position},
+				together: together[d.ID], standby: r.State == string(solver.DiskStandby)})
 		}
 	}
 	if len(list) == 0 {
 		return "", ErrNoSpace
 	}
 	slices.SortFunc(list, func(a, b candidate) int {
-		if c := cmp.Compare(b.room, a.room); c != 0 {
+		if c := cmp.Compare(b.together, a.together); c != 0 {
+			return c
+		}
+		if c := solver.CompareNew(newFiles, fillTo, 0, a.fill, b.fill); c != 0 {
 			return c
 		}
 		if a.standby != b.standby {
@@ -322,7 +340,7 @@ func (w *Writer) place(ctx context.Context, path string) (string, error) {
 			}
 			return -1
 		}
-		return cmp.Compare(a.position, b.position)
+		return cmp.Compare(a.fill.Position, b.fill.Position)
 	})
 	return list[0].id, nil
 }

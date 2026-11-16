@@ -318,11 +318,9 @@ func TestLaterPhaseWarnings(t *testing.T) {
 		"disk[3].role",
 		"health.avoid_hotter_than",
 		"health.evacuate_on",
-		"placement.colocate", // set by the energy preset, unlike new_files, which the file sets
 		"read.classes",
 		"rule[5].cache_min_age",
 		"rule[6].cache_min_age",
-		"rule[7].colocate",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("warnings at\n%q, want\n%q", got, want)
@@ -334,12 +332,14 @@ func TestLaterPhaseWarnings(t *testing.T) {
 	}
 }
 
-func TestFallbackWarnings(t *testing.T) {
+// placement.new_files and colocate came with phase 2b: neither warns any more (specs.md §12.4, §24.4).
+func TestStrategiesNoLongerWarn(t *testing.T) {
 	c, err := Parse([]byte(`pool_id = "p"
 [view]
 mount = "/srv/pool"
 [placement]
 new_files = "ordered"
+colocate = "season"
 [integrity]
 auto_repair = false
 [ups]
@@ -348,11 +348,7 @@ enabled = false
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]string{}
-	for _, w := range c.Warnings {
-		got[w.Key] = w.Message
-	}
-	if len(got) != 1 || !strings.Contains(got["placement.new_files"], "works as most-free") {
+	if len(c.Warnings) != 0 {
 		t.Errorf("warnings: %v", c.Warnings)
 	}
 }

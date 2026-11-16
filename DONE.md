@@ -2,6 +2,21 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The colocate and new_files strategies, 2026-11-16 (specs.md §12.4, §13.4, §21.1, §21.2, §24.4)
+
+Commit "Place copies with colocate and new_files", on `beta`, the first piece of phase 2b (R-28), as the spec had it; vectors first.
+
+- **The plan's best candidate** (§13.4) is now, in order: listed; in a domain with no copy, with `spread = "domain"`; with `colocate`, the disk that holds the most of the file's group; as `placement.new_files` says; `online` before `standby`; by position. 15 vectors in `plan.json`; made to fail, by taking colocate out and percent's share away, 7 of them did.
+- **colocate** (`folder` and `season` alike, `show` one folder up): the group is the files of the folder whose rule says the same `colocate`, each counted once on a disk where it has a copy, in any state, or one the plan placed, so a season placed in one plan lands together.
+- **new_files**: `ordered` fills the disks in the configuration's order, each to `fill_to`, a disk below it once it holds the file first, then the most free when none is; `percent` takes the most free share of capacity, compared exactly, so the disks fill alike; `most-free` as before.
+- **Atoll's own view** places what is new the same way, its group read from the catalog (`TestWriterPlacesAsTheStrategiesSay`); the mergerfs line creates with `ff` for `ordered` and `pfrd` for `percent`.
+- `new_files` and `colocate` no longer warn that they wait for phase 2b; the rows of §24.4 went.
+- **Decided without the maintainer, to confirm:**
+  - `percent` means the most free share of capacity, so that the disks fill to the same share, as DrivePool's equalizer does at placement: mergerfs's `pfrd` draws at random by free space, and Atoll's plan draws nothing at random (§29.3);
+  - `folder` and `season` group alike but are two groups, as two rules that say them are two settings;
+  - a disk counts the files of the group with a copy there in any state, a stale one included, as the folder is there either way;
+  - `read.policy = "prefer-spinning"` and `read.classes`, listed for phase 2a and not done there, come with phase 2b's disk sleep, which knows which disk spins; the view reads the original meanwhile, and both keep their warning.
+
 ## The contracts frozen at format version 1, 2026-11-16 (specs.md §29.3)
 
 Commit "Freeze the contracts at format version 1", on `beta`. The maintainer chose to freeze them now, by the rules recommended ("Geler maintenant"), and confirmed every choice DONE.md still listed as to confirm, 50 sections ("Tout confirmer"): each says so now.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -39,12 +40,11 @@ type Mergerfs struct {
 	Options []string
 }
 
-// mergerfsOptions are the options of specs.md §21.1, in its order. category.create follows
-// placement.new_files, and every value of it works as most-free until phase 2b (§24.4), which is mfs.
+// mergerfsOptions are the options of specs.md §21.1, in its order, but for category.create, which follows
+// placement.new_files (createPolicy) and comes third.
 var mergerfsOptions = []string{
 	"category.search=ff",
 	"category.action=epall",
-	"category.create=mfs",
 	"moveonenospc=false",
 	"rename-exdev=passthrough",
 	"link-exdev=passthrough",
@@ -58,7 +58,10 @@ var mergerfsOptions = []string{
 // no data disk, or a branch path holding ':' or ','.
 func NewMergerfs(c *config.Config, minFree value.MinFree, capacities map[string]int64) (*Mergerfs, error) {
 	mount, _ := c.Effective()["view.mount"].(string)
-	m := &Mergerfs{Mount: mount, Options: append([]string(nil), mergerfsOptions...)}
+	options := slices.Clone(mergerfsOptions)
+	newFiles, _ := c.Effective()["placement.new_files"].(string)
+	options = slices.Insert(options, 2, "category.create="+createPolicy(newFiles))
+	m := &Mergerfs{Mount: mount, Options: options}
 	// A failed disk comes after the others, so that category.search=ff reads a copy it holds only when no other
 	// disk holds one.
 	var order []*config.Disk
@@ -129,3 +132,15 @@ func mergerfsSize(n int64) string {
 
 // fstabEscape writes what fstab(5) would read as the end of a field, or as an escape, in octal.
 var fstabEscape = strings.NewReplacer(`\`, `\134`, " ", `\040`, "\t", `\011`, "\n", `\012`).Replace
+
+// createPolicy is category.create for placement.new_files (specs.md §21.1): mfs for most-free, ff with the branches in
+// fill order, the configuration's, for ordered, and pfrd for percent.
+func createPolicy(newFiles string) string {
+	switch newFiles {
+	case "ordered":
+		return "ff"
+	case "percent":
+		return "pfrd"
+	}
+	return "mfs"
+}

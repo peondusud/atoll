@@ -55,10 +55,16 @@ type bench struct {
 
 func newBench(t *testing.T, t2fs string) *bench {
 	t.Helper()
+	return newBenchWith(t, t2fs, "", 500, 50)
+}
+
+// newBenchWith is newBench with more keys of [placement], and the free space of each disk, of 1000 bytes.
+func newBenchWith(t *testing.T, t2fs, placement string, free1, free2 int64) *bench {
+	t.Helper()
 	top := t.TempDir()
 	b := &bench{t: t, top: top, mount: map[string]string{}}
 	m := &machine{free: map[string]int64{}}
-	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = \"/srv/pool\"\n[placement]\nmin_free = [\"5%%\"]\n", filepath.Join(top, "catalog.db"))
+	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = \"/srv/pool\"\n[placement]\nmin_free = [\"5%%\"]\n", filepath.Join(top, "catalog.db")) + placement
 	for i, id := range []string{"t1", "t2"} {
 		mount := filepath.Join(top, id)
 		b.mount[id] = mount
@@ -73,7 +79,7 @@ func newBench(t *testing.T, t2fs string) *bench {
 		}
 		text += fmt.Sprintf("[[disk]]\nid = %q\nuuid = %q\nmount = %q\nfs = %q\n", id, uuid, mount, fs)
 	}
-	m.free[b.mount["t1"]], m.free[b.mount["t2"]] = 500, 50
+	m.free[b.mount["t1"]], m.free[b.mount["t2"]] = free1, free2
 	c, err := config.Parse([]byte(text))
 	if err != nil {
 		t.Fatal(err)
@@ -327,5 +333,31 @@ func mustWrite(t *testing.T, path, text string) {
 	}
 	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// What is new through the view goes where its group is with colocate, then as placement.new_files says (specs.md
+// §12.4): with ordered, t1, the first disk below fill_to, though t2 has more room; a new episode of a season whose
+// files are on t2 goes to t2.
+func TestWriterPlacesAsTheStrategiesSay(t *testing.T) {
+	b := newBenchWith(t, "ext4", "new_files = \"ordered\"\ncolocate = \"season\"\n", 200, 300)
+	ctx := t.Context()
+	b.create("Films/new.mkv", "new")
+	if b.on("t1", "Films/new.mkv") != "new" {
+		t.Errorf("ordered: a new film is not on t1: t1 %q, t2 %q", b.on("t1", "Films/new.mkv"), b.on("t2", "Films/new.mkv"))
+	}
+	mustWrite(t, filepath.Join(b.mount["t2"], "media", "Series", "S01", "e01.mkv"), "e01")
+	for _, q := range []string{
+		"INSERT INTO files(id, lpath, size, mtime_ns, replicas_target, mode, state, first_seen_ns, updated_ns) VALUES (2, CAST('Series/S01/e01.mkv' AS BLOB), 3, 9, 1, 'deferred', 'ok', 0, 0)",
+		"INSERT INTO copies(file_id, disk_id, size, mtime_ns, created_by, first_seen_ns, state, mode, uid, gid, nlink) VALUES (2, 't2', 3, 9, 'user', 0, 'ok', 420, 0, 0, 1)",
+		"INSERT INTO entries(lpath, disk_id, kind, mode, mtime_ns, created_by) VALUES (CAST('Series' AS BLOB), 't2', 'dir', 493, 5, 'user'), (CAST('Series/S01' AS BLOB), 't2', 'dir', 493, 5, 'user')",
+	} {
+		if _, err := b.w.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.create("Series/S01/e02.mkv", "e02")
+	if b.on("t2", "Series/S01/e02.mkv") != "e02" {
+		t.Errorf("colocate: a new episode is not with its season on t2: t1 %q, t2 %q", b.on("t1", "Series/S01/e02.mkv"), b.on("t2", "Series/S01/e02.mkv"))
 	}
 }

@@ -19,14 +19,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 	for key, v := range set {
 		var phase, effect string
 		switch index.ReplaceAllString(key, "") {
-		case "placement.new_files":
-			if v != "most-free" {
-				phase, effect = "2b", "works as most-free"
-			}
-		case "placement.colocate", "rule.colocate":
-			if v != "none" {
-				phase = "2b"
-			}
 		case "balance.equalize":
 			if v != "off" {
 				phase = "2b"

@@ -256,3 +256,35 @@ func IsViewOp(ctx context.Context, db *sql.DB, opID int64) (bool, error) {
 	}
 	return is, nil
 }
+
+// groupHoldersSQL reads the files below a folder through files' unique index on lpath, ?1 the folder followed by "/",
+// ?2 by "0", the byte after it.
+const groupHoldersSQL = `
+	SELECT c.disk_id, f.lpath FROM files f JOIN copies c ON c.file_id = f.id
+	WHERE f.lpath >= ?1 AND f.lpath < ?2 AND c.state <> 'pending'`
+
+// GroupHolders counts, for each disk, the files below a folder with a copy there that is not pending: those directly in
+// it, or those at any depth below it when deep says so, that in says are of the group. It is what colocate weighs of a
+// disk for a file new in that folder (specs.md §12.4).
+func GroupHolders(ctx context.Context, db *sql.DB, folder string, deep bool, in func(path string) bool) (map[string]int, error) {
+	rows, err := db.QueryContext(ctx, groupHoldersSQL, []byte(folder+"/"), []byte(folder+"0"))
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int{}
+	for rows.Next() {
+		var disk string
+		var path []byte
+		if err := rows.Scan(&disk, &path); err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		if (deep || !strings.Contains(string(path[len(folder)+1:]), "/")) && in(string(path)) {
+			out[disk]++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	return out, nil
+}

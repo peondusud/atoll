@@ -27,6 +27,8 @@ type planVector struct {
 	Balance bool           `json:"balance"`
 	// MoveOriginals is the plan of atoll balance --move-originals, with Balance.
 	MoveOriginals bool   `json:"move_originals"`
+	NewFiles      string `json:"new_files"`
+	FillTo        string `json:"fill_to"`
 	Note          string `json:"note"`
 }
 
@@ -64,6 +66,7 @@ type policyVector struct {
 	Spread     *string  `json:"spread"`
 	SpreadMode *string  `json:"spread_mode"`
 	Overflow   *string  `json:"overflow"`
+	Colocate   *string  `json:"colocate"`
 }
 
 type fileVector struct {
@@ -117,8 +120,15 @@ func or[T any](v *T, fallback T) T {
 // input turns a vector into the input of MakePlan, with the defaults of
 // conformance/vectors/README.md.
 func (v *planVector) input() (Input, error) {
-	in := Input{Balance: v.Balance, MoveOriginals: v.MoveOriginals}
+	in := Input{Balance: v.Balance, MoveOriginals: v.MoveOriginals, NewFiles: v.NewFiles}
 	var err error
+	fillTo := v.FillTo
+	if fillTo == "" {
+		fillTo = "90%"
+	}
+	if in.FillTo, err = value.ParsePercent(fillTo); err != nil {
+		return in, fmt.Errorf("fill_to: %w", err)
+	}
 	minFree := v.MinFree
 	if minFree == nil {
 		minFree = []string{"0%"}
@@ -143,7 +153,7 @@ func (v *planVector) input() (Input, error) {
 			Replicas: or(f.Policy.Replicas, 1), Priority: f.Policy.Priority,
 			Tags: f.Policy.Tags, TagsMode: or(f.Policy.TagsMode, "prefer"), Domains: f.Policy.Domains,
 			Spread: or(f.Policy.Spread, "domain"), SpreadMode: or(f.Policy.SpreadMode, "prefer"),
-			Overflow: or(f.Policy.Overflow, "allow"),
+			Overflow: or(f.Policy.Overflow, "allow"), Colocate: or(f.Policy.Colocate, "none"),
 		}}
 		for _, c := range f.Copies {
 			file.Copies = append(file.Copies, Copy{

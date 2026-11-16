@@ -630,8 +630,12 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	// The plan asks the catalog of the names an NTFS disk holds, and holds none of them (specs.md §13.4).
 	taken, done := catalog.KeysTaken(ctx, db)
 	defer done()
+	newFiles, fillTo, err := NewFilesOf(c)
+	if err != nil {
+		return err
+	}
 	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance,
-		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals, Taken: taken}
+		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals, Taken: taken, NewFiles: newFiles, FillTo: fillTo}
 	var release func(string) bool
 	if rep != nil {
 		release = rep.Release
@@ -722,6 +726,17 @@ func missingGraceOf(c *config.Config) (time.Duration, error) {
 	return grace, nil
 }
 
+// NewFilesOf gives placement.new_files and placement.fill_to (specs.md §12.4).
+func NewFilesOf(c *config.Config) (string, value.Percent, error) {
+	newFiles, _ := c.Effective()["placement.new_files"].(string)
+	text, _ := c.Effective()["placement.fill_to"].(string)
+	fillTo, err := value.ParsePercent(text)
+	if err != nil {
+		return "", value.Percent{}, fmt.Errorf("placement.fill_to: %w", err)
+	}
+	return newFiles, fillTo, nil
+}
+
 func planDisks(list []catalog.Disk, now int64, grace time.Duration) []solver.Disk {
 	out := make([]solver.Disk, 0, len(list))
 	// Two disks on one physical disk count as one (R-06).
@@ -785,11 +800,12 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			}
 			// A rule that now ignores a file leaves it what it was, with the pool's placement (specs.md §15.10).
 			placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread,
-				spreadMode: c.Pool.SpreadMode, tagsMode: c.Pool.TagsMode, overflow: c.Pool.Overflow}
+				spreadMode: c.Pool.SpreadMode, tagsMode: c.Pool.TagsMode, overflow: c.Pool.Overflow, colocate: c.Pool.Colocate}
 			size := update.Size
 			if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
 				placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread, spreadMode: policy.SpreadMode,
-					tagsMode: policy.TagsMode, overflow: policy.Overflow, tags: joinNames(policy.Tags), domains: joinNames(policy.Domains)}
+					tagsMode: policy.TagsMode, overflow: policy.Overflow, tags: joinNames(policy.Tags), domains: joinNames(policy.Domains),
+					colocate: policy.Colocate}
 			}
 			copies := make([]solver.Copy, 0, len(f.Copies))
 			for j := range f.Copies {
@@ -849,6 +865,7 @@ type placementKey struct {
 	replicas, priority                     int
 	spread, spreadMode, tagsMode, overflow string
 	tags, domains                          string
+	colocate                               string
 }
 
 func joinNames(list []string) string {
@@ -869,7 +886,7 @@ func placementFor(known map[placementKey]*solver.Placement, key placementKey) *s
 	}
 	p := &solver.Placement{
 		Replicas: key.replicas, Priority: key.priority, Spread: key.spread, SpreadMode: key.spreadMode, TagsMode: key.tagsMode, Overflow: key.overflow,
-		Tags: splitNames(key.tags), Domains: splitNames(key.domains),
+		Tags: splitNames(key.tags), Domains: splitNames(key.domains), Colocate: key.colocate,
 	}
 	known[key] = p
 	return p
