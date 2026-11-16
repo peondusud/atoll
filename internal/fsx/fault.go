@@ -66,6 +66,13 @@ func (d *faultDir) Mkdir(name string, mode uint32) error {
 	return d.Dir.Mkdir(name, mode)
 }
 
+func (d *faultDir) Symlink(target, name string) error {
+	if err := d.fail("symlink", name); err != nil {
+		return err
+	}
+	return d.Dir.Symlink(target, name)
+}
+
 func (d *faultDir) Adopt(name string, like *Stat) error {
 	if err := d.fail("adopt", name); err != nil {
 		return err

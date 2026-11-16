@@ -117,6 +117,13 @@ type Dir interface {
 	// SetMtime sets the modification time of the folder itself, and SetMode its permission bits, as fchmod does.
 	SetMtime(t Time) error
 	SetMode(mode uint32) error
+	// SetOwner sets the owner of the folder itself, as fchown does: a change Atoll's own view makes on a user's
+	// behalf (specs.md §21.2).
+	SetOwner(uid, gid uint32) error
+	// Symlink makes a symbolic link with that target, and fails on a name that exists; Lchown gives a name the
+	// owner, the symbolic link itself and not what it leads to. Only Atoll's own view makes one, on a user's behalf.
+	Symlink(target, name string) error
+	Lchown(name string, uid, gid uint32) error
 	Close() error
 }
 
@@ -440,6 +447,27 @@ func (d *realDir) OpenWritable(name string) (WritableFile, error) {
 		return nil, errors.Join(fmt.Errorf("open %q: %w", name, ErrNotARegularFile), f.Close())
 	}
 	return f, nil
+}
+
+func (d *realDir) SetOwner(uid, gid uint32) error {
+	if err := unix.Fchown(d.fd(), int(uid), int(gid)); err != nil {
+		return fmt.Errorf("chown %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
+func (d *realDir) Symlink(target, name string) error {
+	if err := unix.Symlinkat(target, d.fd(), name); err != nil {
+		return fmt.Errorf("symlink %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Lchown(name string, uid, gid uint32) error {
+	if err := unix.Fchownat(d.fd(), name, int(uid), int(gid), unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return fmt.Errorf("chown %q: %w", name, err)
+	}
+	return nil
 }
 
 func (d *realDir) SetMtime(t Time) error {
