@@ -2,6 +2,25 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## How Atoll's own view writes, decided 2026-11-16 (specs.md §6.1, §9, §17, §21.2)
+
+The maintainer answered the four questions the write path waited on, each with the option recommended:
+
+- **Its process**: the view that writes runs apart from the daemon, in `atoll mount`, so that the library stays while the daemon restarts; it records what it does in a table of its own, which the daemon's passes take in, so that what it made is presented at once.
+- **A file written**: the original alone; the other copies are presented no more, and the pass makes them `stale` and refreshes them.
+- **A deletion**: the copy presented goes to the trash at once, the others at the next pass, under the mass-deletion guard.
+- **A rename that a disk holding a copy refuses**: refused with `EINVAL`, nothing changed. The TODO item that asked it is closed.
+
+specs.md §21.2 now says how the view writes, from those answers: each operation on one disk, the others at the next pass, as for a change made directly on that disk; §6.1 item 10, §9 (`view_ops`) and §17 follow. `view.engine = "atoll"` stays an error until the write path is done.
+
+- **Decided without the maintainer, to confirm:**
+  - a new folder or symbolic link goes where a new file goes, the disk `placement.new_files` picks, with the folders above it made there with the mode and owner the view presents;
+  - an empty folder removed through the view is removed from its presenting disk at once, and a pass removes it from each other disk once nothing is left in it there: today no pass removes a folder Atoll did not make;
+  - a rename onto a name the view presents replaces it as an atomic save through mergerfs does: the copy presented there to the trash, `overwritten`, the rename on the source's disk, and the pass takes the result for a modification. A folder is never renamed onto one;
+  - the view's journal is a table of its own, `view_ops`, beside `ops`, where a deletion or a replacement is also a `trash` operation, so that the trash, `atoll trash list` and `restore` hold what the view deleted, as they hold the rest;
+  - an operation is taken in once the catalog alone presents what the view presents with it, in the order of their ids;
+  - left for later: a write that meets `ENOSPC`, hard links, refused with `EXDEV`, extended attributes, refused with `ENOTSUP`, copies written in parallel in `immediate` mode, and the SSD cache.
+
 ## Atoll's own view, read only, beside mergerfs, 2026-11-16 (specs.md §21.2, §24, §25, deploy/)
 
 Commit "Serve the view read only beside mergerfs", on `beta`. The maintainer asked for it ("Oui, ajoute-la", 2026-11-16), as a process of its own ("Processus à part"): mergerfs stays the view that writes, at `view.mount`, and Atoll's own view serves the media servers, read only, at another point, so that browsing wakes no disk and each file reads from its original.
