@@ -746,9 +746,14 @@ func CatchUp(ctx context.Context, db *sql.DB, disk string, fileID int64, done *R
 	return nil
 }
 
+// setConflictSQL says that the copies of file ?2 differ, every version kept. A file corrupt stays so, as it shows
+// corrupt first, and holds the conflict, which is its state once no copy of it is corrupt (specs.md §4, §16).
+const setConflictSQL = `UPDATE files SET state = CASE state WHEN 'corrupt' THEN state ELSE 'conflict' END,
+	conflict_held = (state = 'corrupt'), updated_ns = ?1 WHERE id = ?2`
+
 // SetConflict says that the copies of a file differ, every version kept.
 func SetConflict(ctx context.Context, db *sql.DB, fileID, nowNS int64) error {
-	if _, err := db.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'", nowNS, fileID); err != nil {
+	if _, err := db.ExecContext(ctx, setConflictSQL, nowNS, fileID); err != nil {
 		return fmt.Errorf("file %d: %w", fileID, err)
 	}
 	return nil

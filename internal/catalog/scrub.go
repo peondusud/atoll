@@ -144,7 +144,8 @@ func SetCopyVerified(ctx context.Context, db *sql.DB, fileID int64, disk string,
 }
 
 // MarkCopyCorrupt records that a copy no longer holds its file's content, its size and times unchanged: the copy
-// is corrupt, and so is its file, which nothing else remembers (specs.md §4, §16). The event comes first.
+// is corrupt, and so is its file, which nothing else remembers (specs.md §4, §16); a file in conflict holds the
+// conflict. The event comes first.
 func MarkCopyCorrupt(ctx context.Context, db *sql.DB, fileID int64, disk, path string, nowNS int64) error {
 	return inTransaction(ctx, db, func(tx *sql.Tx) error {
 		data := &eventRow{Disk: disk}
@@ -155,7 +156,8 @@ func MarkCopyCorrupt(ctx context.Context, db *sql.DB, fileID int64, disk, path s
 		if _, err := tx.ExecContext(ctx, "UPDATE copies SET state = 'corrupt', verified_ns = NULL WHERE file_id = ? AND disk_id = ?", fileID, disk); err != nil {
 			return fmt.Errorf("copy of %d on %q: %w", fileID, disk, err)
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'corrupt', updated_ns = ? WHERE id = ?", nowNS, fileID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET state = 'corrupt', conflict_held = (conflict_held OR state = 'conflict'), updated_ns = ?
+			WHERE id = ?`, nowNS, fileID); err != nil {
 			return fmt.Errorf("file %d: %w", fileID, err)
 		}
 		return nil

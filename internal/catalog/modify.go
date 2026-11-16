@@ -215,7 +215,7 @@ func applyMetadata(ctx context.Context, tx *sql.Tx, nowNS int64, m *Modification
 // applyConflict keeps every version: nothing says which one a copy's hash describes any more, and a stale copy
 // that changed is no longer what its trash job was decided on.
 func applyConflict(ctx context.Context, tx *sql.Tx, nowNS int64, m *Modification) error {
-	if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'", nowNS, m.FileID); err != nil {
+	if _, err := tx.ExecContext(ctx, setConflictSQL, nowNS, m.FileID); err != nil {
 		return fmt.Errorf("file: %w", err)
 	}
 	for i := range m.Changed {

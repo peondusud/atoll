@@ -169,9 +169,6 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 				return nil, fmt.Errorf("%w", err)
 			}
 		}
-		if err := s.run.callConflicts(ctx); err != nil {
-			return nil, err
-		}
 	}
 	session.Close()
 	// A copy repaired whole is made again at once; one that cannot be is made by the next pass (specs.md §16.1).

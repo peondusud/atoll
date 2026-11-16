@@ -251,3 +251,36 @@ func TestAConflictFoundBesideAnotherCorruptCopy(t *testing.T) {
 		t.Errorf("the copies are %s", got)
 	}
 }
+
+// A conflict found while another copy is still corrupt, at the end of the run too, is held, as the file shows
+// corrupt (specs.md §4, §16): the run that repairs the last corrupt copy, later, makes the file a conflict. It was
+// lost: the run that found it remembered it alone, and a file still corrupt at its end kept nothing of it, so that
+// the file was ok once repaired, its copies different.
+func TestAConflictHeldUntilTheLastCorruptCopyGoes(t *testing.T) {
+	b := newBenchWith(t, "", "t1", "t2", "t3")
+	data := film()
+	for _, id := range []string{"t1", "t2", "t3"} {
+		b.write(id, "a.mkv", string(data))
+	}
+	b.scan(true)
+	b.now += int64(month)
+	b.rotChunks("t2", "a.mkv", data, 1)
+	b.rotChunks("t3", "a.mkv", data, 2)
+	b.scrub(ScrubOptions{Apply: true})
+	b.touch("t2", "a.mkv", touchedNS)
+	b.now = b.ctimeOf("t2", "a.mkv") + settleNS
+	out := b.repair(RepairOptions{Apply: true, Disk: "t2"})
+	if len(out.Items) != 1 || out.Items[0].Outcome != OutcomeConflict {
+		t.Fatalf("%+v", out)
+	}
+	if got := b.text("SELECT state || ' ' || conflict_held FROM files"); got != "corrupt 1" {
+		t.Errorf("t3 still corrupt: the file is %s", got)
+	}
+	out = b.repair(RepairOptions{Apply: true})
+	if len(out.Items) != 1 || out.Items[0].Outcome != trash.OutcomeRepaired {
+		t.Fatalf("%+v", out)
+	}
+	if got := b.text("SELECT state || ' ' || conflict_held FROM files"); got != "conflict 0" {
+		t.Errorf("t3 repaired: the file is %s", got)
+	}
+}

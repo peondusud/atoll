@@ -245,8 +245,8 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 		return fmt.Errorf("prepare: %w", err)
 	}
 	defer func() { _ = find.Close() }()
-	// corrupt comes first in the order of specs.md §4, and only the state remembers it.
-	conflict, err := tx.PrepareContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'")
+	// corrupt comes first in the order of specs.md §4, and holds the conflict.
+	conflict, err := tx.PrepareContext(ctx, setConflictSQL)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
@@ -409,7 +409,10 @@ type FileRow struct {
 	State          string
 	Original       sql.NullString
 	FirstSeenNS    int64
-	Copies         []CopyRow
+	// ConflictHeld says that the copies of a file corrupt were also found to differ: it is a conflict once no copy of
+	// it is corrupt (specs.md §4, §16).
+	ConflictHeld bool
+	Copies       []CopyRow
 }
 
 // filePageSize is how many files FileReader reads at a time.
@@ -457,7 +460,7 @@ func (r *FileReader) NextUnhashed(ctx context.Context) ([]FileRow, error) {
 }
 
 // fileColumns are what readFiles scans.
-const fileColumns = `f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns,
+const fileColumns = `f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns, f.conflict_held,
 	c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state, c.file_key,
 	c.nlink, c.old_lpath, c.gone_ns, c.gone_kind, c.mode, c.uid, c.gid`
 
@@ -486,7 +489,7 @@ func (r *FileReader) readFiles(rows *sql.Rows) ([]FileRow, error) {
 		var c CopyRow
 		var firstSeen sql.NullInt64
 		var old []byte
-		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original, &f.FirstSeenNS,
+		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original, &f.FirstSeenNS, &f.ConflictHeld,
 			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &c.VerifiedNS, &copyState, &c.FileKey,
 			&c.Nlink, &old, &c.GoneNS, &c.GoneKind, &c.Mode, &c.UID, &c.GID)
 		if err != nil {
@@ -661,9 +664,11 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate
 		return nil
 	}
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		// A conflict held goes with corrupt: it is then the state, or was resolved (specs.md §4).
 		update, err := tx.PrepareContext(ctx, `
-			UPDATE files SET size = ?, mtime_ns = ?, replicas_target = ?, rule = ?, mode = ?, state = ?, original_disk = ?, updated_ns = ?
-			WHERE id = ?`)
+			UPDATE files SET size = ?1, mtime_ns = ?2, replicas_target = ?3, rule = ?4, mode = ?5, state = ?6, original_disk = ?7, updated_ns = ?8,
+				conflict_held = conflict_held AND ?6 = 'corrupt'
+			WHERE id = ?9`)
 		if err != nil {
 			return fmt.Errorf("prepare: %w", err)
 		}
@@ -673,7 +678,7 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate
 				return fmt.Errorf("file %d: %w", f.ID, err)
 			}
 		}
-		state, err := tx.PrepareContext(ctx, "UPDATE files SET state = ?, updated_ns = ? WHERE id = ?")
+		state, err := tx.PrepareContext(ctx, "UPDATE files SET state = ?1, updated_ns = ?2, conflict_held = conflict_held AND ?1 = 'corrupt' WHERE id = ?3")
 		if err != nil {
 			return fmt.Errorf("prepare: %w", err)
 		}
@@ -764,7 +769,7 @@ func writeHashes(ctx context.Context, tx *sql.Tx, nowNS int64, w *HashWrite) err
 		}
 	}
 	if w.Conflict {
-		if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'", nowNS, w.FileID); err != nil {
+		if _, err := tx.ExecContext(ctx, setConflictSQL, nowNS, w.FileID); err != nil {
 			return fmt.Errorf("conflict: %w", err)
 		}
 	}

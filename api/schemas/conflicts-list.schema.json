@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/peondusud/atoll/api/schemas/conflicts-list.schema.json",
   "title": "atoll conflicts list --json",
-  "description": "The files in conflict, by path in byte order, each with its copies by disk position, and the size and modification time each disk holds (specs.md §15.7). From the catalog only, which the last walk filled.",
+  "description": "The files in conflict, and the corrupt ones whose copies also differ, by path in byte order, each with its copies by disk position, and the size and modification time each disk holds (specs.md §4, §15.7). From the catalog only, which the last walk filled.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -43,6 +43,11 @@
         "path_b64": {
           "type": "string",
           "minLength": 1
+        },
+        "corrupt": {
+          "type": "boolean",
+          "const": true,
+          "description": "Present when the file is corrupt too, as it shows: atoll conflicts resolve refuses it until no copy of it is corrupt, and it is then a conflict (specs.md §4, §16)."
         },
         "copies": {
           "type": "array",

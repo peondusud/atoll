@@ -564,8 +564,10 @@ func Unchanged(f *FoundFile, k *catalog.KnownCopy) bool {
 // themselves cost more than the plan's input (specs.md §26). update is set when the file already
 // changed, whatever the plan says.
 type settled struct {
-	id        int64
-	state     string
+	id    int64
+	state string
+	// held says that the file, corrupt, holds a conflict (specs.md §4).
+	held      bool
 	firstSeen int64
 	update    *catalog.FileUpdate
 }
@@ -677,7 +679,7 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 const copyBatch = 1000
 
 // copyQueue hands the replicate jobs of the plan to Queue as the plan makes them, leaving out those of a file in
-// conflict.
+// conflict, or that holds one: nothing says which version to copy (specs.md §4, §13).
 type copyQueue struct {
 	queue      func(jobs []PlannedJob) error
 	files      []solver.File
@@ -686,7 +688,7 @@ type copyQueue struct {
 }
 
 func (q *copyQueue) add(i int, jobs []solver.Job) error {
-	if q.remembered[i].state == string(solver.StateConflict) {
+	if q.remembered[i].state == string(solver.StateConflict) || q.remembered[i].held {
 		return nil
 	}
 	for _, job := range jobs {
@@ -802,7 +804,7 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			input.Files = append(input.Files, solver.File{
 				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Leaving: leaving[f.ID], Copies: copies,
 			})
-			entry := settled{id: f.ID, state: f.State, firstSeen: f.FirstSeenNS}
+			entry := settled{id: f.ID, state: f.State, held: f.ConflictHeld, firstSeen: f.FirstSeenNS}
 			if fileChanged(f, &update) {
 				entry.update = &update
 			}
@@ -884,8 +886,9 @@ func originalOf(f *catalog.FileRow, position map[string]int, state map[string]so
 		}
 		candidates = append(candidates, candidate)
 	}
+	// A file corrupt that holds a conflict keeps its original too: its copies differ (specs.md §4, §7).
 	previous := ""
-	if f.State == string(solver.StateConflict) {
+	if f.State == string(solver.StateConflict) || f.ConflictHeld {
 		previous = f.Original.String
 	}
 	original, err := solver.SelectOriginal(candidates, previous)
@@ -907,11 +910,14 @@ func applyResults(files []solver.File, remembered []settled, results []solver.Re
 	for i := range files {
 		f, r := &files[i], &remembered[i]
 		var applying []solver.State
-		// Corrupt holds while a copy is: once that copy went to the trash, the file takes the state its copies give
-		// it, and a conflict they still hold is found again by the next pass, from their rows (specs.md §16).
+		// Corrupt holds while a copy is: once that copy was repaired or went to the trash, the file takes the state its
+		// copies give it, and the conflict it held, found while it was corrupt, comes first (specs.md §4, §16).
 		corrupt := r.state == string(solver.StateCorrupt) && slices.ContainsFunc(f.Copies, func(c solver.Copy) bool { return c.State == solver.CopyCorrupt })
-		if r.state == string(solver.StateConflict) || corrupt {
+		switch {
+		case r.state == string(solver.StateConflict) || corrupt:
 			applying = append(applying, solver.State(r.state))
+		case r.held:
+			applying = append(applying, solver.StateConflict)
 		}
 		if next < len(results) && results[next].Path == f.Path {
 			result := &results[next]

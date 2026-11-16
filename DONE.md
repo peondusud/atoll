@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A conflict found on a corrupt file, 2026-11-16 (specs.md §4, §7, §9, §13, §15.7, §16)
+
+Commit "Hold a conflict found on a corrupt file", on `beta`. The maintainer asked for it among the alpha's known limits.
+
+- A file shows one state, `corrupt` first, and `files.state` was all that remembered either: a conflict found while the file was corrupt went at once. A scrub that read a copy corrupt and a copy never verified that holds another version repaired the first, and left the file `ok`, its copies different, until a scrub read the second again, a month later (`TestAScrubHoldsAConflictFoundOnACorruptFile`, which failed so); a repair by disk, `--disk`, that found a changed copy with another content while a copy on another disk was still corrupt lost it for good (`TestAConflictHeldUntilTheLastCorruptCopyGoes`). The file now holds the conflict, in `files.conflict_held`: once no copy of it is corrupt, it is a conflict. Until then it shows `corrupt`, as before, `atoll conflicts list` gives it, marked `corrupt`, and `atoll conflicts resolve` refuses it, as a repair comes first. A corrupt copy found on a file in conflict keeps the conflict too.
+- Each place that finds a conflict goes through one statement, which holds it on a file corrupt; the list that the repair kept of such files, for the end of its run, goes, as the catalog holds them now. A file that holds a conflict is not queued, and keeps its original, as a conflict does.
+- No conformance scenario: none can make a copy rot, as a write moves the change time and rot is a mismatch with the size and both times unchanged. The unit tests of `catalog` and `jobs` hold it.
+
+### Decided without the maintainer, to confirm
+
+- **`schema/migrations/0017_conflict_held.sql`**, a new migration: a column of `files`, `conflict_held`, 0 or 1, 1 only while the file is `corrupt`. A catalog made before holds nothing, as nothing told it of a conflict lost.
+- **`api/schemas/conflicts-list.schema.json`**: `corrupt`, `true`, present on a file corrupt that holds a conflict; such a file is listed. The output of `atoll scan` still lists the files whose state is `conflict` only.
+- **`atoll conflicts resolve`** exits with 1 on a file corrupt that holds a conflict, with a message of its own, translated.
+
 ## The folders a run stopped before its end left, 2026-11-16 (specs.md §9, §17.5)
 
 Commit "Look at the folders a run stopped before its end left", on `beta`. The maintainer asked for it among the alpha's known limits.

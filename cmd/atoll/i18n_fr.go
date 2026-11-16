@@ -254,6 +254,8 @@ var frenchMessages = map[string]string{
 	"--keep is needed":                                                  "il faut --keep",
 	"the catalog has no file at that path":                              "le catalogue n'a aucun fichier à ce chemin",
 	"the file is not in conflict":                                       "le fichier n'est pas en conflit",
+	"the file is corrupt too: repair it first":                          "le fichier est aussi corrompu : réparez-le d'abord",
+	" (corrupt too: atoll repair first)":                                " (aussi corrompu : atoll repair d'abord)",
 	"the file has no copy on %s":                                        "le fichier n'a aucune copie sur %s",
 	"resolved: the next pass makes its copies from %s\n":                "résolu : la prochaine passe fait ses copies depuis %s\n",
 	"%d to the trash, %d bytes: nothing was written\n":                  "%d vers la corbeille, %d octets : rien n'a été écrit\n",

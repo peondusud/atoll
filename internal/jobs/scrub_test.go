@@ -88,6 +88,48 @@ func TestScrubCallsACopyNeverVerifiedAConflict(t *testing.T) {
 	}
 }
 
+// A scrub that finds a copy corrupt, and another never verified that holds another version, finds a file corrupt
+// whose copies also differ: it shows corrupt, and holds the conflict, which is the file's state once no copy of it is
+// corrupt, the corrupt copy repaired, sent to the trash, or kept until atoll repair (specs.md §4, §16). The conflict
+// was lost: the file was ok once the corrupt copy was repaired, until a scrub read the copy never verified again.
+func TestAScrubHoldsAConflictFoundOnACorruptFile(t *testing.T) {
+	for _, tc := range []struct {
+		config     string
+		quarantine bool
+		after      string
+	}{
+		{"", true, "conflict 0"},
+		{"[integrity]\nauto_repair = false\n", true, "conflict 0"},
+		{"[integrity]\nauto_repair = false\n", false, "corrupt 1"},
+	} {
+		b := newBenchWith(t, tc.config, "t1", "t2", "t3")
+		b.write("t1", "a.mkv", "a film")
+		b.write("t2", "a.mkv", "a film")
+		b.scan(true)
+		b.write("t3", "a.mkv", "A FILM")
+		b.scan(false)
+		b.now += int64(month)
+		b.rot("t2", "a.mkv", "a FILM")
+		out := b.scrub(ScrubOptions{Apply: true, Quarantine: tc.quarantine})
+		if t2, t3 := diskOf(out, "t2"), diskOf(out, "t3"); !slices.Equal(t2.Corrupt, []string{"a.mkv"}) || !slices.Equal(t3.Conflict, []string{"a.mkv"}) {
+			t.Errorf("%q, --yes %v: %+v, %+v", tc.config, tc.quarantine, *t2, *t3)
+		}
+		if got := b.text("SELECT state || ' ' || conflict_held FROM files"); got != tc.after {
+			t.Errorf("%q, --yes %v: the file is %s", tc.config, tc.quarantine, got)
+		}
+		if got := b.read("t3", "a.mkv"); got != "A FILM" {
+			t.Errorf("%q, --yes %v: the other version now holds %q", tc.config, tc.quarantine, got)
+		}
+		if tc.after != "corrupt 1" {
+			continue
+		}
+		b.repair(RepairOptions{Apply: true})
+		if got := b.text("SELECT state || ' ' || conflict_held FROM files"); got != "conflict 0" {
+			t.Errorf("%q, repaired: the file is %s", tc.config, got)
+		}
+	}
+}
+
 // A disk that is readonly is read, and nothing is written to it (specs.md §10): a corrupt copy found there stays
 // where it is, with a healthy copy elsewhere or not. The scrub repaired it in place, or moved it to that disk's
 // trash, making its work folder on the way.

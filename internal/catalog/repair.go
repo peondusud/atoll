@@ -246,10 +246,9 @@ const settleChangedSQL = `
 // read whole as it is now (specs.md §16.1). The copy is ok, and its row takes what the look before the read found.
 // Holding its file's content, it is verified now. Otherwise nothing tells rot that someone touched from another
 // version of the file: the copy is never verified, and its file becomes a conflict, every version kept (specs.md
-// §15.7), unless another copy of it is still corrupt, as a file is corrupt while a copy is (specs.md §16). It says
-// whether the file is a conflict by its end. A copy no longer corrupt is left as it is.
-func SettleChanged(ctx context.Context, db *sql.DB, fileID int64, c *ChangedCopy, holds bool, nowNS int64) (bool, error) {
-	conflict := false
+// §15.7). While another copy of it is still corrupt, as a file is corrupt while a copy is, the file holds the conflict
+// instead, for when none is (specs.md §4, §16). A copy no longer corrupt is left as it is.
+func SettleChanged(ctx context.Context, db *sql.DB, fileID int64, c *ChangedCopy, holds bool, nowNS int64) error {
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
 		var verified sql.NullInt64
 		if holds {
@@ -263,17 +262,16 @@ func SettleChanged(ctx context.Context, db *sql.DB, fileID int64, c *ChangedCopy
 		if n, err := res.RowsAffected(); err != nil || n == 0 || holds {
 			return err //nolint:wrapcheck // the driver's own, of a count
 		}
-		res, err = tx.ExecContext(ctx, `UPDATE files SET state = 'conflict', updated_ns = ?2
-			WHERE id = ?1 AND NOT EXISTS(SELECT 1 FROM copies WHERE file_id = ?1 AND state = 'corrupt')`, fileID, nowNS)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET
+				state = CASE WHEN EXISTS(SELECT 1 FROM copies WHERE file_id = ?1 AND state = 'corrupt') THEN 'corrupt' ELSE 'conflict' END,
+				conflict_held = EXISTS(SELECT 1 FROM copies WHERE file_id = ?1 AND state = 'corrupt'), updated_ns = ?2
+			WHERE id = ?1`, fileID, nowNS); err != nil {
 			return fmt.Errorf("file: %w", err)
 		}
-		n, err := res.RowsAffected()
-		conflict = n > 0
-		return err //nolint:wrapcheck // the driver's own, of a count
+		return nil
 	})
 	if err != nil {
-		return false, fmt.Errorf("copy of %d on %q: %w", fileID, c.Disk, err)
+		return fmt.Errorf("copy of %d on %q: %w", fileID, c.Disk, err)
 	}
-	return conflict, nil
+	return nil
 }
