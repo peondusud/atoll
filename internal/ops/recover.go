@@ -688,7 +688,7 @@ func (d *Disk) FinishMkdir(ctx context.Context, db *sql.DB, op *Op, st *fsx.Stat
 	}
 	// Its identity from the start: a rename of it before the next look is a folder renamed like any other.
 	key := strconv.FormatUint(st.Ino, 10)
-	row := catalog.EntryRow{Path: op.Path, Mode: int64(st.Mode), MtimeNS: mtime, FileKey: &key}
+	row := catalog.EntryRow{Path: op.Path, Mode: int64(st.Mode), MtimeNS: mtime, FileKey: &key, Size: st.Size, UID: st.Uid, GID: st.Gid}
 	if st.HasBirth {
 		birth, ok, err := solver.CreationTimeNS(st.Birth.Sec, st.Birth.Nsec)
 		if err != nil {

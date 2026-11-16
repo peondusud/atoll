@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Phase 2a, Atoll's own view: what the catalog holds of an entry, 2026-11-16 (specs.md §9, §21.2)
+
+Commit "Record the size and owner of each entry, for Atoll's own view", on `beta`. The first step of phase 2a, which the maintainer asked for after the alpha's limits.
+
+- Atoll's own view serves every entry from the catalog, so that browsing wakes no disk (§21.2). The catalog held a folder's, a symlink's and an ignored file's mode and modification time, never its owner, nor an ignored file's size: a listing could not say who owns a folder, nor how long an ignored file is, without looking at the disk. A walk now records the size and the owner of each entry, and so does the folder Atoll makes for a replica (`scan-entry-attributes.json`).
+- §21.2 now says what the view's read path presents: a path is what the first disk that holds something there says, as mergerfs's `ff` reads it; a file presents its original, and an entry its first disk's row; what a row lacks has a default; `statfs` sums the disks from the catalog. The read path comes first, mounted read only, and `view.engine = "atoll"` stays an error until the view writes.
+
+### Decided without the maintainer, to confirm
+
+- **`schema/migrations/0018_entry_attributes.sql`**: three columns of `entries`, `size`, `uid` and `gid`, NULL in a row a catalog made before, until a walk finds the entry again.
+- **What the read path presents**, as §21.2 now writes it, where the spec said only "the original" and "every entry from the catalog": the order of the disks, mergerfs's, with `failed` ones last; a file none of whose copies can be presented is absent rather than unreadable; one link for a folder; the defaults for what a row lacks, and for `<root>`, which the catalog holds no entry of; `statfs` as mergerfs sums its branches; the kernel's caches of 1 s, as mergerfs's.
+- **The read path first, read only**, with `view.engine = "atoll"` still an error: a merged view that takes no new file would stop Sonarr, Radarr and every user, so the engine opens only once the view writes.
+
 ## The watcher's three limits, 2026-11-16 (specs.md §15.1)
 
 Commit "Wait for the other end of a folder's rename, and watch a path past PATH_MAX", on `beta`. The maintainer asked for it among the alpha's known limits.

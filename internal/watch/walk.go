@@ -46,6 +46,9 @@ type FoundEntry struct {
 	Target  *string
 	FileKey *string
 	BtimeNS *int64
+	// Size and its owner are what Atoll's own view presents of it (specs.md §21.2).
+	Size     int64
+	UID, GID uint32
 }
 
 // Walked is what one walk found (specs.md §15.10).
@@ -132,7 +135,7 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, top *fsx.Stat, 
 			}
 			w.Files = append(w.Files, file)
 		case fsx.KindDir:
-			found := FoundEntry{Path: path, Kind: solver.EntryDir, Mode: int64(st.Mode), MtimeNS: mtime}
+			found := FoundEntry{Path: path, Kind: solver.EntryDir, Mode: int64(st.Mode), MtimeNS: mtime, Size: st.Size, UID: st.Uid, GID: st.Gid}
 			if err := setIdentity(&found, &st); err != nil {
 				return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
 			}
@@ -153,9 +156,10 @@ func walkFolder(ctx context.Context, dir fsx.Dir, prefix string, top *fsx.Stat, 
 			case err != nil:
 				return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
 			}
-			w.Entries = append(w.Entries, FoundEntry{Path: path, Kind: solver.EntrySymlink, Mode: int64(st.Mode), MtimeNS: mtime, Target: &target})
+			w.Entries = append(w.Entries, FoundEntry{Path: path, Kind: solver.EntrySymlink, Mode: int64(st.Mode), MtimeNS: mtime, Target: &target,
+				Size: st.Size, UID: st.Uid, GID: st.Gid})
 		case fsx.KindOther:
-			w.Entries = append(w.Entries, FoundEntry{Path: path, Kind: solver.EntryIgnored, Mode: int64(st.Mode), MtimeNS: mtime})
+			w.Entries = append(w.Entries, FoundEntry{Path: path, Kind: solver.EntryIgnored, Mode: int64(st.Mode), MtimeNS: mtime, Size: st.Size, UID: st.Uid, GID: st.Gid})
 		}
 	}
 	return nil

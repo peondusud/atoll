@@ -223,7 +223,7 @@ The catalog schema is `schema/migrations/`: plain SQL, with a comment on why eac
 | `files` | one row per managed file: its current version, level, rule, mode and state, and the conflict a corrupt file holds (§4) |
 | `file_chunks` | the chunk hashes of a file (§16) |
 | `copies` | one row per copy of a file |
-| `entries` | everything else the view must list: folders, symlinks, ignored files |
+| `entries` | everything else the view must list: folders, symlinks, ignored files, each with the mode, owner, size and modification time Atoll's own view presents (§21.2) |
 | `ops` | the journal of Atoll's own filesystem operations |
 | `trash` | what each disk's trash holds |
 | `jobs`, `job_chunks` | the queue, and the chunk hashes a copy in progress has read (§14) |
@@ -1224,6 +1224,18 @@ A folder below the root that Atoll made, recorded with `created_by = atoll` (§1
 - Writes: new files placed by the solver or on the SSD cache. On ENOSPC during a write, the view moves the partial file to a disk with enough space and retries.
 - Deletions: every copy goes to the trash.
 - Optional parallel replica writes in `immediate` mode.
+- **What a path presents** is a pure function of the catalog's rows for that path and of the disks' states, with vectors in `conformance/vectors/view_node.json`:
+  - The disks that present, in this order: those `online`, `standby`, `readonly` or `draining`, by position, then those `failed`, by position, as mergerfs reads their branches (§21.1). A disk `missing` or `retired` presents nothing.
+  - What a disk holds at a path: a copy `ok` or `surplus` of the file at that path, or an entry. A copy `pending`, `stale`, `corrupt` or `unavailable` holds nothing there: it is not on its disk, or it is never presented.
+  - The first disk that holds something at a path says what the path is, as mergerfs's `ff` does: a file, a folder, a symlink, or an ignored file, which presents as a file. A path that no disk holds anything at is absent, as it is from mergerfs once the branches of its disks are removed: a file none of whose copies can be presented is not listed, rather than listed and failing to read.
+  - A file presents its original (§7), or, when no copy is eligible, the first copy `ok` or `surplus` on a `failed` disk, as mergerfs reads a `failed` disk's branch last. Its size, modification time, mode, owner and number of links are that copy's, as the catalog holds them, and its access and change times are its modification time. Its data is read from that copy.
+  - A folder, a symlink or an ignored file presents the entry of the first disk that holds one of that kind at the path: its mode, owner, size and modification time, its access and change times its modification time, and the target of a symlink. A folder presents one link, as btrfs does, so that no program counts its subfolders from it.
+  - What a row lacks, as one a catalog made before it recorded it (§9): a mode of 0755 for a folder and a symlink and 0644 for a file, the owner of the view's own process, a size of 0, or the length of its target for a symlink.
+  - `<root>` presents as a folder with the mode 0755, the owner of the view's own process and the time the view was mounted: the catalog holds no entry of it.
+  - A folder's listing gives each name directly below it that presents something, once, with what it presents, in byte order.
+- **`statfs`** is served from the catalog, with vectors in `conformance/vectors/view_statfs.json`: blocks of 4096 bytes; the size and the free space are the sums of `capacity_bytes` and `free_bytes` over the data disks that present, each rounded down to whole blocks, the free space also the space available, as mergerfs sums its branches; names of up to 255 bytes; no count of inodes, 0. A disk with no capacity or free space recorded yet counts for 0.
+- The kernel keeps what the view answers for 1 s, attributes and names, and keeps no name the view found absent, as for mergerfs (§21.1).
+- The read path comes first: the view is mounted read only, and a write of any kind fails with `EROFS`. `view.engine = "atoll"` stays an error (§24.4) until the view writes, as a merged view that takes no new file would stop Sonarr, Radarr and every user.
 
 ### 21.3 Phase 4: Windows
 

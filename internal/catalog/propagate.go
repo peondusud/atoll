@@ -629,7 +629,8 @@ func rewriteEntries(ctx context.Context, tx *sql.Tx, disk, from, to string) erro
 			continue
 		}
 		next := to + strings.TrimPrefix(p, from)
-		_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns) SELECT ?, ?, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns FROM entries WHERE disk_id = ? AND lpath = ?",
+		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns, size, uid, gid)
+			SELECT ?, ?, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns, size, uid, gid FROM entries WHERE disk_id = ? AND lpath = ?`,
 			[]byte(next), keyOf(next), disk, []byte(p))
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", p, err)

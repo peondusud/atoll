@@ -456,7 +456,8 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 			r.Ignored++
 		}
 		if !atOrBelow(tops, e.Path) && !atOrBelow(out.Kept, e.Path) {
-			out.Entries = append(out.Entries, catalog.EntryRow{Path: e.Path, Kind: string(e.Kind), Mode: e.Mode, MtimeNS: e.MtimeNS, Target: e.Target, FileKey: e.FileKey, BtimeNS: e.BtimeNS})
+			out.Entries = append(out.Entries, catalog.EntryRow{Path: e.Path, Kind: string(e.Kind), Mode: e.Mode, MtimeNS: e.MtimeNS, Target: e.Target, FileKey: e.FileKey, BtimeNS: e.BtimeNS,
+				Size: e.Size, UID: e.UID, GID: e.GID})
 		}
 	}
 	return out, nil
@@ -489,7 +490,7 @@ func freshFile(c *config.Config, f *FoundFile, r *Report, out *catalog.Walk, top
 	policy := c.Policy(f.Path, &size)
 	if policy.Action == rules.Ignore {
 		if !atOrBelow(tops, f.Path) && !atOrBelow(out.Kept, f.Path) {
-			out.Entries = append(out.Entries, catalog.EntryRow{Path: f.Path, Kind: string(solver.EntryIgnored), Mode: f.Mode, MtimeNS: f.MtimeNS})
+			out.Entries = append(out.Entries, catalog.EntryRow{Path: f.Path, Kind: string(solver.EntryIgnored), Mode: f.Mode, MtimeNS: f.MtimeNS, Size: f.Size, UID: f.UID, GID: f.GID})
 		}
 		r.Ignored++
 		return

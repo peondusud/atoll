@@ -139,6 +139,9 @@ type EntryRow struct {
 	Target  *string
 	FileKey *string
 	BtimeNS *int64
+	// Size and the owner are what Atoll's own view presents of it, without waking its disk (specs.md §21.2).
+	Size     int64
+	UID, GID uint32
 }
 
 // CopyClock is what a look says of a copy's clock: Kind empty means found, which clears it.
@@ -329,12 +332,12 @@ func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryR
 			target = []byte(*e.Target)
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, ?)
+			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns, size, uid, gid)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?)
 			ON CONFLICT(lpath, disk_id) DO UPDATE SET
 				kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, target = excluded.target,
-				file_key = excluded.file_key, btime_ns = excluded.btime_ns`,
-			[]byte(e.Path), keyOf(e.Path), disk, e.Kind, e.Mode, e.MtimeNS, target, e.FileKey, e.BtimeNS)
+				file_key = excluded.file_key, btime_ns = excluded.btime_ns, size = excluded.size, uid = excluded.uid, gid = excluded.gid`,
+			[]byte(e.Path), keyOf(e.Path), disk, e.Kind, e.Mode, e.MtimeNS, target, e.FileKey, e.BtimeNS, e.Size, e.UID, e.GID)
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", e.Path, err)
 		}

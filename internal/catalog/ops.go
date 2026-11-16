@@ -488,10 +488,11 @@ func FinishMkdir(ctx context.Context, db *sql.DB, op *Op, e *EntryRow) error {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, created_by, file_key, btime_ns)
-			VALUES (?, ?, ?, 'dir', ?, ?, 'atoll', ?, ?)
-			ON CONFLICT(lpath, disk_id) DO UPDATE SET kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, created_by = 'atoll'`,
-			[]byte(e.Path), keyOf(e.Path), op.Disk, e.Mode, e.MtimeNS, e.FileKey, e.BtimeNS)
+			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, created_by, file_key, btime_ns, size, uid, gid)
+			VALUES (?, ?, ?, 'dir', ?, ?, 'atoll', ?, ?, ?, ?, ?)
+			ON CONFLICT(lpath, disk_id) DO UPDATE SET kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, created_by = 'atoll',
+				size = excluded.size, uid = excluded.uid, gid = excluded.gid`,
+			[]byte(e.Path), keyOf(e.Path), op.Disk, e.Mode, e.MtimeNS, e.FileKey, e.BtimeNS, e.Size, e.UID, e.GID)
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", e.Path, err)
 		}
