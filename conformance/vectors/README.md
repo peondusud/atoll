@@ -338,7 +338,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
-| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, `reachable` when it is on a disk the pass can write to, where its look reached it, and `precision_ns`, its disk's `time_precision_ns`, absent when unknown, which compares exactly (§9); `row_mode`, the mode its row says, absent when it has none, and for a changed copy `look_mode`, the mode its look found; both integers, and a mode absent is unknown; `row_owner` and `look_owner` likewise, each an object of `uid` and `gid`. Booleans are `false` when absent |
+| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, `reachable` when it is on a disk the pass can write to, where its look reached it, and `precision_ns`, its disk's `time_precision_ns`, absent when unknown, which compares exactly (§9); `row_mode`, the mode its row says, absent when it has none, and for a changed copy `look_mode`, the mode its look found; both integers, and a mode absent is unknown; `row_owner` and `look_owner` likewise, each an object of `uid` and `gid`; `mount_owner` when its disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do, so that neither is the copy's own and neither goes to the others. Booleans are `false` when absent |
 | `plan` | object | `mtime`, the time applied, and `from`, the changed copy that gives it, both absent when no time moved; `apply`, the copies that get it through an operation `utimens`; `mode` and `mode_from`, the same for the mode, and `chmod`, the copies that get it through an operation `chmod`; `owner` and `owner_from`, the same for the owner, an object of `uid` and `gid`, and `chown`, the copies that get it through an operation `chown`; `stale`, those that go stale instead, once whatever they lack; each by position, absent when empty |
 | `error` | boolean | `true` on an unknown state, a pending copy, a disk or a position that appears twice, a mode outside 0 to 4095 (`07777`), or an id outside 0 to 4294967295 |
 
@@ -632,6 +632,7 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `marker` | object or string | what `<workdir>/disk.toml` holds, which a confirmation reads (§10): an object of `pool_id`, `disk_id` and `fs_uuid`, the pool being `p`, or `not-a-marker` for a file there that this version does not read; none when left out |
 | `state` | string | `online`, `readonly` or `missing` |
 | `reason` | string | the reason; left out when `online` |
+| `mount_owner` | boolean | the disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do (`fuseblk`), so that neither is a file's own (§15.4); `false` when absent, and always for a disk `missing` |
 
 ### `capacity.json` — capacity of a pool (§13.1)
 

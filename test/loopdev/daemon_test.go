@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -268,42 +269,201 @@ func TestDaemonRunsForGood(t *testing.T) {
 
 // TestDaemonRemountsAfterAReset: a disk whose device goes away under its mount, as a USB reset does, and comes
 // back under another name, is remounted through its fstab entry, then walked, and its branch comes back
-// (specs.md §10, §15.13).
+// (specs.md §10, §15.13). On ext4, and on ntfs-3g, whose mount is a FUSE process of its own that mount starts again
+// through mount.ntfs-3g. The daemon runs as root here: as the dedicated user of deploy/atoll.service, it is not run.
 func TestDaemonRemountsAfterAReset(t *testing.T) {
 	needRoot(t)
 	needMergerfs(t)
-	m := newMapped(t, names.Ext4)
-	at := mountPoint(t)
-	mountVolume(t, m.volume, "", at)
-	renamed := m.name + "-again"
-	t.Cleanup(func() {
-		_ = exec.CommandContext(context.Background(), "umount", "-l", at).Run()
-		_ = exec.CommandContext(context.Background(), "dmsetup", "remove", "-f", "--noudevsync", renamed).Run()
-	})
-	b := newPassBench(t, m.volume, at)
-	pool := viewOf(t, b)
-	fstab := filepath.Join(t.TempDir(), "fstab")
-	mustDo(t, os.WriteFile(fstab, []byte("/dev/mapper/"+renamed+" "+at+" ext4 defaults 0 0\n"), 0o644))
-	passes, _ := runDaemon(t, b, fstab)
-	waitPass(t, passes, daemon.BecauseStart)
+	for _, tc := range []struct {
+		name, driver, fstype string
+		fs                   names.Filesystem
+	}{{"ext4", "", "ext4", names.Ext4}, {"ntfs-3g", "ntfs-3g", "ntfs-3g", names.NTFS}} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newMapped(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, m.volume, tc.driver, at)
+			renamed := m.name + "-again"
+			t.Cleanup(func() {
+				_ = exec.CommandContext(context.Background(), "umount", "-l", at).Run()
+				time.Sleep(200 * time.Millisecond)
+				_ = exec.CommandContext(context.Background(), "dmsetup", "remove", "-f", "--noudevsync", renamed).Run()
+			})
+			b := newPassBench(t, m.volume, at)
+			pool := viewOf(t, b)
+			fstab := filepath.Join(t.TempDir(), "fstab")
+			mustDo(t, os.WriteFile(fstab, []byte("/dev/mapper/"+renamed+" "+at+" "+tc.fstype+" defaults 0 0\n"), 0o644))
+			passes, _ := runDaemon(t, b, fstab)
+			waitPass(t, passes, daemon.BecauseStart)
 
-	// The device goes from under the mount and comes back under another name.
-	must(t, "dmsetup", "rename", m.name, renamed)
-	must(t, "dmsetup", "mknodes")
-	waitPass(t, passes, daemon.BecauseGone)
-	back := waitPass(t, passes, daemon.BecauseBack)
-	walked := false
-	for _, line := range back.outcome.Disks {
-		walked = walked || line.ID == "v" && line.Walked
+			// The device goes from under the mount and comes back under another name.
+			must(t, "dmsetup", "rename", m.name, renamed)
+			must(t, "dmsetup", "mknodes")
+			waitPass(t, passes, daemon.BecauseGone)
+			back := waitPass(t, passes, daemon.BecauseBack)
+			walked := false
+			for _, line := range back.outcome.Disks {
+				walked = walked || line.ID == "v" && line.Walked
+			}
+			if !walked {
+				t.Errorf("not walked once back: %+v", back.outcome.Disks)
+			}
+			if source := must(t, "findmnt", "-n", "-o", "SOURCE", at); source != "/dev/mapper/"+renamed {
+				t.Errorf("mounted from %s", source)
+			}
+			if got := branchesOf(t, pool); !slices.Equal(got, []string{filepath.Join(b.keep, "media"), filepath.Join(at, "media")}) {
+				t.Errorf("branches once back: %v", got)
+			}
+		})
 	}
-	if !walked {
-		t.Errorf("not walked once back: %+v", back.outcome.Disks)
+}
+
+// unitCapabilities are those deploy/atoll.service gives the dedicated user, and no others.
+const unitCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown,+fowner,+sys_rawio"
+
+// asTheUnit runs a command as the daemon's dedicated user runs it under deploy/atoll.service: another account than
+// root, the group disk, the unit's capabilities alone, ambient, and no new privileges, so that a setuid program gains
+// nothing. It gives what the command wrote, and its error.
+func asTheUnit(t *testing.T, name string, args ...string) (string, error) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "setpriv", append([]string{"--reuid=990", "--regid=990", "--groups=6", "--no-new-privs",
+		"--inh-caps=" + unitCapabilities, "--ambient-caps=" + unitCapabilities, "--bounding-set=" + unitCapabilities, "--", name}, args...)...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err //nolint:wrapcheck // what the command said is the test's to report
+}
+
+// TestRemountAsTheDedicatedUser: the remount after a USB reset, umount -l then mount through the fstab entry
+// (specs.md §15.13), works as the daemon runs it, as its dedicated user with the unit's capabilities alone, on ext4 and
+// on ntfs-3g, whose mount.ntfs-3g starts a FUSE process (deploy/README.md).
+func TestRemountAsTheDedicatedUser(t *testing.T) {
+	needRoot(t)
+	if _, err := exec.LookPath("setpriv"); err != nil {
+		t.Skip("no setpriv")
 	}
-	if source := must(t, "findmnt", "-n", "-o", "SOURCE", at); source != "/dev/mapper/"+renamed {
-		t.Errorf("mounted from %s", source)
+	original, err := os.ReadFile("/etc/fstab")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
-	if got := branchesOf(t, pool); !slices.Equal(got, []string{filepath.Join(b.keep, "media"), filepath.Join(at, "media")}) {
-		t.Errorf("branches once back: %v", got)
+	t.Cleanup(func() { _ = os.WriteFile("/etc/fstab", original, 0o644) })
+	// The account, as the package's postinst would make it: ntfs-3g asks for a user's name.
+	passwd, err := os.ReadFile("/etc/passwd")
+	mustDo(t, err)
+	t.Cleanup(func() { _ = os.WriteFile("/etc/passwd", passwd, 0o644) })
+	mustDo(t, os.WriteFile("/etc/passwd", append(slices.Clone(passwd), []byte("atoll:x:990:990::/nonexistent:/usr/sbin/nologin\n")...), 0o644))
+	for _, tc := range []struct {
+		name, driver, fstype, seen string
+		fs                         names.Filesystem
+	}{{"ext4", "", "ext4", "ext4", names.Ext4}, {"ntfs-3g", "ntfs-3g", "ntfs-3g", "fuseblk", names.NTFS}} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			// The folders above the mount point open to every account, as /mnt or /srv is: a test's own are not.
+			for dir := filepath.Dir(at); dir != "/" && dir != "."; dir = filepath.Dir(dir) {
+				mustDo(t, os.Chmod(dir, 0o755))
+			}
+			mountVolume(t, v, tc.driver, at)
+			write(t, at, "a", "a")
+			mustDo(t, os.WriteFile("/etc/fstab", append(slices.Clone(original), []byte(v.device+" "+at+" "+tc.fstype+" defaults 0 0\n")...), 0o644))
+			if out, err := asTheUnit(t, "umount", "-l", at); err != nil {
+				t.Fatalf("umount -l as the dedicated user: %v: %s", err, out)
+			}
+			if out, _ := exec.CommandContext(t.Context(), "findmnt", "-n", at).CombinedOutput(); len(out) != 0 {
+				t.Fatalf("still mounted: %s", out)
+			}
+			out, err := asTheUnit(t, "mount", at)
+			if err != nil && tc.driver == "ntfs-3g" {
+				t.Logf("mount as the dedicated user, its mount point root's: %v: %s", err, out)
+				mustDo(t, os.Chown(at, 990, 990))
+				out, err = asTheUnit(t, "mount", at)
+			}
+			if err != nil {
+				t.Fatalf("mount as the dedicated user: %v: %s", err, out)
+			}
+			if got := must(t, "findmnt", "-n", "-o", "SOURCE,FSTYPE", at); strings.Join(strings.Fields(got), " ") != v.device+" "+tc.seen {
+				t.Errorf("mounted as %q", got)
+			}
+			if data, err := os.ReadFile(filepath.Join(at, "media", "a")); err != nil || string(data) != "a" {
+				t.Errorf("the disk's content once mounted again: %q, %v", data, err)
+			}
+			// What a media server reads each disk as: another account, with no capability at all.
+			t.Logf("mounted again with %s", must(t, "findmnt", "-n", "-o", "OPTIONS", at))
+			other := exec.CommandContext(t.Context(), "setpriv", "--reuid=991", "--regid=991", "--clear-groups", "--no-new-privs",
+				"--inh-caps=-all", "--bounding-set=-all", "--", "cat", filepath.Join(at, "media", "a"))
+			if out, err := other.CombinedOutput(); err != nil || string(out) != "a" {
+				t.Errorf("another account reads %q, %v", out, err)
+			}
+		})
+	}
+}
+
+// TestAnNTFSDiskMountedAgainByAnotherAccount: an ntfs-3g disk mounted again by the daemon's dedicated user, as the
+// remount after a USB reset does (specs.md §15.13), shows every file as that account's: with no user mapping, the
+// owner is the mount's, not the file's. A pass after it must not take that for a chown of every file and apply it to
+// the copies of the other disks (§15.4), nor change anything else of them.
+func TestAnNTFSDiskMountedAgainByAnotherAccount(t *testing.T) {
+	needRoot(t)
+	if _, err := exec.LookPath("setpriv"); err != nil {
+		t.Skip("no setpriv")
+	}
+	passwd, err := os.ReadFile("/etc/passwd")
+	mustDo(t, err)
+	t.Cleanup(func() { _ = os.WriteFile("/etc/passwd", passwd, 0o644) })
+	mustDo(t, os.WriteFile("/etc/passwd", append(slices.Clone(passwd), []byte("atoll:x:990:990::/nonexistent:/usr/sbin/nologin\n")...), 0o644))
+	original, err := os.ReadFile("/etc/fstab")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.WriteFile("/etc/fstab", original, 0o644) })
+
+	v := newVolume(t, names.NTFS)
+	at := mountPoint(t)
+	mountVolume(t, v, "ntfs-3g", at)
+	// A change is decided as soon as it is seen.
+	b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n")
+	for _, top := range []string{b.keep, at} {
+		write(t, top, "d/a.mkv", "film")
+	}
+	b.settle()
+	kept := filepath.Join(b.keep, "media", "d", "a.mkv")
+	before, err := os.Stat(kept)
+	mustDo(t, err)
+
+	// Mounted again by the dedicated user, its mount point given to it, as a remount needs.
+	mustDo(t, os.WriteFile("/etc/fstab", append(slices.Clone(original), []byte(v.device+" "+at+" ntfs-3g defaults 0 0\n")...), 0o644))
+	unmountWhenFree(t, at)
+	mustDo(t, os.Chown(at, 990, 990))
+	if out, err := asTheUnit(t, "mount", at); err != nil {
+		t.Fatalf("mount as the dedicated user: %v: %s", err, out)
+	}
+	ntfsCopy := filepath.Join(at, "media", "d", "a.mkv")
+	if info, err := os.Stat(ntfsCopy); err != nil {
+		t.Fatal(err)
+	} else if uid := info.Sys().(*syscall.Stat_t).Uid; uid != 990 {
+		t.Fatalf("the copy reads as uid %d once mounted again, which this test is about", uid)
+	}
+	out := b.settle()
+	after, err := os.Stat(kept)
+	mustDo(t, err)
+	was, now := before.Sys().(*syscall.Stat_t), after.Sys().(*syscall.Stat_t)
+	if now.Uid != was.Uid || now.Gid != was.Gid || after.Mode() != before.Mode() || !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("the other disk's copy went from %d:%d %v %v to %d:%d %v %v", was.Uid, was.Gid, before.Mode(), before.ModTime(), now.Uid, now.Gid, after.Mode(), after.ModTime())
+	}
+	for _, op := range out.Operations {
+		t.Errorf("an operation once mounted again: %+v", op)
+	}
+
+	// Then the copy's date changes on that disk, as Radarr's "change file date" does: the date reaches the other copy,
+	// and the owner the mount gave every file does not.
+	when := time.Unix(1600000000, 0)
+	mustDo(t, os.Chtimes(ntfsCopy, when, when))
+	b.settle()
+	after, err = os.Stat(kept)
+	mustDo(t, err)
+	now = after.Sys().(*syscall.Stat_t)
+	if !after.ModTime().Equal(when) {
+		t.Errorf("the date did not reach the other copy: %v", after.ModTime())
+	}
+	if now.Uid != was.Uid || now.Gid != was.Gid {
+		t.Errorf("the other disk's copy took the owner %d:%d, which only the mount gave, for %d:%d", now.Uid, now.Gid, was.Uid, was.Gid)
 	}
 }
 

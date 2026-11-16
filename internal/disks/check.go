@@ -58,6 +58,9 @@ type Verdict struct {
 	Reason          Reason
 	Message         string
 	TimePrecisionNS int64
+	// MountOwner says that the disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do,
+	// through FUSE (specs.md §15.4): neither is a file's own. Never for a missing disk.
+	MountOwner bool
 }
 
 // PathAnswer is what the mount path gave.
@@ -205,6 +208,9 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	}
 	verdict := judgeWrites(e, device.Identity, root.OtherCase, d.Root)
 	verdict.TimePrecisionNS = device.Identity.TimePrecisionNS
+	// ntfs3 keeps an owner and a mode for each file, measured; through FUSE, NTFS keeps none, and every file shows what
+	// the mount gives, which a mount by another account changes for all of them at once.
+	verdict.MountOwner = e.FSType == "fuseblk"
 	return verdict
 }
 
@@ -311,6 +317,6 @@ func MarkerVerdict(v Verdict, text []byte, found bool, poolID string, d *config.
 		return v
 	}
 	verdict := readOnly(OtherMarker, why)
-	verdict.TimePrecisionNS = v.TimePrecisionNS
+	verdict.TimePrecisionNS, verdict.MountOwner = v.TimePrecisionNS, v.MountOwner
 	return verdict
 }

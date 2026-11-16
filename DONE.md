@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The remount of an ntfs-3g disk, and the owner its mount gives, 2026-11-16 (specs.md §10, §15.4, §15.13)
+
+Commit "Take the owner an ntfs-3g mount gives for the mount's, and test the remount as the daemon's account", on `beta`. The maintainer asked for the remount of an ntfs-3g disk after a USB reset to be tested, as the dedicated user.
+
+- **The remount itself works**, as root and as the dedicated user, ext4 and ntfs-3g, on Linux 6.12 and 7.3: `TestDaemonRemountsAfterAReset` now runs on both drivers, and `TestRemountAsTheDedicatedUser` runs `umount -l` and `mount` as the unit runs them, another account with the unit's capabilities alone and no new privileges.
+- **But ntfs-3g mounts again, as that account, only on a mount point it may write to**: `mount.ntfs-3g` refuses one that root alone owns. `deploy/README.md` says to give each ntfs-3g disk's mount point to `atoll`. Nothing in Atoll can do it for the administrator.
+- **And the volume then shows every file as that account's.** ntfs-3g keeps no owner of its own for a file: every file shows the mount's, and a mount by `atoll` makes them all `atoll`'s. A pass found nothing to do at once, as no change time moved; but the next change of any of those files, a date set by Radarr for one, carried the owner `atoll` to the copies of the other disks, as a `chown` (`TestAnNTFSDiskMountedAgainByAnotherAccount`, which failed so before the fix). The mount check now says, from the mount table, when a disk is mounted through FUSE, as ntfs-3g and lowntfs-3g mount NTFS (`fuseblk`), and such a copy gives neither its owner nor its mode to the others: the date still goes. ntfs3 keeps an owner and a mode for each file, measured, and gives them as before.
+
+### Decided without the maintainer, to confirm
+
+- **Every disk mounted through FUSE gives no owner and no mode**, ntfs-3g with its `permissions` option or a user mapping included, which Atoll cannot see in the mount table: a real `chown` made there does not reach the other disks. The other way would carry a mount's owner to every copy of the pool.
+- **`conformance/vectors/disk_check.json` has a new field, `mount_owner`**, and `metadata.json` one too, for a copy whose disk gives its mount's owner.
+
 ## A watcher that missed a file made with its folder, on btrfs, 2026-11-16 (specs.md §15.1)
 
 Commit "List a folder that arrives through a descriptor opened after its mark", on `beta`, which the maintainer asked for.

@@ -19,6 +19,10 @@ Measured in a Debian 13 container, as such a user with those capabilities and no
 - it reads and writes mergerfs's runtime branches through `.mergerfs`;
 - it runs `mount` and `umount` through util-linux.
 
+The remount after a USB reset (`specs.md` §15.13), measured in qemu on Linux 6.12 and 7.3 as that user, with `NoNewPrivileges`:
+- ext4 mounts again from its `/etc/fstab` entry;
+- ntfs-3g mounts again only on a mount point that `atoll` may write to: `mount.ntfs-3g` refuses one that root alone owns ("user has no write access to mountpoint"). Give each ntfs-3g disk's mount point to `atoll` while the disk is unmounted (`chown atoll /mnt/disk1`), or the disk stays `missing` after a reset until it is mounted by hand. The volume then shows every file as `atoll`'s, with `allow_other`, so that other accounts, a media server's included, still read it; Atoll takes the owner and the mode an ntfs-3g mount gives for the mount's, never for a change to carry to the other disks.
+
 `NoNewPrivileges`, `ProtectHome=read-only` and `PrivateTmp` harden it no further than the disks allow: the library's mount points stay writable.
 
 The catalog's folder (`/var/lib/atoll`) and the configuration's (`/etc/atoll`) belong to `atoll`: `StateDirectory` and `ConfigurationDirectory` see to it. Commands run by hand as root work on the same catalog; they wait while a pass holds it (§25).

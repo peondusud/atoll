@@ -191,6 +191,7 @@ type checkCase struct {
 	Marker     json.RawMessage `json:"marker"`
 	State      string          `json:"state"`
 	Reason     string          `json:"reason"`
+	MountOwner bool            `json:"mount_owner"`
 	Note       string          `json:"note"`
 }
 
@@ -274,6 +275,9 @@ func TestCheck(t *testing.T) {
 		// What the head said of the time goes with a disk that passed, and nothing with one that did not (specs.md §9).
 		if want := map[bool]int64{true: 0, false: 100}[got.State == Missing]; got.TimePrecisionNS != want {
 			t.Errorf("case %d: %s with a precision of %d (%s)", i, got.State, got.TimePrecisionNS, c.Note)
+		}
+		if got.MountOwner != c.MountOwner {
+			t.Errorf("case %d: the mount's owner %v, want %v (%s)", i, got.MountOwner, c.MountOwner, c.Note)
 		}
 	}
 }

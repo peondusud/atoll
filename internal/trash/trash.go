@@ -157,6 +157,17 @@ func (s *Session) TimePrecision(id string) int64 {
 	return 0
 }
 
+// MountOwner says whether a disk of the configuration gives every file the owner and the mode of its mount, as its
+// mount check found it (specs.md §15.4).
+func (s *Session) MountOwner(id string) bool {
+	for i := range s.config.Disks {
+		if s.config.Disks[i].ID == id && i < len(s.verdicts) {
+			return s.verdicts[i].MountOwner
+		}
+	}
+	return false
+}
+
 // Handle gives a handle on a disk, confirmed if this session writes, and nil when it cannot be reached.
 func (s *Session) Handle(ctx context.Context, id string) (*ops.Disk, error) {
 	return s.open(ctx, id)

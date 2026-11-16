@@ -56,6 +56,7 @@ func (p *pass) metadataPlan(f *catalog.FileRow, in *solver.ModInput, looks map[s
 			Disk: mc.Disk, Position: mc.Position, Changed: isChanged(mc), State: mc.State, RowMtime: row.MtimeNS.Int64,
 			PrecisionNS: p.session.TimePrecision(mc.Disk), RowMode: row.Mode.Int64, HasRowMode: row.Mode.Valid,
 			RowOwner: solver.Owner{UID: row.UID.Int64, GID: row.GID.Int64}, HasRowOwner: row.UID.Valid && row.GID.Valid,
+			MountOwner: p.session.MountOwner(mc.Disk),
 		}
 		if look := looks[mc.Disk]; c.Changed && look != nil {
 			c.Mtime, c.Ctime, c.LookMode, c.HasLookMode = look.MtimeNS, look.CtimeNS, look.Mode, true
