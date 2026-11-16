@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a710",
+  "description": "What a disk's answer to ATA CHECK POWER MODE says, read from the sense data of an ATA PASS-THROUGH (16) sent with CK_COND set: the count it returns, from the ATA Status Return descriptor (code 09h) of descriptor-format sense data, or from the information field of fixed-format sense data whose additional sense code is 00h/1Dh, ATA pass-through information available. Its status must not have ERR set. 00h, 01h and 40h are standby, the disk spun down; 41h, 80h to 83h and FFh are spinning; anything else, or no such answer, says nothing (null).",
+  "cases": [
+    {"note": "standby, descriptor format", "sense": "7201001d0000000e090c000000000000000000004050", "mode": "standby"},
+    {"note": "Standby_y, a standby of the extended power conditions", "sense": "7201001d0000000e090c000000010000000000004050", "mode": "standby"},
+    {"note": "the NV cache power mode, spun down", "sense": "7201001d0000000e090c000000400000000000004050", "mode": "standby"},
+    {"note": "the NV cache power mode, spun up", "sense": "7201001d0000000e090c000000410000000000004050", "mode": "spinning"},
+    {"note": "idle", "sense": "7201001d0000000e090c000000800000000000004050", "mode": "spinning"},
+    {"note": "Idle_a", "sense": "7201001d0000000e090c000000810000000000004050", "mode": "spinning"},
+    {"note": "Idle_b, heads unloaded", "sense": "7201001d0000000e090c000000820000000000004050", "mode": "spinning"},
+    {"note": "Idle_c, a lower speed: still spinning", "sense": "7201001d0000000e090c000000830000000000004050", "mode": "spinning"},
+    {"note": "active or idle", "sense": "7201001d0000000e090c000000ff0000000000004050", "mode": "spinning"},
+    {"note": "a value the standard reserves says nothing", "sense": "7201001d0000000e090c000000100000000000004050", "mode": null},
+    {"note": "the status says the command failed (ERR)", "sense": "7201001d0000000e090c000000000000000000004051", "mode": null},
+    {"note": "another descriptor first: the ATA Status Return one is found", "sense": "7201001d0000001a000a80000000000000000000090c000000000000000000004050", "mode": "standby"},
+    {"note": "the ATA Status Return descriptor cut short", "sense": "7201001d0000000a090c0000000000000000", "mode": null},
+    {"note": "fixed format, ATA pass-through information available: the count in its information field", "sense": "700001005040ff0a00000000001d00000000", "mode": "spinning"},
+    {"note": "fixed format, standby", "sense": "700001005040000a00000000001d00000000", "mode": "standby"},
+    {"note": "fixed format with the information field marked valid", "sense": "f00001005040000a00000000001d00000000", "mode": "standby"},
+    {"note": "fixed format, the status says the command failed", "sense": "700001005140000a00000000001d00000000", "mode": null},
+    {"note": "fixed format, another sense: the information field says nothing of the device", "sense": "700001005040000a00000000290000000000", "mode": null},
+    {"note": "refused: illegal request, invalid command operation code, as a bridge with no pass-through answers", "sense": "700005000040000a00000000200000000000", "mode": null},
+    {"note": "no sense at all, as when the command was ignored", "sense": "", "mode": null},
+    {"note": "a deferred error is not this command's answer", "sense": "7301001d0000000e090c000000000000000000004050", "mode": null}
+  ]
+}

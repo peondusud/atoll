@@ -10,7 +10,7 @@ A milestone is reached when its phase and every phase before it are done.
 |---|---|---|---|
 | **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 98 % |
 | **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 98 % |
-| **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 95 % |
+| **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 97 % |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
 | — | 3 — Rust rewrite | the same contracts and conformance suite, switched to without migrating data | |
 | — | 4 — Windows | a Windows service and a WinFsp pool drive, in Rust | |
@@ -70,10 +70,11 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
   - To do, beyond phase 2a's list: a write that meets `ENOSPC` moved to another disk, hard links, extended attributes, copies written in parallel in `immediate` mode.
 - **The contracts frozen at format version 1**: catalog schema, on-disk layout, configuration keys, local API, `--json` schemas and exit codes. This is what the Rust rewrite (phase 3) must keep.
   - Done on 2026-11-16, as the maintainer chose: specs.md §29.3 says what a later version keeps, and `conformance/frozen/v1.json` pins it, which a test checks (DONE.md). Every choice DONE.md listed as to confirm was confirmed the same day.
-- Phase 2a is done but for `read.policy = "prefer-spinning"` and `read.classes`: which in-sync copy the view reads, one on a disk already spinning, or of a class, SATA before USB. They need to know which disk spins, as the disk sleep of phase 2b does, and come with it (DONE.md, to confirm). What v0.1 needs besides is the alpha's: the memory of a daemon that runs for days, the soak of 24 hours, after phase 2b unless the maintainer asks sooner.
+- Phase 2a is done, `read.policy = "prefer-spinning"` and `read.classes` with phase 2b's knowledge of which disk spins (DONE.md, 2026-11-16). What v0.1 needs besides is the alpha's: the memory of a daemon that runs for days, the soak of 24 hours, after phase 2b unless the maintainer asks sooner.
 
 ## Phase 2b, disk sleep
 
 - Done, the `colocate` and `new_files` strategies (R-28, DONE.md, 2026-11-16): a replica, and what is new through the view, goes where the other files of its folder or show are, then as `new_files` says, `ordered` filling the disks in order to `fill_to`, `percent` to the same share; the mergerfs line creates with `ff` or `pfrd` for them.
 - Done, passes that spare the disks' sleep (§15.13, DONE.md, 2026-11-16): a pass for events or `next_due` walks only the disks something calls for a look at, and neither walks nor confirms the others, which it opens only for work that waits there.
-- To do: which disk spins and `read.policy = "prefer-spinning"` with `read.classes`; the SSD cache (§19, R-26); UPS through NUT (R-27); `balance.equalize`; Prometheus `/metrics`; walks of only the folders that changed, for the CPU of a disk under constant changes (TODO.md).
+- Done, which disk spins, and the view's reads by it (§7, §10, DONE.md, 2026-11-16): the daemon's check tells `standby` from `online` by the kernel's counters, then by ATA CHECK POWER MODE, which wakes none, and records it; `read.policy = "prefer-spinning"` reads a copy on a disk that spins, then by `read.classes`, then the original.
+- To do: the SSD cache (§19, R-26); UPS through NUT (R-27); `balance.equalize`; Prometheus `/metrics`; walks of only the folders that changed, for the CPU of a disk under constant changes (TODO.md).

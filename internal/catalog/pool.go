@@ -309,7 +309,7 @@ func syncOne(ctx context.Context, tx *sql.Tx, d *Disk) error {
 			position = excluded.position, domain = excluded.domain, tags = excluded.tags,
 			capacity_bytes = COALESCE(excluded.capacity_bytes, capacity_bytes),
 			free_bytes = COALESCE(excluded.free_bytes, free_bytes),
-			state = excluded.state,
+			state = CASE WHEN excluded.state = 'online' AND state = 'standby' THEN state ELSE excluded.state END,
 			last_seen_ns = COALESCE(excluded.last_seen_ns, last_seen_ns),
 			time_precision_ns = COALESCE(excluded.time_precision_ns, time_precision_ns)`,
 		d.ID, d.UUID, d.FS, d.Mount, d.Root, d.Workdir, d.Role, d.Position, domain, string(tagsJSON), capacity, free, d.State, lastSeen, precision)
@@ -391,6 +391,26 @@ func SetDiskState(ctx context.Context, db *sql.DB, id, state string) error {
 		return fmt.Errorf("disk %q: %w", id, err)
 	}
 	return nil
+}
+
+// SetSpin records whether a disk the mount check finds online is in standby, as the daemon's check tells (specs.md
+// §10). It says false when the catalog holds the disk in no state of the two: missing, readonly, draining or failed,
+// which the passes write, or not at all. A sync of the disks keeps standby where its own check finds the disk mounted,
+// as no command's check can tell a disk asleep.
+func SetSpin(ctx context.Context, db *sql.DB, id string, standby bool) (bool, error) {
+	state := "online"
+	if standby {
+		state = "standby"
+	}
+	res, err := db.ExecContext(ctx, "UPDATE disks SET state = ? WHERE id = ? AND state IN ('online', 'standby')", state, id)
+	if err != nil {
+		return false, fmt.Errorf("disk %q: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("disk %q: %w", id, err)
+	}
+	return n == 1, nil
 }
 
 // inTransaction commits what fn did, or nothing.

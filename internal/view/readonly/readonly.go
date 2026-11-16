@@ -72,6 +72,9 @@ func Run(ctx context.Context, o Options) error {
 	}
 	c.check()
 	tree := view.NewTree(o.DB, roots, view.Owner{UID: uint32(unix.Geteuid()), GID: uint32(unix.Getegid())}, o.Machine.Now())
+	// Which copy a file is read from (specs.md §7): read.policy and read.classes, as the configuration says at the start.
+	prefer, classes := o.Config.Read()
+	tree.WithRead(view.ReadPolicy{PreferSpinning: prefer, Classes: classes})
 	var w *writer.Writer
 	if o.Writes {
 		if w, err = writer.New(o.DB, o.Config, o.Machine, tree, c.handles, o.Log); err != nil {

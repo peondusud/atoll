@@ -63,7 +63,7 @@ Every item here is a **decision**:
 
 Each point the review left to decide was put to the maintainer as a question, with its options and what each costs. What he chose is below; the reasons and the costs are in the entries of the sections that follow, which stay until each is done. Each is done as any fix: a test that fails first, the spec, DONE.md.
 
-16. **The soak.** The one of 72 hours, started again on `42e9c65` on 2026-11-14, was stopped by the maintainer; one of 12 hours on 200,000 files a disk passed (2026-11-14, `f438a3a`, DONE.md). One of 24 hours waits for phase 2b, unless the maintainer asks for it sooner, as he decided on 2026-11-16, with the try of the notifications on the real Plex and the openmediavault plugin.
+16. **The soak.** The one of 72 hours, started again on `42e9c65` on 2026-11-14, was stopped by the maintainer; one of 12 hours on 200,000 files a disk passed (2026-11-14, `f438a3a`, DONE.md). One of 24 hours waits for phase 2b, unless the maintainer asks for it sooner, as he decided on 2026-11-16, with the try of the notifications on the real Plex and the openmediavault plugin. With them, on the maintainer's own disks, which disk spins (§10): CHECK POWER MODE on a SATA disk asleep and awake, and behind each USB bridge of the pool, as no disk sleeps in qemu; the log says which bridges give no answer, and those disks count as spinning.
 
 Four more, on what the measure of 10 showed, answered on 2026-11-14:
 

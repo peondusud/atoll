@@ -2,6 +2,24 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Which disk spins, and the view's reads by it, 2026-11-16 (specs.md §4, §7, §10, §21.2, §24.4)
+
+Commit "Tell which disk spins, and read from one that does", on `beta`, the third piece of phase 2b, with what phase 2a had left: `read.policy = "prefer-spinning"` and `read.classes`. Vectors first: `view_read.json`, `power_mode.json`, `block_stat.json`, `spin.json`.
+
+- **The maintainer's three answers** (2026-11-16, each the recommended one): the kernel's counters first, then ATA CHECK POWER MODE, an SSD always spinning and a disk that gives no answer counted online; the daemon's check measures it and records it in the catalog's disk state, where the view reads it, with no new capability for `atoll mount`; with `prefer-spinning`, a copy on a disk that spins, then the first class of `read.classes`, then the original, then by position, chosen at the open and kept until the close, and with `oldest` the original alone, `read.classes` keeping a warning.
+- **The daemon's check** (every 30 s): for each disk `online`, its whole disks as SMART finds them; one with no spindle, or whose completed I/O moved since the last check, or with requests under way, spins and is asked nothing; any other is asked CHECK POWER MODE through `SG_IO` (ATA PASS-THROUGH (16), `CK_COND`), its answer read from the sense data, in both formats. It writes `standby` or `online` with `catalog.SetSpin`, only from one to the other; a sync of the disks keeps `standby` where its own check finds the disk mounted.
+- **The view** reads in the order of `view.ReadOrder`, and opens the next copy when one cannot be opened now; it presents the original's attributes either way. The plan already put `online` before `standby`, and the view that writes too, so a replica and a new file now go to a disk that spins, all else equal.
+- **The configuration**: `read.policy` and `read.classes` no longer warn of a later phase; `read.classes` warns, as a setting of no effect, with `oldest`. The example of §24.1 and `deploy/atoll.toml` set `prefer-spinning`, so that their `read.classes` does something. Three scenarios and five vectors of `config.json` follow.
+- Tests: the four vector files; `TestTreeReadsAsThePolicySays`; `TestTheSpinStateIsTheDaemons`; `TestReadClassesWarnWithOldest`; `TestTheCheckRecordsADiskInStandby` and `TestADiskThatGivesNoAnswerIsAskedNoMore`, on a machine whose whole disks a test puts to sleep; `TestCheckPowerModeOfWhatIsNoDisk`; in `test/loopdev`, `TestSpinReadsOfAWholeDisk`, on Linux 6.12 and 7.3: a loop device's counters read and move with a write, and it gives no answer to CHECK POWER MODE, so it counts as spinning. Made to fail, each of 16 mutations was caught. No disk here sleeps: the command on a real SATA disk and behind a USB bridge is to try on the maintainer's machine (TODO.md).
+- **Decided without the maintainer, to confirm:**
+  - CHECK POWER MODE is sent by Atoll itself, through `SG_IO`, rather than by running `smartctl -n standby` every 30 s: no process for each disk at each check, and no fallback that sends anything else when the bridge refuses pass-through, as smartctl may; 5 s for an answer;
+  - a disk is in `standby` when one of its whole disks answers standby, as a read may need it;
+  - a disk `readonly`, `draining` or `failed` is not asked, and the view counts `readonly` and `draining` as spinning, as nothing records them asleep;
+  - the state is written without the catalog's lock, and a sync of the disks by a command or a pass keeps `standby`; with no daemon, the catalog keeps what the last check found;
+  - a whole disk that gives no answer is asked no more until the configuration is read again;
+  - the view opens the next copy in its order when one cannot be opened, rather than failing the open;
+  - the example of §24.1 and `deploy/atoll.toml` say `prefer-spinning`.
+
 ## Passes that spare the disks' sleep, 2026-11-16 (specs.md §15.13)
 
 Commit "Walk only the disks a pass is called for", on `beta`, the second piece of phase 2b (G5); tests first.
@@ -30,7 +48,7 @@ Commit "Place copies with colocate and new_files", on `beta`, the first piece of
   - `percent` means the most free share of capacity, so that the disks fill to the same share, as DrivePool's equalizer does at placement: mergerfs's `pfrd` draws at random by free space, and Atoll's plan draws nothing at random (§29.3);
   - `folder` and `season` group alike but are two groups, as two rules that say them are two settings;
   - a disk counts the files of the group with a copy there in any state, a stale one included, as the folder is there either way;
-  - `read.policy = "prefer-spinning"` and `read.classes`, listed for phase 2a and not done there, come with phase 2b's disk sleep, which knows which disk spins; the view reads the original meanwhile, and both keep their warning.
+  - `read.policy = "prefer-spinning"` and `read.classes`, listed for phase 2a and not done there, come with phase 2b's disk sleep, which knows which disk spins; the view reads the original meanwhile, and both keep their warning. Done on 2026-11-16, as the maintainer answered (above).
 
 ## The contracts frozen at format version 1, 2026-11-16 (specs.md §29.3)
 

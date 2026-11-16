@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,11 +16,13 @@ type ViewDisk struct {
 	State          string
 	Cache          bool
 	Capacity, Free sql.NullInt64
+	// Tags are the disk's tags, which read.classes names (specs.md §7).
+	Tags []string
 }
 
 // ViewDisks reads every disk, for the view.
 func ViewDisks(ctx context.Context, db *sql.DB) ([]ViewDisk, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, position, state, role, capacity_bytes, free_bytes FROM disks ORDER BY position")
+	rows, err := db.QueryContext(ctx, "SELECT id, position, state, role, capacity_bytes, free_bytes, tags FROM disks ORDER BY position")
 	if err != nil {
 		return nil, fmt.Errorf("disks: %w", err)
 	}
@@ -27,9 +30,12 @@ func ViewDisks(ctx context.Context, db *sql.DB) ([]ViewDisk, error) {
 	var out []ViewDisk
 	for rows.Next() {
 		var d ViewDisk
-		var role string
-		if err := rows.Scan(&d.ID, &d.Position, &d.State, &role, &d.Capacity, &d.Free); err != nil {
+		var role, tags string
+		if err := rows.Scan(&d.ID, &d.Position, &d.State, &role, &d.Capacity, &d.Free, &tags); err != nil {
 			return nil, fmt.Errorf("disks: %w", err)
+		}
+		if err := json.Unmarshal([]byte(tags), &d.Tags); err != nil {
+			return nil, fmt.Errorf("disk %q: tags: %w", d.ID, err)
 		}
 		d.Cache = role == "cache"
 		out = append(out, d)

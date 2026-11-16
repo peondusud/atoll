@@ -279,6 +279,30 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `reading` | object | `asleep`, the disk left asleep, nothing read; `needs_sat`, the answer asks for a device type, as behind a USB bridge; `failing`, its health check failed or an NVMe disk raised a critical warning; `reallocated`, `pending` and `uncorrectable`, ATA attributes 5, 197 and 198, or an NVMe disk's media errors; `temperature`, in degrees Celsius, 0 when none is given |
 | `error` | boolean | `true` for an answer with no exit status, or that holds no reading while the disk is neither asleep nor asking for a device type |
 
+### `power_mode.json` — a disk's answer to CHECK POWER MODE (§10)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `sense` | string | the sense data the ATA PASS-THROUGH (16) returned, in hexadecimal; `""` for none |
+| `mode` | string or null | `standby`, `spinning`, or null when the answer says nothing |
+
+### `block_stat.json` — a whole disk's I/O counters (§10)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `stat` | string | the content of `/sys/block/<name>/stat` |
+| `completed` | integer | the reads, writes, discards and flushes completed |
+| `in_flight` | integer | the requests under way |
+| `error` | boolean | `true` when the content cannot be read so; `completed` and `in_flight` are left out then |
+
+### `spin.json` — whether a disk is in standby (§10)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disks` | array of objects | the whole disks below its mount, in byte order of their names: `name`; `rotational`, whether it has a spindle, null when that cannot be read; `before` and `now`, its completed I/O at the last check and now, null when there is no earlier count or it cannot be read; `busy`, requests under way now; `refused`, it gave no answer to an earlier check; `answer`, what it answers if asked: `standby`, `spinning`, or null for none |
+| `asked` | array of strings | the whole disks asked their power mode, in the order given |
+| `standby` | boolean | whether the disk is in standby |
+
 ### `path_map.json` — the path a media server sees (§21.5)
 
 | Field | Type | Meaning |
@@ -388,6 +412,17 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 |---|---|---|
 | `disks` | array of objects | the disks: `id`, `position` and `state`; `role`, `data` when left out; `capacity` and `free`, in bytes, each left out when the catalog holds none |
 | `statfs` | object | `bsize`, `blocks`, `bfree`, `bavail` and `namemax` |
+
+### `view_read.json` — which copy Atoll's own view reads (§7, §21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disks` | array of objects | the disks: `id`, `position` and `state`, as `view_node.json` has them; `role`, `data` when left out; `tags`, none when left out |
+| `copies` | array of objects | the file's copies: `disk` and `state`, required; `gone_kind` and `old_path`, as `view_node.json` has them, each left out when the copy has none |
+| `presented` | string | the disk whose copy the path presents, the original (`view_node.json`) |
+| `policy` | string | `read.policy`: `oldest` or `prefer-spinning` |
+| `classes` | array of strings | `read.classes` |
+| `read` | array of strings | the disks whose copy the view opens, best first |
 
 ### `creation_time.json` — a creation time into `btime_ns` (§7)
 

@@ -131,3 +131,30 @@ func (machine) OpenRoot(mount, root string) (fsx.Dir, error) {
 	}
 	return dir, nil
 }
+
+// powerTimeout is how long a whole disk has to answer CHECK POWER MODE: a USB bridge that hangs must not hold the
+// daemon's check.
+const powerTimeout = 5 * time.Second
+
+func (machine) Rotational(name string) (bool, error) {
+	return fsx.Rotational(name) //nolint:wrapcheck // fsx says what it read
+}
+
+func (machine) BlockStat(name string) (BlockStat, error) {
+	text, err := fsx.ReadBlockStat(name)
+	if err != nil {
+		return BlockStat{}, err //nolint:wrapcheck // likewise
+	}
+	return ParseBlockStat(text)
+}
+
+func (machine) PowerMode(name string) (Power, error) {
+	sense, err := fsx.CheckPowerMode("/dev/"+name, powerTimeout)
+	if err != nil {
+		return PowerUnknown, err //nolint:wrapcheck // likewise
+	}
+	if p := PowerModeOf(sense); p != PowerUnknown {
+		return p, nil
+	}
+	return PowerUnknown, fmt.Errorf("/dev/%s: %w (sense %x)", name, ErrNoPowerMode, sense)
+}

@@ -41,16 +41,6 @@
             "message": "${ANY}"
           },
           {
-            "key": "read.classes",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
-            "key": "read.policy",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "rule[0].cache",
             "later_phase": true,
             "message": "${ANY}"

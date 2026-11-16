@@ -62,9 +62,9 @@ engine = "mergerfs"                     # mergerfs (phase 1) | atoll (phase 2a)
 mount  = "/srv/pool"
 # readonly_mount = "/srv/pool-ro"       # atoll mount: Atoll's own view, read only, for the media servers (§21.2)
 
-[read]                                  # Atoll's own view (phase 2a)
-policy   = "oldest"                     # oldest | prefer-spinning
-classes  = ["sata", "usb"]
+[read]                                  # Atoll's own view (§7, §21.2)
+policy   = "prefer-spinning"            # oldest (the default) | prefer-spinning
+classes  = ["sata", "usb"]              # with prefer-spinning: SATA before USB
 
 [maintenance]
 window           = "02:00-06:00"        # rescans, catalog backups; default of the windows below

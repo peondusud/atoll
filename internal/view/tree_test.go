@@ -75,7 +75,7 @@ func TestTree(t *testing.T) {
 	if n.Disk != "t2" || n.Mode != 0o600 || n.UID != 3 || n.Size != 7 {
 		t.Errorf("the file presents its original, t2's copy: %+v", n)
 	}
-	f, err := tree.Open("Films/a.mkv", &n)
+	f, err := tree.Open(t.Context(), "Films/a.mkv", &n)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestTree(t *testing.T) {
 		t.Errorf("statfs: %+v, %v", s, err)
 	}
 	roots.Drop("t2")
-	if _, err := tree.Open("Films/a.mkv", &n); !errors.Is(err, ErrUnreadable) {
+	if _, err := tree.Open(t.Context(), "Films/a.mkv", &n); !errors.Is(err, ErrUnreadable) {
 		t.Errorf("a disk that cannot be read: %v", err)
 	}
 }
@@ -230,7 +230,7 @@ func TestTreeOverTheViewsOperations(t *testing.T) {
 	}
 	read := func(path string, n *Node) string {
 		t.Helper()
-		f, err := tree.Open(path, n)
+		f, err := tree.Open(t.Context(), path, n)
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}

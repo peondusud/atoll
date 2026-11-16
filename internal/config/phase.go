@@ -23,12 +23,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			if v != "off" {
 				phase = "2b"
 			}
-		case "read.policy":
-			if v != "oldest" {
-				phase = "2a"
-			}
-		case "read.classes":
-			phase = "2a"
 		case "cache.enabled":
 			if v == true {
 				phase = "2b"

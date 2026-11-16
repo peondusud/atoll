@@ -189,7 +189,7 @@ func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 	case v.Kind == view.NodeDir:
 		return nil, 0, syscall.EISDIR
 	}
-	f, err := n.tree.Open(p, v)
+	f, err := n.tree.Open(ctx, p, v)
 	switch {
 	case errors.Is(err, syscall.ENOENT):
 		return nil, 0, syscall.ENOENT

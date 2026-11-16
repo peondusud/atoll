@@ -176,6 +176,10 @@ type diskState struct {
 	// probed says that the NTFS volume of a missing disk was read once since it went missing, and dirty that it was
 	// marked dirty then (specs.md §22).
 	probed, dirty bool
+	// standby says that the last check found it online and asleep, and spinWritten that the catalog holds what it
+	// found; counts are its whole disks' completed I/O at that check (specs.md §10).
+	standby, spinWritten bool
+	counts               map[string]int64
 }
 
 type loop struct {
@@ -244,6 +248,9 @@ type loop struct {
 	balanceNext    int64
 	balanceWork    bool
 	balanceSpent   time.Duration
+	// noAnswer holds the whole disks that gave no answer to CHECK POWER MODE: asked no more until the configuration is
+	// read again, they count as spinning (specs.md §10).
+	noAnswer map[string]bool
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -461,6 +468,8 @@ func (l *loop) reload() {
 		}
 	}
 	l.reloaded = true
+	// A disk that gave no answer to CHECK POWER MODE is asked again, as one a configuration read again may name.
+	clear(l.noAnswer)
 	l.checkDue = l.opt.Machine.Now()
 	if l.smartDue == nil {
 		l.smartDue = smartFirst(l.opt.Machine)
@@ -536,6 +545,7 @@ func (l *loop) check(ctx context.Context) {
 			l.log.Info("a disk changed state", "disk", d.ID, "from", st.state, "to", v.State, "reason", v.Reason)
 		}
 		st.state = v.State
+		l.spin(d, st)
 		l.probeDirty(d, st)
 		if remountWanted(d, st) {
 			l.remount(ctx, d)
@@ -544,6 +554,7 @@ func (l *loop) check(ctx context.Context) {
 			l.rearm(ctx, d.ID)
 		}
 	}
+	l.recordSpin(ctx)
 }
 
 // rearm watches again a disk whose watch ended while the disk stayed there: its reader stopped on an error, or the

@@ -22,6 +22,8 @@ type Tree struct {
 	roots Roots
 	// mountedNS is the time the view was mounted, which its root presents.
 	mountedNS int64
+	// read is how it reads a file's data (specs.md §7).
+	read ReadPolicy
 }
 
 // NewTree makes the tree of a view, mounted at mountedNS, whose own process is owned by self.
@@ -221,26 +223,6 @@ func (t *Tree) Statfs(ctx context.Context) (Statfs, error) {
 	return StatfsOf(disks), nil
 }
 
-// Open opens the data of a file node for reading, from the disk it presents, one name at a time below the root and
-// following no symlink.
-func (t *Tree) Open(path string, n *Node) (fsx.File, error) {
-	var f fsx.File
-	err := t.roots.Root(n.Disk, func(root fsx.Dir) error {
-		return walk(root, path, func(dir fsx.Dir, name string) error {
-			opened, err := dir.OpenFile(name)
-			if err != nil {
-				return fmt.Errorf("%w", err)
-			}
-			f = opened
-			return nil
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
-}
-
 func (t *Tree) disks(ctx context.Context) ([]Disk, error) {
 	rows, err := catalog.ViewDisks(ctx, t.db)
 	if err != nil {
@@ -248,7 +230,7 @@ func (t *Tree) disks(ctx context.Context) ([]Disk, error) {
 	}
 	out := make([]Disk, 0, len(rows))
 	for _, r := range rows {
-		d := Disk{ID: r.ID, Position: r.Position, State: solver.DiskState(r.State), Cache: r.Cache}
+		d := Disk{ID: r.ID, Position: r.Position, State: solver.DiskState(r.State), Cache: r.Cache, Tags: r.Tags}
 		if r.Capacity.Valid {
 			d.Capacity = &r.Capacity.Int64
 		}

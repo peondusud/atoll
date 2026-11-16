@@ -318,7 +318,6 @@ func TestLaterPhaseWarnings(t *testing.T) {
 		"disk[3].role",
 		"health.avoid_hotter_than",
 		"health.evacuate_on",
-		"read.classes",
 		"rule[5].cache_min_age",
 		"rule[6].cache_min_age",
 	}
@@ -328,6 +327,49 @@ func TestLaterPhaseWarnings(t *testing.T) {
 	for _, w := range c.Warnings {
 		if !strings.Contains(w.Message, "phase") {
 			t.Errorf("%v does not name the phase", w)
+		}
+	}
+}
+
+// read.policy and read.classes came with phase 2b, which knows which disk spins. read.classes still warns, as a
+// setting of no effect and of no later phase, where the file sets it and read.policy is "oldest", which reads the
+// original alone (specs.md §7, §24.4).
+func TestReadClassesWarnWithOldest(t *testing.T) {
+	for _, tc := range []struct {
+		name, read string
+		warn       bool
+	}{
+		{"classes with oldest, the default", `classes = ["sata"]` + "\n", true},
+		{"an empty list, as the file wrote it", "classes = []\n", true},
+		{"classes with oldest said", `policy = "oldest"` + "\n" + `classes = ["sata"]` + "\n", true},
+		{"classes with prefer-spinning", `policy = "prefer-spinning"` + "\n" + `classes = ["sata"]` + "\n", false},
+		{"prefer-spinning alone", `policy = "prefer-spinning"` + "\n", false},
+	} {
+		c, err := Parse([]byte(`pool_id = "p"
+[view]
+mount = "/srv/pool"
+[[disk]]
+id = "t1"
+uuid = "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"
+mount = "/mnt/t1"
+fs = "ext4"
+tags = ["sata"]
+[read]
+` + tc.read))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var got []Problem
+		for _, w := range c.Warnings {
+			if w.Key == "read.classes" || w.Key == "read.policy" {
+				got = append(got, w)
+			}
+		}
+		switch {
+		case !tc.warn && len(got) != 0:
+			t.Errorf("%s: %v", tc.name, got)
+		case tc.warn && (len(got) != 1 || got[0].Key != "read.classes" || got[0].LaterPhase || !strings.Contains(got[0].Message, "oldest")):
+			t.Errorf("%s: %v", tc.name, got)
 		}
 	}
 }

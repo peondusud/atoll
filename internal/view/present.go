@@ -17,6 +17,8 @@ type Disk struct {
 	Cache bool
 	// Capacity and Free are what the catalog holds, nil when it holds none yet.
 	Capacity, Free *int64
+	// Tags are the disk's tags, which read.classes names (specs.md §7).
+	Tags []string
 }
 
 // Copy is a copy of the file at a path, as the catalog holds it: a nil field is one its row holds none of.

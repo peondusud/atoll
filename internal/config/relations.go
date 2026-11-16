@@ -439,6 +439,15 @@ func poolKeys() map[string]string {
 	}
 }
 
+// noEffect warns about what the file or the preset set and what else it set makes of no effect (specs.md §24.4):
+// read.classes with read.policy = "oldest", which reads the original alone (§7).
+func noEffect(tree map[string]any, set map[string]any) []Problem {
+	if _, classes := set["read.classes"]; !classes || text(table(tree, "read"), "policy") != "oldest" {
+		return nil
+	}
+	return []Problem{{Key: "read.classes", Message: `no effect with read.policy = "oldest", which reads the original alone`}}
+}
+
 // unknownLabels warns about tags and domains no disk carries (specs.md §24.4).
 func unknownLabels(tree map[string]any) []Problem {
 	tags, domains := map[string]bool{}, map[string]bool{}

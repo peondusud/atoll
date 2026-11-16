@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a724.4",
-  "description": "A setting the table lists under any gets its warning for an empty list too, as the file wrote it.",
+  "description": "A setting the table lists under any gets its warning for an empty list too, as the file wrote it; so does read.classes with read.policy = \"oldest\", where it has no effect, a warning of no later phase.",
   "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[read]\nclasses = []\n[health]\nevacuate_on = []\n[[rule]]\nlabel = \"r\"\ntags = []\ndomains = []\n",
   "steps": [
     {
@@ -22,7 +22,7 @@
           },
           {
             "key": "read.classes",
-            "later_phase": true,
+            "later_phase": false,
             "message": "${ANY}"
           }
         ],

@@ -124,6 +124,18 @@ func (c *Config) MinFree() (value.MinFree, error) {
 	return minFree, nil
 }
 
+// Read returns [read]: whether read.policy is "prefer-spinning" rather than "oldest", and read.classes (specs.md §7).
+func (c *Config) Read() (preferSpinning bool, classes []string) {
+	policy, _ := c.effective["read.policy"].(string)
+	raw, _ := c.effective["read.classes"].([]any)
+	for _, v := range raw {
+		if text, ok := v.(string); ok {
+			classes = append(classes, text)
+		}
+	}
+	return policy == "prefer-spinning", classes
+}
+
 // Policy returns the effective policy of a file (specs.md §11.3). A nil size means it
 // is not known yet.
 func (c *Config) Policy(path string, size *int64) rules.Policy {
@@ -194,7 +206,7 @@ func Parse(data []byte) (*Config, error) {
 	c.effective = flatten(tree)
 	c.PoolID, c.Strategy = text(tree, "pool_id"), text(tree, "strategy")
 	c.MediaServers = mediaServers(tree)
-	c.Warnings = append(unknownLabels(tree), laterPhaseWarnings(set)...)
+	c.Warnings = append(append(unknownLabels(tree), noEffect(tree, set)...), laterPhaseWarnings(set)...)
 	sortProblems(c.Warnings)
 	return c, nil
 }
