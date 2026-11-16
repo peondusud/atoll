@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## What ntfs3 with ads does with a rename onto a stream, pinned, 2026-11-16 (specs.md §10, §15.8)
+
+Commit "Pin what ntfs3 with ads does with a rename onto a stream", on `beta`, the rest of a TODO item.
+
+- `TestMergerfsRenameOntoAnADSStream`, in `test/loopdev`: where the kernel's ntfs3 knows `ads`, on by default, mergerfs over an ext4 branch and an ntfs3 one renames a file on both onto `m1:n`, where `m1` is another file with its only copy on NTFS. The rename succeeds, and `m1` then holds the renamed file's content, its own gone, read through a cold cache; the view lists `m1` and `m1:n`. What `docs/research/name-compatibility.md` measured by hand, and why ntfs3 with `ads` is a refused variant. Measured in qemu: it passes on Ubuntu's mainline 7.3.1, where ads is on by default, and is skipped on Debian's 6.12.117, whose ntfs3 has no ads option.
+- TODO.md: the item of pinning mergerfs and ntfs3 is done.
+
 ## A TODO item found done, 2026-11-16 (specs.md §10, §15.8)
 
 - "`disk add`: refuse ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase`, ntfs3 `ads` and lowntfs-3g `ignore_case`" was done: `disk add` refuses each of these reasons of the mount check (`nameRuleReasons` in `cmd/atoll/diskadd.go`, `TestDiskAddRefusesNameRules`, and `test/loopdev` on a real ext4 with `casefold`). "Watch `FS_CASEFOLD_FL` on folders under `<root>/`" needs nothing more: ext4 lets a folder take that flag only when the filesystem has the `casefold` feature, and every mount check reads the superblock again, so a disk that gains the feature turns `readonly`, with the reason `casefold`. The line left TODO.md.

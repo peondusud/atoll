@@ -117,3 +117,66 @@ func TestMergerfsRenameARefusedName(t *testing.T) {
 		})
 	}
 }
+
+// TestMergerfsRenameOntoAnADSStream pins what ntfs3 does with ads on, where the kernel knows that option and has it on
+// by default, as Ubuntu's mainline 7.3 does (docs/research/name-compatibility.md): it takes "m1:n" for the stream n of
+// the file m1. A file on both disks renamed through mergerfs onto "m1:n", where m1 is another file with its only copy
+// on NTFS, succeeds, and m1 then holds the renamed file's content: its own is gone, read through a cold cache. This is
+// why ntfs3 with ads is a refused variant (specs.md §10, §15.8). A kernel that changes it fails here.
+func TestMergerfsRenameOntoAnADSStream(t *testing.T) {
+	needRoot(t)
+	needMergerfs(t)
+	ntfs3Type(t)
+	if ntfs3Options(t) == nil {
+		t.Skip("this kernel's ntfs3 has no ads option")
+	}
+	ext := newVolume(t, names.Ext4)
+	e := mountPoint(t)
+	mountVolume(t, ext, "", e)
+	ntfs := newVolume(t, names.NTFS)
+	n := mountPoint(t)
+	mountVolume(t, ntfs, "ntfs3", n)
+	em, nm := filepath.Join(e, "media"), filepath.Join(n, "media")
+	for _, top := range []string{em, nm} {
+		mustDo(t, os.MkdirAll(top, 0o755))
+	}
+	// ads is on: a name with ':' is a stream of the file before it, which a listing does not show.
+	probe := filepath.Join(nm, "probe")
+	mustDo(t, os.WriteFile(probe, []byte("p"), 0o644))
+	mustDo(t, os.WriteFile(probe+":s", []byte("s"), 0o644))
+	entries, err := os.ReadDir(nm)
+	mustDo(t, err)
+	if len(entries) != 1 {
+		t.Skip("ads is not on for this mount")
+	}
+	mustDo(t, os.Remove(probe))
+	pool := mountPoint(t)
+	mount(t, pool, "mergerfs", "-o", mergerfsOptions, em+"=RW:"+nm+"=RW")
+	for _, top := range []string{em, nm} {
+		mustDo(t, os.WriteFile(filepath.Join(top, "x.mkv"), []byte("the content of x"), 0o644))
+	}
+	mustDo(t, os.WriteFile(filepath.Join(nm, "m1"), []byte("m1's own content"), 0o644))
+	must(t, "sync")
+	mustDo(t, os.WriteFile("/proc/sys/vm/drop_caches", []byte("3"), 0o644))
+
+	if err := os.Rename(filepath.Join(pool, "x.mkv"), filepath.Join(pool, "m1:n")); err != nil {
+		t.Fatalf("the rename onto a stream: %v", err)
+	}
+	must(t, "sync")
+	mustDo(t, os.WriteFile("/proc/sys/vm/drop_caches", []byte("3"), 0o644))
+	if data, err := os.ReadFile(filepath.Join(nm, "m1")); err != nil || string(data) != "the content of x" {
+		t.Errorf("m1 on NTFS holds %q, %v: it was overwritten, measured by hand", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(em, "m1:n")); err != nil || string(data) != "the content of x" {
+		t.Errorf("the ext4 copy at the new name: %q, %v", data, err)
+	}
+	entries, err = os.ReadDir(pool)
+	mustDo(t, err)
+	var listed []string
+	for _, d := range entries {
+		listed = append(listed, d.Name())
+	}
+	if want := []string{"m1", "m1:n"}; !slices.Equal(listed, want) {
+		t.Errorf("the merged view lists %q, want %q", listed, want)
+	}
+}
