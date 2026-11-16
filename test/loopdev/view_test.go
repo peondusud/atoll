@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -114,6 +115,86 @@ func TestViewMatchesMergerfs(t *testing.T) {
 			mustDo(t, m.Unmount())
 		})
 	}
+}
+
+// TestViewBrowsesNoDisk: browsing the view reads the catalog alone (specs.md §21.2, §21.6). Once a disk's device
+// answers every read with an error and the page cache is dropped, the whole library still lists, every name with its
+// attributes as before; a file presented from the other disk reads, and one presented from the failed disk fails
+// with EIO, as nothing was read from it until then.
+func TestViewBrowsesNoDisk(t *testing.T) {
+	needRoot(t)
+	for _, tc := range failingDrivers {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			m := newMapped(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, m.volume, tc.driver, at, options...)
+			b := newPassBenchWith(t, m.volume, at, "[defaults]\nsettle = \"0s\"\n")
+			write(t, b.keep, "Films/A.mkv", "from k")
+			// Past what NTFS keeps in the file's own record, which the driver may still hold once the device fails.
+			write(t, b.at, "Films/B.mkv", strings.Repeat("v", 64<<10))
+			write(t, b.at, "Series/S01/e01.mkv", "e01")
+			b.scan(false)
+			catchUp(b)
+			b.scan(false)
+			roots := viewRoots{}
+			for id, top := range map[string]string{"k": b.keep, "v": b.at} {
+				dir, err := fsx.OpenDir(filepath.Join(top, "media"))
+				mustDo(t, err)
+				t.Cleanup(func() { _ = dir.Close() })
+				roots[id] = dir
+			}
+			own := mountPoint(t)
+			mustDo(t, os.MkdirAll(own, 0o755))
+			tree := view.NewTree(b.db, roots, view.Owner{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}, time.Now().UnixNano())
+			mounted, err := mountOwn(tree, own)
+			mustDo(t, err)
+			t.Cleanup(func() { _ = mounted.Unmount() })
+			before := listedOnly(t, own)
+
+			must(t, "sync")
+			m.fail(t)
+			mustDo(t, os.WriteFile("/proc/sys/vm/drop_caches", []byte("3"), 0o644))
+			time.Sleep(1100 * time.Millisecond) // past the kernel's caches of the view
+			if after := listedOnly(t, own); !maps.Equal(after, before) {
+				t.Errorf("listed with a disk that fails: %v, before: %v", after, before)
+			}
+			if data, err := os.ReadFile(filepath.Join(own, "Films", "A.mkv")); err != nil || string(data) != "from k" {
+				t.Errorf("a file presented from the disk that answers: %q, %v", data, err)
+			}
+			if _, err := os.ReadFile(filepath.Join(own, "Films", "B.mkv")); !errors.Is(err, syscall.EIO) {
+				t.Errorf("a file presented from the disk that fails: %v, want EIO", err)
+			}
+			mustDo(t, mounted.Unmount())
+			m.heal(t)
+		})
+	}
+}
+
+// listedOnly gives, for each path below root, its kind, mode, owner and size, as a listing finds them, reading no
+// file.
+func listedOnly(t *testing.T, root string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, err error) error {
+		if err != nil || path == root {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		st, _ := info.Sys().(*syscall.Stat_t)
+		size := info.Size()
+		if info.IsDir() {
+			size = 0
+		}
+		out[rel] = fmt.Sprintf("%v %d:%d %d %d", info.Mode(), st.Uid, st.Gid, size, info.ModTime().UnixNano())
+		return nil
+	})
+	mustDo(t, err)
+	return out
 }
 
 // described gives, for each path below root, what it is: its kind, mode and owner, and for a file or a symlink its

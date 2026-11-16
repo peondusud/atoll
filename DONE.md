@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Phase 2a, Atoll's own view: browsing reads no disk, 2026-11-16 (specs.md §21.2, §21.6)
+
+Commit "Show that browsing the view reads no disk", on `beta`.
+
+- `TestViewBrowsesNoDisk`, in `test/loopdev`, through go-fuse on ext4, XFS, ntfs3 and ntfs-3g, in qemu on both kernels: once a disk's device answers every read with an error (dm-error) and the page cache is dropped, the whole library still lists through the view, every name with the kind, mode, owner, size and time it had; a file presented from the other disk reads, and one presented from the failed disk fails with `EIO`. mergerfs lists every branch, so this is what §21.6 says Atoll's own view brings: browsing wakes no disk.
+- A file of a few bytes presented from the failed disk still read on ntfs3 and ntfs-3g: NTFS keeps it in the file's own record, which the driver held. The test's file is 64 KiB, past it.
+- `TODO.md`: the break-glass item no longer waits for a comparison of the view with mergerfs, which `TestViewMatchesMergerfs` makes.
+
 ## Phase 2a, Atoll's own view: the read path, 2026-11-16 (specs.md §21.2, §29.7)
 
 Commit "Serve the read path of Atoll's own view through FUSE", on `beta`.
