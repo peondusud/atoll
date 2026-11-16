@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The watcher's three limits, 2026-11-16 (specs.md §15.1)
+
+Commit "Wait for the other end of a folder's rename, and watch a path past PATH_MAX", on `beta`. The maintainer asked for it among the alpha's known limits.
+
+- **A folder renamed within the root, under inotify.** The kernel queues the two ends of a rename one after the other, so a read can come between them: the folder was taken for gone, its watches removed, then watched again from scratch, listed, and every name in it reported as `created`, which costs a look at each. A read that leaves a folder moved away with no other end now waits 10 ms for it (`TestARenameInTwoReads`, which failed so). A folder that leaves the root and comes back later is watched again, as it should be: it may have changed while it was away.
+- **A path past `PATH_MAX` on ntfs-3g.** No limit any more: a mark per folder goes on a descriptor opened one name at a time, and the path of an event comes from the tree of the folders marked, never from `/proc`, since the commits that opened folders from the root. `TestWatcherOnEachDriver` now makes a file 4,230 bytes deep on every driver, by each way it can be watched, and finds it at its path through a watch per folder, fanotify or inotify. Through a filesystem mark, on ext4, XFS, btrfs and ntfs3, it comes at `""`, and the disk is looked at whole, as `/proc` names no folder past `PATH_MAX`: a cost, not a loss, and Atoll never writes such a path (§15.8). Left in TODO.md.
+- **The process of an event already gone** reads as `user`, and stays so. Calling it `unknown` was tried and measured wrong: a user's command, `mv`, `cp`, a shell, has mostly ended by the time its event is read, so in qemu nearly every event of a user became `unknown` (`TestWatcherOnEachDriver`, on both kernels). The view's mergerfs and the daemon outlive their events, so only an Atoll command that ended reads as `user`; its events wake a pass, which finds its operations in the journal, and tell a media server of a folder that did change. No decision differs between `user` and `unknown`. `FAN_REPORT_PIDFD` says only that a process is gone, never who it was. Recommended: leave; written in §15.1.
+
+### Decided without the maintainer, to confirm
+
+- **The wait, 10 ms**, once a read, and only when a folder left with no other end.
+
 ## A conflict found on a corrupt file, 2026-11-16 (specs.md §4, §7, §9, §13, §15.7, §16)
 
 Commit "Hold a conflict found on a corrupt file", on `beta`. The maintainer asked for it among the alpha's known limits.

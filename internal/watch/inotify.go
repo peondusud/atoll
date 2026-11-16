@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"strconv"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -29,6 +30,10 @@ type inotifySource struct {
 	tree             *folderTree[int32]
 	// moved holds the folders that left their parent in this read, by cookie, until the other end comes.
 	moved map[uint32]*folderNode[int32]
+	// read reads the instance, and wait waits for it to have something to read, at most a time, saying whether it
+	// has: unix.Read and a poll, but in tests.
+	read func(buf []byte) (int, error)
+	wait func(d time.Duration) bool
 	// opened is WatcherOptions.Opened.
 	opened func(path string)
 }
@@ -39,6 +44,8 @@ func openInotify(ctx context.Context, root string) (*inotifySource, error) {
 		return nil, fmt.Errorf("inotify: %w", err)
 	}
 	s := &inotifySource{ino: ino, root: path.Clean(root), moved: map[uint32]*folderNode[int32]{}}
+	s.read = func(buf []byte) (int, error) { return unix.Read(ino, buf) }
+	s.wait = func(d time.Duration) bool { return readable(ino, d) }
 	dir, err := fsx.OpenDir(root)
 	if err != nil {
 		_ = unix.Close(ino)
@@ -100,14 +107,27 @@ var errRootGone = errors.New("the watch of the root is gone")
 
 func (s *inotifySource) close() error { return unix.Close(s.ino) }
 
+// moveWait is how long a read that a folder left by a rename, its other end not come yet, waits for that end: the
+// kernel queues the two ends of a rename one after the other, so a read can come between them. Without it, a folder
+// renamed within the root was forgotten, then watched again from scratch, listed and every name in it reported as
+// created (specs.md §15.1).
+const moveWait = 10 * time.Millisecond
+
 func (s *inotifySource) drain(buf []byte) ([]change, []int32, error) {
 	var out []change
+	waited := false
 	for {
-		n, err := unix.Read(s.ino, buf)
+		n, err := s.read(buf)
 		switch {
 		case errors.Is(err, unix.EINTR):
 			continue
 		case errors.Is(err, unix.EAGAIN) || err == nil && n <= 0:
+			if len(s.moved) > 0 && !waited {
+				waited = true
+				if s.wait(moveWait) {
+					continue
+				}
+			}
 			s.settleMoves()
 			return out, nil, nil
 		case err != nil:
@@ -209,6 +229,18 @@ func (s *inotifySource) arrive(parent *folderNode[int32], name string) []change 
 	var found []change
 	_ = s.watchBelow(context.Background(), sub, s.tree.add(parent, name, wd), at, &found)
 	return found
+}
+
+// readable waits at most d for an inotify instance to have something to read.
+func readable(ino int, d time.Duration) bool {
+	fds := []unix.PollFd{{Fd: int32(ino), Events: unix.POLLIN}}
+	for {
+		n, err := unix.Poll(fds, int(d.Milliseconds()))
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		return err == nil && n > 0
+	}
 }
 
 // settleMoves forgets the folders that left and did not come back below the root: their watches go.

@@ -19,7 +19,9 @@ import (
 // TestWatcherOnEachDriver: on each driver, by each way it can be watched, what a user's process, the mergerfs
 // process of the view and Atoll itself do below the root comes as events, each with its path, what it did and
 // who did it; a folder moved in is watched below as soon as it arrives, and a folder renamed carries its path;
-// nothing outside the root comes (specs.md §15.1, docs/research/watcher.md).
+// a file made past PATH_MAX comes at its path through a watch per folder, and at "" through a filesystem mark,
+// whose folders /proc cannot name past it; nothing outside the root comes (specs.md §15.1,
+// docs/research/watcher.md).
 func TestWatcherOnEachDriver(t *testing.T) {
 	needRoot(t)
 	needMergerfs(t)
@@ -79,6 +81,17 @@ func TestWatcherOnEachDriver(t *testing.T) {
 				if how != watch.HowFilesystem {
 					r.step("mkdir media/Gap", "", "", "")
 					r.wait("Gap/late.mkv", watch.KindCreated, watch.OriginUnknown)
+				}
+				// Past PATH_MAX, made by this process, which is Atoll's own to the watcher.
+				parts := []string{"Deep"}
+				for range 21 {
+					parts = append(parts, strings.Repeat("d", 200))
+				}
+				deepFile(t, filepath.Join(at, "media"), parts)
+				if how == watch.HowFilesystem {
+					r.wait("", watch.KindCreated, self)
+				} else {
+					r.wait(strings.Join(parts, "/")+"/deep", watch.KindCreated, self, watch.OriginUnknown)
 				}
 				r.step("mv outside/Show media/Show", "Show", watch.KindMovedTo, user)
 				r.step("printf e > media/Show/S01/e01.mkv", "Show/S01/e01.mkv", watch.KindWritten, user)
