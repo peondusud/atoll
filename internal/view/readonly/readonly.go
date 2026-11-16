@@ -63,7 +63,7 @@ func Run(ctx context.Context, o Options) error {
 	c := &checker{o: o, roots: roots, readable: map[string]bool{}}
 	c.check()
 	tree := view.NewTree(o.DB, roots, view.Owner{UID: uint32(unix.Geteuid()), GID: uint32(unix.Getegid())}, o.Machine.Now())
-	m, err := fusefs.Mount(tree, o.Point)
+	m, err := fusefs.Mount(tree, o.Point, nil)
 	if err != nil {
 		return fmt.Errorf("mount at %s: %w", o.Point, err)
 	}

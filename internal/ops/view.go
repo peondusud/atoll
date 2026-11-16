@@ -452,3 +452,8 @@ func (d *Disk) setFolderAttrs(parent fsx.Dir, name string, a *UserAttrs, uid, gi
 	}
 	return nil
 }
+
+// StatTrash looks at a place of the trash, as the reprise of an operation that sent a copy there looks at it.
+func (d *Disk) StatTrash(trashPath string) (fsx.Stat, bool, error) {
+	return d.stat(d.trashPlace(trashPath))
+}

@@ -15,12 +15,14 @@ import (
 
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/view"
+	"github.com/peondusud/atoll/internal/view/writer"
 )
 
-// node is one path of the view; the root's path is "".
+// node is one path of the view; the root's path is "". w writes on a user's behalf, nil in a view read only.
 type node struct {
 	fs.Inode
 	tree *view.Tree
+	w    *writer.Writer
 }
 
 var (
@@ -104,7 +106,12 @@ func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs
 	}
 	fill(&out.Attr, v)
 	p := join(n.logical(), name)
-	return n.NewInode(ctx, &node{tree: n.tree}, fs.StableAttr{Mode: kindMode(v.Kind), Ino: inoOf(p)}), 0
+	return n.child(ctx, p, v), 0
+}
+
+// child is the node of a path below this one, which presents v.
+func (n *node) child(ctx context.Context, p string, v *view.Node) *fs.Inode {
+	return n.NewInode(ctx, &node{tree: n.tree, w: n.w}, fs.StableAttr{Mode: kindMode(v.Kind), Ino: inoOf(p)})
 }
 
 // inoOf numbers a path the same at each lookup, so that go-fuse gives the kernel the node it already knows once its
@@ -172,7 +179,7 @@ var (
 
 func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	if flags&syscall.O_ACCMODE != syscall.O_RDONLY || flags&syscall.O_TRUNC != 0 {
-		return nil, 0, syscall.EROFS
+		return n.openToWrite(ctx, flags)
 	}
 	p := n.logical()
 	v, errno := n.lookup(ctx, p)
@@ -218,20 +225,23 @@ const Type = "fuse.atoll"
 // device is the kernel's FUSE device, which mount(2) and fusermount both open as the account that mounts.
 const device = "/dev/fuse"
 
-// Mount serves the view at mount, read only, until Unmount: mounted by mount(2) when the process holds CAP_SYS_ADMIN,
-// as its units give it, and by fusermount otherwise.
-func Mount(tree *view.Tree, mount string) (*Mounted, error) {
+// Mount serves the view at mount until Unmount, read only when w is nil, and writing through w otherwise: mounted by
+// mount(2) when the process holds CAP_SYS_ADMIN, as its units give it, and by fusermount otherwise.
+func Mount(tree *view.Tree, mount string, w *writer.Writer) (*Mounted, error) {
 	// Said here: go-fuse would say only that fusermount failed, once mount(2) had.
 	if err := fsx.CanReadWrite(device); err != nil {
 		return nil, fmt.Errorf("%w: FUSE needs it readable and writable by this account, as udev makes it (mode 0666)", err)
 	}
 	second := time.Second
 	none := time.Duration(0)
-	server, err := fs.Mount(mount, &node{tree: tree}, &fs.Options{
+	options := []string{"ro", "default_permissions"}
+	if w != nil {
+		options = options[1:]
+	}
+	server, err := fs.Mount(mount, &node{tree: tree, w: w}, &fs.Options{
 		EntryTimeout: &second, AttrTimeout: &second, NegativeTimeout: &none,
 		MountOptions: fuse.MountOptions{
-			AllowOther: true, FsName: "atoll", Name: "atoll", DirectMount: true,
-			Options: []string{"ro", "default_permissions"},
+			AllowOther: true, FsName: "atoll", Name: "atoll", DirectMount: true, Options: options,
 		},
 	})
 	if err != nil {

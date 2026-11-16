@@ -190,3 +190,39 @@ func TakeViewOps(ctx context.Context, db *sql.DB, ids []int64, nowNS int64) erro
 	}
 	return nil
 }
+
+// longestBelowSQL reads the copies below a folder through files' unique index on lpath, those behind at an old path
+// through copies_old, and the entries through their key, as each holds the paths in byte order: ?2 is the folder
+// followed by "/", ?3 by "0", the byte after it.
+const longestBelowSQL = `
+	SELECT COALESCE(max(n), 0) FROM (
+		SELECT length(f.lpath) AS n FROM files f JOIN copies c ON c.file_id = f.id
+			WHERE f.lpath >= ?2 AND f.lpath < ?3 AND c.disk_id = ?1 AND c.old_lpath IS NULL
+		UNION ALL SELECT length(old_lpath) FROM copies WHERE disk_id = ?1 AND old_lpath >= ?2 AND old_lpath < ?3
+		UNION ALL SELECT length(lpath) FROM entries WHERE disk_id = ?1 AND lpath >= ?2 AND lpath < ?3)`
+
+// LongestBelow gives the length in bytes of the longest path a disk holds below a folder, 0 when it holds none: what a
+// rename of that folder must still fit in its branch (specs.md §15.8, §21.2).
+func LongestBelow(ctx context.Context, db *sql.DB, disk, folder string) (int, error) {
+	var n int
+	if err := db.QueryRowContext(ctx, longestBelowSQL, disk, []byte(folder+"/"), []byte(folder+"0")).Scan(&n); err != nil {
+		return 0, fmt.Errorf("catalog: %w", err)
+	}
+	return n, nil
+}
+
+// OpByID gives an operation of the journal, and false when there is none of that id.
+func OpByID(ctx context.Context, db *sql.DB, id int64) (Op, bool, error) {
+	var op Op
+	var path, path2 []byte
+	err := db.QueryRowContext(ctx, "SELECT id, disk_id, kind, path, COALESCE(path2, x''), COALESCE(file_key, ''), COALESCE(link, 0) FROM ops WHERE id = ?", id).
+		Scan(&op.ID, &op.Disk, &op.Kind, &path, &path2, &op.FileKey, &op.Link)
+	switch {
+	case isNoRows(err):
+		return Op{}, false, nil
+	case err != nil:
+		return Op{}, false, fmt.Errorf("journal: %w", err)
+	}
+	op.Path, op.Path2 = string(path), string(path2)
+	return op, true, nil
+}

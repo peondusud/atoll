@@ -57,7 +57,7 @@ func TestViewMatchesMergerfs(t *testing.T) {
 			own := mountPoint(t)
 			mustDo(t, os.MkdirAll(own, 0o755))
 			tree := view.NewTree(b.db, roots, view.Owner{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}, time.Now().UnixNano())
-			m, err := fusefs.Mount(tree, own)
+			m, err := fusefs.Mount(tree, own, nil)
 			mustDo(t, err)
 			t.Cleanup(func() { _ = m.Unmount() })
 
@@ -141,7 +141,7 @@ func TestViewBrowsesNoDisk(t *testing.T) {
 			own := mountPoint(t)
 			mustDo(t, os.MkdirAll(own, 0o755))
 			tree := view.NewTree(b.db, roots, view.Owner{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}, time.Now().UnixNano())
-			mounted, err := fusefs.Mount(tree, own)
+			mounted, err := fusefs.Mount(tree, own, nil)
 			mustDo(t, err)
 			t.Cleanup(func() { _ = mounted.Unmount() })
 			before := listedOnly(t, own)
