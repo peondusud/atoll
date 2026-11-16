@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -108,5 +109,179 @@ func TestTree(t *testing.T) {
 	roots.Drop("t2")
 	if _, err := tree.Open("Films/a.mkv", &n); !errors.Is(err, ErrUnreadable) {
 		t.Errorf("a disk that cannot be read: %v", err)
+	}
+}
+
+// The view's own operations over the catalog (specs.md §21.2): a file made presents what its disk holds and lists;
+// a file written presents its original alone, as its disk holds it; a file deleted presents nothing; below a folder
+// renamed, what the catalog holds below its old name presents at the new one and reads there, before and after a pass
+// records the rename; and once taken in, the catalog alone decides.
+func TestTreeOverTheViewsOperations(t *testing.T) {
+	top := t.TempDir()
+	file := filepath.Join(top, "catalog.db")
+	if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
+		t.Fatal(err)
+	}
+	db, err := catalog.OpenPool(t.Context(), file, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	roots := NewDiskRoots()
+	defer roots.Close()
+	var list []catalog.Disk
+	for i, id := range []string{"t1", "t2"} {
+		dir := filepath.Join(top, id)
+		mustWrite(t, filepath.Join(dir, "Films", "a.mkv"), "from "+id)
+		root, err := fsx.OpenDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots.Set(id, root)
+		list = append(list, catalog.Disk{ID: id, UUID: "u-" + id, FS: "ext4", Mount: "/mnt/" + id, Root: "media", Workdir: "Atoll", Role: "data", Position: i, State: "online"})
+	}
+	if err := catalog.SyncDisks(t.Context(), db, list); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO files(id, lpath, size, mtime_ns, replicas_target, mode, state, first_seen_ns, updated_ns)
+			VALUES (1, x'46696c6d732f612e6d6b76', 7, 9, 1, 'deferred', 'ok', 0, 0), (2, x'46696c6d732f622e6d6b76', 7, 9, 1, 'deferred', 'ok', 0, 0)`,
+		`INSERT INTO copies(file_id, disk_id, size, mtime_ns, created_by, first_seen_ns, btime_ns, state, mode, uid, gid, nlink)
+			VALUES (1, 't1', 7, 9, 'atoll', 0, 200, 'ok', 420, 1, 2, 1), (1, 't2', 7, 9, 'user', 0, 100, 'ok', 420, 1, 2, 1),
+			(2, 't1', 7, 9, 'user', 0, 100, 'ok', 420, 1, 2, 1)`,
+		`INSERT INTO entries(lpath, disk_id, kind, mode, mtime_ns, created_by) VALUES (x'46696c6d73', 't1', 'dir', 493, 5, 'user'), (x'46696c6d73', 't2', 'dir', 493, 5, 'user')`,
+	} {
+		if _, err := db.ExecContext(t.Context(), q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tree := NewTree(db, roots, Owner{UID: 7, GID: 8}, 99)
+	journal := func(v *catalog.ViewOp) {
+		t.Helper()
+		if err := catalog.BeginViewOp(t.Context(), db, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lookup := func(path string) *Node {
+		t.Helper()
+		n, err := tree.Lookup(t.Context(), path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		return n
+	}
+	names := func(dir string) []string {
+		t.Helper()
+		children, err := tree.List(t.Context(), dir)
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		var out []string
+		for _, c := range children {
+			out = append(out, c.Name)
+		}
+		return out
+	}
+
+	mustWrite(t, filepath.Join(top, "t1", "Films", "new.mkv"), "a new film")
+	journal(&catalog.ViewOp{Kind: catalog.ViewCreate, Disk: "t1", Path: "Films/new.mkv", AtNS: 10})
+	if n := lookup("Films/new.mkv"); n == nil || n.Disk != "t1" || n.Size != 10 || n.Kind != NodeFile {
+		t.Errorf("a file made: %+v", n)
+	}
+	if got := names("Films"); !slices.Equal(got, []string{"a.mkv", "b.mkv", "new.mkv"}) {
+		t.Errorf("listed with a file made: %v", got)
+	}
+
+	if n := lookup("Films/a.mkv"); n == nil || n.Disk != "t2" {
+		t.Fatalf("before the write, the original: %+v", n)
+	}
+	mustWrite(t, filepath.Join(top, "t1", "Films", "a.mkv"), "rewritten on t1")
+	journal(&catalog.ViewOp{Kind: catalog.ViewWrite, Disk: "t1", Path: "Films/a.mkv", AtNS: 11})
+	if n := lookup("Films/a.mkv"); n == nil || n.Disk != "t1" || n.Size != 15 {
+		t.Errorf("a file written presents the copy written, as its disk holds it: %+v", n)
+	}
+
+	journal(&catalog.ViewOp{Kind: catalog.ViewUnlink, Disk: "t1", Path: "Films/b.mkv", AtNS: 12})
+	if n := lookup("Films/b.mkv"); n != nil {
+		t.Errorf("a file deleted: %+v", n)
+	}
+	if got := names("Films"); !slices.Equal(got, []string{"a.mkv", "new.mkv"}) {
+		t.Errorf("listed with a file deleted: %v", got)
+	}
+
+	for _, id := range []string{"t1", "t2"} {
+		if err := os.Rename(filepath.Join(top, id, "Films"), filepath.Join(top, id, "Movies")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal(&catalog.ViewOp{Kind: catalog.ViewRename, Disk: "t1", Path: "Films", Path2: "Movies", Folder: true, AtNS: 13})
+	if n := lookup("Films"); n != nil {
+		t.Errorf("a folder renamed, at its old name: %+v", n)
+	}
+	if got := names(""); !slices.Equal(got, []string{"Movies"}) {
+		t.Errorf("the root with a folder renamed: %v", got)
+	}
+	if got := names("Movies"); !slices.Equal(got, []string{"a.mkv", "new.mkv"}) {
+		t.Errorf("a folder renamed lists: %v", got)
+	}
+	n := lookup("Movies/a.mkv")
+	if n == nil || n.Disk != "t1" {
+		t.Fatalf("below a folder renamed: %+v", n)
+	}
+	read := func(path string, n *Node) string {
+		t.Helper()
+		f, err := tree.Open(path, n)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		defer func() { _ = f.Close() }()
+		data, err := io.ReadAll(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	if got := read("Movies/a.mkv", n); got != "rewritten on t1" {
+		t.Errorf("read below a folder renamed: %q", got)
+	}
+	if _, err := db.ExecContext(t.Context(), "UPDATE files SET lpath = CAST('Movies/' || substr(CAST(lpath AS TEXT), 7) AS BLOB)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), "UPDATE entries SET lpath = CAST('Movies' AS BLOB)"); err != nil {
+		t.Fatal(err)
+	}
+	if n := lookup("Movies/b.mkv"); n != nil {
+		t.Errorf("once a pass recorded the rename, the file deleted: %+v", n)
+	}
+	if got := names("Movies"); !slices.Equal(got, []string{"a.mkv", "new.mkv"}) {
+		t.Errorf("once a pass recorded the rename: %v", got)
+	}
+
+	open, err := catalog.OpenViewOps(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, v := range open {
+		ids = append(ids, v.ID)
+	}
+	if err := catalog.TakeViewOps(t.Context(), db, ids, 20); err != nil {
+		t.Fatal(err)
+	}
+	if n := lookup("Movies/a.mkv"); n == nil || n.Disk != "t2" {
+		t.Errorf("taken in, the catalog alone decides: %+v", n)
+	}
+	if n := lookup("Movies/new.mkv"); n != nil {
+		t.Errorf("taken in before the catalog knows it, a file made presents nothing: %+v", n)
+	}
+}
+
+func mustWrite(t *testing.T, path, text string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

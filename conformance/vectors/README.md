@@ -371,6 +371,17 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `entries` | array of objects | optional: the entries at the path, one a disk: `disk` and `kind` (`dir`, `symlink` or `ignored`), required; `mode`, `uid`, `gid`, `size`, `mtime_ns` and `target`, each left out when its row holds none |
 | `node` | object or null | what the path presents, null when it is absent: `kind` (`file`, `dir` or `symlink`), `disk`, the disk whose copy or entry it presents, `mode`, `uid`, `gid`, `size`, `mtime_ns` and `nlink`; `target` for a symlink, and `ignored`, `true` for an ignored file. The view's own process is owned by 4242:4343 in every case |
 
+### `view_resolve.json` — the view's own operations over the catalog (§21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ops` | array of objects | the view's operations no pass has taken in, oldest first: `kind` (`create`, `mkdir`, `symlink`, `write`, `rename`, `replace`, `unlink` or `rmdir`), `disk` and `path`, required; `path2`, the new path of a `rename` or a `replace`; `folder`, `true` for one that names a folder, left out otherwise |
+| `path` | string | a case of resolution: the logical path asked |
+| `source` | object | what it resolves to: `kind` `disk`, with `disk`, what that disk holds at the path; `absent`; or `catalog`, with `paths`, the catalog's rows at the first of them that presents something |
+| `dir` | string | a case of listing, instead of `path`: the folder listed, `""` for the root |
+| `catalog_dirs` | array of strings | the folders of the catalog whose names the listing may hold |
+| `names` | array of strings | the names the operations made or renamed directly below `dir`, in byte order |
+
 ### `view_statfs.json` — `statfs` of Atoll's own view (§21.2)
 
 | Field | Type | Meaning |

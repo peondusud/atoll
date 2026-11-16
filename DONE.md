@@ -15,7 +15,8 @@ specs.md §21.2 now says how the view writes, from those answers: each operation
 
 - **Decided without the maintainer, to confirm:**
   - a new folder or symbolic link goes where a new file goes, the disk `placement.new_files` picks, with the folders above it made there with the mode and owner the view presents;
-  - an empty folder removed through the view is removed from its presenting disk at once, and a pass removes it from each other disk once nothing is left in it there: today no pass removes a folder Atoll did not make;
+  - a folder renamed or removed through the view is renamed or removed on every disk that holds it at once, as through mergerfs, an exception to one disk at once: what is below a folder spans disks, and a folder renamed on one disk alone left the files below it on the others under a name the view no longer presented, while a file the view then made below the new name sat on a disk where the pass saw no rename;
+  - an empty folder removed through the view stays on a disk where it still holds what the view does not present, as a stale copy on its way to the trash, and a pass removes it once nothing is left there: today no pass removes a folder Atoll did not make;
   - a rename onto a name the view presents replaces it as an atomic save through mergerfs does: the copy presented there to the trash, `overwritten`, the rename on the source's disk, and the pass takes the result for a modification. A folder is never renamed onto one;
   - the view's journal is a table of its own, `view_ops`, beside `ops`, where a deletion or a replacement is also a `trash` operation, so that the trash, `atoll trash list` and `restore` hold what the view deleted, as they hold the rest;
   - an operation is taken in once the catalog alone presents what the view presents with it, in the order of their ids;

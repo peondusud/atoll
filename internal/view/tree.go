@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -35,7 +37,9 @@ func (t *Tree) Root() *Node {
 	return &Node{Kind: NodeDir, Mode: defaultDirMode, UID: t.self.UID, GID: t.self.GID, MtimeNS: t.mountedNS, Nlink: 1}
 }
 
-// Lookup says what a path presents, nil when it is absent. The path is the logical path, "" for the root.
+// Lookup says what a path presents, nil when it is absent. The path is the logical path, "" for the root. The view's
+// own operations that no pass has taken in are laid over the catalog's rows (specs.md §21.2): what one made or wrote
+// is looked at on its disk, and ErrUnreadable says that its disk cannot be read now.
 func (t *Tree) Lookup(ctx context.Context, path string) (*Node, error) {
 	if path == "" {
 		return t.Root(), nil
@@ -44,15 +48,109 @@ func (t *Tree) Lookup(ctx context.Context, path string) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	return t.lookup(ctx, disks, path)
+	ops, err := t.ops(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s := Resolve(ops, path)
+	var rows map[string]catalog.ViewAt
+	if s.Kind == FromCatalog {
+		if rows, err = catalog.ViewRowsOf(ctx, t.db, s.Paths); err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+	}
+	return t.present(disks, s, path, rows)
 }
 
-func (t *Tree) lookup(ctx context.Context, disks []Disk, path string) (*Node, error) {
-	f, rows, err := catalog.ViewRows(ctx, t.db, path)
+// present says what a path presents from what it resolves to: from the catalog, the rows at the first of its paths
+// that presents something; from a disk, what a look finds there.
+func (t *Tree) present(disks []Disk, s Source, path string, rows map[string]catalog.ViewAt) (*Node, error) {
+	switch s.Kind {
+	case Absent:
+		return nil, nil
+	case FromDisk:
+		return t.look(s.Disk, path)
+	case FromCatalog:
+	}
+	for _, p := range s.Paths {
+		at := rows[p]
+		n, err := Present(disks, fileOf(at.File), entriesOf(at.Entries), t.self)
+		if err != nil || n != nil {
+			return n, err
+		}
+	}
+	return nil, nil
+}
+
+// ops gives the view's own operations that no pass has taken in, oldest first.
+func (t *Tree) ops(ctx context.Context) ([]Op, error) {
+	rows, err := catalog.OpenViewOps(ctx, t.db)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
-	return Present(disks, fileOf(f), entriesOf(rows), t.self)
+	out := make([]Op, 0, len(rows))
+	for i := range rows {
+		r := &rows[i]
+		out = append(out, Op{Kind: r.Kind, Disk: r.Disk, Path: r.Path, Path2: r.Path2, Folder: r.Folder})
+	}
+	return out, nil
+}
+
+// look says what a disk holds at a path, as a look there finds it, nil when it holds nothing. A folder presents one
+// link, as one of the catalog does (specs.md §21.2).
+func (t *Tree) look(disk, path string) (*Node, error) {
+	var n *Node
+	err := t.roots.Root(disk, func(root fsx.Dir) error {
+		return walk(root, path, func(dir fsx.Dir, name string) error {
+			st, err := dir.Stat(name)
+			if err != nil {
+				return fmt.Errorf("%w", err)
+			}
+			n = &Node{Kind: NodeFile, Disk: disk, Mode: st.Mode, UID: st.Uid, GID: st.Gid, Size: st.Size,
+				MtimeNS: st.Mtime.Sec*1_000_000_000 + st.Mtime.Nsec, Nlink: int64(st.Nlink)}
+			switch st.Kind {
+			case fsx.KindDir:
+				n.Kind, n.Nlink = NodeDir, 1
+			case fsx.KindSymlink:
+				target, err := dir.ReadLink(name)
+				if err != nil {
+					return fmt.Errorf("%w", err)
+				}
+				n.Kind, n.Target, n.Size = NodeSymlink, target, int64(len(target))
+			case fsx.KindFile, fsx.KindOther:
+				// A file, or what is neither file, folder nor symlink, as a FIFO, presents as a file.
+			}
+			return nil
+		})
+	})
+	switch {
+	case fsx.IsAbsent(err):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	return n, nil
+}
+
+// walk opens each folder of a path below a root, one name at a time and following no symlink, and gives the last
+// one, with the path's last name, to use.
+func walk(root fsx.Dir, path string, use func(dir fsx.Dir, name string) error) error {
+	parts := strings.Split(path, "/")
+	dir := root
+	for i, name := range parts[:len(parts)-1] {
+		next, err := dir.OpenDir(name)
+		if i > 0 {
+			_ = dir.Close()
+		}
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		dir = next
+	}
+	if len(parts) > 1 {
+		defer func() { _ = dir.Close() }()
+	}
+	return use(dir, parts[len(parts)-1])
 }
 
 // Child is a name directly below a folder, and what it presents.
@@ -68,16 +166,30 @@ func (t *Tree) List(ctx context.Context, dir string) ([]Child, error) {
 	if err != nil {
 		return nil, err
 	}
-	names, err := catalog.ViewNames(ctx, t.db, dir)
+	ops, err := t.ops(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
+		return nil, err
 	}
-	paths := make([]string, len(names))
-	for i, name := range names {
-		paths[i] = name
-		if dir != "" {
-			paths[i] = dir + "/" + name
+	l := ListOf(ops, dir)
+	set := map[string]bool{}
+	for _, name := range l.Names {
+		set[name] = true
+	}
+	for _, d := range l.CatalogDirs {
+		names, err := catalog.ViewNames(ctx, t.db, d)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
 		}
+		for _, name := range names {
+			set[name] = true
+		}
+	}
+	names := slices.Sorted(maps.Keys(set))
+	sources := make([]Source, len(names))
+	var paths []string
+	for i, name := range names {
+		sources[i] = Resolve(ops, join(dir, name))
+		paths = append(paths, sources[i].Paths...)
 	}
 	rows, err := catalog.ViewRowsOf(ctx, t.db, paths)
 	if err != nil {
@@ -85,16 +197,26 @@ func (t *Tree) List(ctx context.Context, dir string) ([]Child, error) {
 	}
 	out := make([]Child, 0, len(names))
 	for i, name := range names {
-		at := rows[paths[i]]
-		n, err := Present(disks, fileOf(at.File), entriesOf(at.Entries), t.self)
-		if err != nil {
+		n, err := t.present(disks, sources[i], join(dir, name), rows)
+		switch {
+		case errors.Is(err, ErrUnreadable):
+			// What the view made on a disk that cannot be read now is left out of a listing, as a file none of whose
+			// copies can be presented is.
+		case err != nil:
 			return nil, err
-		}
-		if n != nil {
+		case n != nil:
 			out = append(out, Child{Name: name, Node: *n})
 		}
 	}
 	return out, nil
+}
+
+// join gives the logical path of a name in a folder, "" for the root.
+func join(dir, name string) string {
+	if dir == "" {
+		return name
+	}
+	return dir + "/" + name
 }
 
 // Statfs sums the disks, from the catalog.
@@ -111,27 +233,14 @@ func (t *Tree) Statfs(ctx context.Context) (Statfs, error) {
 func (t *Tree) Open(path string, n *Node) (fsx.File, error) {
 	var f fsx.File
 	err := t.roots.Root(n.Disk, func(root fsx.Dir) error {
-		parts := strings.Split(path, "/")
-		dir := root
-		for i, name := range parts[:len(parts)-1] {
-			next, err := dir.OpenDir(name)
-			if i > 0 {
-				_ = dir.Close()
-			}
+		return walk(root, path, func(dir fsx.Dir, name string) error {
+			opened, err := dir.OpenFile(name)
 			if err != nil {
 				return fmt.Errorf("%w", err)
 			}
-			dir = next
-		}
-		opened, err := dir.OpenFile(parts[len(parts)-1])
-		if len(parts) > 1 {
-			_ = dir.Close()
-		}
-		if err != nil {
-			return fmt.Errorf("%w", err)
-		}
-		f = opened
-		return nil
+			f = opened
+			return nil
+		})
 	})
 	if err != nil {
 		return nil, err
