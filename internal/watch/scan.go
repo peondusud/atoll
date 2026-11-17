@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -619,6 +620,22 @@ type Replicate struct {
 	// MoveOriginals makes a user copy that breaks a strict setting count as misplaced too, with Balance: atoll
 	// balance --move-originals (specs.md §13.3).
 	MoveOriginals bool
+	// Only limits the plan to the files that may have changed since the last; nil plans every file.
+	Only *Only
+}
+
+// Only limits a plan to the files that may have changed since the last one, and those it must place with them
+// (specs.md §15.13): the files at or below the names a pass looked at, given by disk, and those catalog.PlanSet adds to
+// them, with every file of the same group of colocate. The others keep what the last plan gave them.
+type Only struct {
+	Names map[string][]string
+	// IDs are more files to plan: those a pass made a copy of, or transferred, which may be at their level now.
+	IDs map[int64]bool
+}
+
+// SettleOnly is Settle for the files only says, and those it adds.
+func SettleOnly(ctx context.Context, db *sql.DB, c *config.Config, now int64, only *Only) error {
+	return settle(ctx, db, c, now, nil, only)
 }
 
 // PlannedJob is a job of the plan, with what queueing it needs of its file.
@@ -633,6 +650,14 @@ type PlannedJob struct {
 // SettleFor is Settle, and with a Replicate, also what atoll replicate asks of the plan. A file in
 // conflict is never given a job, as nothing says which version to copy (specs.md §14.1).
 func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate) error {
+	var only *Only
+	if rep != nil {
+		only = rep.Only
+	}
+	return settle(ctx, db, c, now, rep, only)
+}
+
+func settle(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate, only *Only) error {
 	diskList, err := catalog.Disks(ctx, db)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
@@ -671,7 +696,12 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	if err != nil {
 		return err
 	}
-	remembered, err := filesForPlan(ctx, db, c, diskList, &input, release, residency)
+	var remembered []settled
+	if only == nil {
+		remembered, err = filesForPlan(ctx, db, c, diskList, &input, release, residency)
+	} else {
+		remembered, err = filesOnly(ctx, db, c, diskList, &input, release, residency, only)
+	}
 	if err != nil {
 		return err
 	}
@@ -839,6 +869,121 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			remembered = append(remembered, entry)
 		}
 	}
+}
+
+// filesOnly is filesForPlan for the files only says, catalog.PlanSet adds, and those of their groups of colocate, by
+// path in byte order as a plan of every file has them.
+func filesOnly(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input, released func(string) bool,
+	residency map[int64]solver.Residency, only *Only) (_ []settled, err error) {
+	var cacheDisks []string
+	for i := range diskList {
+		if diskList[i].Role == solver.RoleCache {
+			cacheDisks = append(cacheDisks, diskList[i].ID)
+		}
+	}
+	ids, err := catalog.PlanSet(ctx, db, only.Names, cacheDisks)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	for id := range only.IDs {
+		ids[id] = true
+	}
+	finder, err := catalog.NewFileFinder(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	defer func() { err = errors.Join(err, finder.Close()) }()
+	var rows []catalog.FileRow
+	read := func(list []int64) error {
+		for _, id := range list {
+			f, err := finder.ByID(ctx, id)
+			if err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+			if f != nil {
+				rows = append(rows, *f)
+			}
+		}
+		return nil
+	}
+	if err := read(slices.Sorted(maps.Keys(ids))); err != nil {
+		return nil, err
+	}
+	// A group of colocate is placed whole: the disk that holds the most of it is the best for each of its files (specs.md
+	// §12.4).
+	groups := map[string]bool{}
+	for i := range rows {
+		if folder, ok := solver.GroupFolder(rows[i].Path, colocateOf(c, &rows[i])); ok {
+			groups[folder] = true
+		}
+	}
+	var more []int64
+	for _, folder := range slices.Sorted(maps.Keys(groups)) {
+		below, err := catalog.FileIDsBelow(ctx, db, folder)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		for _, id := range below {
+			if !ids[id] {
+				ids[id] = true
+				more = append(more, id)
+			}
+		}
+	}
+	// A file at a name above another's stands in the way of its copies, as a folder of that name cannot be made there.
+	parents := map[string]bool{}
+	for i := range rows {
+		for at := strings.IndexByte(rows[i].Path, '/'); at >= 0; at = strings.IndexByte(rows[i].Path[at+1:], '/') + at + 1 {
+			parents[rows[i].Path[:at]] = true
+			if strings.IndexByte(rows[i].Path[at+1:], '/') < 0 {
+				break
+			}
+		}
+	}
+	above, err := catalog.FileIDsAt(ctx, db, slices.Sorted(maps.Keys(parents)))
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	for _, id := range above {
+		if !ids[id] {
+			ids[id] = true
+			more = append(more, id)
+		}
+	}
+	if err := read(more); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(rows, func(a, b catalog.FileRow) int { return strings.Compare(a.Path, b.Path) })
+	k := newPlanKit(c, diskList, released)
+	input.Files = slices.Grow(input.Files, len(rows))
+	remembered := make([]settled, 0, len(rows))
+	for i := range rows {
+		f := &rows[i]
+		leaving, err := catalog.Leaving(ctx, db, f.Path, f.Path)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		file, update, err := k.planFile(f, leaving[f.ID], residency[f.ID])
+		if err != nil {
+			return nil, err
+		}
+		input.Files = append(input.Files, file)
+		entry := settled{id: f.ID, state: f.State, held: f.ConflictHeld, firstSeen: f.FirstSeenNS}
+		if fileChanged(f, &update) {
+			entry.update = &update
+		}
+		remembered = append(remembered, entry)
+	}
+	return remembered, nil
+}
+
+// colocateOf gives a file's colocate, as its plan reads it: its policy's, or the pool's for a file a rule now ignores.
+func colocateOf(c *config.Config, f *catalog.FileRow) string {
+	size := f.Size
+	if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
+		return policy.Colocate
+	}
+	return c.Pool.Colocate
 }
 
 // planKit is what giving the plan a file needs of the pool and of the configuration, and the placements made so far.

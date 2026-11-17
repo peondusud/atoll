@@ -13,6 +13,19 @@ import (
 // names, and those of the inodes it found there, wherever their names are. Each read goes through an index, by path
 // or by inode, so that such a look costs what it looked at, never the size of the disk.
 
+// atOrBelow runs a query twice for a name: once with cond as "<column> = ?<n>", for the name itself, and once as the
+// range of what is below it, so that each goes through the index on that column, where an OR of the two reads every row.
+// args holds the query's own arguments, then the name's.
+func atOrBelow(query, column string, n int, name string, args []any, each func(query string, args []any) error) error {
+	lo, hi := folderRange(name)
+	exact := strings.ReplaceAll(query, "<cond>", fmt.Sprintf("%s = ?%d", column, n))
+	if err := each(exact, append(slices.Clip(args), []byte(name))); err != nil {
+		return err
+	}
+	below := strings.ReplaceAll(query, "<cond>", fmt.Sprintf("%s >= ?%d AND %s < ?%d", column, n, column, n+1))
+	return each(below, append(slices.Clip(args), lo, hi))
+}
+
 // TopNames gives the names in byte order, each once, leaving out those at or below another: a name covers what is below
 // it.
 func TopNames(names []string) []string {
@@ -37,22 +50,27 @@ func TopNames(names []string) []string {
 func EachKnownCopyAt(ctx context.Context, db *sql.DB, disk string, names []string, fn func(*KnownCopy)) error {
 	var settled, behind []KnownCopy
 	for _, name := range TopNames(names) {
-		lo, hi := folderRange(name)
-		err := eachKnown(ctx, db, false, &settled, `
+		err := atOrBelow(`
 			SELECT f.lpath, `+knownColumns+`
 			FROM files f CROSS JOIN copies c ON c.file_id = f.id AND c.disk_id = ?1
-			WHERE (f.lpath = ?2 OR (f.lpath >= ?3 AND f.lpath < ?4)) AND c.old_lpath IS NULL AND c.state <> 'pending'`,
-			disk, []byte(name), lo, hi)
+			WHERE <cond> AND c.old_lpath IS NULL AND c.state <> 'pending'`, "f.lpath", 2, name, []any{disk},
+			func(query string, args []any) error { return eachKnown(ctx, db, false, &settled, query, args...) })
 		if err != nil {
 			return fmt.Errorf("copies of %q: %w", disk, err)
 		}
-		err = eachKnown(ctx, db, true, &behind, `
+		// Few copies are left behind their file's name: those of a disk are read whole, and kept when below the name.
+		var all []KnownCopy
+		err = eachKnown(ctx, db, true, &all, `
 			SELECT c.old_lpath, `+knownColumns+`, f.lpath
 			FROM copies c JOIN files f ON f.id = c.file_id
-			WHERE c.disk_id = ?1 AND (c.old_lpath = ?2 OR (c.old_lpath >= ?3 AND c.old_lpath < ?4)) AND c.state <> 'pending'`,
-			disk, []byte(name), lo, hi)
+			WHERE c.disk_id = ?1 AND c.old_lpath IS NOT NULL AND c.state <> 'pending'`, disk)
 		if err != nil {
 			return fmt.Errorf("copies of %q: %w", disk, err)
+		}
+		for i := range all {
+			if all[i].Path == name || strings.HasPrefix(all[i].Path, name+"/") {
+				behind = append(behind, all[i])
+			}
 		}
 	}
 	byPath := func(a, b KnownCopy) int { return cmp.Compare(a.Path, b.Path) }
@@ -120,14 +138,15 @@ func KnownCopiesByKey(ctx context.Context, db *sql.DB, disk string, keys []strin
 func EachFolderRowAt(ctx context.Context, db *sql.DB, disk string, names []string, fn func(*EntryIdentity)) error {
 	var list []EntryIdentity
 	for _, name := range TopNames(names) {
-		lo, hi := folderRange(name)
-		rows, err := db.QueryContext(ctx, `
-			SELECT lpath, file_key, btime_ns FROM entries
-			WHERE disk_id = ?1 AND kind = 'dir' AND (lpath = ?2 OR (lpath >= ?3 AND lpath < ?4))`, disk, []byte(name), lo, hi)
-		if err != nil {
-			return fmt.Errorf("folders of %q: %w", disk, err)
-		}
-		list, err = appendIdentities(rows, list)
+		err := atOrBelow("SELECT lpath, file_key, btime_ns FROM entries WHERE disk_id = ?1 AND kind = 'dir' AND <cond>", "lpath", 2, name, []any{disk},
+			func(query string, args []any) error {
+				rows, err := db.QueryContext(ctx, query, args...)
+				if err != nil {
+					return fmt.Errorf("%w", err)
+				}
+				list, err = appendIdentities(rows, list)
+				return err
+			})
 		if err != nil {
 			return fmt.Errorf("folders of %q: %w", disk, err)
 		}

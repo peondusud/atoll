@@ -70,6 +70,7 @@ func (p *pass) transfers(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		p.ranFile(t.FileID)
 		p.record(Operation{Disk: t.Src, Kind: KindTransfer, Path: t.Path, Outcome: outcome})
 		if p.sinkErr != nil {
 			return p.sinkErr

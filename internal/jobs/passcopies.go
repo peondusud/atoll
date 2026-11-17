@@ -20,8 +20,11 @@ func (p *pass) copies(ctx context.Context) error {
 	if enabled, _ := p.config.Effective()["replication.enabled"].(bool); !enabled {
 		return nil
 	}
-	// What the walks found has served, and the plan reads every file.
+	// What the walks found has served, and the plan reads every file, or what may have changed.
 	p.seen, p.moves = nil, nil
+	if err := p.planOnly(ctx); err != nil {
+		return err
+	}
 	var lines []copyLine
 	rep := &watch.Replicate{DryRun: !p.apply, Queue: func(jobs []watch.PlannedJob) error {
 		jobs = p.settledCopies(jobs)
@@ -32,7 +35,7 @@ func (p *pass) copies(ctx context.Context) error {
 			return nil
 		}
 		return queue(ctx, p.db, p.now, jobs)
-	}}
+	}, Only: p.only}
 	if err := watch.SettleFor(ctx, p.db, p.config, p.now, rep); err != nil {
 		return fmt.Errorf("%w", err)
 	}
@@ -76,6 +79,7 @@ func (p *pass) copies(ctx context.Context) error {
 			if outcome == OutcomeReplicated {
 				p.out.Copied += job.Size
 			}
+			p.ranFile(job.FileID)
 			p.record(Operation{Disk: job.Dst, Kind: KindReplicate, Path: job.Path, Source: job.Src, Outcome: outcome})
 			if p.sinkErr != nil {
 				return p.sinkErr

@@ -111,7 +111,10 @@ func (p *pass) guardModification(ctx context.Context, d *solver.ModDecision, cti
 		return true, true, nil
 	}
 	// A guard that stands held this file before anything of it was read (heldBefore): here it is clear.
-	rows := p.rows[disk]
+	rows, err := p.rowsOf(ctx, disk)
+	if err != nil {
+		return false, false, err
+	}
 	if !solver.GuardTrips(&solver.GuardInput{Count: g.count + 1, CountPercent: g.count + 1, Rows: rows, Files: p.modFiles, Percent: p.modPercent}) {
 		g.count++
 		return true, false, nil

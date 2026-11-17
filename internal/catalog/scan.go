@@ -377,13 +377,14 @@ func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryR
 		}
 	}
 	for _, name := range TopNames(names) {
-		lo, hi := folderRange(name)
-		below, err := entriesNotSeen(ctx, tx, seen, "SELECT lpath FROM entries WHERE disk_id = ?1 AND (lpath = ?2 OR (lpath >= ?3 AND lpath < ?4))",
-			disk, []byte(name), lo, hi)
+		err := atOrBelow("SELECT lpath FROM entries WHERE disk_id = ?1 AND <cond>", "lpath", 2, name, []any{disk}, func(query string, args []any) error {
+			below, err := entriesNotSeen(ctx, tx, seen, query, args...)
+			gone = append(gone, below...)
+			return err
+		})
 		if err != nil {
 			return err
 		}
-		gone = append(gone, below...)
 	}
 	for _, p := range gone {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM entries WHERE lpath = ? AND disk_id = ?", p, disk); err != nil {

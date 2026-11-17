@@ -28,9 +28,10 @@ const (
 )
 
 // DueFiles reads the files that have a copy whose name no longer holds it, by path as they stand, a
-// page at a time: a file decided leaves the list, as its clock is cleared.
+// page at a time: a file decided leaves the list, as its clock is cleared. The copies are found through the index
+// copies_gone, which holds those alone: a test of each file would read every file of the pool at each pass.
 func DueFiles(ctx context.Context, r *FileReader) ([]FileRow, error) {
-	return r.page(ctx, `SELECT * FROM files WHERE lpath > ? AND EXISTS(SELECT 1 FROM copies c WHERE c.file_id = files.id AND c.gone_ns IS NOT NULL) ORDER BY lpath LIMIT ?`)
+	return r.page(ctx, `SELECT * FROM files WHERE lpath > ? AND id IN (SELECT file_id FROM copies WHERE gone_ns IS NOT NULL) ORDER BY lpath LIMIT ?`)
 }
 
 // FileAt gives the file at a path, with its copies, and nil when there is none.

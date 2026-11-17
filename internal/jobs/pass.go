@@ -182,8 +182,16 @@ type pass struct {
 	// called for a look at them: their copies read as their rows say (specs.md §15.13).
 	scope  Scope
 	spared map[string]bool
-	// partial holds the disks this pass looked at some names of alone, as the watcher gave them.
+	// partial holds the disks this pass looked at some names of alone, as the watcher gave them, and names the names
+	// each look read in the end, by disk.
 	partial map[string]bool
+	// added holds, by disk, the copies this pass's look recorded: the count of a disk's copies before it leaves them out.
+	added map[string]int64
+	names map[string][]string
+	// only limits the plans of this pass to what may have changed, nil for every file; ran holds the files whose copy
+	// or transfer ran in it, which a plan after them takes too (specs.md §15.13).
+	only *watch.Only
+	ran  map[int64]bool
 	// start says that the pass is a start of the daemon, which records the physical disks of each disk (R-06).
 	start bool
 	// onBattery says whether the UPS runs on battery, as a copy or a transfer is about to start (specs.md §20).
@@ -307,7 +315,7 @@ func RunLaterOn(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 func newPass(db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) *pass {
 	return &pass{
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink, closed: closed,
-		rows: map[string]int64{}, walked: map[string]bool{}, spared: map[string]bool{}, partial: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
+		rows: map[string]int64{}, walked: map[string]bool{}, spared: map[string]bool{}, partial: map[string]bool{}, added: map[string]int64{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
 		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, requeued: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
 		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
@@ -412,10 +420,6 @@ func (p *pass) look(ctx context.Context) error {
 			// Never read again: no walk and no line, as it is neither missing nor skipped (specs.md §18).
 			continue
 		}
-		// Before the walk: what the look adds says nothing of how many it had (specs.md §15.6).
-		if p.rows[d.ID], err = catalog.CopyCount(ctx, p.db, d.ID); err != nil {
-			return fmt.Errorf("catalog: %w", err)
-		}
 		verdict := p.session.VerdictOf(i)
 		if !p.session.Readable(d.ID) && verdict.State != disks.Missing {
 			verdict = disks.Verdict{State: disks.Missing, Reason: disks.IOError, Message: "the disk failed its confirmation"}
@@ -442,6 +446,15 @@ func (p *pass) look(ctx context.Context) error {
 		}
 		if report.Whole {
 			p.out.Whole = append(p.out.Whole, d.ID)
+		}
+		if p.apply {
+			p.added[d.ID] = int64(report.New)
+		}
+		if p.partial[d.ID] && report.Walked {
+			if p.names == nil {
+				p.names = map[string][]string{}
+			}
+			p.names[d.ID] = report.Looked
 		}
 		if !report.Walked {
 			p.out.Partial = true
@@ -676,10 +689,16 @@ func (p *pass) readGuards(ctx context.Context) error {
 		state := &guardState{read: read, wishes: wishes}
 		p.guards[d.ID] = state
 		n := int64(len(wishes))
-		rows := p.rows[d.ID]
-		if read.HasGuard {
+		// Nothing counts against the copies of a disk with nothing gone and nothing wished: they are not counted.
+		var rows int64
+		switch {
+		case read.HasGuard:
 			if rows, err = catalog.CopiesBefore(ctx, p.db, d.ID, read.GuardNS); err != nil {
 				return fmt.Errorf("catalog: %w", err)
+			}
+		case read.Gone+read.Events+n > 0:
+			if rows, err = p.rowsOf(ctx, d.ID); err != nil {
+				return err
 			}
 		}
 		state.tripped = solver.GuardTrips(&solver.GuardInput{
@@ -1583,8 +1602,8 @@ func (p *pass) finish(ctx context.Context) error {
 		return err
 	}
 	if !p.settled {
-		if err := p.session.Settle(ctx); err != nil {
-			return fmt.Errorf("%w", err)
+		if err := p.settleAgain(ctx); err != nil {
+			return err
 		}
 	}
 	count, next, err := catalog.Waiting(ctx, p.db, p.debounce.Nanoseconds(), p.now)
@@ -1595,6 +1614,73 @@ func (p *pass) finish(ctx context.Context) error {
 	p.out.Waiting, p.out.NextDue = count+p.copiesWaiting, earliest(next, p.copiesDue)
 	p.out.Partial = p.out.Partial || p.session.Lost()
 	return nil
+}
+
+// planOnly works out what the plans of this pass take (specs.md §15.13): every file, unless the pass was given a scope,
+// walked no disk whole, and every disk is online or in standby, as a disk in any other state changes what its files
+// are, with time too; otherwise the files at the names its looks read, and those catalog.PlanSet adds.
+func (p *pass) planOnly(ctx context.Context) error {
+	p.only = nil
+	if p.scope == nil {
+		return nil
+	}
+	for id := range p.walked {
+		if !p.partial[id] {
+			return nil
+		}
+	}
+	list, err := catalog.Disks(ctx, p.db)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	for i := range list {
+		if list[i].State != string(solver.DiskOnline) && list[i].State != string(solver.DiskStandby) {
+			return nil
+		}
+	}
+	p.only = &watch.Only{Names: maps.Clone(p.names)}
+	if p.only.Names == nil {
+		p.only.Names = map[string][]string{}
+	}
+	return nil
+}
+
+// ranFile records a file whose copy or transfer ran in this pass.
+func (p *pass) ranFile(id int64) {
+	if p.ran == nil {
+		p.ran = map[int64]bool{}
+	}
+	p.ran[id] = true
+}
+
+// settleAgain works out each file again once copies ran, as the plan of this pass took them: every file, or what may
+// have changed, with the files whose copy or transfer ran.
+func (p *pass) settleAgain(ctx context.Context) error {
+	if p.only == nil {
+		if err := p.session.Settle(ctx); err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		return nil
+	}
+	only := &watch.Only{Names: p.only.Names, IDs: p.ran}
+	if err := watch.SettleOnly(ctx, p.db, p.config, p.now, only); err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	return nil
+}
+
+// rowsOf counts the copies a disk had before this pass's look: what the look adds says nothing of how many it had
+// (specs.md §15.6). Counted once, when a guard needs them.
+func (p *pass) rowsOf(ctx context.Context, id string) (int64, error) {
+	if n, ok := p.rows[id]; ok {
+		return n, nil
+	}
+	n, err := catalog.CopyCount(ctx, p.db, id)
+	if err != nil {
+		return 0, fmt.Errorf("catalog: %w", err)
+	}
+	p.rows[id] = n - p.added[id]
+	return p.rows[id], nil
 }
 
 // findWaits finds the disks where this pass's look found what the catalog does not hold yet, which a later look must
