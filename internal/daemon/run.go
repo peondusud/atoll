@@ -18,6 +18,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/notify"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/ups"
@@ -65,6 +66,8 @@ type Options struct {
 	// UPSEvery, UPSDead and FlushWait are for tests: the UPS read every 5 s, unheard for 15 s at most, and the disks
 	// written out within a minute as the battery runs low (specs.md §20).
 	UPSEvery, UPSDead, FlushWait time.Duration
+	// Metrics holds what /metrics gives, which the loop records as it goes (specs.md §23.1); nil records nothing.
+	Metrics *metrics.Recorder
 }
 
 // ErrStartup says that the daemon could not start: its configuration or its catalog cannot be used.
@@ -93,6 +96,8 @@ type settings struct {
 	// scrubWindow is integrity.window, maintenance.window when left out, and scrubBudget integrity.scrub_budget.
 	scrubWindow value.Window
 	scrubBudget time.Duration
+	// scrubEvery is integrity.scrub_every: what the metrics count as due for the scrub (specs.md §16, §23.1).
+	scrubEvery time.Duration
 	// balanceSchedule is balance.schedule: never, immediate, or a window, which balanceWindow holds; balanceBudget is
 	// balance.budget, and balanceRatio and balanceMore balance.trigger (specs.md §13.3).
 	balanceSchedule string
@@ -133,6 +138,9 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 	}
 	if s.scrubBudget, err = value.ParseDuration(text("integrity.scrub_budget")); err != nil {
 		return nil, fmt.Errorf("integrity.scrub_budget: %w", err)
+	}
+	if s.scrubEvery, err = value.ParseDuration(text("integrity.scrub_every")); err != nil {
+		return nil, fmt.Errorf("integrity.scrub_every: %w", err)
 	}
 	s.balanceSchedule = text("balance.schedule")
 	if s.balanceSchedule != scheduleNever && s.balanceSchedule != scheduleImmediate {
@@ -291,6 +299,8 @@ func Run(ctx context.Context, opt Options) error {
 	defer l.watcher.Close()
 	// The UPS is read before the first pass, so that a daemon that starts on battery starts no copy.
 	l.power = newPower(opt.Log, opt.Machine.Now, opt.UPSEvery, opt.UPSDead)
+	l.power.metrics = opt.Metrics
+	l.recordConfig()
 	l.power.configure(opt.Config)
 	l.power.poll(ctx)
 	l.lastPower = ups.Reading{Power: ups.Online}
@@ -507,6 +517,7 @@ func (l *loop) reload() {
 		}
 	}
 	l.reloaded = true
+	l.recordConfig()
 	l.power.configure(c)
 	// A disk that gave no answer to CHECK POWER MODE is asked again, as one a configuration read again may name.
 	clear(l.noAnswer)
@@ -595,6 +606,7 @@ func (l *loop) check(ctx context.Context) {
 		}
 	}
 	l.recordSpin(ctx)
+	l.recordDisks(true)
 }
 
 // rearm watches again a disk whose watch ended while the disk stayed there: its reader stopped on an error, or the
@@ -739,6 +751,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	}
 	sink := &passSink{folders: map[string]bool{}, unheard: unheard}
 	var due *alerts.Due
+	var count *passCount
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		// A pass reads no file whole: what must be read to be decided is read after it, by slices (specs.md §15.13).
 		outcome, err := jobs.RunLaterOn(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed, scope, l.power.onBattery)
@@ -762,6 +775,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		l.branches(ctx, db)
 		l.purge(ctx, db)
 		due = l.prepareAlerts(ctx, db, l.withLastLines(outcome), &sink.refused)
+		count = l.countForMetrics(ctx, db)
 		return outcome, nil
 	})
 	end := l.opt.Machine.Now()
@@ -770,6 +784,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		if ctx.Err() != nil {
 			return
 		}
+		l.opt.Metrics.Update(func(s *metrics.Snapshot) { s.PassFailures++ })
 		retry := end + retryAfter.Nanoseconds()
 		l.passDue = &retry
 		l.log.Error("the pass failed", "error", err)
@@ -799,6 +814,9 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	}
 	l.log.Info("a pass ended", "because", because, "seconds", float64(end-start)/1e9, "decisions", sink.decisions,
 		"operations", sink.operations, "waiting", outcome.Waiting, "partial", outcome.Partial, "held", outcome.Held)
+	// A disk the pass found missing is missing in the metrics too, before the next check.
+	l.recordDisks(false)
+	l.recordPass(start, end, outcome, sink, count)
 	l.sendAlerts(ctx, due)
 	l.remindAt(due)
 	if l.opt.OnPass != nil {
@@ -840,8 +858,10 @@ func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
 // changed.
 type passSink struct {
 	decisions, operations int64
-	refused               alerts.Refused
-	folders               map[string]bool
+	// ops counts the operations by kind and outcome, for the metrics (specs.md §23.1).
+	ops     map[[2]string]int64
+	refused alerts.Refused
+	folders map[string]bool
 	// unheard holds the disks whose watch may have missed a change since their last walk.
 	unheard map[string]bool
 }
@@ -870,6 +890,10 @@ func (s *passSink) Decision(*jobs.Decision) error {
 
 func (s *passSink) Operation(op *jobs.Operation) error {
 	s.operations++
+	if s.ops == nil {
+		s.ops = map[[2]string]int64{}
+	}
+	s.ops[[2]string{op.Kind, op.Outcome}]++
 	for _, f := range OperationFolders(op) {
 		if s.folders != nil {
 			s.folders[f] = true
@@ -889,7 +913,8 @@ func (s *passSink) Operation(op *jobs.Operation) error {
 // prepareAlerts works out, under the catalog's lock, the alerts a pass leaves to send (specs.md §23). With no
 // channel set, the table alerts stays as it is, so that a channel set later hears of what holds then.
 func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outcome, refused *alerts.Refused) *alerts.Due {
-	if len(l.set.channels) == 0 {
+	// The metrics give what holds whether or not a channel is set (specs.md §23.1).
+	if len(l.set.channels) == 0 && l.opt.Metrics == nil {
 		return nil
 	}
 	now := l.opt.Machine.Now()
@@ -911,6 +936,10 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 		}
 	}
 	if err == nil {
+		l.recordAlerts(alerts.Holdings(facts))
+		if len(l.set.channels) == 0 {
+			return nil
+		}
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {
@@ -1015,6 +1044,10 @@ func (l *loop) readChanged(ctx context.Context) {
 		return
 	}
 	l.queueFolders(sink.folders)
+	l.opt.Metrics.Update(func(s *metrics.Snapshot) {
+		s.AddOperations(sink.ops)
+		s.CopiedBytes += outcome.Copied
+	})
 	l.toRead = left
 	l.readDecided = l.readDecided || sink.decisions > 0 || outcome.Held || outcome.Partial
 	if sink.decisions > 0 || sink.operations > 0 || outcome.Held {
@@ -1145,6 +1178,7 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		}
 		return
 	}
+	l.recordScrub(out)
 	left, corrupt := false, 0
 	refused := map[string][]string{}
 	for i := range out.Disks {

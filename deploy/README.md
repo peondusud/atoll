@@ -30,6 +30,17 @@ The catalog's folder (`/var/lib/atoll`) and the configuration's (`/etc/atoll`) b
 
 Each disk's work folder, `Atoll/` at its top, must belong to root or to `atoll` (`specs.md` §10): `atoll disk add` refuses one that another account owns, on ext4, XFS and btrfs, and says the `chown` that gives it back, which a disk needs when it comes from a machine where `atoll` has another number. Keep the top of each disk closed to the accounts that must not read every file of the library: whoever owns it can make that folder again.
 
+Prometheus reads the daemon's metrics on `/metrics` (`specs.md` §23.1): over TCP on `api.listen`, with the API's token, or on `metrics.listen`, which asks none and gives nothing else. A scrape job for each:
+
+```yaml
+scrape_configs:
+  - job_name: atoll                       # api.listen = "127.0.0.1:7341"
+    authorization: { credentials_file: /etc/prometheus/atoll.token }
+    static_configs: [{ targets: ["127.0.0.1:7341"] }]
+  - job_name: atoll-open                  # or metrics.listen = "127.0.0.1:9341", with no token
+    static_configs: [{ targets: ["127.0.0.1:9341"] }]
+```
+
 The catalog's folder is closed to other accounts (`StateDirectoryMode=0750`). The catalog and its backups list every path of the library, its trash and its history, which the local API gives only through its socket, of mode 0660, or with its token (§25.1): a folder anyone could read would give them to every account of the machine. A member of the group `atoll` reads them, and may ask the socket.
 
 ## Atoll's own view in place of mergerfs

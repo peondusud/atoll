@@ -21,6 +21,7 @@ import (
 	"github.com/peondusud/atoll/internal/daemon"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/value"
 )
@@ -157,7 +158,9 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 	}()
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 	// The local API answers with the configuration the daemon runs with, the one a reload takes too (specs.md §25.1).
-	api := newAPIServer(c, machine, log)
+	// What the loop records, /metrics gives (specs.md §23.1).
+	rec := metrics.NewRecorder(atollVersion())
+	api := newAPIServer(c, machine, log, rec)
 	stopAPI := api.start(ctx, c)
 	defer stopAPI()
 	load := func() (*config.Config, error) {
@@ -167,7 +170,7 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 		}
 		return next, err
 	}
-	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: load}
+	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: load, Metrics: rec}
 	if err := daemon.Run(ctx, opts); err != nil {
 		return failure(stderr, err)
 	}

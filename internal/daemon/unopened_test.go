@@ -17,6 +17,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -190,9 +191,10 @@ func TestTheDaemonReadsChangedCopiesAfterItsPass(t *testing.T) {
 	}
 	passes := make(chan passed, 16)
 	done := make(chan error, 1)
+	rec := metrics.NewRecorder("test")
 	go func() {
 		done <- Run(ctx, Options{Config: c, Machine: m, Apply: true, Log: slog.New(slog.DiscardHandler), CheckEvery: 50 * time.Millisecond, Inotify: true,
-			OnPass: func(because []string, o *jobs.Outcome) { passes <- passed{because, len(o.ToRead)} }})
+			Metrics: rec, OnPass: func(because []string, o *jobs.Outcome) { passes <- passed{because, len(o.ToRead)} }})
 	}()
 	select {
 	case first := <-passes:
@@ -215,6 +217,8 @@ func TestTheDaemonReadsChangedCopiesAfterItsPass(t *testing.T) {
 	if err != nil || !info.ModTime().Equal(touched) {
 		t.Errorf("the other copy's time is %v, %v", info.ModTime(), err)
 	}
+	// What the slice did is counted with what the passes did (specs.md §23.1).
+	waitMetrics(t, rec, "the slice", `atoll_operations_total{kind="utimens",outcome="applied"} 1`)
 	cancel()
 	select {
 	case err := <-done:

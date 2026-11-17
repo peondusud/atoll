@@ -19,6 +19,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/value"
 )
 
@@ -37,13 +38,15 @@ type apiServer struct {
 	current atomic.Pointer[config.Config]
 	machine disks.Machine
 	log     *slog.Logger
+	// metrics is what the daemon recorded for /metrics (specs.md §23.1).
+	metrics *metrics.Recorder
 	// reading lets one answer at a time read the catalog: each is made in the daemon's own process, beside its passes,
 	// and one may plan the whole pool.
 	reading chan struct{}
 }
 
-func newAPIServer(c *config.Config, m disks.Machine, log *slog.Logger) *apiServer {
-	a := &apiServer{machine: m, log: log, reading: make(chan struct{}, 1)}
+func newAPIServer(c *config.Config, m disks.Machine, log *slog.Logger, rec *metrics.Recorder) *apiServer {
+	a := &apiServer{machine: m, log: log, metrics: rec, reading: make(chan struct{}, 1)}
 	a.current.Store(c)
 	return a
 }
@@ -110,17 +113,39 @@ func (a *apiServer) one(answer apiAnswer) apiAnswer {
 	}
 }
 
-// routes serves each answer, and 404 for any other path.
+// metricsAnswer writes what the daemon recorded, as Prometheus reads it (specs.md §23.1). It reads nothing but memory.
+func (a *apiServer) metricsAnswer(_ *http.Request, _ *config.Config, w io.Writer) (int, error) {
+	text, err := a.metrics.Text()
+	if err != nil {
+		return 0, fmt.Errorf("metrics: %w", err)
+	}
+	_, err = w.Write(text)
+	return http.StatusOK, err
+}
+
+// routes serves each answer and /metrics, and 404 for any other path.
 func (a *apiServer) routes() http.Handler {
-	mux := http.NewServeMux()
+	mux := a.metricsRoutes()
 	for path, answer := range a.answers() {
-		mux.HandleFunc(path, a.get(answer))
+		mux.HandleFunc(path, a.get(answer, jsonType))
+	}
+	return mux
+}
+
+// metricsRoutes serves /metrics alone, and 404 for any other path: what metrics.listen answers, with no token.
+func (a *apiServer) metricsRoutes() *http.ServeMux {
+	mux := http.NewServeMux()
+	if a.metrics != nil {
+		mux.HandleFunc("/metrics", a.get(a.metricsAnswer, metrics.ContentType))
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		send(w, http.StatusNotFound, apiError{"no such path"})
 	})
 	return mux
 }
+
+// jsonType is what each answer of /v1 is.
+const jsonType = "application/json"
 
 // apiError is what an answer that could not be made says.
 type apiError struct {
@@ -129,7 +154,7 @@ type apiError struct {
 
 // get answers GET alone. The answer is made whole before it is sent, so that one that fails halfway is an error, not a
 // cut document.
-func (a *apiServer) get(answer apiAnswer) http.HandlerFunc {
+func (a *apiServer) get(answer apiAnswer, contentType string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -146,7 +171,7 @@ func (a *apiServer) get(answer apiAnswer) http.HandlerFunc {
 			send(w, http.StatusServiceUnavailable, apiError{err.Error()})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", contentType)
 		w.WriteHeader(status)
 		_, _ = w.Write(body.Bytes())
 	}
@@ -226,6 +251,15 @@ func (a *apiServer) start(ctx context.Context, c *config.Config) func() {
 		} else {
 			a.log.Info("the local API listens", "tcp", l.Addr().String())
 			serve(httpServer(a.withToken(a.routes())), l)
+		}
+	}
+	if text, _ := c.Effective()["metrics.listen"].(string); text != "" && a.metrics != nil {
+		l, err := listenTCP(ctx, text)
+		if err != nil {
+			a.log.Warn("the metrics over TCP are off", "listen", text, "error", err)
+		} else {
+			a.log.Info("the metrics listen, with no token", "tcp", l.Addr().String())
+			serve(httpServer(a.metricsRoutes()), l)
 		}
 	}
 	return func() {

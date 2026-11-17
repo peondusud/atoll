@@ -44,6 +44,12 @@ func checkAPI(tree map[string]any, found *problems) {
 	if text(api, "listen") != "" && text(api, "token_file") == "" {
 		found.add("api.token_file", "api.listen needs a token file: HTTP over TCP asks every request for its token")
 	}
+	// metrics.listen asks no token: on api.listen's address, one of the two could not listen, and which is a race.
+	apiAt, apiErr := value.ParseListen(text(api, "listen"))
+	metricsAt, metricsErr := value.ParseListen(text(table(tree, "metrics"), "listen"))
+	if apiErr == nil && metricsErr == nil && apiAt == metricsAt {
+		found.add("metrics.listen", "metrics.listen is api.listen: give each its own address or port")
+	}
 }
 
 func checkRelations(tree, user map[string]any, c *Config, found *problems) {

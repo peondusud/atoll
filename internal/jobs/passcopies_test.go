@@ -58,6 +58,10 @@ func TestAPassCopiesOnceSettled(t *testing.T) {
 	if b.read("t2", "a") != "content" {
 		t.Error("not copied")
 	}
+	// The metrics count what the copy wrote (specs.md §23.1).
+	if out.Copied != int64(len("content")) {
+		t.Errorf("%d bytes copied, want %d", out.Copied, len("content"))
+	}
 	// The pass worked the file out again after the copy.
 	if got := b.text("SELECT state FROM files"); got != "ok" {
 		t.Errorf("the file is %s", got)
@@ -172,6 +176,9 @@ func TestAPassCopyThatFails(t *testing.T) {
 			want := []Operation{{Disk: "t2", Kind: KindReplicate, Path: "a", Source: "t1", Outcome: tc.outcome}}
 			if !slices.Equal(out.Operations, want) || out.Partial != tc.partial {
 				t.Errorf("%+v, partial %v; want %+v, partial %v", out.Operations, out.Partial, want, tc.partial)
+			}
+			if out.Copied != 0 {
+				t.Errorf("%d bytes copied by a copy that failed", out.Copied)
 			}
 			// Only a source that changed waits, for settle: what failed otherwise is due again at once.
 			var waiting int64

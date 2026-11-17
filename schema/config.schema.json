@@ -349,6 +349,19 @@
         }
       }
     },
+    "metrics": {
+      "description": "Prometheus metrics (specs.md §23.1), which the local API gives too, on /metrics.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "listen": {
+          "description": "An address and a port where /metrics alone is given over HTTP with no token, a loopback one or one of the Tailscale network (specs.md §29.5), never api.listen's; empty for none.",
+          "type": "string",
+          "format": "atoll-optional-listen",
+          "default": ""
+        }
+      }
+    },
     "rule": {
       "description": "Ordered: the first matching rule wins (specs.md §11.3).",
       "type": "array",

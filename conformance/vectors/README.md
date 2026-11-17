@@ -49,6 +49,13 @@ One JSON file per function. Every file has this envelope:
 | `port` | integer | the port |
 | `error` | boolean | `true` when `input` is rejected |
 
+### `metrics.json` — the text of `/metrics` (§23.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `snapshot` | object | what the daemon holds: `version`; `disks`, each with `id`, `fs`, `role`, `mount`, `state`, `standby` (`true` or left out), `space` (`capacity`, `free`) and `catalog` (`copies`, `bytes`, `trash_entries`, `trash_bytes`, `scrub_due_copies`, `scrub_due_bytes`) and `smart` (`read_ns`, `failing`, `reallocated`, `pending`, `uncorrectable`, `temperature`), each left out when unknown, and `scrub_read_copies`, `scrub_read_bytes` and `scrub_corrupt`; `files`, by state, each `files` and `bytes`, left out before a pass; `passes`, `pass_failures` and `copied_bytes`; `last_pass` (`end_ns`, `duration_ns`, `partial`, `held`) and `waiting`, left out before a pass; `operations` (`kind`, `outcome`, `count`) and `alerts` (`key`, `count`), in any order; `ups` (`power`, `unreachable`), left out without `ups.enabled`. A flag inside is `true` or left out |
+| `text` | string | what `/metrics` writes: the metrics of `api/metrics.json` that have a sample, in that file's order, each with its `# HELP` and `# TYPE` lines, its samples by their label values in byte order, every line ending in a line feed |
+
 ### `size.json` — sizes (§29.5)
 
 | Field | Type | Meaning |

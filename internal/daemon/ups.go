@@ -12,6 +12,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/ups"
 	"github.com/peondusud/atoll/internal/value"
 )
@@ -48,6 +49,8 @@ type power struct {
 	cancel context.CancelFunc
 	// changed tells the loop that the reading changed.
 	changed chan struct{}
+	// metrics is told of each reading that changes, under mu (specs.md §23.1).
+	metrics *metrics.Recorder
 }
 
 func newPower(log *slog.Logger, now func() int64, every, dead time.Duration) *power {
@@ -71,6 +74,7 @@ func (p *power) configure(c *config.Config) {
 	address, _ := effective["ups.nut"].(string)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	defer p.record()
 	if enabled && !p.enabled {
 		p.answeredNS = p.now()
 	}
@@ -143,6 +147,7 @@ func (p *power) set(r ups.Reading) {
 	}
 	was := p.reading
 	p.reading = r
+	p.record()
 	if r.Power == ups.Low && was.Power != ups.Low && p.cancel != nil {
 		p.cancel()
 	}
@@ -150,6 +155,15 @@ func (p *power) set(r ups.Reading) {
 	case p.changed <- struct{}{}:
 	default:
 	}
+}
+
+// record gives the metrics what the daemon makes of the UPS, nothing without ups.enabled (specs.md §23.1). Under mu.
+func (p *power) record() {
+	var u *metrics.UPS
+	if p.enabled {
+		u = &metrics.UPS{Power: string(p.reading.Power), Unreachable: p.reading.Unreachable}
+	}
+	p.metrics.Update(func(s *metrics.Snapshot) { s.UPS = u })
 }
 
 // get gives what the daemon makes of the UPS.

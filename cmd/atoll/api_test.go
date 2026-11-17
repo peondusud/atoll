@@ -22,6 +22,7 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/metrics"
 )
 
 // apiPool writes a configuration with one disk that is not mounted, and makes its catalog.
@@ -51,7 +52,11 @@ func newTestAPI(t *testing.T, c *config.Config) *apiServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newAPIServer(c, m, slog.New(slog.DiscardHandler))
+	rec := metrics.NewRecorder("v0.1.0")
+	rec.Update(func(s *metrics.Snapshot) {
+		s.Configure([]metrics.Disk{{ID: "t1", FS: "ext4", Role: "data", Mount: "/mnt/t1", State: "online"}})
+	})
+	return newAPIServer(c, m, slog.New(slog.DiscardHandler), rec)
 }
 
 func ask(h http.Handler, method, path, token string) *httptest.ResponseRecorder {
@@ -266,7 +271,7 @@ func TestTheAPIReadsTheCatalogOneAnswerAtATime(t *testing.T) {
 		entered <- struct{}{}
 		<-release
 		return http.StatusOK, nil
-	}))
+	}), jsonType)
 	codes := make(chan int, 3)
 	for range 3 {
 		go func() { codes <- serve(t.Context(), slow, "/v1/status") }()
@@ -369,9 +374,87 @@ func TestTheOpenAPIDocument(t *testing.T) {
 		}
 	}
 	_, c := apiPool(t, "")
+	// /metrics is no command's: it is what the daemon recorded (specs.md §23.1).
 	served := slices.Sorted(maps.Keys(newTestAPI(t, c).answers()))
+	served = append(served, "/metrics")
+	slices.Sort(served)
 	slices.Sort(listed)
 	if !slices.Equal(listed, served) {
 		t.Errorf("openapi.yaml lists %v, the server answers %v", listed, served)
+	}
+}
+
+// /metrics gives what the daemon recorded, as Prometheus reads it, on the socket with no token and over TCP with it,
+// GET alone (specs.md §23.1).
+func TestTheAPIGivesTheMetrics(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "api.token")
+	if err := os.WriteFile(token, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, c := apiPool(t, "[api]\nlisten = \"127.0.0.1:7341\"\ntoken_file = "+strconv.Quote(token)+"\n")
+	a := newTestAPI(t, c)
+	a.metrics.Update(func(s *metrics.Snapshot) { s.Passes = 3 })
+	want, err := a.metrics.Text()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(want), "atoll_passes_total 3\n") || !strings.Contains(string(want), `atoll_disk_state{disk="t1",state="online"} 1`) {
+		t.Fatalf("the recorder gives\n%s", want)
+	}
+	socket, tcp := a.routes(), a.withToken(a.routes())
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"the socket": ask(socket, http.MethodGet, "/metrics", ""), "TCP with the token": ask(tcp, http.MethodGet, "/metrics", "Bearer s3cret"),
+	} {
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/plain; version=0.0.4; charset=utf-8" || w.Body.String() != string(want) {
+			t.Errorf("%s: %d %q\n%s", name, w.Code, w.Header().Get("Content-Type"), w.Body.String())
+		}
+	}
+	if w := ask(tcp, http.MethodGet, "/metrics", ""); w.Code != http.StatusUnauthorized || w.Body.Len() != 0 {
+		t.Errorf("TCP with no token: %d %q", w.Code, w.Body.String())
+	}
+	if w := ask(socket, http.MethodPost, "/metrics", ""); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != http.MethodGet {
+		t.Errorf("POST: %d", w.Code)
+	}
+	// What the daemon records next is in the next answer.
+	a.metrics.Update(func(s *metrics.Snapshot) { s.Passes = 4 })
+	if w := ask(socket, http.MethodGet, "/metrics", ""); !strings.Contains(w.Body.String(), "atoll_passes_total 4\n") {
+		t.Errorf("after another pass:\n%s", w.Body.String())
+	}
+}
+
+// metrics.listen gives /metrics with no token, and nothing else: no answer of /v1 goes out with no token (specs.md
+// §23.1).
+func TestMetricsListenGivesTheMetricsAlone(t *testing.T) {
+	ports := make([]string, 2)
+	for i := range ports {
+		free, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ports[i] = strconv.Itoa(free.Addr().(*net.TCPAddr).Port)
+		_ = free.Close()
+	}
+	token := filepath.Join(t.TempDir(), "api.token")
+	if err := os.WriteFile(token, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, open := "127.0.0.1:"+ports[0], "127.0.0.1:"+ports[1]
+	_, c := apiPool(t, "[api]\nsocket = \"\"\nlisten = "+strconv.Quote(api)+"\ntoken_file = "+strconv.Quote(token)+"\n[metrics]\nlisten = "+strconv.Quote(open)+"\n")
+	stop := newTestAPI(t, c).start(t.Context(), c)
+	defer stop()
+	client := &http.Client{}
+	for _, tc := range []struct {
+		url, token string
+		code       int
+	}{
+		{"http://" + open + "/metrics", "", http.StatusOK},
+		{"http://" + open + "/v1/health", "", http.StatusNotFound},
+		{"http://" + open + "/v1/status", "s3cret", http.StatusNotFound},
+		{"http://" + api + "/metrics", "", http.StatusUnauthorized},
+		{"http://" + api + "/metrics", "s3cret", http.StatusOK},
+	} {
+		if code := getHealth(t, client, tc.url, tc.token); code != tc.code {
+			t.Errorf("%s with token %q: %d, want %d", tc.url, tc.token, code, tc.code)
+		}
 	}
 }

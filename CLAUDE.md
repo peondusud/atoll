@@ -68,8 +68,9 @@ internal/integrity/    hashing (pure), scrub, repair, quarantine, duplicates
 internal/view/         mergerfs configuration and runtime branches, FUSE view
 internal/fsx/          disk I/O abstraction (real, and with fault injection)
 internal/vectors/      loads conformance/vectors/ for unit tests
+internal/metrics/      Prometheus metrics: the text of a snapshot (pure), and the daemon's recorder
 internal/trash/  internal/notify/  internal/alerts/  internal/cache/
-api/                   openapi.yaml, schemas/ for --json outputs
+api/                   openapi.yaml, schemas/ for --json outputs, metrics.json for /metrics
 schema/                migrations/NNNN_name.sql, config.schema.json
 conformance/           vectors/, scenarios/, corpus/names/, runner/ (language-neutral)
 test/                  integration, faults, break glass, loopdev, qemu to run loopdev anywhere, and ci to run every check of a commit

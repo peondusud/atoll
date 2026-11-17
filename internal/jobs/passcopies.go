@@ -73,6 +73,9 @@ func (p *pass) copies(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			if outcome == OutcomeReplicated {
+				p.out.Copied += job.Size
+			}
 			p.record(Operation{Disk: job.Dst, Kind: KindReplicate, Path: job.Path, Source: job.Src, Outcome: outcome})
 			if p.sinkErr != nil {
 				return p.sinkErr

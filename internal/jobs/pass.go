@@ -119,6 +119,9 @@ type Outcome struct {
 	// order: a later look must see it again, so the daemon walks them in its next pass (specs.md §15.13). Set by a pass
 	// that writes; no part of the pass's output.
 	WaitDisks []string
+	// Copied counts the bytes of the replicas this pass made, for the metrics (specs.md §23.1); no part of the pass's
+	// output.
+	Copied int64
 }
 
 // Scope holds the disks a pass of the daemon is asked to walk, by id (specs.md §15.13). The pass walks those, and every

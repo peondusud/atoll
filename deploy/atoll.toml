@@ -146,6 +146,9 @@ socket     = "/run/atoll/atoll.sock"
 listen     = ""                         # "127.0.0.1:7341", or an address of the Tailscale network
 token_file = ""                         # the Bearer token TCP asks for
 
+[metrics]                               # Prometheus (§23.1), which the API gives on /metrics too
+listen = ""                             # "127.0.0.1:9341": /metrics alone, with no token
+
 # Rules: the first matching rule wins; conditions are combined with AND.
 [[rule]]
 label    = "temporary and system files"

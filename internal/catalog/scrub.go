@@ -39,7 +39,10 @@ const scrubColumns = `c.file_id, COALESCE(c.old_lpath, f.lpath), c.size, c.mtime
 // in conflict, nor corrupt and holding one, never verified or verified at or before ?2, its size and times known. The
 // copies of a file in conflict are versions of it, which nothing tells apart: one never verified would be read first
 // by every scrub, to find the same again (specs.md §4, §16).
-const scrubDue = `c.disk_id = ?1 AND c.state IN ('ok', 'surplus') AND f.blake3 IS NOT NULL AND f.state <> 'conflict' AND NOT f.conflict_held
+const scrubDue = `c.disk_id = ?1 AND ` + scrubDueCopy
+
+// scrubDueCopy is that condition on whichever disk: what the metrics count by disk (specs.md §23.1).
+const scrubDueCopy = `c.state IN ('ok', 'surplus') AND f.blake3 IS NOT NULL AND f.state <> 'conflict' AND NOT f.conflict_held
 	AND (c.verified_ns IS NULL OR c.verified_ns <= ?2) AND c.size IS NOT NULL AND c.mtime_ns IS NOT NULL AND c.ctime_ns IS NOT NULL`
 
 // ScrubDue gives up to limit copies of a disk that are due, after the key: those never verified first, then by the
