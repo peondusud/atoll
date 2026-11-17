@@ -504,6 +504,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
 | `alert_retry_due_ns` | integer | when the alerts that could not be sent are next tried again, alone (§23); left out when none waits |
 | `balance_due_ns` | integer | when the daemon next balances; left out when it never does |
+| `on_battery` | boolean | the UPS runs on battery (§20): nothing that reads or moves data in bulk starts, so `read_changed`, `read_hashes`, `backup`, `scrub` and `balance` stay false, `rescan` is never a reason, and none of their times is one to wake at |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is, or when `after_pass` makes it wait |
 | `read_changed` | boolean | `true` when the changed copies are to be read now: `changed_pending`, inside the window or not, before every other step |
@@ -518,6 +519,37 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `scrub_opened_ns` | integer | with `scrub_pending`, inside `scrub_window`, when this stretch of it began; left out otherwise |
 | `wake_ns` | integer | when to look again: `now_ns` when something is due |
 | `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, a `rescan_every_ns` that is not positive, or a scrub budget that is not, with `scrub_pending` |
+
+### `ups_address.json` — where the daemon reads the UPS (§20)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `nut` | string | `ups.nut`, `<ups>@<host>[:<port>]` |
+| `ups`, `host` | string | the UPS's name, and the host of its `upsd`, an IPv6 address without its brackets |
+| `port` | integer | the port, 3493 when `nut` names none |
+| `error` | boolean | `true` when the daemon cannot read a UPS there: `ups`, `host` and `port` are left out then |
+
+### `ups_answer.json` — one line of upsd's answer (§20)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ups` | string | the name of the UPS asked about |
+| `line` | string | the line `upsd` answered `GET VAR <ups> ups.status` with, its line feed taken off |
+| `status` | string or null | the value of `ups.status`, unescaped; null when the line gives none |
+| `err` | string | the code of an `ERR` line; left out otherwise |
+
+### `ups_power.json` — what a reading of the UPS says (§20)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `power` | string | what the daemon made of the UPS before this reading: `online`, `battery` or `low` |
+| `answered_ns` | integer | when the last reading that said something came; the daemon's start until one does |
+| `now_ns` | integer | the time of this reading |
+| `dead_ns` | integer | how long the UPS may go unheard: 15 s, upsmon's `DEADTIME` |
+| `status` | string or null | the value of `ups.status` this reading gave; null when it gave none |
+| `next` | string | what the daemon makes of the UPS now |
+| `answered` | boolean | this reading said something: the time of the last answer becomes `now_ns` |
+| `unreachable` | boolean | the UPS has said nothing for `dead_ns` or longer: the alert `ups-unreachable` holds |
 
 ### `event_grouping.json` — the watcher's events grouped per path (§15.1)
 

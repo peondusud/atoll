@@ -38,6 +38,7 @@ const (
 	KeySharedDevice = "shared-device:"
 	KeyNoAccess     = "no-access:"
 	KeyWorkdirOwner = "workdir-owner:"
+	KeyUPS          = "ups-unreachable"
 )
 
 // FirstN is how many paths an alert names, at most.
@@ -109,6 +110,9 @@ type Facts struct {
 	// Unopened holds, by disk, the files a read of the daemon could not open, for a reason that says nothing of
 	// their disk, in byte order (specs.md §15.10): they count with the names a walk could not reach.
 	Unopened map[string][]string
+	// UPSUnreachable is ups.nut when the UPS the daemon reads has said nothing for 15 s or more, "" otherwise
+	// (specs.md §20).
+	UPSUnreachable string
 }
 
 // SharedDevice is a group of disks of the pool on one physical disk, by its first disk: each disk of it in the
@@ -248,6 +252,9 @@ func Holdings(f *Facts) []Holding {
 	}
 	for i := range f.Foreign {
 		counts[KeyWorkdirOwner+f.Foreign[i].ID] = 1
+	}
+	if f.UPSUnreachable != "" {
+		counts[KeyUPS] = 1
 	}
 	for _, g := range f.Guards {
 		counts[KeyGuard+g.Kind+":"+g.Disk] = 1
@@ -423,6 +430,11 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Body = fmt.Sprintf("The folder %s, which Atoll works in on disk %s, belongs to the account %d, which is neither root's "+
 			"nor the one Atoll runs as. That account can read what Atoll copies, through the folders of its parts and of its links, "+
 			"and remove what its trash holds. Atoll goes on writing there. Give the folder back: chown -R %d %s", Shown(w.Path), id, w.UID, w.Want, Shown(w.Path))
+	case h.Key == KeyUPS:
+		m.Title = "Atoll: the UPS cannot be read"
+		m.Body = fmt.Sprintf("NUT has said nothing of the UPS %s for 15 s or more. Atoll goes on as on line power: a power cut "+
+			"would neither stop its copies nor have it write its disks out before the battery runs low. Check that upsd runs "+
+			"there and knows that UPS: upsc %s ups.status", f.UPSUnreachable, f.UPSUnreachable)
 	case strings.HasPrefix(h.Key, KeySmartFailing):
 		id := strings.TrimPrefix(h.Key, KeySmartFailing)
 		m.Priority = priorityHigh

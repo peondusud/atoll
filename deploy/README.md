@@ -52,3 +52,11 @@ With `view.engine = "atoll"`, `atoll mount` serves the view that writes at `view
 
 - What the view presents follows the disks' states the catalog holds, which the daemon keeps. A disk whose mount check fails, which `atoll mount` runs every 30 s, is read from no more: a read of a copy there fails with `EIO` until the disk is back.
 - A stop unmounts the view. A view still read from is detached, as `umount -l` does, and what is open there fails. A view whose process stopped short is detached at the next start; anything else mounted at the point is refused.
+
+## A UPS through NUT
+
+With `[ups] enabled = true`, the daemon reads the UPS that `ups.nut` names from NUT's `upsd` every 5 s, as upsmon does, over NUT's own protocol (`specs.md` §20): on battery, it starts no copy; with the battery low, it stops its work, writes out every disk, and waits for line power, which upsmon's shutdown ends with `SIGTERM` if it comes first.
+
+- NUT's driver and `upsd` must run, on this machine or another: `upsc ups@localhost ups.status` says `OL` on line power. `upsd` listens on `127.0.0.1:3493` by default; for another machine, its `LISTEN` in `upsd.conf`, and `ups.nut = "ups@<host>"`. Reading takes no account in `upsd.users`.
+- The unit starts after `nut-server.service` when NUT runs here. Atoll shuts nothing down: upsmon keeps that, as ever.
+- A UPS that `upsd` says nothing of for 15 s is an alert, `ups-unreachable`, and the daemon goes on as on line power; one on battery that goes unheard counts as low, as upsmon counts it critical.

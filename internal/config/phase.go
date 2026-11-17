@@ -23,10 +23,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			if v != "off" {
 				phase = "2b"
 			}
-		case "ups.enabled":
-			if v == true {
-				phase = "2b"
-			}
 		case "health.evacuate_on", "health.avoid_hotter_than":
 			phase = "4"
 		}

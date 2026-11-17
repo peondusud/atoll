@@ -461,6 +461,21 @@ func noEffect(tree map[string]any, set map[string]any) []Problem {
 	return out
 }
 
+// unreadableUPS warns about a UPS the daemon is to read at an address NUT cannot have, as a port past 65535: the
+// schema takes it, and so does a configuration of format version 1, so it loads, and the daemon finds the UPS
+// unreachable (specs.md §20, §24.4).
+func unreadableUPS(tree map[string]any) []Problem {
+	ups := table(tree, "ups")
+	nut := text(ups, "nut")
+	if ups["enabled"] != true || nut == "" {
+		return nil
+	}
+	if _, err := value.ParseNUT(nut); err != nil {
+		return []Problem{{Key: "ups.nut", Message: fmt.Sprintf("the daemon cannot read a UPS there: %v", err)}}
+	}
+	return nil
+}
+
 // unknownLabels warns about tags and domains no disk carries (specs.md §24.4).
 func unknownLabels(tree map[string]any) []Problem {
 	tags, domains := map[string]bool{}, map[string]bool{}

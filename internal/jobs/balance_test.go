@@ -99,7 +99,7 @@ func TestBalanceAtollLeavesUserCopies(t *testing.T) {
 	b.reconfigure("[[rule]]\nlabel = \"x\"\npath = \"**\"\ntags = [\"usb\"]\ntags_mode = \"strict\"\n")
 	b.scan(false)
 	var items []BalanceItem
-	if _, err := BalanceAtoll(t.Context(), b.db, b.config, b, 0, func(item *BalanceItem) error {
+	if _, err := BalanceAtoll(t.Context(), b.db, b.config, b, 0, nil, func(item *BalanceItem) error {
 		items = append(items, *item)
 		return nil
 	}); err != nil {
@@ -148,7 +148,7 @@ func TestBalanceRetiresNothingForACopyStillToMake(t *testing.T) {
 	run := func() []BalanceItem {
 		t.Helper()
 		var items []BalanceItem
-		if _, err := BalanceAtoll(t.Context(), b.db, b.config, b, 0, func(item *BalanceItem) error {
+		if _, err := BalanceAtoll(t.Context(), b.db, b.config, b, 0, nil, func(item *BalanceItem) error {
 			items = append(items, *item)
 			return nil
 		}); err != nil {

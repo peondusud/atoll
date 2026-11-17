@@ -16,7 +16,7 @@ func (b *bench) passOn(ids ...string) *Outcome {
 	for _, id := range ids {
 		scope[id] = true
 	}
-	out, err := RunLaterOn(b.t.Context(), b.db, b.config, b, true, nil, nil, scope)
+	out, err := RunLaterOn(b.t.Context(), b.db, b.config, b, true, nil, nil, scope, nil)
 	if err != nil {
 		b.t.Fatal(err)
 	}

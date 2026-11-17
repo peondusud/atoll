@@ -130,6 +130,13 @@ func (d *faultDir) Sync() error {
 	return d.Dir.Sync()
 }
 
+func (d *faultDir) SyncFS() error {
+	if err := d.fail("syncfs", d.name); err != nil {
+		return err
+	}
+	return d.Dir.SyncFS()
+}
+
 // CreateFile and OpenWritable are about the name they open, and so is every call on what they open.
 func (d *faultDir) CreateFile(name string, mode uint32) (WritableFile, error) {
 	if err := d.fail("create", name); err != nil {

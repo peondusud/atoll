@@ -59,6 +59,9 @@ func (p *pass) transfers(ctx context.Context) error {
 			p.copiesDue = earliest(p.copiesDue, sql.NullInt64{Int64: p.now + p.debounce.Nanoseconds(), Valid: true})
 			continue
 		}
+		if p.batteryHolds() {
+			continue
+		}
 		if !p.apply {
 			p.operated(Operation{Disk: t.Src, Kind: KindTransfer, Path: t.Path, Outcome: OutcomeToTransfer})
 			continue

@@ -20,6 +20,7 @@ import (
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/notify"
 	"github.com/peondusud/atoll/internal/trash"
+	"github.com/peondusud/atoll/internal/ups"
 	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/view"
 	"github.com/peondusud/atoll/internal/watch"
@@ -61,6 +62,9 @@ type Options struct {
 	// Reload says to read the configuration again, through Load: SIGHUP (specs.md §15.13).
 	Reload <-chan struct{}
 	Load   func() (*config.Config, error)
+	// UPSEvery, UPSDead and FlushWait are for tests: the UPS read every 5 s, unheard for 15 s at most, and the disks
+	// written out within a minute as the battery runs low (specs.md §20).
+	UPSEvery, UPSDead, FlushWait time.Duration
 }
 
 // ErrStartup says that the daemon could not start: its configuration or its catalog cannot be used.
@@ -251,6 +255,9 @@ type loop struct {
 	// noAnswer holds the whole disks that gave no answer to CHECK POWER MODE: asked no more until the configuration is
 	// read again, they count as spinning (specs.md §10).
 	noAnswer map[string]bool
+	// power reads the UPS, and lastPower is what the loop last made of it (specs.md §20).
+	power     *power
+	lastPower ups.Reading
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -282,6 +289,14 @@ func Run(ctx context.Context, opt Options) error {
 		queues:   newQueues(set.servers, nil), changed: map[string]bool{}, eventDisks: map[string]bool{}, lines: map[string]jobs.DiskLine{},
 	}
 	defer l.watcher.Close()
+	// The UPS is read before the first pass, so that a daemon that starts on battery starts no copy.
+	l.power = newPower(opt.Log, opt.Machine.Now, opt.UPSEvery, opt.UPSDead)
+	l.power.configure(opt.Config)
+	l.power.poll(ctx)
+	l.lastPower = ups.Reading{Power: ups.Online}
+	reading, stopReading := context.WithCancel(ctx)
+	defer stopReading()
+	go l.power.run(reading)
 	l.notify("READY=1")
 	l.check(ctx)
 	l.lookAtDevices(ctx)
@@ -338,7 +353,8 @@ func (l *loop) takeRipe(now int64) (groupNext int64, waiting bool) {
 	return groupNext, waiting
 }
 
-// run is the loop of §15.13: what Wake says is due, then a sleep until it says to look again.
+// run is the loop of §15.13: what Wake says is due, then a sleep until it says to look again. A battery running low
+// parks it until line power is back (specs.md §20).
 func (l *loop) run(ctx context.Context) error {
 	for {
 		select {
@@ -348,93 +364,116 @@ func (l *loop) run(ctx context.Context) error {
 		default:
 		}
 		l.listen()
-		now := l.opt.Machine.Now()
-		groupNext, waiting := l.takeRipe(now)
-		// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
-		nowLocal := time.Unix(0, now).In(l.set.location)
-		opened := l.set.scrubWindow.Opened(nowLocal)
-		idle := !opened.IsZero() && l.scrubIdle == opened.UnixNano()
-		// One catalog backup a stretch of maintenance.window.
-		window := l.set.window.Opened(nowLocal)
-		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
-		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
-			RipeOrigins: l.origins, LastPassEndNS: l.lastFullEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
-			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending, AlertRetryDueNS: l.alertDue,
-			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
-			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
-			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
-			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue,
-			NotifyDueNS: l.notifyDue(), BalanceDueNS: l.balanceDue(now)}
-		if waiting {
-			in.GroupDueNS = &groupNext
-		}
-		out, err := Wake(&in)
-		if err != nil {
-			return fmt.Errorf("daemon: %w", err)
-		}
-		if out.Check {
-			l.check(ctx)
+		l.powerChanged()
+		if l.power.get().Power == ups.Low {
+			if l.park(ctx) {
+				return nil
+			}
 			continue
 		}
-		if len(out.Because) > 0 {
-			l.pass(ctx, out.Because)
-			l.afterPass = true
-			continue
-		}
-		if out.Read || out.Purge || out.Alerts || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
-			// The turn another step has after a pass.
-			l.afterPass = false
-		}
-		if out.Read {
-			l.readChanged(ctx)
-			continue
-		}
-		if out.Purge {
-			l.purgeMore(ctx)
-			continue
-		}
-		if out.Alerts {
-			l.resendAlerts(ctx)
-			continue
-		}
-		if out.Notify {
-			l.tell(ctx)
-			continue
-		}
-		if out.Smart {
-			l.readSmart(ctx)
-			continue
-		}
-		if out.Balance {
-			l.balance(ctx)
-			continue
-		}
-		if out.Hash {
-			l.hash(ctx)
-			continue
-		}
-		if out.Backup {
-			l.backup(ctx, window.UnixNano())
-			continue
-		}
-		if out.Scrub {
-			l.scrub(ctx, out.ScrubOpenedNS)
-			continue
-		}
-		timer := time.NewTimer(time.Duration(out.WakeNS - now))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil
-		case e := <-l.watcher.Events():
-			timer.Stop()
-			l.add(e)
-		case <-l.opt.Reload:
-			timer.Stop()
-			l.reload()
-		case <-timer.C:
+		turn, done := l.power.turn(ctx)
+		stop, err := l.step(ctx, turn)
+		done()
+		if stop || err != nil {
+			return err
 		}
 	}
+}
+
+// step takes one turn of the loop: the step due, run under turn, which the battery running low ends as SIGTERM would,
+// or a sleep until something calls for a look. It says whether the daemon was asked to stop.
+func (l *loop) step(ctx, turn context.Context) (bool, error) {
+	now := l.opt.Machine.Now()
+	groupNext, waiting := l.takeRipe(now)
+	// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
+	nowLocal := time.Unix(0, now).In(l.set.location)
+	opened := l.set.scrubWindow.Opened(nowLocal)
+	idle := !opened.IsZero() && l.scrubIdle == opened.UnixNano()
+	// One catalog backup a stretch of maintenance.window.
+	window := l.set.window.Opened(nowLocal)
+	backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
+	in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
+		RipeOrigins: l.origins, LastPassEndNS: l.lastFullEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
+		HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending, AlertRetryDueNS: l.alertDue,
+		// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
+		ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
+		ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
+		ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue,
+		NotifyDueNS: l.notifyDue(), BalanceDueNS: l.balanceDue(now),
+		// On battery, nothing that reads or moves data in bulk starts (specs.md §20).
+		OnBattery: l.power.get().Power == ups.Battery}
+	if waiting {
+		in.GroupDueNS = &groupNext
+	}
+	out, err := Wake(&in)
+	if err != nil {
+		return false, fmt.Errorf("daemon: %w", err)
+	}
+	if out.Check {
+		l.check(turn)
+		return false, nil
+	}
+	if len(out.Because) > 0 {
+		l.pass(turn, out.Because)
+		l.afterPass = true
+		return false, nil
+	}
+	if out.Read || out.Purge || out.Alerts || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+		// The turn another step has after a pass.
+		l.afterPass = false
+	}
+	if out.Read {
+		l.readChanged(turn)
+		return false, nil
+	}
+	if out.Purge {
+		l.purgeMore(turn)
+		return false, nil
+	}
+	if out.Alerts {
+		l.resendAlerts(turn)
+		return false, nil
+	}
+	if out.Notify {
+		l.tell(turn)
+		return false, nil
+	}
+	if out.Smart {
+		l.readSmart(turn)
+		return false, nil
+	}
+	if out.Balance {
+		l.balance(turn)
+		return false, nil
+	}
+	if out.Hash {
+		l.hash(turn)
+		return false, nil
+	}
+	if out.Backup {
+		l.backup(turn, window.UnixNano())
+		return false, nil
+	}
+	if out.Scrub {
+		l.scrub(turn, out.ScrubOpenedNS)
+		return false, nil
+	}
+	timer := time.NewTimer(time.Duration(out.WakeNS - now))
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return true, nil
+	case e := <-l.watcher.Events():
+		timer.Stop()
+		l.add(e)
+	case <-l.opt.Reload:
+		timer.Stop()
+		l.reload()
+	case <-l.power.signal():
+		timer.Stop()
+	case <-timer.C:
+	}
+	return false, nil
 }
 
 // reload reads the configuration again (specs.md §15.13). One that does not load is left aside, and the one read
@@ -468,6 +507,7 @@ func (l *loop) reload() {
 		}
 	}
 	l.reloaded = true
+	l.power.configure(c)
 	// A disk that gave no answer to CHECK POWER MODE is asked again, as one a configuration read again may name.
 	clear(l.noAnswer)
 	l.checkDue = l.opt.Machine.Now()
@@ -701,7 +741,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	var due *alerts.Due
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		// A pass reads no file whole: what must be read to be decided is read after it, by slices (specs.md §15.13).
-		outcome, err := jobs.RunLaterOn(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed, scope)
+		outcome, err := jobs.RunLaterOn(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed, scope, l.power.onBattery)
 		if err != nil {
 			return nil, err
 		}
@@ -858,6 +898,9 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 		facts.Dirty = l.dirtyDisks()
 		facts.Foreign = l.foreignWorkdirs(outcome)
 		facts.Unopened = l.stillUnopened()
+		if l.power.get().Unreachable {
+			facts.UPSUnreachable, _ = l.opt.Config.Effective()["ups.nut"].(string)
+		}
 		// A trash that a purge still under way will bring back under its limit is not full: only one that stays over
 		// once everything due is gone is told of (specs.md §23).
 		if l.purgePending && len(facts.TrashFull) > 0 {

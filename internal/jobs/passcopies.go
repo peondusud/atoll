@@ -42,7 +42,7 @@ func (p *pass) copies(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		return p.listCopies(lines)
+		return p.listCopies(slices.DeleteFunc(lines, func(copyLine) bool { return p.batteryHolds() }))
 	}
 	p.settled = true
 	r := &replicator{db: p.db, config: p.config, machine: p.machine, session: p.session, now: p.now, sum: &ReplicateSummary{Applied: true}}
@@ -64,7 +64,7 @@ func (p *pass) copies(ctx context.Context) error {
 				return fmt.Errorf("replicate: %w", err)
 			}
 			job := &page[i]
-			if p.waitsForWindow(job, schedule) {
+			if p.batteryHolds() || p.waitsForWindow(job, schedule) {
 				continue
 			}
 			// What a copy does, the files must be worked out again for.
@@ -111,6 +111,17 @@ func (p *pass) settledCopies(jobs []watch.PlannedJob) []watch.PlannedJob {
 		p.copiesDue = earliest(p.copiesDue, sql.NullInt64{Int64: due, Valid: true})
 		return true
 	})
+}
+
+// batteryHolds says whether the UPS runs on battery as a copy or a transfer is about to start: none starts then, and each
+// counts as waiting, with no time it is due at, as the daemon passes again once line power is back (specs.md §20). A copy
+// under way when the battery took over finishes.
+func (p *pass) batteryHolds() bool {
+	if p.onBattery == nil || !p.onBattery() {
+		return false
+	}
+	p.copiesWaiting++
+	return true
 }
 
 func boolInt(b bool) int {

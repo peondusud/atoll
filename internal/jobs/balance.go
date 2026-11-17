@@ -148,6 +148,12 @@ func planBalance(ctx context.Context, db *sql.DB, c *config.Config, now int64, o
 // it, and its old copy goes then. Without apply, it says what it would move, and writes nothing. With until, Unix
 // nanoseconds, it starts no file past that time, and says so in Left.
 func Balance(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, until int64, originals bool, each func(*BalanceItem) error) (*BalanceSummary, error) {
+	return balance(ctx, db, c, m, apply, until, nil, originals, each)
+}
+
+// balance is Balance, which with onBattery also starts no file while the UPS runs on battery, and says so in Left
+// (specs.md §20).
+func balance(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, until int64, onBattery OnBattery, originals bool, each func(*BalanceItem) error) (*BalanceSummary, error) {
 	sum := &BalanceSummary{Applied: apply}
 	if enabled, _ := c.Effective()["replication.enabled"].(bool); !enabled {
 		sum.Disabled = true
@@ -201,7 +207,7 @@ func Balance(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine,
 		return nil, err
 	}
 	for i, path := range paths {
-		if until > 0 && m.Now() >= until {
+		if until > 0 && m.Now() >= until || onBattery != nil && onBattery() {
 			sum.Left, paths = true, paths[:i]
 			break
 		}
@@ -276,9 +282,9 @@ func queueMoves(ctx context.Context, db *sql.DB, now int64, jobs []watch.Planned
 }
 
 // BalanceAtoll is Balance as the daemon runs it, with until: it moves Atoll's copies alone, as no setting moves a user
-// copy (specs.md §12.4).
-func BalanceAtoll(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64, each func(*BalanceItem) error) (*BalanceSummary, error) {
-	return Balance(ctx, db, c, m, true, until, false, each)
+// copy (specs.md §12.4), and starts no file while the UPS runs on battery (§20).
+func BalanceAtoll(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64, onBattery OnBattery, each func(*BalanceItem) error) (*BalanceSummary, error) {
+	return balance(ctx, db, c, m, true, until, onBattery, false, each)
 }
 
 type balancer struct {

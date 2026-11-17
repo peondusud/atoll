@@ -4,8 +4,9 @@
 [Unit]
 Description=Atoll: file-level redundancy for a media library
 Documentation=https://github.com/peondusud/atoll/blob/main/specs.md
-# The disks are mounted first; the network is for the alerts.
-After=local-fs.target remote-fs.target network-online.target
+# The disks are mounted first; the network is for the alerts, and for a UPS read through NUT on another machine; upsd
+# first when NUT runs here (specs.md §20). An After= on a unit that is not installed asks nothing.
+After=local-fs.target remote-fs.target network-online.target nut-server.service
 Wants=network-online.target
 
 [Service]

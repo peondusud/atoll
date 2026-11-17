@@ -116,7 +116,7 @@ remount_after_reset = true              # never for an NTFS volume marked dirty
 evacuate_on         = ["smart_failing", "pending_sectors"]   # phase 4
 avoid_hotter_than   = "50C"                                  # phase 4
 
-[ups]                                   # phase 2b, through NUT
+[ups]                                   # through NUT (§20)
 enabled = false
 nut     = "ups@localhost"
 

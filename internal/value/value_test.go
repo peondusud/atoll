@@ -52,6 +52,30 @@ func TestListenVectors(t *testing.T) {
 	}
 }
 
+func TestNUTVectors(t *testing.T) {
+	type vector struct {
+		NUT   string  `json:"nut"`
+		UPS   *string `json:"ups"`
+		Host  *string `json:"host"`
+		Port  *int    `json:"port"`
+		Error bool    `json:"error"`
+		Note  string  `json:"note"`
+	}
+	for _, v := range vectors.Load[vector](t, "ups_address.json") {
+		got, err := ParseNUT(v.NUT)
+		switch {
+		case v.Error == (v.UPS != nil) || (v.UPS == nil) != (v.Host == nil) || (v.UPS == nil) != (v.Port == nil):
+			t.Errorf("vector %q: want a name, a host and a port, or an error", v.NUT)
+		case v.Error && err == nil:
+			t.Errorf("ParseNUT(%q) = %+v, want an error (%s)", v.NUT, got, v.Note)
+		case !v.Error && err != nil:
+			t.Errorf("ParseNUT(%q): %v", v.NUT, err)
+		case !v.Error && (got.UPS != *v.UPS || got.Host != *v.Host || got.Port != *v.Port):
+			t.Errorf("ParseNUT(%q) = %+v, want %s at %s port %d (%s)", v.NUT, got, *v.UPS, *v.Host, *v.Port, v.Note)
+		}
+	}
+}
+
 // A duration is written in its largest whole unit, and read back as it was (specs.md §29.5).
 func TestFormatDuration(t *testing.T) {
 	for d, want := range map[time.Duration]string{

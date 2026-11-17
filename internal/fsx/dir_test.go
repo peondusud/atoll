@@ -475,3 +475,24 @@ func TestWriteNewIsClosedToOtherAccounts(t *testing.T) {
 		}
 	}
 }
+
+// SyncFS writes out the folder's whole filesystem, and the fault layer can make it fail (specs.md §20).
+func TestSyncFS(t *testing.T) {
+	dir, err := OpenDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	if err := dir.SyncFS(); err != nil {
+		t.Fatal(err)
+	}
+	faulty := Fault(dir, func(call, _ string) error {
+		if call == "syncfs" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	if err := faulty.SyncFS(); !errors.Is(err, syscall.EIO) {
+		t.Errorf("%v", err)
+	}
+}

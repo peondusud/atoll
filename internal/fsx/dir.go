@@ -104,6 +104,9 @@ type Dir interface {
 	Rmdir(name string) error
 	// Sync makes what was done to the names of this folder durable.
 	Sync() error
+	// SyncFS writes out what the whole filesystem of this folder holds in memory, syncfs(2): what any process wrote
+	// there and the kernel has not written yet, as the daemon asks before the UPS's battery runs out (specs.md §20).
+	SyncFS() error
 	// SyncEntry makes durable what the file or folder a name leads to records of itself, its own names
 	// included: on NTFS each keeps them in its own record, which ntfs3 does not write when only the folder
 	// is synced, so that a device failing then leaves neither name (measured). A name it cannot open gives
@@ -382,6 +385,13 @@ func (d *realDir) Rmdir(name string) error {
 func (d *realDir) Sync() error {
 	if err := unix.Fsync(d.fd()); err != nil {
 		return fmt.Errorf("fsync %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
+func (d *realDir) SyncFS() error {
+	if err := unix.Syncfs(d.fd()); err != nil {
+		return fmt.Errorf("syncfs %q: %w", d.file.Name(), err)
 	}
 	return nil
 }

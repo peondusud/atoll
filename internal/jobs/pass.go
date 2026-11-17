@@ -126,6 +126,11 @@ type Outcome struct {
 // disk.
 type Scope map[string]bool
 
+// OnBattery says whether the UPS runs on battery now (specs.md §20). A pass asks it before each copy and each transfer
+// it would start, and balancing before each file it would move: on battery, none starts, and what runs finishes. Nil
+// reads no UPS.
+type OnBattery func() bool
+
 // PendingRead is a file whose changed copies a pass left to read.
 type PendingRead struct {
 	FileID int64
@@ -149,13 +154,15 @@ type pass struct {
 	scope  Scope
 	spared map[string]bool
 	// start says that the pass is a start of the daemon, which records the physical disks of each disk (R-06).
-	start    bool
-	now      int64
-	direct   string
-	debounce time.Duration
-	window   time.Duration
-	files    int64
-	percent  value.Percent
+	start bool
+	// onBattery says whether the UPS runs on battery, as a copy or a transfer is about to start (specs.md §20).
+	onBattery OnBattery
+	now       int64
+	direct    string
+	debounce  time.Duration
+	window    time.Duration
+	files     int64
+	percent   value.Percent
 	// the settings of the mass-modification guard, and its state by disk (specs.md §15.6)
 	modWindow   time.Duration
 	modFiles    int64
@@ -251,16 +258,18 @@ func RunClosed(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 // §15.13): a file whose changed copies must be read to be decided is left in the outcome's ToRead, for ReadChanged. A
 // dry run records nothing, so it reads in its pass what it must to say what it would decide.
 func RunLater(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) (*Outcome, error) {
-	return RunLaterOn(ctx, db, c, m, apply, sink, closed, nil)
+	return RunLaterOn(ctx, db, c, m, apply, sink, closed, nil, nil)
 }
 
 // RunLaterOn is RunLater for a pass that walks only some disks (specs.md §15.13): those of the scope, and those whose
 // rows or operations call for a look. It spares the others: no walk, no confirmation, and their copies read as their
 // rows say, as a walk of a disk where nothing changed since its last walk would find them. A nil scope walks every disk.
-func RunLaterOn(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed, scope Scope) (*Outcome, error) {
+// With onBattery, it starts no copy and no transfer while the UPS runs on battery: each waits (specs.md §20).
+func RunLaterOn(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed, scope Scope, onBattery OnBattery) (*Outcome, error) {
 	p := newPass(db, c, m, apply, sink, closed)
 	p.later = apply
 	p.scope = scope
+	p.onBattery = onBattery
 	return p.run(ctx)
 }
 

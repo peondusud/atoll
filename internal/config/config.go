@@ -254,7 +254,7 @@ func Parse(data []byte) (*Config, error) {
 	c.effective = flatten(tree)
 	c.PoolID, c.Strategy = text(tree, "pool_id"), text(tree, "strategy")
 	c.MediaServers = mediaServers(tree)
-	c.Warnings = append(append(unknownLabels(tree), noEffect(tree, set)...), laterPhaseWarnings(set)...)
+	c.Warnings = slices.Concat(unknownLabels(tree), noEffect(tree, set), unreadableUPS(tree), laterPhaseWarnings(set))
 	sortProblems(c.Warnings)
 	return c, nil
 }
