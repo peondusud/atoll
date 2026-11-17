@@ -81,4 +81,5 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
 - Done, the UPS through NUT (§20, R-27, DONE.md, 2026-11-17): the daemon reads `ups.status` from `upsd` every 5 s; on battery, nothing that moves data starts; with the battery low, it stops its work, writes out the disks, and waits for line power.
 - Done, `balance.equalize` (§12.4, DONE.md, 2026-11-17): with `percent`, Atoll's own copies go by the most free share of capacity, whatever `new_files` says; nothing is moved.
 - Done, Prometheus `/metrics` (§23.1, DONE.md, 2026-11-17): on the local API with its token and on `metrics.listen` with none; the counts of the catalog after each pass, the rest as the daemon holds it; names pinned in `api/metrics.json`.
-- To do: walks of only the folders that changed, for the CPU of a disk under constant changes (TODO.md).
+- Done, passes that look at what changed (§15.13, DONE.md, 2026-11-17): a pass for events looks at the names the watcher heard alone, and plans only what may have changed; on 50,000 files a disk, 12 ms for a pass given one name, against 1 s for a pass of everything.
+- Phase 2b is done but for a write that runs out of space moved to another disk as it goes, left apart by the maintainer. What follows it: the soak of 24 hours, the try with a real Plex and the openmediavault plugin (TODO.md).

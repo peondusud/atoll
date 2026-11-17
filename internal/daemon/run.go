@@ -237,11 +237,14 @@ type loop struct {
 	// once ripe, so a turn of the loop that does something else first, as a check, must not lose what it asks for
 	// (specs.md §15.13).
 	origins []string
-	// eventDisks holds the disks of the ripe groups someone other than Atoll made, until a pass walks them, and waitDisks
-	// those where the last pass's look found what the catalog does not hold yet: a pass for events or next_due alone
-	// walks these, and the disks whose watch may have missed a change, and spares the others (specs.md §15.13).
-	eventDisks map[string]bool
-	waitDisks  []string
+	// heard holds what the ripe groups someone other than Atoll made ask a pass to look at, by disk, until a pass takes
+	// it: their names, or the whole disk; again the names the last pass's looks limited to names left to see again; and
+	// waitDisks the disks where the last pass's look found what the catalog does not hold yet, or concluded nothing of a
+	// copy it no longer found. A pass for events or next_due alone looks at these, walks the disks whose watch may have
+	// missed a change, and spares the others (specs.md §15.13).
+	heard     map[string]watch.Heard
+	again     map[string][]watch.Named
+	waitDisks []string
 	// lines holds, by disk, what the last pass that walked it said of it, for the alerts after a pass that spared it.
 	lines   map[string]jobs.DiskLine
 	lastEnd *int64
@@ -294,7 +297,7 @@ func Run(ctx context.Context, opt Options) error {
 		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true, closed: jobs.Closed{},
 		watcher:  watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
 		smartDue: smartFirst(opt.Machine),
-		queues:   newQueues(set.servers, nil), changed: map[string]bool{}, eventDisks: map[string]bool{}, lines: map[string]jobs.DiskLine{},
+		queues:   newQueues(set.servers, nil), changed: map[string]bool{}, heard: map[string]watch.Heard{}, lines: map[string]jobs.DiskLine{},
 	}
 	defer l.watcher.Close()
 	// The UPS is read before the first pass, so that a daemon that starts on battery starts no copy.
@@ -352,14 +355,12 @@ func (l *loop) takeRipe(now int64) (groupNext int64, waiting bool) {
 				l.origins = append(l.origins, o)
 			}
 		}
-		// What Atoll did itself is in its journal and its catalog: no walk needs to find it.
-		if slices.ContainsFunc(g.Origins, func(o string) bool { return o != watch.OriginAtoll }) {
-			if l.eventDisks == nil {
-				l.eventDisks = map[string]bool{}
-			}
-			l.eventDisks[g.Disk] = true
-		}
 	}
+	// What Atoll did itself is in its journal and its catalog: no look needs to find it.
+	if l.heard == nil {
+		l.heard = map[string]watch.Heard{}
+	}
+	watch.AddHeard(l.heard, watch.HeardNames(ripe, watch.MaxNames), watch.MaxNames)
 	return groupNext, waiting
 }
 
@@ -714,8 +715,15 @@ func (l *loop) scope(because []string) jobs.Scope {
 		return nil
 	}
 	scope := jobs.Scope{}
-	for id := range l.eventDisks {
-		scope[id] = jobs.Whole
+	for id, h := range l.heard {
+		if h.Whole {
+			scope[id] = jobs.Whole
+		} else {
+			scope.Add(id, h.Names)
+		}
+	}
+	for id, names := range l.again {
+		scope.Add(id, names)
 	}
 	for _, id := range l.waitDisks {
 		scope[id] = jobs.Whole
@@ -723,6 +731,12 @@ func (l *loop) scope(because []string) jobs.Scope {
 	for i := range l.opt.Config.Disks {
 		id := l.opt.Config.Disks[i].ID
 		if st := l.disks[id]; st == nil || st.unheard || !st.watched || !st.walked {
+			scope[id] = jobs.Whole
+		}
+	}
+	// So many names cost more than a walk of the disk.
+	for id, looking := range scope {
+		if len(looking.Names) > watch.MaxNames {
 			scope[id] = jobs.Whole
 		}
 	}
@@ -790,8 +804,9 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		l.log.Error("the pass failed", "error", err)
 		return
 	}
-	// What the ripe groups told of, the pass walked; what its look left, the next one walks.
-	clear(l.eventDisks)
+	// What the ripe groups told of, the pass looked at; what its looks left, the next one looks at again.
+	clear(l.heard)
+	l.again = outcome.Again
 	// A look limited to names that concluded nothing of a copy it no longer found leaves its disk to a walk of the
 	// whole disk, as what its look found waits for one (specs.md §15.13).
 	l.waitDisks = append(slices.Clip(outcome.WaitDisks), outcome.Whole...)

@@ -147,12 +147,14 @@ type Looking struct {
 // Whole walks a whole disk.
 var Whole = Looking{}
 
-// add looks at more names of a disk: a disk walked whole stays so.
-func (s Scope) add(id string, names []watch.Named) {
+// Add looks at more names of a disk: a disk walked whole stays so.
+func (s Scope) Add(id string, names []watch.Named) {
 	if was, ok := s[id]; ok && was.Names == nil {
 		return
 	}
-	s[id] = Looking{Names: append(slices.Clip(s[id].Names), names...)}
+	// Never nil: no name is a look at nothing, not a walk of the whole disk.
+	merged := make([]watch.Named, 0, len(s[id].Names)+len(names))
+	s[id] = Looking{Names: append(append(merged, s[id].Names...), names...)}
 }
 
 // OnBattery says whether the UPS runs on battery now (specs.md §20). A pass asks it before each copy and each transfer
@@ -516,7 +518,7 @@ func (p *pass) toWalk(ctx context.Context, planned []catalog.Op) (Scope, error) 
 			walk[id] = Whole
 			continue
 		}
-		walk.add(id, names)
+		walk.Add(id, names)
 	}
 	for i := range planned {
 		walk[planned[i].Disk] = Whole

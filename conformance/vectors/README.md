@@ -545,6 +545,14 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `status` | string or null | the value of `ups.status`, unescaped; null when the line gives none |
 | `err` | string | the code of an `ERR` line; left out otherwise |
 
+### `heard_names.json` — what the watcher asks a pass of the daemon to look at (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `max_names` | integer | how many names a disk is looked at by at most, before it is walked whole: 10,000 in the daemon |
+| `groups` | array of objects | the ripe groups, as `event_grouping.json` gives them: `disk`, `path` (`""` for the root), `folder` (`true` or left out), `kinds` and `origins` |
+| `disks` | array of objects | for each disk asked for, in any order: `disk`, and `whole` (`true` for a walk of the whole disk) or `names`, each with `path`, `folder` and `deleted` (`true` or left out), in byte order, each once |
+
 ### `named_verdict.json` — what a look limited to names concludes of a copy (§15.13)
 
 | Field | Type | Meaning |
