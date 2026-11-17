@@ -136,7 +136,7 @@ Commit "Place copies with colocate and new_files", on `beta`, the first piece of
 - **new_files**: `ordered` fills the disks in the configuration's order, each to `fill_to`, a disk below it once it holds the file first, then the most free when none is; `percent` takes the most free share of capacity, compared exactly, so the disks fill alike; `most-free` as before.
 - **Atoll's own view** places what is new the same way, its group read from the catalog (`TestWriterPlacesAsTheStrategiesSay`); the mergerfs line creates with `ff` for `ordered` and `pfrd` for `percent`.
 - `new_files` and `colocate` no longer warn that they wait for phase 2b; the rows of §24.4 went.
-- **Decided without the maintainer, to confirm:**
+- **Decided without the maintainer, confirmed on 2026-11-17** ("Oui, confirmés"):
   - `percent` means the most free share of capacity, so that the disks fill to the same share, as DrivePool's equalizer does at placement: mergerfs's `pfrd` draws at random by free space, and Atoll's plan draws nothing at random (§29.3);
   - `folder` and `season` group alike but are two groups, as two rules that say them are two settings;
   - a disk counts the files of the group with a copy there in any state, a stale one included, as the folder is there either way;
@@ -148,7 +148,7 @@ Commit "Freeze the contracts at format version 1", on `beta`. The maintainer cho
 
 - specs.md §29.3 says what format version 1 holds and what a later version keeps: the migrations 0001 to 0019 never edited, the schema changed only by new ones; the on-disk layout as it is; each key of the configuration, each field of a `--json` output and of the local API, each command, flag and exit code kept, with what it takes and means; values of a closed list added, never taken away. A change that cannot keep them is format version 2, and the maintainer's.
 - `conformance/frozen/v1.json` pins it: the SHA-256 of each of the 19 migrations; the shape of 149 places of the configuration and of 483 of the 31 `--json` outputs, their types, closed lists, formats and whether each is always there; the 6 routes of the local API; the exit codes; the names of the on-disk layout. `TestContractsKeepFormatVersion1` checks it. Made to fail on a copy, it caught a migration edited, a value taken from `view.engine`'s list, and a field of `atoll status --json` no longer always there.
-- **Decided without the maintainer, to confirm:** a configuration key may take more types and values than it did, and an output field may gain values in a closed list, as both keep what a version 1 user relies on; an output field keeps exactly its types.
+- **Decided without the maintainer, confirmed on 2026-11-17** ("Oui, confirmés"): a configuration key may take more types and values than it did, and an output field may gain values in a closed list, as both keep what a version 1 user relies on; an output field keeps exactly its types.
 
 ## Atoll's own view writes, 2026-11-16 (specs.md §6.1, §9, §15.1, §15.5, §17, §21.2, §24.4)
 
