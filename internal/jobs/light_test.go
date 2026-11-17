@@ -14,7 +14,7 @@ func (b *bench) passOn(ids ...string) *Outcome {
 	b.t.Helper()
 	scope := Scope{}
 	for _, id := range ids {
-		scope[id] = true
+		scope[id] = Whole
 	}
 	out, err := RunLaterOn(b.t.Context(), b.db, b.config, b, true, nil, nil, scope, nil)
 	if err != nil {

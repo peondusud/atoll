@@ -166,6 +166,9 @@ type Walk struct {
 	Clocks  []CopyClock
 	Modes   []CopyMode
 	Kept    map[string]bool
+	// Names are those a look limited to the names the watcher gave read (specs.md §15.13), nil for a walk of the whole
+	// disk: only an entry at or below one of them that the look did not find is gone.
+	Names []string
 }
 
 // WriteWalk writes what the walk of one disk found, in one transaction, so a walk is written whole
@@ -182,7 +185,7 @@ func WriteWalk(ctx context.Context, db *sql.DB, disk string, nowNS int64, w *Wal
 		if err := writeModes(ctx, tx, disk, w.Modes); err != nil {
 			return err
 		}
-		return writeEntries(ctx, tx, disk, w.Entries, w.Kept)
+		return writeEntries(ctx, tx, disk, w.Entries, w.Kept, w.Names)
 	})
 	if err != nil {
 		return fmt.Errorf("walk of %q: %w", disk, err)
@@ -343,7 +346,7 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 
 // writeEntries makes the entries of a disk match a walk. A folder Atoll created stays its own, as
 // only it may remove it (specs.md §6.1).
-func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryRow, kept map[string]bool) error {
+func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryRow, kept map[string]bool, names []string) error {
 	seen := make(map[string]bool, len(entries)+len(kept))
 	for p := range kept {
 		seen[p] = true
@@ -366,23 +369,21 @@ func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryR
 			return fmt.Errorf("entry %q: %w", e.Path, err)
 		}
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT lpath FROM entries WHERE disk_id = ?", disk)
-	if err != nil {
-		return fmt.Errorf("entries: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	var gone [][]byte
-	for rows.Next() {
-		var p []byte
-		if err := rows.Scan(&p); err != nil {
-			return fmt.Errorf("entries: %w", err)
-		}
-		if !seen[string(p)] {
-			gone = append(gone, p)
+	if names == nil {
+		var err error
+		if gone, err = entriesNotSeen(ctx, tx, seen, "SELECT lpath FROM entries WHERE disk_id = ?", disk); err != nil {
+			return err
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("entries: %w", err)
+	for _, name := range TopNames(names) {
+		lo, hi := folderRange(name)
+		below, err := entriesNotSeen(ctx, tx, seen, "SELECT lpath FROM entries WHERE disk_id = ?1 AND (lpath = ?2 OR (lpath >= ?3 AND lpath < ?4))",
+			disk, []byte(name), lo, hi)
+		if err != nil {
+			return err
+		}
+		gone = append(gone, below...)
 	}
 	for _, p := range gone {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM entries WHERE lpath = ? AND disk_id = ?", p, disk); err != nil {
@@ -390,6 +391,29 @@ func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryR
 		}
 	}
 	return nil
+}
+
+// entriesNotSeen gives the entries a query names that a walk did not see.
+func entriesNotSeen(ctx context.Context, tx *sql.Tx, seen map[string]bool, query string, args ...any) ([][]byte, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("entries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var gone [][]byte
+	for rows.Next() {
+		var p []byte
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("entries: %w", err)
+		}
+		if !seen[string(p)] {
+			gone = append(gone, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("entries: %w", err)
+	}
+	return gone, nil
 }
 
 // CopyRow is one copy of a file. OldPath, when it has one, is where it sits, as it has not followed

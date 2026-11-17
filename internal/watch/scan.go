@@ -67,6 +67,11 @@ type Report struct {
 	// for the top of the root: the daemon tells the media servers of them (specs.md §21.5).
 	NewFolders []string
 	newFolders map[string]bool
+	// Looked holds, for a look limited to names, the names it read in the end, in byte order: those it was given, and
+	// those it took in for the inodes it found (specs.md §15.13). Whole says that it concluded nothing of a copy it no
+	// longer found, which a walk of the whole disk must look for.
+	Looked []string
+	Whole  bool
 }
 
 // MovedCopy is a copy found at a new name.
@@ -203,6 +208,9 @@ type Look struct {
 	// written, as a scan does. It says false for a disk that fails.
 	Confirm     func(ctx context.Context, d *config.Disk) (bool, error)
 	ConfirmEach bool
+	// Names limits the look to the names the watcher gave, and to what they hold (specs.md §15.13); nil walks the whole
+	// disk.
+	Names []Named
 }
 
 // Compare walks each disk not failed and compares it with the catalog, as a scan would, and writes nothing, to the
@@ -245,7 +253,16 @@ func LookAtDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 	if verdict.State == disks.Missing {
 		return r, nil
 	}
-	walked, err := walkRoot(ctx, m, d)
+	var found *catalog.Walk
+	var err error
+	if look.Names != nil {
+		found, err = lookNamed(ctx, db, c, m, d, r, look, now)
+	} else {
+		var walked *Walked
+		if walked, err = walkRoot(ctx, m, d); err == nil {
+			found, err = compareWalk(ctx, db, c, d, walked, r, look, now, nil)
+		}
+	}
 	switch {
 	case errors.Is(err, ErrInterrupted):
 		r.Verdict = disks.Verdict{State: disks.Missing, Reason: disks.IOError, Message: err.Error()}
@@ -256,11 +273,7 @@ func LookAtDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 		}
 		return r, nil
 	case err != nil:
-		return nil, err
-	}
-	found, err := compareWalk(ctx, db, c, d, walked, r, look, now)
-	if err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 	if look.Confirm != nil && (look.ConfirmEach || needsConfirming(r)) {
 		ok, err := look.Confirm(ctx, d)
@@ -384,7 +397,9 @@ func withoutOwnLinks(m disks.Machine, d *config.Disk, w *Walked) error {
 // compareWalk says what a walk means against what the catalog knows, and fills the report. Both
 // sides are in the byte order of paths, so it is a merge. Only what is not where its row says is looked
 // up, and only what no row claims is indexed for that.
-func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Disk, w *Walked, r *Report, look *Look, now int64) (*catalog.Walk, error) {
+// A look limited to names compares the rows at or below what it read alone, and concludes of a copy it no longer finds
+// only what NamedVerdict says (specs.md §15.13); named is nil for a walk of the whole disk.
+func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Disk, w *Walked, r *Report, look *Look, now int64, named *namedLook) (*catalog.Walk, error) {
 	r.Unreadable, r.Refused = w.Unreadable, w.Refused
 	r.OtherMounts = w.OtherMounts
 	slices.SortFunc(w.Files, func(a, b FoundFile) int { return cmp.Compare(a.Path, b.Path) })
@@ -392,9 +407,16 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 		r.Files++
 		r.Bytes += f.Size
 	}
-	cmpr := compared{notReached: pathSet(w.Unreadable, w.OtherMounts, look.Planned), planned: pathSet(look.Planned), r: r, found: found, quiet: look.Own != nil}
+	cmpr := compared{notReached: pathSet(w.Unreadable, w.OtherMounts, look.Planned), planned: pathSet(look.Planned), r: r, found: found, quiet: look.Own != nil,
+		named: named}
 	next := 0
-	err := catalog.EachKnownCopy(ctx, db, d.ID, func(k *catalog.KnownCopy) {
+	each := func(fn func(*catalog.KnownCopy)) error { return catalog.EachKnownCopy(ctx, db, d.ID, fn) }
+	if named != nil {
+		each = func(fn func(*catalog.KnownCopy)) error {
+			return catalog.EachKnownCopyAt(ctx, db, d.ID, named.names, fn)
+		}
+	}
+	err := each(func(k *catalog.KnownCopy) {
 		for next < len(w.Files) && w.Files[next].Path < k.Path {
 			w.Files[next].rowless = true
 			cmpr.rowless = append(cmpr.rowless, &w.Files[next])
@@ -420,7 +442,7 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 	out := &catalog.Walk{}
 	// A name the walk could not read may be a folder renamed since it was listed, which only says so by its
 	// row: this look may find the new name, and the next look otherwise.
-	tops, err := moveFolders(ctx, db, d.ID, w, r, out, pathSet(w.OtherMounts, look.Planned))
+	tops, err := moveFolders(ctx, db, d.ID, w, r, out, pathSet(w.OtherMounts, look.Planned), named)
 	if err != nil {
 		return nil, err
 	}

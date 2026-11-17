@@ -65,6 +65,9 @@ type DiskLine struct {
 	// Spared says that a pass of the daemon left the disk unwalked, as nothing called for a look at it: its copies read
 	// as their rows say, and Verdict is its mount check's (specs.md §15.13). No part of the pass's output.
 	Spared bool
+	// Partial says that a pass of the daemon looked at some names of the disk alone, those the watcher gave: what it
+	// says of the names a walk could not reach is no more than those (specs.md §15.13). No part of the pass's output.
+	Partial bool
 	// Refused counts the names its walk could not reach as they refuse the account that asks, and RefusedFirst holds
 	// the first RefusedShown of them in byte order: what an alert says (specs.md §15.10, §23). They are no part of the
 	// pass's output.
@@ -122,12 +125,35 @@ type Outcome struct {
 	// Copied counts the bytes of the replicas this pass made, for the metrics (specs.md §23.1); no part of the pass's
 	// output.
 	Copied int64
+	// Again holds, by disk, the names a look limited to names leaves for the next pass to look at again, as what it
+	// found waits there: a copy found at another name, a changed copy, a folder renamed (specs.md §15.13). Whole holds the
+	// disks such a look concluded nothing about a copy of, which it no longer found: the next pass walks them whole.
+	// Neither is part of the pass's output.
+	Again map[string][]watch.Named
+	Whole []string
 }
 
-// Scope holds the disks a pass of the daemon is asked to walk, by id (specs.md §15.13). The pass walks those, and every
-// disk whose rows or operations call for a look whatever the scope says; it spares the others. A nil scope walks every
-// disk.
-type Scope map[string]bool
+// Scope holds the disks a pass of the daemon is asked to look at, by id (specs.md §15.13). The pass looks at those, and
+// at every disk whose rows or operations call for a look whatever the scope says; it spares the others. A nil scope
+// walks every disk.
+type Scope map[string]Looking
+
+// Looking is how a pass looks at a disk: with Names, at those names alone and what they hold, as the watcher gave them;
+// with none, it walks the whole disk.
+type Looking struct {
+	Names []watch.Named
+}
+
+// Whole walks a whole disk.
+var Whole = Looking{}
+
+// add looks at more names of a disk: a disk walked whole stays so.
+func (s Scope) add(id string, names []watch.Named) {
+	if was, ok := s[id]; ok && was.Names == nil {
+		return
+	}
+	s[id] = Looking{Names: append(slices.Clip(s[id].Names), names...)}
+}
 
 // OnBattery says whether the UPS runs on battery now (specs.md §20). A pass asks it before each copy and each transfer
 // it would start, and balancing before each file it would move: on battery, none starts, and what runs finishes. Nil
@@ -156,6 +182,8 @@ type pass struct {
 	// called for a look at them: their copies read as their rows say (specs.md §15.13).
 	scope  Scope
 	spared map[string]bool
+	// partial holds the disks this pass looked at some names of alone, as the watcher gave them.
+	partial map[string]bool
 	// start says that the pass is a start of the daemon, which records the physical disks of each disk (R-06).
 	start bool
 	// onBattery says whether the UPS runs on battery, as a copy or a transfer is about to start (specs.md §20).
@@ -279,7 +307,7 @@ func RunLaterOn(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 func newPass(db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sink, closed Closed) *pass {
 	return &pass{
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink, closed: closed,
-		rows: map[string]int64{}, walked: map[string]bool{}, spared: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
+		rows: map[string]int64{}, walked: map[string]bool{}, spared: map[string]bool{}, partial: map[string]bool{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
 		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, requeued: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
 		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
@@ -396,15 +424,24 @@ func (p *pass) look(ctx context.Context) error {
 		// folders may have lost it.
 		look := &watch.Look{Write: p.apply, Own: p.ownFiles, Confirm: p.confirm, Planned: append(plannedOn(planned, d.ID), p.viewPlannedOn(d.ID)...)}
 		p.planned[d.ID] = look.Planned
-		if toWalk != nil && !toWalk[d.ID] && verdict.State != disks.Missing {
+		looking, asked := toWalk[d.ID]
+		if toWalk != nil && !asked && verdict.State != disks.Missing {
 			// Nothing called for a look at it: nothing reads it, and its copies read as their rows say (specs.md §15.13).
 			p.spared[d.ID] = true
 			p.out.Disks = append(p.out.Disks, DiskLine{ID: d.ID, Verdict: verdict, Spared: true})
 			continue
 		}
+		if looking.Names != nil {
+			// Only the names the watcher gave, and what they hold (specs.md §15.13).
+			look.Names = looking.Names
+			p.partial[d.ID] = true
+		}
 		report, err := watch.LookAtDisk(ctx, p.db, p.config, p.machine, d, verdict, p.now, look)
 		if err != nil {
 			return fmt.Errorf("%w", err)
+		}
+		if report.Whole {
+			p.out.Whole = append(p.out.Whole, d.ID)
 		}
 		if !report.Walked {
 			p.out.Partial = true
@@ -418,7 +455,7 @@ func (p *pass) look(ctx context.Context) error {
 			p.moves[d.ID] = topMoves(report.FolderMoves)
 			p.unfound[d.ID] = report.UnfoundFolders
 		}
-		line := DiskLine{ID: d.ID, Verdict: report.Verdict, Walked: report.Walked}
+		line := DiskLine{ID: d.ID, Verdict: report.Verdict, Walked: report.Walked, Partial: report.Walked && p.partial[d.ID]}
 		if report.Walked {
 			line.Refused, line.RefusedFirst = firstRefused(report.Refused)
 			line.NewFolders = slices.Sorted(slices.Values(report.NewFolders))
@@ -431,31 +468,49 @@ func (p *pass) look(ctx context.Context) error {
 	return nil
 }
 
-// toWalk gives the disks a pass with a scope walks, nil for every disk: those of its scope, and those a walk must see
-// again whatever the scope says (specs.md §15.13). A copy whose row says it went or moved has a clock that only a walk
-// lets run out; an operation of Atoll's own left planned is found again by a walk; and an operation of the view is
-// taken in once the walks of its disks find what it did, a folder removed on every disk that held it.
-func (p *pass) toWalk(ctx context.Context, planned []catalog.Op) (map[string]bool, error) {
+// toWalk gives the disks a pass with a scope looks at, nil for every disk: those of its scope, and those a look must
+// see again whatever the scope says (specs.md §15.13). A copy whose row says it went or moved has a clock that only a
+// look lets run out. A copy that went is found again at its name, or not: the names of such copies are looked at
+// again. A copy that moved, or is uncertain, is found again at the name a look found it at, which its row does not
+// hold: its disk is walked whole, unless the scope gives names for it, those a look limited to names left to see again,
+// the names it found such copies at among them. An operation of Atoll's own left planned is found again by a walk; and an
+// operation of the view is taken in once the walks of its disks find what it did, a folder removed on every disk that
+// held it.
+func (p *pass) toWalk(ctx context.Context, planned []catalog.Op) (Scope, error) {
 	if p.scope == nil {
 		return nil, nil
 	}
 	walk := maps.Clone(p.scope)
 	if walk == nil {
-		walk = map[string]bool{}
+		walk = Scope{}
 	}
 	gone, err := catalog.DisksWithGoneCopies(ctx, p.db)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	for _, id := range gone {
-		walk[id] = true
+		clocked, err := catalog.ClockedCopies(ctx, p.db, id)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		names := make([]watch.Named, 0, len(clocked))
+		whole := false
+		for i := range clocked {
+			names = append(names, watch.Named{Path: clocked[i].Path})
+			whole = whole || (clocked[i].Kind != string(solver.VerdictGone) && clocked[i].Kind != string(solver.VerdictOwn))
+		}
+		if given, ok := p.scope[id]; whole && (!ok || given.Names == nil) {
+			walk[id] = Whole
+			continue
+		}
+		walk.add(id, names)
 	}
 	for i := range planned {
-		walk[planned[i].Disk] = true
+		walk[planned[i].Disk] = Whole
 	}
 	for i := range p.viewOps {
 		v := &p.viewOps[i]
-		walk[v.Disk] = true
+		walk[v.Disk] = Whole
 		if v.Kind != catalog.ViewRmdir {
 			continue
 		}
@@ -464,7 +519,7 @@ func (p *pass) toWalk(ctx context.Context, planned []catalog.Op) (map[string]boo
 			return nil, fmt.Errorf("catalog: %w", err)
 		}
 		for _, id := range held {
-			walk[id] = true
+			walk[id] = Whole
 		}
 	}
 	return walk, nil
@@ -1555,6 +1610,20 @@ func (p *pass) findWaits(ctx context.Context) error {
 		if !p.walked[id] {
 			continue
 		}
+		if p.partial[id] {
+			// What waits there is at names this look read: the next pass reads those again, not the whole disk.
+			names, err := p.waitingNames(ctx, id)
+			if err != nil {
+				return err
+			}
+			if len(names) > 0 {
+				if p.out.Again == nil {
+					p.out.Again = map[string][]watch.Named{}
+				}
+				p.out.Again[id] = names
+			}
+			continue
+		}
 		waits := len(p.waited[id])+len(p.held[id])+len(p.unfound[id]) > 0
 		for j := 0; !waits && j < len(p.seen[id]); j++ {
 			s := &p.seen[id][j]
@@ -1574,6 +1643,47 @@ func (p *pass) findWaits(ctx context.Context) error {
 	return nil
 }
 
+// waitingNames gives the names a look limited to names leaves waiting on a disk, which the next pass looks at again
+// (specs.md §15.13): where a copy was found at another name, whose old name the clock of its row brings back; a changed
+// copy whose row does not hold the change time the look found; and each folder found renamed and left waiting, or found
+// at neither name, at both its names.
+func (p *pass) waitingNames(ctx context.Context, id string) ([]watch.Named, error) {
+	var out []watch.Named
+	for i := range p.seen[id] {
+		s := &p.seen[id][i]
+		switch s.Verdict {
+		case solver.VerdictMoved:
+			out = append(out, watch.Named{Path: s.Target})
+		case solver.VerdictEdited, solver.VerdictReplaced:
+			f, err := catalog.FileByID(ctx, p.db, s.FileID)
+			if err != nil {
+				return nil, fmt.Errorf("catalog: %w", err)
+			}
+			if f == nil || holdsSeen(f, id, s) {
+				continue
+			}
+			at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == id })
+			path := f.Path
+			if at >= 0 && f.Copies[at].OldPath != nil {
+				path = *f.Copies[at].OldPath
+			}
+			out = append(out, watch.Named{Path: path})
+		case solver.VerdictUnknown, solver.VerdictThere, solver.VerdictUncertain, solver.VerdictOwn, solver.VerdictGone:
+		}
+	}
+	for _, folder := range p.waited[id] {
+		out = append(out, watch.Named{Path: folder, Folder: true})
+	}
+	for _, m := range p.held[id] {
+		out = append(out, watch.Named{Path: m.From, Folder: true}, watch.Named{Path: m.To, Folder: true})
+	}
+	for _, folder := range p.unfound[id] {
+		out = append(out, watch.Named{Path: folder, Folder: true})
+	}
+	slices.SortFunc(out, func(a, b watch.Named) int { return strings.Compare(a.Path, b.Path) })
+	return slices.CompactFunc(out, func(a, b watch.Named) bool { return a.Path == b.Path && a.Folder == b.Folder }), nil
+}
+
 // holdsSeen says that a file's row on a disk holds the change time a look found of a changed copy there.
 func holdsSeen(f *catalog.FileRow, disk string, s *watch.CopySeen) bool {
 	if f == nil || (s.Verdict == solver.VerdictReplaced && !s.Regular) {
@@ -1590,7 +1700,9 @@ func holdsSeen(f *catalog.FileRow, disk string, s *watch.CopySeen) bool {
 func (p *pass) linkGuard(ctx context.Context) error {
 	for i := range p.config.Disks {
 		id := p.config.Disks[i].ID
-		if !p.walked[id] && (!p.spared[id] || !p.session.Opened(id)) {
+		// A look limited to names read none of the links: as a disk spared, it keeps them in step once opened.
+		whole := p.walked[id] && !p.partial[id]
+		if !whole && (!p.spared[id] && !p.partial[id] || !p.session.Opened(id)) {
 			continue
 		}
 		err := p.session.Guard(ctx, id, p.linkGuardOn, func(item *trash.LinkItem) error {

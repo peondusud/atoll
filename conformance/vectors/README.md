@@ -545,6 +545,16 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `status` | string or null | the value of `ups.status`, unescaped; null when the line gives none |
 | `err` | string | the code of an `ERR` line; left out otherwise |
 
+### `named_verdict.json` — what a look limited to names concludes of a copy (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verdict` | string | what a walk of the whole disk would say of the copy, as `copy_verdict.json` gives it |
+| `deleted` | boolean | `true` when an event said the copy's name, or a folder above it, was deleted; left out otherwise |
+| `row_kind` | string | the `gone_kind` of the copy's row, `""` when its clock does not run |
+| `next` | string | what the look says of the copy |
+| `whole` | boolean | `true` when the look concluded nothing of a copy it no longer found, so that the next pass walks the disk whole; left out otherwise |
+
 ### `ups_power.json` — what a reading of the UPS says (§20)
 
 | Field | Type | Meaning |

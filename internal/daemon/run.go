@@ -715,15 +715,15 @@ func (l *loop) scope(because []string) jobs.Scope {
 	}
 	scope := jobs.Scope{}
 	for id := range l.eventDisks {
-		scope[id] = true
+		scope[id] = jobs.Whole
 	}
 	for _, id := range l.waitDisks {
-		scope[id] = true
+		scope[id] = jobs.Whole
 	}
 	for i := range l.opt.Config.Disks {
 		id := l.opt.Config.Disks[i].ID
 		if st := l.disks[id]; st == nil || st.unheard || !st.watched || !st.walked {
-			scope[id] = true
+			scope[id] = jobs.Whole
 		}
 	}
 	return scope
@@ -761,7 +761,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		for _, line := range outcome.Disks {
 			st := l.disks[line.ID]
 			switch {
-			case st == nil, line.Spared:
+			case st == nil, line.Spared, line.Partial:
 			case line.Walked:
 				l.walked(line.ID)
 			case line.Verdict.State == disks.Missing && st.state != disks.Missing:
@@ -792,8 +792,10 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	}
 	// What the ripe groups told of, the pass walked; what its look left, the next one walks.
 	clear(l.eventDisks)
-	l.waitDisks = outcome.WaitDisks
-	if !slices.ContainsFunc(outcome.Disks, func(line jobs.DiskLine) bool { return line.Spared }) {
+	// A look limited to names that concluded nothing of a copy it no longer found leaves its disk to a walk of the
+	// whole disk, as what its look found waits for one (specs.md §15.13).
+	l.waitDisks = append(slices.Clip(outcome.WaitDisks), outcome.Whole...)
+	if !slices.ContainsFunc(outcome.Disks, func(line jobs.DiskLine) bool { return line.Spared || line.Partial }) {
 		l.lastFullEnd = &end
 	}
 	// What the watcher saw closed served this pass, and what changed goes to the media servers.
@@ -833,7 +835,7 @@ func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
 	}
 	spared := false
 	for _, line := range outcome.Disks {
-		if line.Spared {
+		if line.Spared || line.Partial {
 			spared = true
 			continue
 		}
@@ -846,7 +848,7 @@ func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
 	merged.Disks = make([]jobs.DiskLine, len(outcome.Disks))
 	for i, line := range outcome.Disks {
 		merged.Disks[i] = line
-		if last, ok := l.lines[line.ID]; ok && line.Spared {
+		if last, ok := l.lines[line.ID]; ok && (line.Spared || line.Partial) {
 			last.Verdict = line.Verdict
 			merged.Disks[i] = last
 		}
