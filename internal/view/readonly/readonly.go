@@ -75,6 +75,13 @@ func Run(ctx context.Context, o Options) error {
 	// Which copy a file is read from (specs.md §7): read.policy and read.classes, as the configuration says at the start.
 	prefer, classes := o.Config.Read()
 	tree.WithRead(view.ReadPolicy{PreferSpinning: prefer, Classes: classes})
+	// The cache disks are part of Atoll's own view, with view.engine = "atoll" (specs.md §19); with mergerfs, they are
+	// not, as its line leaves them out, and the view beside it presents what it does.
+	settings, err := o.Config.Cache()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	tree.WithCache(settings.InView)
 	var w *writer.Writer
 	if o.Writes {
 		if w, err = writer.New(o.DB, o.Config, o.Machine, tree, c.handles, o.Log); err != nil {

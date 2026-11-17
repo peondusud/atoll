@@ -23,16 +23,6 @@ func laterPhaseWarnings(set map[string]any) []Problem {
 			if v != "off" {
 				phase = "2b"
 			}
-		case "cache.enabled":
-			if v == true {
-				phase = "2b"
-			}
-		case "disk.role":
-			if v == "cache" {
-				phase = "2b"
-			}
-		case "rule.cache", "rule.cache_min_age":
-			phase = "2b"
 		case "ups.enabled":
 			if v == true {
 				phase = "2b"

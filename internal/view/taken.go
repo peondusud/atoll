@@ -32,9 +32,10 @@ type Look func(ctx context.Context, disk, path string) (*Node, bool, error)
 // TakenIn says which of the view's operations no pass has taken in a pass takes in (specs.md §21.2): each done, in the
 // order of their ids, once the catalog alone presents at each path it touched what the view presents with all of them,
 // and for a folder once every disk the pass could read was walked, so that nothing presented changes then. One that is
-// not taken in holds back each later one at, below or above one of its paths.
-func TakenIn(ctx context.Context, db *sql.DB, open []catalog.ViewOp, walkedAll bool, look Look) ([]int64, error) {
-	t := &Tree{db: db}
+// not taken in holds back each later one at, below or above one of its paths. cacheInView says that the view presents
+// the cache disks, as with view.engine = "atoll" (specs.md §19): what it made there, the catalog presents too.
+func TakenIn(ctx context.Context, db *sql.DB, open []catalog.ViewOp, walkedAll, cacheInView bool, look Look) ([]int64, error) {
+	t := &Tree{db: db, cacheInView: cacheInView}
 	disks, err := t.disks(ctx)
 	if err != nil {
 		return nil, err

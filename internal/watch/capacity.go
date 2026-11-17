@@ -56,7 +56,11 @@ func Capacity(ctx context.Context, db *sql.DB, c *config.Config, now int64) ([]L
 		return nil, err
 	}
 	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Taken: taken, NewFiles: newFiles, FillTo: fillTo}
-	if _, err := filesForPlan(ctx, db, c, diskList, &input, nil); err != nil {
+	leave, err := allLeave(ctx, db, c)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := filesForPlan(ctx, db, c, diskList, &input, nil, leave); err != nil {
 		return nil, err
 	}
 	strict := c.Pool.SpreadMode == solver.ModeStrict

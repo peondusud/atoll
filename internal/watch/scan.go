@@ -640,7 +640,16 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	if rep != nil {
 		release = rep.Release
 	}
-	remembered, err := filesForPlan(ctx, db, c, diskList, &input, release)
+	cacheSettings, err := c.Cache()
+	if err != nil {
+		return err
+	}
+	input.CacheMirror, input.CacheEarly = cacheSettings.Mirror, cacheSettings.Early
+	residency, err := Residencies(ctx, db, c, diskList, now, release)
+	if err != nil {
+		return err
+	}
+	remembered, err := filesForPlan(ctx, db, c, diskList, &input, release, residency)
 	if err != nil {
 		return err
 	}
@@ -764,14 +773,9 @@ func planEntries(list []catalog.EntryKey) []solver.Entry {
 
 // filesForPlan works out each file's original and policy, gives the plan what it needs of them, and
 // says what else must be remembered of each, in the same order.
-func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input, released func(string) bool) ([]settled, error) {
-	position := make(map[string]int, len(diskList))
-	state := make(map[string]solver.DiskState, len(diskList))
-	for i := range diskList {
-		position[diskList[i].ID] = diskList[i].Position
-		state[diskList[i].ID] = solver.DiskState(diskList[i].State)
-	}
-	placements := map[placementKey]*solver.Placement{}
+func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input, released func(string) bool,
+	residency map[int64]solver.Residency) ([]settled, error) {
+	k := newPlanKit(c, diskList, released)
 	// Sized once: grown file by file, each list is for a moment both its old size and its new one.
 	count, err := catalog.FileCount(ctx, db)
 	if err != nil {
@@ -794,33 +798,11 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 		}
 		for i := range page {
 			f := &page[i]
-			update, err := settleFile(c, f, position, state)
+			file, update, err := k.planFile(f, leaving[f.ID], residency[f.ID])
 			if err != nil {
-				return nil, fmt.Errorf("%q: %w", f.Path, err)
+				return nil, err
 			}
-			// A rule that now ignores a file leaves it what it was, with the pool's placement (specs.md §15.10).
-			placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread,
-				spreadMode: c.Pool.SpreadMode, tagsMode: c.Pool.TagsMode, overflow: c.Pool.Overflow, colocate: c.Pool.Colocate}
-			size := update.Size
-			if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
-				placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread, spreadMode: policy.SpreadMode,
-					tagsMode: policy.TagsMode, overflow: policy.Overflow, tags: joinNames(policy.Tags), domains: joinNames(policy.Domains),
-					colocate: policy.Colocate}
-			}
-			copies := make([]solver.Copy, 0, len(f.Copies))
-			for j := range f.Copies {
-				cp := &f.Copies[j]
-				// A copy whose clock runs is no source: nothing is at its name until its file is decided (specs.md §13.4).
-				plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS, Away: cp.GoneNS.Valid}
-				if cp.OldPath != nil {
-					plan.OldPath = *cp.OldPath
-				}
-				copies = append(copies, plan)
-			}
-			hold := update.Mode == "manual" && (released == nil || !released(f.Path))
-			input.Files = append(input.Files, solver.File{
-				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Leaving: leaving[f.ID], Copies: copies,
-			})
+			input.Files = append(input.Files, file)
 			entry := settled{id: f.ID, state: f.State, held: f.ConflictHeld, firstSeen: f.FirstSeenNS}
 			if fileChanged(f, &update) {
 				entry.update = &update
@@ -828,6 +810,59 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 			remembered = append(remembered, entry)
 		}
 	}
+}
+
+// planKit is what giving the plan a file needs of the pool and of the configuration, and the placements made so far.
+type planKit struct {
+	c          *config.Config
+	position   map[string]int
+	state      map[string]solver.DiskState
+	placements map[placementKey]*solver.Placement
+	released   func(string) bool
+}
+
+func newPlanKit(c *config.Config, diskList []catalog.Disk, released func(string) bool) *planKit {
+	k := &planKit{c: c, position: make(map[string]int, len(diskList)), state: make(map[string]solver.DiskState, len(diskList)),
+		placements: map[placementKey]*solver.Placement{}, released: released}
+	for i := range diskList {
+		k.position[diskList[i].ID] = diskList[i].Position
+		k.state[diskList[i].ID] = solver.DiskState(diskList[i].State)
+	}
+	return k
+}
+
+// planFile gives the plan a file of the catalog, and what its original and policy make of its row.
+func (k *planKit) planFile(f *catalog.FileRow, leaving bool, residency solver.Residency) (solver.File, catalog.FileUpdate, error) {
+	c := k.c
+	update, err := settleFile(c, f, k.position, k.state)
+	if err != nil {
+		return solver.File{}, update, fmt.Errorf("%q: %w", f.Path, err)
+	}
+	// A rule that now ignores a file leaves it what it was, with the pool's placement (specs.md §15.10).
+	placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread,
+		spreadMode: c.Pool.SpreadMode, tagsMode: c.Pool.TagsMode, overflow: c.Pool.Overflow, colocate: c.Pool.Colocate}
+	size := update.Size
+	if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
+		placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread, spreadMode: policy.SpreadMode,
+			tagsMode: policy.TagsMode, overflow: policy.Overflow, tags: joinNames(policy.Tags), domains: joinNames(policy.Domains),
+			colocate: policy.Colocate}
+	}
+	copies := make([]solver.Copy, 0, len(f.Copies))
+	for j := range f.Copies {
+		cp := &f.Copies[j]
+		// A copy whose clock runs is no source: nothing is at its name until its file is decided (specs.md §13.4).
+		plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS, Away: cp.GoneNS.Valid,
+			Unverified: !cp.VerifiedNS.Valid}
+		if cp.OldPath != nil {
+			plan.OldPath = *cp.OldPath
+		}
+		copies = append(copies, plan)
+	}
+	hold := update.Mode == "manual" && (k.released == nil || !k.released(f.Path))
+	return solver.File{
+		Path: f.Path, Size: update.Size, Placement: placementFor(k.placements, placement), Hold: hold, Leaving: leaving, Copies: copies,
+		Cache: residency,
+	}, update, nil
 }
 
 // settleFile gives what a file's original and policy make of its row. The state is the plan's. With

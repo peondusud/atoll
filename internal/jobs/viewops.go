@@ -92,7 +92,11 @@ func (p *pass) takeInViewOps(ctx context.Context) error {
 			walkedAll = false
 		}
 	}
-	taken, err := view.TakenIn(ctx, p.db, p.viewOps, walkedAll, p.lookForView)
+	settings, err := p.config.Cache()
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	taken, err := view.TakenIn(ctx, p.db, p.viewOps, walkedAll, settings.InView, p.lookForView)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

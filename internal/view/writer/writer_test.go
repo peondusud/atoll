@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -61,6 +62,12 @@ func newBench(t *testing.T, t2fs string) *bench {
 // newBenchWith is newBench with more keys of [placement], and the free space of each disk, of 1000 bytes.
 func newBenchWith(t *testing.T, t2fs, placement string, free1, free2 int64) *bench {
 	t.Helper()
+	return newBenchEdited(t, t2fs, placement, free1, free2, nil)
+}
+
+// newBenchEdited is newBenchWith, whose configuration edit changes once its disks are in it.
+func newBenchEdited(t *testing.T, t2fs, placement string, free1, free2 int64, edit func(b *bench, text string) string) *bench {
+	t.Helper()
 	top := t.TempDir()
 	b := &bench{t: t, top: top, mount: map[string]string{}}
 	m := &machine{free: map[string]int64{}}
@@ -80,6 +87,9 @@ func newBenchWith(t *testing.T, t2fs, placement string, free1, free2 int64) *ben
 		text += fmt.Sprintf("[[disk]]\nid = %q\nuuid = %q\nmount = %q\nfs = %q\n", id, uuid, mount, fs)
 	}
 	m.free[b.mount["t1"]], m.free[b.mount["t2"]] = free1, free2
+	if edit != nil {
+		text = edit(b, text)
+	}
 	c, err := config.Parse([]byte(text))
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +106,7 @@ func newBenchWith(t *testing.T, t2fs, placement string, free1, free2 int64) *ben
 	var rows []catalog.Disk
 	for i := range c.Disks {
 		d := &c.Disks[i]
-		rows = append(rows, catalog.Disk{ID: d.ID, UUID: d.UUID, FS: string(d.FS), Mount: d.Mount, Root: d.Root, Workdir: d.Workdir, Role: "data", Position: i, State: "online"})
+		rows = append(rows, catalog.Disk{ID: d.ID, UUID: d.UUID, FS: string(d.FS), Mount: d.Mount, Root: d.Root, Workdir: d.Workdir, Role: d.Role, Position: i, State: "online"})
 	}
 	if err := catalog.SyncDisks(t.Context(), db, rows); err != nil {
 		t.Fatal(err)
@@ -129,7 +139,11 @@ func newBenchWith(t *testing.T, t2fs, placement string, free1, free2 int64) *ben
 		}
 		handles.Set(d.ID, h)
 	}
-	b.tree = view.NewTree(db, roots, view.Owner{UID: 0, GID: 0}, 1)
+	settings, err := c.Cache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.tree = view.NewTree(db, roots, view.Owner{UID: 0, GID: 0}, 1).WithCache(settings.InView)
 	if b.w, err = New(db, c, m, b.tree, handles, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
@@ -359,5 +373,51 @@ func TestWriterPlacesAsTheStrategiesSay(t *testing.T) {
 	b.create("Series/S01/e02.mkv", "e02")
 	if b.on("t2", "Series/S01/e02.mkv") != "e02" {
 		t.Errorf("colocate: a new episode is not with its season on t2: t1 %q, t2 %q", b.on("t1", "Series/S01/e02.mkv"), b.on("t2", "Series/S01/e02.mkv"))
+	}
+}
+
+// cacheBench is a bench whose t2 is a cache disk, with Atoll's own view, and more after the disks.
+func cacheBench(t *testing.T, more string, free2 int64) *bench {
+	t.Helper()
+	return newBenchEdited(t, "ext4", "", 500, free2, func(b *bench, text string) string {
+		text = strings.Replace(text, "[view]\n", "[view]\nengine = \"atoll\"\n", 1)
+		disk := fmt.Sprintf("mount = %q\nfs = \"ext4\"\n", b.mount["t2"])
+		if !strings.Contains(text, disk) {
+			t.Fatal("no disk t2")
+		}
+		return strings.Replace(text, disk, disk+"role = \"cache\"\n", 1) + more
+	})
+}
+
+// A new file lands on the SSD cache, with Atoll's own view and cache.enabled, though a data disk has more room; a folder
+// does not, as it has no residency; nor does a file a rule keeps off the cache, any file with the cache not enabled,
+// or one the cache has no room for past min_free, which go to a data disk (specs.md §19).
+func TestANewFileLandsOnTheCache(t *testing.T) {
+	for _, tc := range []struct {
+		name, more, path string
+		free2            int64
+		want             string
+	}{
+		{"on the cache", "[cache]\nenabled = true\n", "Films/new.mkv", 100, "t2"},
+		{"the cache not enabled", "[cache]\nenabled = false\n", "Films/new.mkv", 100, "t1"},
+		{"a rule keeps it off", "[cache]\nenabled = true\n[[rule]]\nlabel = \"iso\"\next = [\"iso\"]\ncache = false\n", "Films/new.iso", 100, "t1"},
+		{"a rule keeps another off", "[cache]\nenabled = true\n[[rule]]\nlabel = \"iso\"\next = [\"iso\"]\ncache = false\n", "Films/new.mkv", 100, "t2"},
+		{"the cache full", "[cache]\nenabled = true\n", "Films/new.mkv", 50, "t1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := cacheBench(t, tc.more, tc.free2)
+			b.create(tc.path, "new")
+			other := map[string]string{"t1": "t2", "t2": "t1"}[tc.want]
+			if b.on(tc.want, tc.path) != "new" || b.on(other, tc.path) != "absent" {
+				t.Errorf("t1 %q, t2 %q, want it on %s", b.on("t1", tc.path), b.on("t2", tc.path), tc.want)
+			}
+			if n := b.lookup(tc.path); n == nil || n.Disk != tc.want {
+				t.Errorf("it presents %+v", n)
+			}
+		})
+	}
+	b := cacheBench(t, "[cache]\nenabled = true\n", 100)
+	if n, err := b.w.Mkdir(t.Context(), "Shows", 0o755, Owner{}); err != nil || n.Disk != "t1" {
+		t.Errorf("a folder: %+v, %v", n, err)
 	}
 }

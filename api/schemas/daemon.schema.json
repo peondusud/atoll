@@ -107,11 +107,19 @@
               "properties": { "outcome": { "enum": ["replicated", "to-replicate", "changed", "conflict", "path-taken", "name-refused", "no-room", "io-error", "disk-unavailable"] } },
               "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["reason"] }] }
             }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "transfer" } } },
+            "then": {
+              "description": "A file's copy on the SSD cache removed, as the data disks hold it (specs.md §19): disk is its cache disk.",
+              "properties": { "outcome": { "enum": ["transferred", "to-transfer", "changed", "io-error", "disk-unavailable"] } },
+              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["reason"] }, { "required": ["source"] }] }
+            }
           }
         ],
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["chown", "chmod", "utimens", "rename", "folder", "trash", "replicate"] },
+          "kind": { "enum": ["chown", "chmod", "utimens", "rename", "folder", "trash", "replicate", "transfer"] },
           "path": { "type": "string" },
           "path_b64": { "type": "string" },
           "to": { "type": "string" },

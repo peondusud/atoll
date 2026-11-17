@@ -13,7 +13,8 @@ type Disk struct {
 	ID       string
 	Position int
 	State    solver.DiskState
-	// Cache says that the disk is a cache disk, no part of the view until phase 2b.
+	// Cache says that the disk is a cache disk the view leaves out, as mergerfs's line does, with view.engine =
+	// "mergerfs" (specs.md §19). With Atoll's own view, a cache disk is part of the view, and is not one of these.
 	Cache bool
 	// Capacity and Free are what the catalog holds, nil when it holds none yet.
 	Capacity, Free *int64
@@ -97,7 +98,7 @@ const (
 
 // presentOrder gives each disk that presents its rank: those online, standby, readonly or draining, by position, then
 // those failed, by position, as mergerfs reads its branches (specs.md §21.1, §21.2). A disk missing or retired has
-// none, and nor has a cache disk, which mergerfs's line leaves out until phase 2b.
+// none, and nor has a cache disk the view leaves out, as mergerfs's line does (specs.md §19).
 func presentOrder(disks []Disk) map[string]int {
 	var first, last []Disk
 	for _, d := range disks {

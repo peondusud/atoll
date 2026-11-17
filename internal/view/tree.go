@@ -24,6 +24,9 @@ type Tree struct {
 	mountedNS int64
 	// read is how it reads a file's data (specs.md §7).
 	read ReadPolicy
+	// cacheInView says that it presents the cache disks, as Atoll's own view does with view.engine = "atoll"
+	// (specs.md §19).
+	cacheInView bool
 }
 
 // NewTree makes the tree of a view, mounted at mountedNS, whose own process is owned by self.
@@ -230,7 +233,7 @@ func (t *Tree) disks(ctx context.Context) ([]Disk, error) {
 	}
 	out := make([]Disk, 0, len(rows))
 	for _, r := range rows {
-		d := Disk{ID: r.ID, Position: r.Position, State: solver.DiskState(r.State), Cache: r.Cache, Tags: r.Tags}
+		d := Disk{ID: r.ID, Position: r.Position, State: solver.DiskState(r.State), Cache: r.Cache && !t.cacheInView, Tags: r.Tags}
 		if r.Capacity.Valid {
 			d.Capacity = &r.Capacity.Int64
 		}

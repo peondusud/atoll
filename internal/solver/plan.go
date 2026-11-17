@@ -57,7 +57,24 @@ type Copy struct {
 	// Away says that its last look did not find it at its name: its clock runs (specs.md §15.12). It counts, and is
 	// no source until its file is decided, which a tripped guard can put off for days (§13.4).
 	Away bool
+	// Unverified says that it was not read back since it last changed (copies.verified_ns NULL): no transfer of the
+	// SSD cache leans on it (specs.md §19).
+	Unverified bool
 }
+
+// Residency is what the SSD cache says of a file with a copy on a cache disk (specs.md §19).
+type Residency string
+
+// The residencies of a file. A file with none has its copies on cache disks count as any other copy.
+const (
+	CacheNone Residency = ""
+	// CacheResident: it stays on the cache. Its copies there are kept, toward no level, and it gets only the copies
+	// cache.mirror and cache.replicate_early ask for.
+	CacheResident Residency = "resident"
+	// CacheTransfer: it leaves the cache. Its copies there count for nothing and stay sources; once the data disks
+	// hold it, each gets a transfer job.
+	CacheTransfer Residency = "transfer"
+)
 
 // Placement is what a file's effective policy says about where its copies go.
 type Placement struct {
@@ -95,6 +112,8 @@ type File struct {
 	Hold      bool
 	Leaving   bool
 	Copies    []Copy
+	// Cache is what the SSD cache says of it, which needs a copy on a cache disk (specs.md §19).
+	Cache Residency
 }
 
 // EntryKind is what an entry on a disk is, other than a managed file.
@@ -137,6 +156,9 @@ type Input struct {
 	// file: it holds no name of a disk that the catalog can answer for, as a disk has hundreds of thousands (§26).
 	// What is not on a disk yet, it holds itself. Nil answers that nothing is taken.
 	Taken func(disk, path string) (bool, error)
+	// CacheMirror and CacheEarly are cache.mirror and cache.replicate_early: what a file resident on the SSD cache
+	// gets, a copy on a second cache disk and one on a data disk (specs.md §19).
+	CacheMirror, CacheEarly bool
 }
 
 // JobKind is a kind of job (specs.md §9).
@@ -146,9 +168,12 @@ type JobKind string
 const (
 	JobRefresh   JobKind = "refresh"
 	JobReplicate JobKind = "replicate"
+	// JobTransfer removes a file's copy on the cache disk Src, once the data disks hold it (specs.md §19). It has no
+	// Dst.
+	JobTransfer JobKind = "transfer"
 )
 
-// Job is one copy to make.
+// Job is one copy to make, or one to remove from the SSD cache.
 type Job struct {
 	Kind JobKind
 	Path string
@@ -290,6 +315,7 @@ func (d *planDisk) writable() bool {
 type planFile struct {
 	*File
 	level    int         // the copies it wants
+	want     int         // the copies on data disks it may have now: its level, but on the SSD cache (planner.want)
 	holding  []*planDisk // the disks with a copy of it, in any state, or one planned
 	counted  []*planDisk // the disks whose copy counts and is kept
 	covered  []string    // the domains its copies cover
@@ -305,6 +331,12 @@ type planFile struct {
 	marks    *fileMarks  // nil for most files
 	// misplaced holds, in a plan of atoll balance, the disks of its Atoll copies that break a strict setting.
 	misplaced []*planDisk
+	// For a file on the SSD cache (specs.md §19): cached holds the disks of its copies on cache disks kept, of a file
+	// resident; cacheReached counts its copies on cache disks that can be read, and those kept that are pending, on a
+	// disk that is not missing; cacheJobs counts the copies placed on a cache disk.
+	cached       []*planDisk
+	cacheReached int
+	cacheJobs    int
 }
 
 // fileMarks holds the marks a file's copies get.
@@ -353,12 +385,14 @@ type planner struct {
 	// groups counts, for each group of colocate, the files with a copy on each disk, in any state, or one the plan
 	// placed there (specs.md §12.4).
 	groups map[string]map[*planDisk]int
+	// mirror and early are Input.CacheMirror and Input.CacheEarly.
+	mirror, early bool
 }
 
 func newPlanner(in Input) (*planner, error) {
 	p := &planner{byID: map[string]*planDisk{}, byPath: map[string]*planFile{}, entries: in.Entries, balance: in.Balance,
 		newFiles: in.NewFiles, fillTo: in.FillTo, groups: map[string]map[*planDisk]int{},
-		originals: in.Balance && in.MoveOriginals, taken: in.Taken}
+		originals: in.Balance && in.MoveOriginals, taken: in.Taken, mirror: in.CacheMirror, early: in.CacheEarly}
 	if err := p.addDisks(in); err != nil {
 		return nil, err
 	}
@@ -428,6 +462,7 @@ func (p *planner) addFiles(in Input) error {
 			return fmt.Errorf("plan: path %q appears twice", f.Path)
 		}
 		pf := &planFile{File: f, level: f.Placement.Replicas + 1, index: int32(i)} //nolint:gosec // far fewer files than 2^31
+		pf.want = p.want(pf)
 		p.byPath[f.Path] = pf
 		p.files = append(p.files, pf)
 		if err := p.addCopies(pf); err != nil {
@@ -473,6 +508,8 @@ func checkFile(f *File) error {
 		return fmt.Errorf("plan: %q: unknown spread %q", f.Path, place.Spread)
 	case place.Overflow != OverflowAllow && place.Overflow != OverflowDeny:
 		return fmt.Errorf("plan: %q: unknown overflow %q", f.Path, place.Overflow)
+	case f.Cache != CacheNone && f.Cache != CacheResident && f.Cache != CacheTransfer:
+		return fmt.Errorf("plan: %q: unknown residency %q", f.Path, f.Cache)
 	}
 	return nil
 }
@@ -514,7 +551,9 @@ func (p *planner) addCopies(f *planFile) error {
 			}
 			d.old[c.OldPath] = true
 		}
-		if slices.Contains(f.misplaced, d) {
+		if f.Cache != CacheNone && d.Role == RoleCache {
+			p.cacheCopy(f, c, d)
+		} else if slices.Contains(f.misplaced, d) {
 			// It counts for nothing, so that one is made where the setting wants it; it is no loss.
 		} else if counts(c, d) && (!f.Leaving || c.State != CopyPending) {
 			// A file leaving keeps no pending copy: the copy made would end its deletion (specs.md §13.4).
@@ -529,9 +568,59 @@ func (p *planner) addCopies(f *planFile) error {
 			source = d
 		}
 	}
+	if f.Cache != CacheNone && !slices.ContainsFunc(f.holding, func(d *planDisk) bool { return d.Role == RoleCache }) {
+		return fmt.Errorf("plan: %q: on the SSD cache with no copy on a cache disk", f.Path)
+	}
 	f.source = source
 	f.keep(counted)
 	return nil
+}
+
+// cacheCopy reads a copy on a cache disk of a file on the SSD cache (specs.md §19). A file resident keeps it, toward no
+// level and never as surplus, a pending one only with cache.mirror, on a cache disk online or standby; a file that
+// leaves counts it for nothing, and cancels it when pending. Either way, one that can be read counts in its states.
+func (p *planner) cacheCopy(f *planFile, c *Copy, d *planDisk) {
+	writable := d.State == DiskOnline || d.State == DiskStandby
+	kept := f.Cache == CacheResident && (counts(c, d) || c.State == CopyPending && !f.Leaving && p.mirror && writable)
+	switch {
+	case kept:
+		f.cached = append(f.cached, d)
+		switch c.State {
+		case CopySurplus:
+			f.mark().back = append(f.mark().back, d)
+		case CopyPending:
+			f.pending++
+		case CopyOK, CopyStale, CopyCorrupt, CopyUnavailable:
+		}
+		if d.State != DiskMissing {
+			f.cacheReached++
+		}
+	case c.State == CopyPending:
+		f.mark().cancel = append(f.mark().cancel, d)
+	case counts(c, d) && d.State != DiskMissing:
+		f.cacheReached++
+	}
+}
+
+// cacheWant is how many copies on cache disks a file resident on the SSD cache may have: one, and a second with
+// cache.mirror, never past its level (specs.md §19).
+func (p *planner) cacheWant(f *planFile) int {
+	if p.mirror {
+		return min(2, f.level)
+	}
+	return min(1, f.level)
+}
+
+// want is how many copies on data disks a file may have now: its level, but for a file resident on the SSD cache, one
+// with cache.replicate_early within its level, after what cacheWant leaves, and none otherwise (specs.md §19).
+func (p *planner) want(f *planFile) int {
+	if f.Cache != CacheResident {
+		return f.level
+	}
+	if !p.early {
+		return 0
+	}
+	return max(0, min(1, f.level-p.cacheWant(f)))
 }
 
 func checkCopy(c *Copy) error {
@@ -580,6 +669,10 @@ func isSource(c *Copy, d *planDisk) bool {
 func betterSource(a, b *planDisk) bool {
 	if (a.State == DiskOnline) != (b.State == DiskOnline) {
 		return a.State == DiskOnline
+	}
+	// A cache disk, an SSD, wakes nothing (specs.md §13.4).
+	if (a.Role == RoleCache) != (b.Role == RoleCache) {
+		return a.Role == RoleCache
 	}
 	return a.Position < b.Position
 }
@@ -660,7 +753,9 @@ func (p *planner) holdRoom(f *planFile) {
 	}
 	var kept []*planDisk
 	for i := range f.Copies {
-		if d := p.byID[f.Copies[i].Disk]; f.Copies[i].State == CopyPending && slices.Contains(f.counted, d) {
+		d := p.byID[f.Copies[i].Disk]
+		// A resident file's second copy on the SSD cache holds its room as any (specs.md §19).
+		if f.Copies[i].State == CopyPending && (slices.Contains(f.counted, d) || slices.Contains(f.cached, d)) {
 			kept = append(kept, d)
 		}
 	}
@@ -671,11 +766,16 @@ func (p *planner) holdRoom(f *planFile) {
 			d.room = subtract(d.room, f.Size)
 			continue
 		}
-		canceled = true
 		f.pending--
+		f.mark().cancel = append(f.mark().cancel, d)
+		if slices.Contains(f.cached, d) {
+			f.cached = slices.DeleteFunc(f.cached, func(o *planDisk) bool { return o == d })
+			f.cacheReached--
+			continue
+		}
+		canceled = true
 		f.reached--
 		f.counted = slices.DeleteFunc(f.counted, func(o *planDisk) bool { return o == d })
-		f.mark().cancel = append(f.mark().cancel, d)
 	}
 	if canceled {
 		f.covered = f.covered[:0]
@@ -835,7 +935,7 @@ func compareFiles(a, b *planFile) int {
 
 // missing is how many copies the file still needs.
 func (f *planFile) missing() int {
-	return f.level - len(f.counted) - f.jobs
+	return f.want - len(f.counted) - f.jobs
 }
 
 func (f *planFile) place(d *planDisk) {
@@ -882,6 +982,12 @@ func (p *planner) create(f *planFile, jobs []Job) ([]Job, error) {
 	if f.Hold || f.Leaving || f.source == nil {
 		return jobs, nil
 	}
+	var err error
+	if f.Cache == CacheResident {
+		if jobs, err = p.mirrorCopy(f, jobs); err != nil {
+			return nil, err
+		}
+	}
 	for f.missing() > 0 {
 		d, overflow, err := p.pick(f)
 		if err != nil {
@@ -892,17 +998,96 @@ func (p *planner) create(f *planFile, jobs []Job) ([]Job, error) {
 		}
 		f.overflow = f.overflow || overflow
 		f.place(d)
-		f.holding = append(f.holding, d)
-		p.holds(f, d)
-		addParents(d, f.Path)
-		if d.names != nil {
-			if err := d.names.Add(f.Path); err != nil {
-				return nil, fmt.Errorf("plan: %w", err)
-			}
+		if err := p.takePlace(f, d); err != nil {
+			return nil, err
 		}
 		jobs = append(jobs, Job{Kind: JobReplicate, Path: f.Path, Src: f.source.ID, Dst: d.ID})
 	}
+	if f.Cache == CacheTransfer {
+		jobs = p.transfers(f, jobs)
+	}
 	return jobs, nil
+}
+
+// takePlace records a copy placed on a disk: the disk holds it, in its group of colocate, with its folders and name.
+func (p *planner) takePlace(f *planFile, d *planDisk) error {
+	f.holding = append(f.holding, d)
+	p.holds(f, d)
+	addParents(d, f.Path)
+	if d.names != nil {
+		if err := d.names.Add(f.Path); err != nil {
+			return fmt.Errorf("plan: %w", err)
+		}
+	}
+	return nil
+}
+
+// mirrorCopy gives a file resident on the SSD cache its copy on a second cache disk, with cache.mirror (specs.md §19):
+// a cache disk online or standby, with no copy of the file, sharing no physical disk with one that has, with room for
+// it, a name it takes and its path free; the most room, then by position.
+func (p *planner) mirrorCopy(f *planFile, jobs []Job) ([]Job, error) {
+	// A second copy, never a first: a file whose copy on the cache does not count is no better for one more there.
+	if !p.mirror || len(f.cached) == 0 {
+		return jobs, nil
+	}
+	// Never past its level, all its copies counted: one already on the data disks may leave no room for it.
+	for len(f.cached)+f.cacheJobs < p.cacheWant(f) && len(f.counted)+f.jobs+len(f.cached)+f.cacheJobs < f.level {
+		var best *planDisk
+		for _, d := range p.disks {
+			if d.Role != RoleCache || d.State != DiskOnline && d.State != DiskStandby || slices.Contains(f.holding, d) ||
+				f.onPhysicalOf(d) || f.Size > d.room {
+				continue
+			}
+			refusal, err := p.checkName(f, d)
+			if err != nil {
+				return nil, err
+			}
+			if refusal.any() || !p.pathFree(f, d) {
+				continue
+			}
+			if best == nil || cmp.Or(cmp.Compare(best.room, d.room), cmp.Compare(d.Position, best.Position)) < 0 {
+				best = d
+			}
+		}
+		if best == nil {
+			break
+		}
+		f.cacheJobs++
+		best.room = subtract(best.room, f.Size)
+		best.used += f.Size
+		if err := p.takePlace(f, best); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, Job{Kind: JobReplicate, Path: f.Path, Src: f.source.ID, Dst: best.ID})
+	}
+	return jobs, nil
+}
+
+// transfers gives each copy of a file leaving the SSD cache its transfer job (specs.md §19), once the copies that count
+// reach its level and can be leaned on: each ok, verified, at its path, on a disk online, standby or readonly, with no
+// job and no pending copy. A copy on a cache disk goes when it is ok or surplus, at its path, on a disk online or
+// standby; by position.
+func (p *planner) transfers(f *planFile, jobs []Job) []Job {
+	if f.jobs > 0 || f.pending > 0 || len(f.counted) < f.level {
+		return jobs
+	}
+	var from []*planDisk
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		d := p.byID[c.Disk]
+		up := d.State == DiskOnline || d.State == DiskStandby
+		if slices.Contains(f.counted, d) && (c.State != CopyOK || c.Unverified || c.Away || c.OldPath != "" || !up && d.State != DiskReadOnly) {
+			return jobs
+		}
+		if d.Role == RoleCache && (c.State == CopyOK || c.State == CopySurplus) && !c.Away && c.OldPath == "" && up {
+			from = append(from, d)
+		}
+	}
+	slices.SortFunc(from, func(a, b *planDisk) int { return cmp.Compare(a.Position, b.Position) })
+	for _, d := range from {
+		jobs = append(jobs, Job{Kind: JobTransfer, Path: f.Path, Src: d.ID})
+	}
+	return jobs
 }
 
 // listed reports whether a disk is one the rule's lists name (specs.md §13.4).
@@ -948,7 +1133,8 @@ func (p *planner) misplaced(f *planFile) []*planDisk {
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		d := p.byID[c.Disk]
-		if !counts(c, d) || c.State == CopyPending {
+		// A copy on the SSD cache of a file there is where the cache wants it: it leaves by its transfer (specs.md §19).
+		if !counts(c, d) || c.State == CopyPending || f.Cache != CacheNone && d.Role == RoleCache {
 			continue
 		}
 		if p.movable(c) && onlyListed(f.Placement) && !listed(d, f.Placement) {
@@ -1202,9 +1388,12 @@ func (p *planner) result(f *planFile) Result {
 		r.Cancel = disksByPosition(f.marks.cancel)
 	}
 	below := f.missing() > 0
-	reached := f.reached + f.jobs
+	// A file on the SSD cache counts its copies there that can be read: they protect it as any copy (specs.md §19).
+	reached := f.reached + f.jobs + f.cacheJobs + f.cacheReached
 	notCovered := f.Placement.SpreadMode == ModeStrict && p.domainsLeft(f) > 0
 	waiting := f.Hold && reached < f.level
+	// Resident below its level, it waits for its transfer, which brings its copies.
+	resident := f.Cache == CacheResident && reached < f.level
 	add := func(applies bool, s State) {
 		if applies {
 			r.States = append(r.States, s)
@@ -1213,8 +1402,8 @@ func (p *planner) result(f *planFile) Result {
 	add(f.source == nil, StateUnavailable)
 	add(below && f.refused.incompatible || f.stale.incompatible, StateNameIncompatible)
 	add(below && f.refused.collision || f.stale.collision, StateNameCollision)
-	add(!waiting && (reached < f.level || notCovered), StateDegraded)
-	add(f.jobs > 0 || f.pending > 0, StatePending)
+	add(!waiting && !resident && (reached < f.level || notCovered), StateDegraded)
+	add(f.jobs > 0 || f.cacheJobs > 0 || f.pending > 0 || resident, StatePending)
 	add(f.Placement.Replicas == 0 || waiting, StateUnprotected)
 	return r
 }

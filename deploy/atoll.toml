@@ -33,7 +33,7 @@ fs     = "ntfs"
 domain = "d4-320"
 tags   = ["usb"]
 
-[[disk]]                                # phase 2b
+[[disk]]                                # the SSD cache (§19), with view.engine = "atoll"
 id     = "c1"
 uuid   = "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b"
 mount  = "/mnt/c1"
@@ -103,7 +103,7 @@ retention        = "30d"
 max_size         = "5%"                 # of each disk's capacity
 link_guard       = false                # phase-1 protection against deletions through mergerfs
 
-[cache]                                 # phase 2b
+[cache]                                 # with view.engine = "atoll" (§19)
 enabled         = false
 min_age         = "7d"                  # minimum residency on the SSD
 max_fill        = "80%"                 # of the cache's capacity

@@ -157,17 +157,22 @@ func (w *Writer) finish(ctx context.Context, v *catalog.ViewOp, err error) error
 	return err
 }
 
-// Create makes a new file, on the disk placement.new_files picks (specs.md §12.4, §21.2), and gives it open for
-// writing.
+// Create makes a new file, on the SSD cache when its policy says so, or on the disk placement.new_files picks
+// (specs.md §12.4, §19, §21.2), and gives it open for writing.
 func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Owner) (*File, *view.Node, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.free(ctx, path); err != nil {
 		return nil, nil, err
 	}
-	disk, err := w.place(ctx, path)
+	disk, err := w.landing(ctx, path)
 	if err != nil {
 		return nil, nil, err
+	}
+	if disk == "" {
+		if disk, err = w.place(ctx, path); err != nil {
+			return nil, nil, err
+		}
 	}
 	v := &catalog.ViewOp{Kind: catalog.ViewCreate, Disk: disk, Path: path}
 	if err := w.journal(ctx, v); err != nil {
@@ -256,6 +261,61 @@ func (w *Writer) free(ctx context.Context, path string) error {
 		return ErrExists
 	}
 	return nil
+}
+
+// landing gives the cache disk a new file lands on (specs.md §19): with Atoll's own view, cache.enabled and its policy's
+// cache, read before its size is known, a cache disk the view may write to now, online or standby and neither readonly,
+// draining nor failed, with room past min_free, whose filesystem takes the name with no collision and whose branch
+// reaches it; the most room, then by position. "" when there is none: the cache is full, or not for this file, and it
+// goes to a data disk. Only a file lands there: a folder or a symbolic link has no residency.
+func (w *Writer) landing(ctx context.Context, path string) (string, error) {
+	settings, err := w.config.Cache()
+	if err != nil {
+		return "", fmt.Errorf("%w", err)
+	}
+	if !settings.InView || !settings.Enabled || !w.config.Policy(path, nil).Cache {
+		return "", nil
+	}
+	rows, err := catalog.ViewDisks(ctx, w.db)
+	if err != nil {
+		return "", fmt.Errorf("%w", err)
+	}
+	state := map[string]catalog.ViewDisk{}
+	for _, r := range rows {
+		state[r.ID] = r
+	}
+	best, bestRoom, bestPosition := "", int64(0), 0
+	for i := range w.config.Disks {
+		d := &w.config.Disks[i]
+		r, known := state[d.ID]
+		if !known || !r.Cache || d.State != "" || !w.handles.Has(d.ID) {
+			continue
+		}
+		if r.State != string(solver.DiskOnline) && r.State != string(solver.DiskStandby) {
+			continue
+		}
+		refused, err := w.refusedOn(ctx, d, path, "")
+		if err != nil {
+			return "", err
+		}
+		if refused {
+			continue
+		}
+		capacity, free, err := w.machine.Space(d.Mount)
+		if err != nil {
+			w.log.Warn("the space of a disk cannot be read: nothing new goes there", "disk", d.ID, "error", err)
+			continue
+		}
+		reserved, err := w.minFree.Reserved(capacity)
+		if err != nil {
+			return "", fmt.Errorf("%w", err)
+		}
+		room := free - reserved
+		if room > 0 && (best == "" || room > bestRoom || room == bestRoom && r.Position < bestPosition) {
+			best, bestRoom, bestPosition = d.ID, room, r.Position
+		}
+	}
+	return best, nil
 }
 
 // candidate is a disk a new file may go to: the room it has past min_free and what it holds, for new_files, and how many

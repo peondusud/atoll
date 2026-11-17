@@ -28,13 +28,14 @@ type viewReadCopy struct {
 }
 
 type viewReadVector struct {
-	Disks     []viewReadDisk `json:"disks"`
-	Copies    []viewReadCopy `json:"copies"`
-	Presented string         `json:"presented"`
-	Policy    string         `json:"policy"`
-	Classes   []string       `json:"classes"`
-	Read      []string       `json:"read"`
-	Note      string         `json:"note"`
+	CacheInView bool           `json:"cache_in_view"`
+	Disks       []viewReadDisk `json:"disks"`
+	Copies      []viewReadCopy `json:"copies"`
+	Presented   string         `json:"presented"`
+	Policy      string         `json:"policy"`
+	Classes     []string       `json:"classes"`
+	Read        []string       `json:"read"`
+	Note        string         `json:"note"`
 }
 
 // TestReadOrderVectors: which copy the view reads, best first (specs.md §7, §21.2).
@@ -42,7 +43,7 @@ func TestReadOrderVectors(t *testing.T) {
 	for i, v := range vectors.Load[viewReadVector](t, "view_read.json") {
 		var list []Disk
 		for _, d := range v.Disks {
-			list = append(list, Disk{ID: d.ID, Position: d.Position, State: d.State, Cache: d.Role == "cache", Tags: d.Tags})
+			list = append(list, Disk{ID: d.ID, Position: d.Position, State: d.State, Cache: d.Role == "cache" && !v.CacheInView, Tags: d.Tags})
 		}
 		var copies []Copy
 		for _, c := range v.Copies {
@@ -153,5 +154,25 @@ func TestTreeReadsAsThePolicySays(t *testing.T) {
 	tree.WithRead(ReadPolicy{Classes: []string{"sata", "usb"}})
 	if got := readOf(t, tree); got != "from t1" {
 		t.Errorf("oldest with classes: read %q", got)
+	}
+}
+
+// A cache disk is part of Atoll's own view only when it presents the cache, as with view.engine = "atoll": a file
+// presents from its copy there, the oldest; otherwise from the data disk, as mergerfs's line leaves the cache out
+// (specs.md §19).
+func TestTheTreePresentsTheCacheWhenAsked(t *testing.T) {
+	tree, _ := readBench(t, [2]string{"online", "online"}, [2]string{})
+	if _, err := tree.db.ExecContext(t.Context(), "UPDATE disks SET role = 'cache' WHERE id = 't1'"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		inView bool
+		disk   string
+	}{{false, "t2"}, {true, "t1"}} {
+		tree.WithCache(tc.inView)
+		n, err := tree.Lookup(t.Context(), "Films/a.mkv")
+		if err != nil || n == nil || n.Disk != tc.disk {
+			t.Errorf("the cache in the view %v: presents %+v, %v; want from %s", tc.inView, n, err, tc.disk)
+		}
 	}
 }

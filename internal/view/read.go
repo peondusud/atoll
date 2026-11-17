@@ -101,6 +101,13 @@ func (t *Tree) WithRead(p ReadPolicy) *Tree {
 	return t
 }
 
+// WithCache says whether the view presents the cache disks, as Atoll's own view does with view.engine = "atoll", before
+// it is served, and gives the tree (specs.md §19).
+func (t *Tree) WithCache(inView bool) *Tree {
+	t.cacheInView = inView
+	return t
+}
+
 // Open opens the data of a file node for reading, one name at a time below a disk's root and following no symlink:
 // from the disk the node presents with read.policy = "oldest", and from the first copy ReadOrder gives that opens with
 // "prefer-spinning", which the file keeps until it is closed (specs.md §7, §21.2). With none, it gives the first one's

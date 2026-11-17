@@ -1,0 +1,23 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a712.2, \u00a719, \u00a724.4",
+  "description": "With Atoll's own view, the SSD cache does what it says: the preset energy turns cache.enabled on for a disk with the role cache, and neither gets a warning.",
+  "config": "strategy = \"energy\"\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nengine = \"atoll\"\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"c1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/c1\"\nfs = \"ext4\"\nrole = \"cache\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [],
+        "hidden": [],
+        "unreached": null
+      }
+    }
+  ]
+}

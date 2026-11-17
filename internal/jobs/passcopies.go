@@ -185,19 +185,11 @@ type schedule struct {
 
 // scheduleOf reads replication.window, maintenance.window when left out, and timezone, local when left out.
 func scheduleOf(c *config.Config) (schedule, error) {
-	effective := c.Effective()
-	text, _ := effective["replication.window"].(string)
-	w, err := value.ParseWindow(text)
+	w, location, err := c.Schedule()
 	if err != nil {
-		return schedule{}, fmt.Errorf("replication.window: %w", err)
+		return schedule{}, fmt.Errorf("%w", err)
 	}
-	s := schedule{window: w, location: time.Local}
-	if zone, _ := effective["timezone"].(string); zone != "" && zone != "local" {
-		if s.location, err = time.LoadLocation(zone); err != nil {
-			return schedule{}, fmt.Errorf("timezone: %w", err)
-		}
-	}
-	return s, nil
+	return schedule{window: w, location: location}, nil
 }
 
 // waitsForWindow says whether a copy of a file in scheduled mode waits for replication.window: outside it, it stays

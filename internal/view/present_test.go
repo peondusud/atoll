@@ -52,10 +52,11 @@ type viewEntryVector struct {
 }
 
 type viewNodeVector struct {
-	Disks   []viewDiskVector  `json:"disks"`
-	File    *viewFileVector   `json:"file"`
-	Entries []viewEntryVector `json:"entries"`
-	Node    *struct {
+	CacheInView bool              `json:"cache_in_view"`
+	Disks       []viewDiskVector  `json:"disks"`
+	File        *viewFileVector   `json:"file"`
+	Entries     []viewEntryVector `json:"entries"`
+	Node        *struct {
 		Kind    NodeKind `json:"kind"`
 		Disk    string   `json:"disk"`
 		Mode    uint32   `json:"mode"`
@@ -70,10 +71,11 @@ type viewNodeVector struct {
 	Note string `json:"note"`
 }
 
-func disksOf(list []viewDiskVector) []Disk {
+// disksOf gives the disks of a vector: a cache disk is left out of the view but with cacheInView (specs.md §19).
+func disksOf(list []viewDiskVector, cacheInView bool) []Disk {
 	out := make([]Disk, 0, len(list))
 	for _, d := range list {
-		out = append(out, Disk{ID: d.ID, Position: d.Position, State: d.State, Cache: d.Role == "cache", Capacity: d.Capacity, Free: d.Free})
+		out = append(out, Disk{ID: d.ID, Position: d.Position, State: d.State, Cache: d.Role == "cache" && !cacheInView, Capacity: d.Capacity, Free: d.Free})
 	}
 	return out
 }
@@ -93,7 +95,7 @@ func TestPresentVectors(t *testing.T) {
 		for _, e := range v.Entries {
 			entries = append(entries, Entry(e))
 		}
-		got, err := Present(disksOf(v.Disks), file, entries, self)
+		got, err := Present(disksOf(v.Disks, v.CacheInView), file, entries, self)
 		if err != nil {
 			t.Errorf("vector %d (%s): %v", i, v.Note, err)
 			continue
@@ -114,8 +116,9 @@ func TestPresentVectors(t *testing.T) {
 }
 
 type viewStatfsVector struct {
-	Disks  []viewDiskVector `json:"disks"`
-	Statfs struct {
+	CacheInView bool             `json:"cache_in_view"`
+	Disks       []viewDiskVector `json:"disks"`
+	Statfs      struct {
 		Bsize   uint64 `json:"bsize"`
 		Blocks  uint64 `json:"blocks"`
 		Bfree   uint64 `json:"bfree"`
@@ -128,7 +131,7 @@ type viewStatfsVector struct {
 // TestStatfsVectors: statfs of the view, from the catalog (specs.md §21.2).
 func TestStatfsVectors(t *testing.T) {
 	for i, v := range vectors.Load[viewStatfsVector](t, "view_statfs.json") {
-		got := StatfsOf(disksOf(v.Disks))
+		got := StatfsOf(disksOf(v.Disks, v.CacheInView))
 		want := Statfs{Bsize: v.Statfs.Bsize, Blocks: v.Statfs.Blocks, Bfree: v.Statfs.Bfree, Bavail: v.Statfs.Bavail, Namemax: v.Statfs.Namemax}
 		if got != want {
 			t.Errorf("vector %d (%s): %+v, want %+v", i, v.Note, got, want)

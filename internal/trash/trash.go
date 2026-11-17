@@ -694,17 +694,50 @@ func (s *Session) unchanged(ctx context.Context, path string, c *catalog.CopyRow
 
 // Send sends one copy to the trash, and says what became of it (specs.md §17.1).
 func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, error) {
-	place := c.Place(f)
-	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
-	if !s.writable(c.Disk) {
-		return outcomeUnavailable, nil
+	outcome, _, err := s.send(ctx, f, c, reason)
+	return outcome, err
+}
+
+// Transfer removes a file's copy on a cache disk, once the data disks hold it (specs.md §19): it goes to that disk's
+// trash as surplus, a move checked against its row, so that a file just written there is never the one sent, then is
+// purged from there at once, which gives its space back. It says what became of the copy, as Send does: trashed once
+// it left its place, purged or not. One the purge leaves stays in the trash, which its retention or trash.max_size
+// empties.
+func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow) (string, error) {
+	outcome, op, err := s.send(ctx, f, c, reasonSurplus)
+	if err != nil || outcome != OutcomeTrashed || op == nil {
+		return outcome, err
 	}
-	handle, err := s.open(ctx, c.Disk)
+	e, found, err := catalog.TrashEntryOfOp(ctx, s.db, op.Path, op.ID)
+	if err != nil {
+		return "", fmt.Errorf("catalog: %w", err)
+	}
+	if !found {
+		return outcome, nil
+	}
+	purged, err := s.purgeEntry(ctx, &e)
 	if err != nil {
 		return "", err
 	}
+	if purged != OutcomePurged {
+		slog.Warn("a copy the SSD cache sent stays in its trash", "disk", e.Disk, "path", e.Path, "outcome", purged)
+	}
+	return outcome, nil
+}
+
+// send is Send, which also gives the operation that moved the copy, when one did.
+func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, *ops.Op, error) {
+	place := c.Place(f)
+	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
+	if !s.writable(c.Disk) {
+		return outcomeUnavailable, nil, nil
+	}
+	handle, err := s.open(ctx, c.Disk)
+	if err != nil {
+		return "", nil, err
+	}
 	if handle == nil {
-		return outcomeUnavailable, nil
+		return outcomeUnavailable, nil, nil
 	}
 	// A stale copy holds a version that came before the file's hash, and a corrupt one holds none.
 	hash := f.Hash
@@ -716,22 +749,23 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention),
 	})
 	if err != nil {
-		return "", fmt.Errorf("catalog: %w", err)
+		return "", nil, fmt.Errorf("catalog: %w", err)
 	}
 	s.machine.Checkpoint("journaled")
 	moved, moveErr := handle.ToTrash(op, &catalog.KnownCopy{Path: place, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey})
 	if moveErr == nil {
 		if err := catalog.FinishTrash(ctx, s.db, op, nil, moved.Links()); err != nil {
-			return "", fmt.Errorf("catalog: %w", err)
+			return "", nil, fmt.Errorf("catalog: %w", err)
 		}
 		s.changed = true
 		s.Left(c.Disk, place)
-		return OutcomeTrashed, nil
+		return OutcomeTrashed, op, nil
 	}
 	if fsx.IsNoRoom(moveErr) {
 		s.full[c.Disk] = true
 	}
-	return s.afterFailedMove(ctx, handle, op, moveErr)
+	outcome, err := s.afterFailedMove(ctx, handle, op, moveErr)
+	return outcome, op, err
 }
 
 // Full says that a disk had no room for a move to its trash in this run, as each takes a folder there: what else would

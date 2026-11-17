@@ -53,10 +53,15 @@ var mergerfsOptions = []string{
 	"cache.negative_entry=0",
 }
 
-// NewMergerfs gives the configuration of the data disks of c, in its order. capacities holds the capacity
-// the catalog recorded for each disk it knows one of, by id. An error names what mergerfs cannot take:
-// no data disk, or a branch path holding ':' or ','.
+// NewMergerfs gives the configuration of the data disks of c, in its order, and of its cache disks with view.engine =
+// "atoll", whose view presents them, so that plain mergerfs shows what they hold (specs.md §19, §21.1). capacities
+// holds the capacity the catalog recorded for each disk it knows one of, by id. An error names what mergerfs cannot
+// take: no data disk, or a branch path holding ':' or ','.
 func NewMergerfs(c *config.Config, minFree value.MinFree, capacities map[string]int64) (*Mergerfs, error) {
+	settings, err := c.Cache()
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
 	mount, _ := c.Effective()["view.mount"].(string)
 	options := slices.Clone(mergerfsOptions)
 	newFiles, _ := c.Effective()["placement.new_files"].(string)
@@ -73,8 +78,8 @@ func NewMergerfs(c *config.Config, minFree value.MinFree, capacities map[string]
 		}
 	}
 	for _, d := range order {
-		if d.Role != "data" {
-			continue // cache disks wait for phase 2b
+		if d.Role != "data" && !settings.InView {
+			continue // with mergerfs as the view, a cache disk has no part in it: it cannot apply a rule as a file is made
 		}
 		b := Branch{Disk: d.ID, Path: path.Join(d.Mount, d.Root), Mode: ModeRW}
 		switch d.State {

@@ -303,6 +303,19 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `asked` | array of strings | the whole disks asked their power mode, in the order given |
 | `standby` | boolean | whether the disk is in standby |
 
+### `cache_residency.json` — which files leave the SSD cache now (§19)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `now_ns` | integer | the time |
+| `enabled` | boolean | `cache.enabled`; `true` when left out |
+| `window_open` | boolean | whether `replication.window` is open at `now_ns`; `false` when left out |
+| `max_fill` | string | `cache.max_fill`, as in the configuration |
+| `disks` | array of objects | the cache disks: `id`, `position`, and `capacity` and `free` in bytes, as the catalog last recorded them, left out when not known |
+| `files` | array of objects | the files with a copy on a cache disk: `path` or `path_b64`, `size`, `disks` (the cache disks that hold a copy), `since_ns` (when its residency began), `min_age_ns` (its policy's `cache_min_age`); `cache` (its policy's `cache`, `true` when left out), `held` (mode `manual`, waiting for `atoll replicate`), `released` (`atoll replicate` names it), each `false` when left out |
+| `leave` | array of objects | the files that leave now, by path in byte order: `path` or `path_b64`, and `why`: `due`, `full` or `released`. Every other file is resident |
+| `error` | boolean | `true` for a file on an unknown disk or on none, two files with one path, two disks with one id, a negative size or `min_age_ns`, or a free space above the capacity |
+
 ### `path_map.json` — the path a media server sees (§21.5)
 
 | Field | Type | Meaning |
@@ -389,6 +402,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
+| `cache_in_view` | boolean | whether the view presents the cache disks, as Atoll's own view does; `false` when left out, as with mergerfs, whose line leaves them out (`specs.md` §19) |
 | `disks` | array of objects | the disks: `id`, `position` and `state`, as `original.json` has them; `role`, `data` when left out |
 | `file` | object | optional: the file at the path, as its row holds it: `state`, `size`, `mtime_ns` and `copies`, all required; `original`, the disk `files.original_disk` names, when it names one; and `conflict_held`, `true` when the file holds a conflict (§4) |
 | `file.copies` | array of objects | its copies: `disk`, `state` and `first_seen_ns`, required; `size`, `mtime_ns`, `mode`, `uid`, `gid`, `nlink` and `creation_ns`, each left out when its row holds none; `gone_kind`, what the last look found when the copy's clock runs (`moved`, `gone`, `uncertain` or `own`), and `old_path`, the name it sits at when it has not followed its file's rename, each left out otherwise |
@@ -410,6 +424,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
+| `cache_in_view` | boolean | whether the view presents the cache disks, as Atoll's own view does; `false` when left out, as with mergerfs, whose line leaves them out (`specs.md` §19) |
 | `disks` | array of objects | the disks: `id`, `position` and `state`; `role`, `data` when left out; `capacity` and `free`, in bytes, each left out when the catalog holds none |
 | `statfs` | object | `bsize`, `blocks`, `bfree`, `bavail` and `namemax` |
 
@@ -417,6 +432,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
+| `cache_in_view` | boolean | whether the view presents the cache disks, as Atoll's own view does; `false` when left out, as with mergerfs, whose line leaves them out (`specs.md` §19) |
 | `disks` | array of objects | the disks: `id`, `position` and `state`, as `view_node.json` has them; `role`, `data` when left out; `tags`, none when left out |
 | `copies` | array of objects | the file's copies: `disk` and `state`, required; `gone_kind` and `old_path`, as `view_node.json` has them, each left out when the copy has none |
 | `presented` | string | the disk whose copy the path presents, the original (`view_node.json`) |
@@ -549,7 +565,7 @@ A case holds the text of a file, and says what loading it gives. Keys are writte
 | `effective` | array of objects | values the file must load to, each `{"key": …, "value": …}` with the value as in the file: a string, an integer, a boolean, a list of these, or an empty table. A value in a non-empty `path_map` has its own key. A list of tables is listed item by item (`rule[0].label`), and is the value `[]` when empty |
 | `complete` | boolean | `true` when `effective` lists every key the configuration has a value for |
 | `not_set` | array of strings | keys that must have no value |
-| `warnings` | array of strings | the keys of the warnings about names no disk carries (§24.4), in byte order |
+| `warnings` | array of strings | the keys of the warnings of no later phase (§24.4), in byte order: names no disk carries, and settings of no effect, as `read.classes` with `read.policy = "oldest"`, or the SSD cache with mergerfs |
 
 A case has `error`, or `errors`, or at least one of `effective`, `not_set` and `warnings`, and loads in the last case. `path`, `filename` and `ext` are shown as written, not compiled. A rule's keys hold what the file sets, plus `action` and `ignore_case`: its pool-wide values (§24.2) apply when it gives a file its policy, which these vectors do not cover.
 
@@ -611,14 +627,15 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 | Field | Type | Meaning |
 |---|---|---|
 | `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`), `physical` (none): the physical disk it lives on, which two disks share when a start found them on one (R-06); the plan counts them as one, so that no two copies of a file are on it |
-| `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `leaving` (`false`), for a file whose deletion is decided and waits for a trash job (`specs.md` §13.4); `policy` (below) |
-| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source |
+| `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `leaving` (`false`), for a file whose deletion is decided and waits for a trash job (`specs.md` §13.4); `cache` (none), `resident` or `transfer` for a file on the SSD cache that stays or leaves it (`specs.md` §19), which must hold a copy on a cache disk; `policy` (below) |
+| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source; `unverified` (`false`): `true` for a copy not read back since it last changed (`copies.verified_ns` NULL), on which no transfer leans |
 | `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`), `colocate` (`none`) |
 | `entries` | array of objects | `disk`, `path`, `kind`: `dir`, `symlink` or `ignored` |
 | `taken` | array of objects | `disk`, `path`: what the catalog answers when the plan asks whether a disk has another name with the collision key of that path (`specs.md` §15.7). Taken for the names listed, free for every other; none when left out. The plan asks of an NTFS disk alone, of each folder above a file, then of the file. The files and the entries of the case do not answer: a case whose collision is with a name on the disk lists it here |
 | `min_free` | array of strings | as in the configuration; `["0%"]` when left out |
 | `new_files`, `fill_to` | strings | `placement.new_files` (`most-free`) and `placement.fill_to` (`90%`), as in the configuration |
-| `jobs` | array of objects | `kind` (`refresh` or `replicate`), `path` or `path_b64`, `src`, `dst` |
+| `cache_mirror`, `cache_early` | booleans | `cache.mirror` and `cache.replicate_early` (`false`) |
+| `jobs` | array of objects | `kind` (`refresh`, `replicate` or `transfer`), `path` or `path_b64`, `src`, `dst`, which a `transfer` leaves out: it removes its copy on the cache disk `src` |
 | `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel`, `misplaced` (disks by position), `overflow`. What is left out is empty or false |
 | `balance` | boolean | `true` for the plan of `atoll balance` (`specs.md` §13.3): an Atoll copy that breaks a strict setting of its file counts for nothing, and its result lists its disk in `misplaced` |
 | `move_originals` | boolean | with `balance`, the plan of `atoll balance --move-originals`: a user copy breaks a setting as an Atoll copy does. Without `balance`, nothing |

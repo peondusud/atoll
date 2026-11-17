@@ -442,10 +442,23 @@ func poolKeys() map[string]string {
 // noEffect warns about what the file or the preset set and what else it set makes of no effect (specs.md §24.4):
 // read.classes with read.policy = "oldest", which reads the original alone (§7).
 func noEffect(tree map[string]any, set map[string]any) []Problem {
-	if _, classes := set["read.classes"]; !classes || text(table(tree, "read"), "policy") != "oldest" {
-		return nil
+	var out []Problem
+	if _, classes := set["read.classes"]; classes && text(table(tree, "read"), "policy") == "oldest" {
+		out = append(out, Problem{Key: "read.classes", Message: `no effect with read.policy = "oldest", which reads the original alone`})
 	}
-	return []Problem{{Key: "read.classes", Message: `no effect with read.policy = "oldest", which reads the original alone`}}
+	// The SSD cache needs Atoll's own view: mergerfs cannot apply a rule when a file is created (specs.md §19).
+	if text(table(tree, "view"), "engine") == "mergerfs" {
+		const needsOwnView = `no effect with view.engine = "mergerfs": the SSD cache needs Atoll's own view`
+		if set["cache.enabled"] == true {
+			out = append(out, Problem{Key: "cache.enabled", Message: needsOwnView})
+		}
+		for i, d := range list(tree, "disk") {
+			if key := indexKey("disk", i) + ".role"; set[key] == "cache" && text(d, "role") == "cache" {
+				out = append(out, Problem{Key: key, Message: needsOwnView})
+			}
+		}
+	}
+	return out
 }
 
 // unknownLabels warns about tags and domains no disk carries (specs.md §24.4).

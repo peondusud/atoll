@@ -651,6 +651,7 @@ const (
 	// a purge reads first, whatever else the trash holds.
 	trashExpiredSQL = trashEntrySQL + ` AND t.expires_ns <= ?1 AND (t.expires_ns, t.id) > (?2, ?3) ORDER BY t.expires_ns, t.id LIMIT ?4`
 	trashByRowSQL   = trashEntrySQL + ` AND t.id = ?`
+	trashOfOpSQL    = trashEntrySQL + ` AND t.lpath = ?1 AND t.op_id = ?2`
 	trashDueSQL     = `SELECT EXISTS(SELECT 1 FROM trash t JOIN ops o ON o.id = t.op_id WHERE t.expires_ns <= ? AND o.state = 'done')`
 	// Every entry once, in the order the table holds them, which costs no sort.
 	trashWeightsSQL = `
@@ -750,6 +751,16 @@ func TrashExpired(ctx context.Context, db *sql.DB, nowNS, afterNS, afterRow int6
 // TrashEntryByRow gives the entry of a row, and false when it is gone, or its operation is not done.
 func TrashEntryByRow(ctx context.Context, db *sql.DB, row int64) (TrashEntry, bool, error) {
 	list, err := trashEntries(ctx, db, trashByRowSQL, row)
+	if err != nil || len(list) == 0 {
+		return TrashEntry{}, false, err
+	}
+	return list[0], true, nil
+}
+
+// TrashEntryOfOp gives the entry an operation sent to the trash from a path, and false when it is gone, or the
+// operation is not done: through trash_by_path.
+func TrashEntryOfOp(ctx context.Context, db *sql.DB, path string, opID int64) (TrashEntry, bool, error) {
+	list, err := trashEntries(ctx, db, trashOfOpSQL, []byte(path), opID)
 	if err != nil || len(list) == 0 {
 		return TrashEntry{}, false, err
 	}

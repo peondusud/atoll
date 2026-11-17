@@ -301,7 +301,8 @@ label = "c"
 	}
 }
 
-// The warnings of this build: every later-phase key of the example, and no default.
+// The warnings of this build: every later-phase key of the example, and no default. Its cache disk, with mergerfs, has
+// no effect, a warning of no later phase (specs.md §19, §24.4).
 func TestLaterPhaseWarnings(t *testing.T) {
 	c, err := Parse(specExample(t))
 	if err != nil {
@@ -309,25 +310,25 @@ func TestLaterPhaseWarnings(t *testing.T) {
 	}
 	var got []string
 	for _, w := range c.Warnings {
-		if !w.LaterPhase {
-			t.Errorf("the example names something no disk carries: %v", w)
-		}
 		got = append(got, w.Key)
+		switch {
+		case w.Key == "disk[3].role":
+			if w.LaterPhase || !strings.Contains(w.Message, "mergerfs") {
+				t.Errorf("%v", w)
+			}
+		case !w.LaterPhase:
+			t.Errorf("the example names something no disk carries: %v", w)
+		case !strings.Contains(w.Message, "phase"):
+			t.Errorf("%v does not name the phase", w)
+		}
 	}
 	want := []string{
 		"disk[3].role",
 		"health.avoid_hotter_than",
 		"health.evacuate_on",
-		"rule[5].cache_min_age",
-		"rule[6].cache_min_age",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("warnings at\n%q, want\n%q", got, want)
-	}
-	for _, w := range c.Warnings {
-		if !strings.Contains(w.Message, "phase") {
-			t.Errorf("%v does not name the phase", w)
-		}
 	}
 }
 

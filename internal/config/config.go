@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -134,6 +135,53 @@ func (c *Config) Read() (preferSpinning bool, classes []string) {
 		}
 	}
 	return policy == "prefer-spinning", classes
+}
+
+// Cache is what the SSD cache's settings say (specs.md §19).
+type Cache struct {
+	// InView says that view.engine is "atoll", whose view presents the cache disks and lands new files there: with
+	// mergerfs the cache does nothing, and its disks count as any other.
+	InView bool
+	// Enabled is cache.enabled: new files land on the cache, and stay there their residency.
+	Enabled bool
+	// MaxFill is cache.max_fill: above it, the oldest files of a cache disk leave at once.
+	MaxFill value.Percent
+	// Mirror and Early are cache.mirror and cache.replicate_early.
+	Mirror, Early bool
+}
+
+// Cache returns the SSD cache's settings (specs.md §19). A file's cache and cache_min_age are its policy's.
+func (c *Config) Cache() (Cache, error) {
+	engine, _ := c.effective["view.engine"].(string)
+	out := Cache{InView: engine == "atoll"}
+	out.Enabled, _ = c.effective["cache.enabled"].(bool)
+	out.Mirror, _ = c.effective["cache.mirror"].(bool)
+	out.Early, _ = c.effective["cache.replicate_early"].(bool)
+	text, _ := c.effective["cache.max_fill"].(string)
+	maxFill, err := value.ParsePercent(text)
+	if err != nil {
+		return Cache{}, fmt.Errorf("cache.max_fill: %w", err)
+	}
+	out.MaxFill = maxFill
+	return out, nil
+}
+
+// Schedule returns replication.window, maintenance.window when it is left out, and the time zone both are read in,
+// timezone, local when left out (specs.md §12.3): where the copies of a file in scheduled mode run, and when files
+// leave the SSD cache (§19).
+func (c *Config) Schedule() (value.Window, *time.Location, error) {
+	text, _ := c.effective["replication.window"].(string)
+	w, err := value.ParseWindow(text)
+	if err != nil {
+		return value.Window{}, nil, fmt.Errorf("replication.window: %w", err)
+	}
+	location := time.Local
+	if zone, _ := c.effective["timezone"].(string); zone != "" && zone != "local" {
+		if location, err = time.LoadLocation(zone); err != nil {
+			return value.Window{}, nil, fmt.Errorf("timezone: %w", err)
+		}
+	}
+	return w, location, nil
 }
 
 // Policy returns the effective policy of a file (specs.md §11.3). A nil size means it
