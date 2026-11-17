@@ -28,6 +28,8 @@ type bench struct {
 	db     *sql.DB
 	config *config.Config
 	dirs   map[string]string
+	// spaces gives, by mount, the capacity and the free space a disk reports, when it is not the one every disk has.
+	spaces map[string][2]int64
 	fail   map[string]func(call, name string) error
 	// walkFail makes a call fail in a walk, which goes through its own handle.
 	walkFail map[string]func(call, name string) error
@@ -93,7 +95,10 @@ func (b *bench) ReadPastCache(_ names.Filesystem, entry *disks.MountEntry) disks
 
 func (b *bench) Root(string, string) disks.RootSeen { return disks.RootSeen{Folder: disks.FolderOK} }
 func (b *bench) Now() int64                         { return b.now }
-func (b *bench) Space(string) (capacity, free int64, err error) {
+func (b *bench) Space(mount string) (capacity, free int64, err error) {
+	if s, ok := b.spaces[mount]; ok {
+		return s[0], s[1], nil
+	}
 	return 1 << 30, 1 << 29, nil
 }
 

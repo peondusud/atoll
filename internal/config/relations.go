@@ -446,6 +446,10 @@ func noEffect(tree map[string]any, set map[string]any) []Problem {
 	if _, classes := set["read.classes"]; classes && text(table(tree, "read"), "policy") == "oldest" {
 		out = append(out, Problem{Key: "read.classes", Message: `no effect with read.policy = "oldest", which reads the original alone`})
 	}
+	// new_files = "percent" places every copy by the most free share already (specs.md §12.4).
+	if set["balance.equalize"] == "percent" && text(table(tree, "placement"), "new_files") == "percent" {
+		out = append(out, Problem{Key: "balance.equalize", Message: `no effect with placement.new_files = "percent", which places every copy so already`})
+	}
 	// The SSD cache needs Atoll's own view: mergerfs cannot apply a rule when a file is created (specs.md §19).
 	if text(table(tree, "view"), "engine") == "mergerfs" {
 		const needsOwnView = `no effect with view.engine = "mergerfs": the SSD cache needs Atoll's own view`

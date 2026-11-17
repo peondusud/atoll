@@ -16,13 +16,9 @@ func laterPhaseErrors(map[string]any) []Problem {
 func laterPhaseWarnings(set map[string]any) []Problem {
 	index := regexp.MustCompile(`\[[0-9]+\]`)
 	var out []Problem
-	for key, v := range set {
+	for key := range set {
 		var phase, effect string
 		switch index.ReplaceAllString(key, "") {
-		case "balance.equalize":
-			if v != "off" {
-				phase = "2b"
-			}
 		case "health.evacuate_on", "health.avoid_hotter_than":
 			phase = "4"
 		}

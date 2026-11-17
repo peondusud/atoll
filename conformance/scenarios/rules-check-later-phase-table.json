@@ -16,11 +16,6 @@
         "problems": [],
         "warnings": [
           {
-            "key": "balance.equalize",
-            "later_phase": true,
-            "message": "${ANY}"
-          },
-          {
             "key": "health.avoid_hotter_than",
             "later_phase": true,
             "message": "${ANY}"

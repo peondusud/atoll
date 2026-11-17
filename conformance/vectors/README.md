@@ -666,6 +666,7 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 | `taken` | array of objects | `disk`, `path`: what the catalog answers when the plan asks whether a disk has another name with the collision key of that path (`specs.md` §15.7). Taken for the names listed, free for every other; none when left out. The plan asks of an NTFS disk alone, of each folder above a file, then of the file. The files and the entries of the case do not answer: a case whose collision is with a name on the disk lists it here |
 | `min_free` | array of strings | as in the configuration; `["0%"]` when left out |
 | `new_files`, `fill_to` | strings | `placement.new_files` (`most-free`) and `placement.fill_to` (`90%`), as in the configuration |
+| `equalize` | string | `balance.equalize` (`off`): with `percent`, the plan places each copy by the most free share of capacity, whatever `new_files` says |
 | `cache_mirror`, `cache_early` | booleans | `cache.mirror` and `cache.replicate_early` (`false`) |
 | `jobs` | array of objects | `kind` (`refresh`, `replicate` or `transfer`), `path` or `path_b64`, `src`, `dst`, which a `transfer` leaves out: it removes its copy on the cache disk `src` |
 | `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel`, `misplaced` (disks by position), `overflow`. What is left out is empty or false |

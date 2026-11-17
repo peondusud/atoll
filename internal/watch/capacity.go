@@ -55,7 +55,7 @@ func Capacity(ctx context.Context, db *sql.DB, c *config.Config, now int64) ([]L
 	if err != nil {
 		return nil, err
 	}
-	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Taken: taken, NewFiles: newFiles, FillTo: fillTo}
+	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Taken: taken, NewFiles: newFiles, FillTo: fillTo, Equalize: EqualizeOf(c)}
 	leave, err := allLeave(ctx, db, c)
 	if err != nil {
 		return nil, err

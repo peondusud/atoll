@@ -414,10 +414,11 @@ Until a strategy is implemented (see §28), it falls back to `most-free`, with a
   - `spread_mode = "strict"`: at least one copy in each failure domain, as long as the number of copies allows it; with fewer copies than domains, each copy in a different domain. A disk with no `domain` forms its own domain;
   - `tags_mode = "strict"`: only disks carrying one of the rule's `tags` when it has any, and in one of its `domains` when it has any (the equivalent of DrivePool's hard file-placement limit). A rule with neither has no limit, even when `[placement]` says `strict`; a rule that itself says `strict` with neither is refused when the configuration loads (§24.3).
   When they cannot be met, the file stays `degraded` and the status says so.
-- **Preferences**, in order: the rule's `tags` and `domains` (with `tags_mode = "prefer"`); spreading across domains (`spread`); `colocate`; the `new_files` strategy; a disk that is already spinning, `online` before `standby` (§10, §13.4).
+- **Preferences**, in order: the rule's `tags` and `domains` (with `tags_mode = "prefer"`); spreading across domains (`spread`); `colocate`; the `new_files` strategy, or `balance.equalize` for the copies Atoll places; a disk that is already spinning, `online` before `standby` (§10, §13.4).
 - `overflow = "allow"` (default): when the preferred disks are full, another disk is used and a warning is raised. With `deny`, the file stays `degraded`.
 - `colocate`: `none`; `folder` (copies of files from the same folder go to the same disks); `season` (same as `folder`, the usual choice for series); `show` (same grandparent folder). A file's group is the files of that folder, directly in it with `folder` and `season` and at any depth with `show`, each of whose rule says the same `colocate`; a file at the root has none. The preferred disk is the one that holds the most of them, each counted once on a disk where it has a copy, in any state, or one the plan placed.
 - `new_files`: `most-free`, the most free space after `min_free`; `ordered`, the disks in the configuration's order, each filled to `fill_to` of its capacity: a disk below `fill_to` once it holds the file, the lowest position first, then, when none is, the most free space; `percent`, the most free space after `min_free` as a share of the disk's capacity, compared exactly, so that the disks fill to the same share.
+- `balance.equalize` (the maintainer, 2026-11-17): `off` by default; `percent` places each copy Atoll makes, a replica, the copy of a file leaving the SSD cache (§19) or a balancing move (§13.3), as `new_files = "percent"` does, the most free share of capacity, whatever `new_files` says. `new_files` then decides only where a new file first lands: through Atoll's own view (§21.2), or mergerfs's `category.create` (§21.1). So the copies the user writes can fill the disks in order while Atoll's even them out. Nothing is ever moved to even the disks: it acts at placement time only, as DrivePool's equalizer does not. With `new_files = "percent"`, it changes nothing, and a warning says so (§24.4).
 - `spread`: `domain`, or `none` to turn this preference off. `spread = "none"` cannot go with `spread_mode = "strict"`.
 - **Originals**: the solver optimizes space by moving Atoll copies only. When it cannot reach the wanted level otherwise, it says so and suggests `atoll balance --move-originals`. No setting makes this automatic (§6.1, item 9).
 
@@ -435,7 +436,7 @@ Until a strategy is implemented (see §28), it falls back to `most-free`, with a
 | Scanner integration (evacuation, temperature) | `[health]` (phase 4) |
 | Real-time duplication | `mode` per rule; parallel writes with Atoll's own view (phase 2a) |
 | Read striping | none; read classes, SATA before USB |
-| Disk Space Equalizer | `equalize = "off"` by default; `percent` at placement time only |
+| Disk Space Equalizer | `balance.equalize = "percent"`: Atoll's copies go by the most free share; at placement time only, nothing is moved (§12.4) |
 | Stacked balancers, All in One | a single solver, hence no conflict between modules |
 
 ## 13. Placement and capacity
@@ -507,7 +508,7 @@ This is the part of the solver that phase 1a needs: which copies to create, how 
   - What the plan has placed so far counts everywhere: free space, names and paths. So the first name in the plan's order gets the disk (§15.7).
   - **Listed disks**: a disk is listed when it carries one of the rule's `tags`, if it has any, and is in one of its `domains`, if it has any. With neither, every disk is listed. With `tags_mode = "strict"` or `overflow = "deny"`, only a listed disk is a candidate. Otherwise any disk is, and placing a copy on one that is not listed is an overflow, reported with a warning. `overflow` concerns these lists only, so `spread = "domain"` in `prefer` mode always falls back to another domain.
   - **`spread_mode = "strict"`**: the file must cover `min(level, m)` failure domains, where m counts the domains among the disks of role `data` that are not `failed`, `retired` or `draining`, and that are listed when only listed disks are candidates. So a disk `missing` or `readonly` still counts, and a file waits for its domain rather than doubling up on another. Copies that count and are kept, and copies placed or refreshed, cover their domains; a domain outside the m does not help. When at least one domain is left to cover, and they are as many as the jobs left to create, or more, a candidate must be in a domain with no copy.
-  - **The best candidate**, in this order: listed; in a domain with no copy, with `spread = "domain"`; with `colocate`, the one that holds the most of the file's group (§12.4); as `placement.new_files` says, the most free space after `min_free` by default (§12.4); `online` before `standby`; the lowest position. Vectors in `conformance/vectors/plan.json`.
+  - **The best candidate**, in this order: listed; in a domain with no copy, with `spread = "domain"`; with `colocate`, the one that holds the most of the file's group (§12.4); as `placement.new_files` says, the most free space after `min_free` by default, or the most free share with `balance.equalize = "percent"` (§12.4); `online` before `standby`; the lowest position. Vectors in `conformance/vectors/plan.json`.
   - What fits is placed, even when the level or the domains cannot be reached.
 - **Copies beyond the level**: when more copies count than the level, the level's number of them is kept, and only their marks change; nothing is removed (§11.3). The order is: a copy not on a `missing` disk, so that a copy that can be read is never marked for a copy that cannot; `user` before `atoll`; where only listed disks are candidates, a copy on a listed disk before one that is not, so that a copy made where the lists now want it outranks one they no longer allow; the oldest `first_seen`; the lowest position; with `pending` copies last. With `spread = "domain"`, a first pass keeps only copies of domains not yet covered, and a second pass fills what is left. So a replica re-created while a disk was away gives way to the copy that comes back (§18), and a copy that spreads the file can outrank a user copy. A copy `ok` that is not kept becomes `surplus`, a copy `surplus` that is kept goes back to `ok`, and a copy `pending` that is not kept, or that does not count, is canceled. An `unavailable` copy keeps its state.
 - **The states the plan gives a file**, for `ShownState` (§4): `corrupt` and `conflict` come from elsewhere.
@@ -1481,7 +1482,7 @@ mass_guard = { files = 100, percent = "5%", window = "10m" }   # files modified,
 schedule = "02:00-06:00"                # never | immediate | time window
 trigger  = { ratio_below = "90%", or_more_than = "200GiB" }   # share of bytes correctly placed
 budget   = "3h"
-equalize = "off"
+equalize = "off"                        # off | percent: Atoll's copies by the most free share
 
 [integrity]
 scrub_every  = "30d"
@@ -1651,6 +1652,7 @@ Each step reports every problem it finds, at most one per key, sorted by key as 
 - `view.engine = "atoll"` was the exception, an error until phase 2a brought Atoll's own view, as there would have been no merged view at all. It is accepted since; no setting is an error for its phase any more.
 - `read.classes` with `read.policy = "oldest"`, the default, gets a warning of no later phase where the file or a preset sets it, an empty list too: it has no effect, as `oldest` reads the original alone (§7).
 - With `view.engine = "mergerfs"`, the default, `cache.enabled = true` and a disk's `role = "cache"` get a warning of no later phase where the file or a preset sets them: the SSD cache needs Atoll's own view, and does nothing with mergerfs (§19).
+- `balance.equalize = "percent"` with `placement.new_files = "percent"` gets a warning of no later phase where the file sets it: it has no effect, as `new_files` places every copy so already (§12.4).
 - With `ups.enabled = true`, a `ups.nut` that is no address NUT can have, such as a port past 65535, gets a warning of no later phase, as the schema takes it: the daemon finds the UPS unreachable (§20).
 - A tag or domain that a rule or `read.classes` names and no disk carries gets a warning too, as `disk add` may bring it later. A disk with no `domain` carries none, not even its `id`. The key is that of the item, such as `rule[0].tags[1]`, and warnings are sorted as problems are.
 
@@ -1658,7 +1660,6 @@ Phase 1a warns about these settings, and each phase removes its own lines. The k
 
 | Setting | Value that gets a warning | Phase | Until then |
 |---|---|---|---|
-| `balance.equalize` | anything but `off` | 2b | no effect |
 | `health.evacuate_on`, `health.avoid_hotter_than` | any | 4 | no effect |
 
 ## 25. Command-line interface

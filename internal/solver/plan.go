@@ -91,6 +91,9 @@ type Placement struct {
 	Colocate string
 }
 
+// EqualizePercent is the value of balance.equalize that places each copy by the most free share (specs.md §12.4).
+const EqualizePercent = "percent"
+
 // The values of colocate, and of placement.new_files (specs.md §12.4).
 const (
 	ColocateNone   = "none"
@@ -143,6 +146,9 @@ type Input struct {
 	// to (specs.md §12.4).
 	NewFiles string
 	FillTo   value.Percent
+	// Equalize is balance.equalize: with percent, the plan places each copy by the most free share of capacity,
+	// whatever NewFiles says, which then decides only where a new file first lands (specs.md §12.4).
+	Equalize string
 	// Balance makes the plan of atoll balance (specs.md §13.3): an Atoll copy that breaks a strict setting of its
 	// file counts for nothing, so that one is made where the setting wants it. It stays a source, and its disk still
 	// holds a copy; its result names it.
@@ -379,7 +385,7 @@ type planner struct {
 	originals bool
 	// taken is Input.Taken.
 	taken func(disk, path string) (bool, error)
-	// newFiles and fillTo are Input.NewFiles and Input.FillTo.
+	// newFiles and fillTo are Input.NewFiles and Input.FillTo; newFiles is percent with Input.Equalize so.
 	newFiles string
 	fillTo   value.Percent
 	// groups counts, for each group of colocate, the files with a copy on each disk, in any state, or one the plan
@@ -390,6 +396,9 @@ type planner struct {
 }
 
 func newPlanner(in Input) (*planner, error) {
+	if in.Equalize == EqualizePercent {
+		in.NewFiles = NewPercent
+	}
 	p := &planner{byID: map[string]*planDisk{}, byPath: map[string]*planFile{}, entries: in.Entries, balance: in.Balance,
 		newFiles: in.NewFiles, fillTo: in.FillTo, groups: map[string]map[*planDisk]int{},
 		originals: in.Balance && in.MoveOriginals, taken: in.Taken, mirror: in.CacheMirror, early: in.CacheEarly}

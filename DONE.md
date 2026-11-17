@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## balance.equalize, 2026-11-17 (specs.md §12, §12.4, §13.4, §24.4)
+
+Commit "Place Atoll's copies by the most free share with balance.equalize", on `beta`, the sixth piece of phase 2b. Vectors first: five cases of `plan.json` and three of `config.json`.
+
+- **The maintainer's answer** (2026-11-17, the recommended one): with `balance.equalize = "percent"`, the copies Atoll places itself go to the disk with the most free share of capacity, whatever `placement.new_files` says, which then decides only where a new file first lands; nothing is ever moved to even the disks, "at placement time only", as the spec's line had it. Rejected: moving Atoll's copies to even the fill, as DrivePool's equalizer does, and a key of no effect.
+- **The plan** (`solver.Input.Equalize`): `percent` takes the place of `new_files` in the best candidate's order, after the listed disks, spreading and `colocate`, before `online` and the position (§13.4). Every plan reads it: the passes' copies, those of a file leaving the SSD cache, balancing's, `atoll replicate`'s, and `atoll capacity`, which plans as Atoll would place. Atoll's own view and the mergerfs line keep `new_files` for what is new.
+- **The configuration**: `balance.equalize` no longer warns of a later phase; with `new_files = "percent"` it warns of no effect. The example of §24.1 and `deploy/atoll.toml` say what it does; the DrivePool table of §12 too.
+- Tests: the vectors, which put `equalize` after `colocate` and spreading and before `new_files`; `TestEqualizePlacesAtollsCopies`, a pass whose copy goes to the most free share with `ordered`, and as `ordered` says when off; `TestCapacityPlansWithEqualize`; `TestTheViewLandsAsNewFilesSaysWhateverEqualize`. Verified: the unit tests, the race detector on solver, jobs, watch and catalog, lint on the default and loop-device builds, and 617 scenarios. Made to fail, each of 7 mutations was caught: the plan or the pass or `atoll capacity` that reads no `equalize`, the view that equalizes, `equalize` before `colocate`, and the warning missing or wrong.
+- **Decided without the maintainer, to confirm:**
+  - every plan reads it, `atoll capacity` and `atoll balance` among them, as each says what Atoll would do; only the landing of what is new, through the view or mergerfs, keeps `new_files`, the SSD cache's included;
+  - with `percent`, `fill_to` no longer bounds Atoll's copies, as with `new_files = "percent"`: a copy goes to a disk past it while it has room past `min_free`;
+  - `balance.equalize = "percent"` with `new_files = "percent"` loads with a warning of no effect, where the file sets it, as `read.classes` with `oldest` does.
+
 ## The UPS through NUT, 2026-11-17 (specs.md §15.13, §20, §23, §24.4)
 
 Commit "Read the UPS through NUT, and stop on its battery", on `beta`, the fifth piece of phase 2b (R-27). Vectors first: `ups_address.json`, `ups_answer.json` and `ups_power.json`, new, ten cases of `daemon_wake.json` and three of `config.json`.

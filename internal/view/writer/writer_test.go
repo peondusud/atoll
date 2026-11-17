@@ -376,6 +376,16 @@ func TestWriterPlacesAsTheStrategiesSay(t *testing.T) {
 	}
 }
 
+// balance.equalize places Atoll's copies, not what is new: the view lands a new file as placement.new_files says, ordered
+// here, where the most free share would be t2 (specs.md §12.4).
+func TestTheViewLandsAsNewFilesSaysWhateverEqualize(t *testing.T) {
+	b := newBenchWith(t, "ext4", "new_files = \"ordered\"\n[balance]\nequalize = \"percent\"\n", 200, 300)
+	b.create("Films/new.mkv", "new")
+	if b.on("t1", "Films/new.mkv") != "new" {
+		t.Errorf("a new film is not on t1: t1 %q, t2 %q", b.on("t1", "Films/new.mkv"), b.on("t2", "Films/new.mkv"))
+	}
+}
+
 // cacheBench is a bench whose t2 is a cache disk, with Atoll's own view, and more after the disks.
 func cacheBench(t *testing.T, more string, free2 int64) *bench {
 	t.Helper()

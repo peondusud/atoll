@@ -29,6 +29,7 @@ type planVector struct {
 	MoveOriginals bool   `json:"move_originals"`
 	NewFiles      string `json:"new_files"`
 	FillTo        string `json:"fill_to"`
+	Equalize      string `json:"equalize"`
 	CacheMirror   bool   `json:"cache_mirror"`
 	CacheEarly    bool   `json:"cache_early"`
 	Note          string `json:"note"`
@@ -124,7 +125,7 @@ func or[T any](v *T, fallback T) T {
 // input turns a vector into the input of MakePlan, with the defaults of
 // conformance/vectors/README.md.
 func (v *planVector) input() (Input, error) {
-	in := Input{Balance: v.Balance, MoveOriginals: v.MoveOriginals, NewFiles: v.NewFiles, CacheMirror: v.CacheMirror, CacheEarly: v.CacheEarly}
+	in := Input{Balance: v.Balance, MoveOriginals: v.MoveOriginals, NewFiles: v.NewFiles, Equalize: v.Equalize, CacheMirror: v.CacheMirror, CacheEarly: v.CacheEarly}
 	var err error
 	fillTo := v.FillTo
 	if fillTo == "" {

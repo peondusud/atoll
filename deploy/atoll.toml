@@ -88,7 +88,7 @@ mass_guard = { files = 100, percent = "5%", window = "10m" }   # files modified,
 schedule = "02:00-06:00"                # never | immediate | time window
 trigger  = { ratio_below = "90%", or_more_than = "200GiB" }   # share of bytes correctly placed
 budget   = "3h"
-equalize = "off"
+equalize = "off"                        # off | percent: Atoll's copies by the most free share
 
 [integrity]
 scrub_every  = "30d"

@@ -635,7 +635,7 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 		return err
 	}
 	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance,
-		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals, Taken: taken, NewFiles: newFiles, FillTo: fillTo}
+		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals, Taken: taken, NewFiles: newFiles, FillTo: fillTo, Equalize: EqualizeOf(c)}
 	var release func(string) bool
 	if rep != nil {
 		release = rep.Release
@@ -733,6 +733,13 @@ func missingGraceOf(c *config.Config) (time.Duration, error) {
 		return 0, fmt.Errorf("health.missing_grace: %w", err)
 	}
 	return grace, nil
+}
+
+// EqualizeOf gives balance.equalize: with percent, the plan places Atoll's copies by the most free share, and the view
+// still lands what is new as placement.new_files says (specs.md §12.4).
+func EqualizeOf(c *config.Config) string {
+	equalize, _ := c.Effective()["balance.equalize"].(string)
+	return equalize
 }
 
 // NewFilesOf gives placement.new_files and placement.fill_to (specs.md §12.4).
