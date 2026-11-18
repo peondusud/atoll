@@ -438,8 +438,10 @@ func TestDaemonSoak(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	// A soak in which the daemon did nothing, or held everything, measures nothing. A pass walks every file of both
-	// disks: one a minute on the default 2,000 files a disk, a hundred times fewer on a hundred times as many.
+	// A soak in which the daemon did nothing, or held everything, measures nothing. The floor dates from passes that
+	// walked every file of both disks: one a minute on the default 2,000 files a disk, a hundred times fewer on a
+	// hundred times as many. A pass for events now looks at the names the watcher heard (specs.md §15.13), and 12
+	// hours on 200,000 files a disk held 911 of them.
 	if want := max(10, int(*soakFor/time.Minute)*2000/max(*soakFiles, 2000)); count < want {
 		t.Errorf("%d passes in %v: the writer's changes did not reach the daemon", count, *soakFor)
 	}
@@ -447,7 +449,7 @@ func TestDaemonSoak(t *testing.T) {
 		t.Errorf("a guard held %d passes of %d: the soak measured a daemon that decides nothing", held, count)
 	}
 	// Fewer passes than that in a tenth say nothing of a trend: on 200,000 files a disk in qemu without KVM, a tenth of
-	// an hour holds one at most.
+	// an hour held one at most while each pass walked both disks whole, and holds about eight now.
 	if tenths[1] >= 4 && tenths[9]*2 < tenths[1] {
 		t.Errorf("the passes slowed down: %d in the second tenth, %d in the last (%v)", tenths[1], tenths[9], tenths)
 	}

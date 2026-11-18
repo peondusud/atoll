@@ -2,6 +2,16 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The soak of 12 hours on the passes that look at names, 2026-11-18 (specs.md §26)
+
+The maintainer asked for it once phase 2b was done, 12 hours ahead of the 24 ("lance le soak 12h deja"): `TestDaemonSoak` on `2d016b3`, the code of the passes that look at what changed (`5a6586e`), in qemu without KVM on Linux 6.12, `SOAK=12h SOAK_FILES=200000`, the run made on `f438a3a` on 2026-11-14. Its log is `bin/soak12b/soak-12h.log`.
+
+- **It passed**: 911 passes, none held nor partial, no error, and one warning, expected, no `smartctl` in the guest.
+- **The passes.** The one that starts took 5 min 56 s, for 6 min 21 s. Every pass after it looked at the disk the writer changes alone, by names, and took 7.0 s at the median, 8.0 s on average and 15.9 s at most, for 105 s at the median on `f438a3a`. Its time is that of the operations it runs: about 92 a pass, and 112 to 116 in the second and third tenths, where a pass took 10 to 11 s. The daemon spent 2.0 hours of the 12 in its passes, for 8.9 hours, and ran as many operations a minute as before, about 116, in three times as many passes.
+- **At each tenth**: 74 to 99 passes, for 24 to 31; 3.3 to 3.6 MiB of heap in use, 9 goroutines, 14 open files, with no growth; 38 to 110 MiB resident, for 174 to 184; a peak of 172.8 to 180.7 MiB, under the 200 MB (190.7 MiB) at every tenth, for 212.1 to 220.4 MiB, the Go runtime holding at most 155.0 to 163.8 MiB of it and the heap 126.0 to 141.1 MiB live. The catalog grew from 73.3 to 113.1 MiB, as on `f438a3a`: events and journal under a change every second.
+- **The first pass is still past the 200 MB**: 195.2 MiB, the Go runtime holding at most 173.9 MiB, 19 past its soft limit of 155, and the heap 147.5 MiB live. Read at its most, 193.9 MiB: the runtime 171.7, SQLite's allocator 10.2, the binary's pages 16.0, and 4.0 of it all in transparent huge pages. It is the pass that finds the 400,000 copies of a catalog that knows none, once; `TestScale` measured every step at 183.8 MiB at most on `47ab5f6`, and the soak on `f438a3a` had its first pass at 192.4 MiB. Left open (TODO.md).
+- The soak's comments on how many passes a tenth holds dated from passes that walked both disks whole; they say so now.
+
 ## Passes that look at what changed, 2026-11-17 (specs.md §15.13)
 
 Commits "Look at some names of a disk alone, as a pass is given them", "Plan only what may have changed after a look limited to names" and "Look at the names the watcher heard, not the whole disk", on `beta`, the last piece of phase 2b. Vectors first: `named_verdict.json` (12 cases) and `heard_names.json` (8).

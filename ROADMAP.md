@@ -47,7 +47,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 12 hours are, on the code of the review's decisions: 293 passes, its heap in use 3.6 to 3.9 MiB, with no growth. Days remain: a soak of 24 hours, after phase 2b unless the maintainer asks sooner (2026-11-16). The most it holds went past the 200 MB of §26 at that size, up to 220.4 MiB in the soak and 229.6 MiB in the link guard's passes, by transparent huge pages the kernel kept resident: with them off and a soft limit of 155 MiB, done on 2026-11-15, every step measured peaks at 181.6 MiB at most, which the soak is to confirm (TODO.md).
+1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 12 hours are, on the code of the review's decisions: 293 passes, its heap in use 3.6 to 3.9 MiB, with no growth. Again on the passes that look at names (2026-11-18): 911 passes, its heap in use 3.3 to 3.6 MiB, with no growth. Days remain: a soak of 24 hours. The most it holds went past the 200 MB of §26 at that size, up to 220.4 MiB in the soak and 229.6 MiB in the link guard's passes, by transparent huge pages the kernel kept resident: with them off and a soft limit of 155 MiB, done on 2026-11-15, every step measured peaks at 181.6 MiB at most; the soak of 2026-11-18 confirms it at each tenth, 180.7 MiB at most, but not for its first pass, 195.2 MiB (TODO.md).
 
 ## Beta: phase 1b, the complete Linux MVP
 
@@ -70,7 +70,7 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
   - To do, beyond phase 2a's list: a write that meets `ENOSPC` moved to another disk, hard links, extended attributes, copies written in parallel in `immediate` mode.
 - **The contracts frozen at format version 1**: catalog schema, on-disk layout, configuration keys, local API, `--json` schemas and exit codes. This is what the Rust rewrite (phase 3) must keep.
   - Done on 2026-11-16, as the maintainer chose: specs.md §29.3 says what a later version keeps, and `conformance/frozen/v1.json` pins it, which a test checks (DONE.md). Every choice DONE.md listed as to confirm was confirmed the same day.
-- Phase 2a is done, `read.policy = "prefer-spinning"` and `read.classes` with phase 2b's knowledge of which disk spins (DONE.md, 2026-11-16). What v0.1 needs besides is the alpha's: the memory of a daemon that runs for days, the soak of 24 hours, after phase 2b unless the maintainer asks sooner.
+- Phase 2a is done, `read.policy = "prefer-spinning"` and `read.classes` with phase 2b's knowledge of which disk spins (DONE.md, 2026-11-16). What v0.1 needs besides is the alpha's: the memory of a daemon that runs for days, the soak of 24 hours.
 
 ## Phase 2b, disk sleep
 
@@ -82,4 +82,4 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
 - Done, `balance.equalize` (§12.4, DONE.md, 2026-11-17): with `percent`, Atoll's own copies go by the most free share of capacity, whatever `new_files` says; nothing is moved.
 - Done, Prometheus `/metrics` (§23.1, DONE.md, 2026-11-17): on the local API with its token and on `metrics.listen` with none; the counts of the catalog after each pass, the rest as the daemon holds it; names pinned in `api/metrics.json`.
 - Done, passes that look at what changed (§15.13, DONE.md, 2026-11-17): a pass for events looks at the names the watcher heard alone, and plans only what may have changed; on 50,000 files a disk, 12 ms for a pass given one name, against 1 s for a pass of everything.
-- Phase 2b is done but for a write that runs out of space moved to another disk as it goes, left apart by the maintainer. What follows it: the soak of 24 hours, the try with a real Plex and the openmediavault plugin (TODO.md).
+- Phase 2b is done but for a write that runs out of space moved to another disk as it goes, left apart by the maintainer. What follows it: the soak of 24 hours, the try with a real Plex and the openmediavault plugin (TODO.md). A soak of 12 hours on it passed on 2026-11-18: about 7 s a pass for 105 s, and a peak under the 200 MB at every tenth.
