@@ -2,6 +2,24 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The first pass back under the 200 MB, 2026-11-18 (specs.md §26)
+
+The maintainer asked why the soak's first pass peaked at 195.2 MiB ("Oui, cherche").
+
+- **Not the daemon: the pass.** `TestScale`'s first pass, which runs the pass alone, peaked at 198.5 MiB on `a101246`, its heap 148.4 MiB live, where `47ab5f6` peaks at 182.7 MiB with 135.5 MiB live, measured the same way the same day. The two runs were in qemu, from copies of the tests that stop after the first pass and take a heap profile at the most live heap. The soak's own first pass on `a101246` held 150.4 MiB live.
+- **What grew.** The profiles hold all of it in the plan of the whole pool (`watch.filesForPlan`, `solver.newPlanner`), 22 MiB more than on `47ab5f6`. Phase 2b had made what the plan holds for every file larger:
+  - each file's `planFile`, by 48 bytes for the counts of the SSD cache, 224 bytes once the allocator rounds it, for 176;
+  - its `File`, by 16 bytes, for its residency;
+  - what the settling remembers of it, by 8 bytes, for a conflict held.
+  On 200,000 files, that is about 14 MiB.
+- **The fix.** What only a file on the SSD cache, or with copies misplaced in a plan of `atoll balance`, needs is held apart, and made for that file alone. A `planFile` is 160 bytes, 64 fewer for each file once rounded, about 12 MiB on 200,000 files. A test holds `planFile`, `File`, `Copy` and what the settling remembers to their sizes: a field more for every file is then a choice, not something nobody saw.
+- **Measured in qemu on the fix**, in the same copies of the tests:
+  - `TestScale`'s first pass peaks at 180.5 MiB, its heap 134.6 MiB live;
+  - the soak's first pass peaks at 181.7 MiB, its heap 136.0 MiB live;
+  - both are under the 200 MB (190.7 MiB), where `47ab5f6` was.
+  The copies sampled the heap every 64 KiB, which costs a little.
+- **Left:** `File`'s residency could be a byte, 3 MiB on 200,000 files. It stays as it is: the first pass is back where it was.
+
 ## The soak of 12 hours on the passes that look at names, 2026-11-18 (specs.md §26)
 
 The maintainer asked for it once phase 2b was done, 12 hours ahead of the 24 ("lance le soak 12h deja"): `TestDaemonSoak` on `2d016b3`, the code of the passes that look at what changed (`5a6586e`), in qemu without KVM on Linux 6.12, `SOAK=12h SOAK_FILES=200000`, the run made on `f438a3a` on 2026-11-14. Its log is `bin/soak12b/soak-12h.log`.
@@ -9,7 +27,7 @@ The maintainer asked for it once phase 2b was done, 12 hours ahead of the 24 ("l
 - **It passed**: 911 passes, none held nor partial, no error, and one warning, expected, no `smartctl` in the guest.
 - **The passes.** The one that starts took 5 min 56 s, for 6 min 21 s. Every pass after it looked at the disk the writer changes alone, by names, and took 7.0 s at the median, 8.0 s on average and 15.9 s at most, for 105 s at the median on `f438a3a`. Its time is that of the operations it runs: about 92 a pass, and 112 to 116 in the second and third tenths, where a pass took 10 to 11 s. The daemon spent 2.0 hours of the 12 in its passes, for 8.9 hours, and ran as many operations a minute as before, about 116, in three times as many passes.
 - **At each tenth**: 74 to 99 passes, for 24 to 31; 3.3 to 3.6 MiB of heap in use, 9 goroutines, 14 open files, with no growth; 38 to 110 MiB resident, for 174 to 184; a peak of 172.8 to 180.7 MiB, under the 200 MB (190.7 MiB) at every tenth, for 212.1 to 220.4 MiB, the Go runtime holding at most 155.0 to 163.8 MiB of it and the heap 126.0 to 141.1 MiB live. The catalog grew from 73.3 to 113.1 MiB, as on `f438a3a`: events and journal under a change every second.
-- **The first pass is still past the 200 MB**: 195.2 MiB, the Go runtime holding at most 173.9 MiB, 19 past its soft limit of 155, and the heap 147.5 MiB live. Read at its most, 193.9 MiB: the runtime 171.7, SQLite's allocator 10.2, the binary's pages 16.0, and 4.0 of it all in transparent huge pages. It is the pass that finds the 400,000 copies of a catalog that knows none, once; `TestScale` measured every step at 183.8 MiB at most on `47ab5f6`, and the soak on `f438a3a` had its first pass at 192.4 MiB. Left open (TODO.md).
+- **The first pass is still past the 200 MB**: 195.2 MiB, the Go runtime holding at most 173.9 MiB, 19 past its soft limit of 155, and the heap 147.5 MiB live. Read at its most, 193.9 MiB: the runtime 171.7, SQLite's allocator 10.2, the binary's pages 16.0, and 4.0 of it all in transparent huge pages. It is the pass that finds the 400,000 copies of a catalog that knows none, once; `TestScale` measured every step at 183.8 MiB at most on `47ab5f6`, and the soak on `f438a3a` had its first pass at 192.4 MiB. Brought back under the same day (the entry above).
 - The soak's comments on how many passes a tenth holds dated from passes that walked both disks whole; they say so now.
 
 ## Passes that look at what changed, 2026-11-17 (specs.md §15.13)
