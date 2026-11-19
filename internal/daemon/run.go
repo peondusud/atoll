@@ -68,6 +68,9 @@ type Options struct {
 	UPSEvery, UPSDead, FlushWait time.Duration
 	// Metrics holds what /metrics gives, which the loop records as it goes (specs.md §23.1); nil records nothing.
 	Metrics *metrics.Recorder
+	// Catalog takes what the local API hands the loop through Hand: its answers to a guard, which the loop runs on the
+	// catalog between two steps (specs.md §25.1). Nil takes none.
+	Catalog <-chan *CatalogWork
 }
 
 // ErrStartup says that the daemon could not start: its configuration or its catalog cannot be used.
@@ -394,6 +397,11 @@ func (l *loop) run(ctx context.Context) error {
 // step takes one turn of the loop: the step due, run under turn, which the battery running low ends as SIGTERM would,
 // or a sleep until something calls for a look. It says whether the daemon was asked to stop.
 func (l *loop) step(ctx, turn context.Context) (bool, error) {
+	// What the local API handed comes first: it waited for the step before, as a command waits for a pass (specs.md
+	// §25.1).
+	if l.takeWork(turn) {
+		return false, nil
+	}
 	now := l.opt.Machine.Now()
 	groupNext, waiting := l.takeRipe(now)
 	// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
@@ -480,6 +488,9 @@ func (l *loop) step(ctx, turn context.Context) (bool, error) {
 	case <-l.opt.Reload:
 		timer.Stop()
 		l.reload()
+	case w := <-l.opt.Catalog:
+		timer.Stop()
+		l.runWork(turn, w)
 	case <-l.power.signal():
 		timer.Stop()
 	case <-timer.C:

@@ -51,8 +51,8 @@ func commandHelps() []commandHelp {
 			"report names a disk would refuse, and those that collide"},
 		{"guard", []string{
 			"atoll guard list [--json]",
-			"atoll guard confirm --disk <id> [--kind deletions|modifications] [--json]",
-			"atoll guard reject --disk <id> [--kind deletions|modifications] [--json]",
+			"atoll guard confirm --disk <id> [--kind deletions|modifications] [--dry-run] [--json]",
+			"atoll guard reject --disk <id> [--kind deletions|modifications] [--dry-run] [--json]",
 		}, "show the mass-deletion and mass-modification guards, or answer one that tripped"},
 		{"balance", []string{"atoll balance [--move-originals] [--dry-run] [--yes] [--json]"},
 			"move the copies Atoll made that break a strict setting of their file to where it wants them, and with --move-originals the user's copies too"},

@@ -46,12 +46,29 @@ func ListenSocket(ctx context.Context, path string) (net.Listener, error) {
 // ReadSmallFile reads a file of the system disk that holds at most limit bytes, such as a token: a larger one is an
 // error, and is not read whole.
 func ReadSmallFile(path string, limit int64) (data []byte, err error) {
+	data, _, err = ReadSecretFile(path, limit)
+	return data, err
+}
+
+// ReadSecretFile is ReadSmallFile for a file that holds a secret, such as a token: it also says whether accounts other
+// than the file's owner and group may read it, as the file it read says, with no second look at its path.
+func ReadSecretFile(path string, limit int64) (data []byte, othersMayRead bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
+		return nil, false, fmt.Errorf("read: %w", err)
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
-	data, err = io.ReadAll(io.LimitReader(f, limit+1))
+	st, err := f.Stat()
+	if err != nil {
+		return nil, false, fmt.Errorf("read %s: %w", path, err)
+	}
+	othersMayRead = st.Mode().Perm()&0o004 != 0
+	data, err = readLimited(f, path, limit)
+	return data, othersMayRead, err
+}
+
+func readLimited(f *os.File, path string, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}

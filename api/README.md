@@ -4,7 +4,7 @@ Language-neutral contracts shared by the Go and Rust versions of Atoll (`specs.m
 
 | Path | Content |
 |---|---|
-| `openapi.yaml` | The local API (`specs.md` §25.1): HTTP/1.1 and JSON over a Unix socket (named pipe on Windows), and over TCP with a token. Each answer has the schema of the command it mirrors. |
+| `openapi.yaml` | The local API (`specs.md` §25.1): HTTP/1.1 and JSON over a Unix socket (named pipe on Windows), and over TCP with a token. Each answer has the schema of the command it mirrors. Its one write, `POST /v1/guards/{id}`, an answer to a guard, takes the body `GuardAnswerRequest`, which it defines, and answers as `atoll guard confirm` or `reject` does. |
 | `schemas/` | JSON schemas of the `--json` outputs of the CLI (`specs.md` §25). |
 | `metrics.json` | The Prometheus metrics of `/metrics` (`specs.md` §23.1): each metric's name, type, labels and help, in the order they are written. The binary embeds it (`api.go`), and `conformance/vectors/metrics.json` pins the text. |
 
