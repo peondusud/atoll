@@ -71,6 +71,14 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - GoReleaser v2.20.2 or later once two weeks old.
 - **confirm**: the choices made alone, first the sample configuration outside `/etc`.
 
+## The two flaws TLC found, 2026-11-19 (DONE.md)
+
+- **decision**: the remedy of flaw 1, a write into a new replica before its row is written recorded as verified (§14.2, §17.2): the row takes what the part was when verified, or another (`conformance/models/README.md`).
+- **decision**: the remedy of flaw 2, a job running dropped while its operation is planned (§13.4, §14.1, §15.12): §14.1 everywhere, or a reprise that sends such a copy to the trash.
+- Once a remedy lands: a test that fails first, its scenario moved from `conformance/models/flaws/` to `conformance/scenarios/`, its `Flaw…cfg` expecting `pass`, its name out of `Fixes`.
+- The copy state `unavailable`: say what sets it, or say in §4 that nothing does.
+- Next TLA+ models, by risk: the view's journal and its parts written in parallel, renames and folders, the SSD cache's transfer, the link guard, copies at once. tla2tools 1.8.0 once released.
+
 ## The tests after the gaps of 2026-11-19 (DONE.md)
 
 - Read the first nights of mutation tests on `names`, `rules`, `config`, `integrity` and `solver`, sort the mutants that lived, then set the gate (95 % efficacy, 85 % mutant coverage a pure package); then `jobs`, `ops`, `trash` and `watch`.
