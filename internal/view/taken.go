@@ -8,6 +8,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/solver"
 )
 
 // NodeOfStat presents what a look found on a disk, as the view presents what it made or wrote there (specs.md §21.2):
@@ -115,5 +116,28 @@ func (t *Tree) agrees(ctx context.Context, disks []Disk, ops []Op, path string, 
 		return live.Target == alone.Target, nil
 	case NodeFile:
 	}
-	return alone.Disk == live.Disk && alone.Size == live.Size && alone.MtimeNS == live.MtimeNS, nil
+	if alone.Size != live.Size || alone.MtimeNS != live.MtimeNS {
+		return false, nil
+	}
+	// The catalog may present another copy than the one the view wrote, as the original moved to a copy of the same
+	// version with an older creation time, or the only one known: a part written in parallel, on a disk whose time of
+	// creation statx gives, beside one where it gives none (ntfs-3g). Nothing presented changes in a byte then, once the
+	// catalog holds the copy the view wrote in sync, at the size and time a look finds there (specs.md §7, §21.2).
+	return alone.Disk == live.Disk || inSyncOn(rows[path].File, live), nil
+}
+
+// inSyncOn says whether the catalog holds a file's copy on a disk in sync, where it is, at the size and time a look
+// found there.
+func inSyncOn(file *catalog.ViewFile, live *Node) bool {
+	if file == nil {
+		return false
+	}
+	for _, c := range file.Copies {
+		if c.Disk != live.Disk {
+			continue
+		}
+		return (c.State == string(solver.CopyOK) || c.State == string(solver.CopySurplus)) && c.GoneKind == "" && c.OldPath == "" &&
+			c.Size.Valid && c.Size.Int64 == live.Size && c.MtimeNS.Valid && c.MtimeNS.Int64 == live.MtimeNS
+	}
+	return false
 }
