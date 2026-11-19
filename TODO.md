@@ -50,7 +50,9 @@ All of it is done but the maintainer's own step, moving Plex's libraries to the 
 Still open, though the solver, the scanner and `atoll names check` are built:
 
 - Measure on the maintainer's Windows machine, with their go-ahead, what a report says is not established: which reserved names Windows 11 still refuses, and what Windows does with `Film.mkv` beside `film.mkv` on an NTFS volume (a VHD).
-- **decision**: the `ntfs` driver of Linux 7.1 and later (§10, §15.8, §22), the only NTFS driver of Debian 14's kernel: support it like ntfs3, keep it `readonly`, or something in between. Measured in `docs/research/ntfs-driver.md`, whose last section lists the decisions it needs. Until then a disk mounted with it is `readonly`.
+- **decision**: hibernated NTFS volumes on every driver (point 3 of `docs/research/ntfs-driver.md`): ntfs3, and the type `ntfs` with `errors=continue`, mount them read-write; a mount check reading `hiberfil.sys` at the top would make such a disk `readonly` (a new reason, §10, §29.3).
+- **confirm**: the six choices made alone for the type `ntfs` (DONE.md, 2026-11-19), the link guard making no link there first.
+- Run `test/loopdev` on the type `ntfs` in qemu (mainline 7.3), and consider booting Debian sid's 7.3.3, the kernel with no ntfs3 (point 7 of the report).. Measured in `docs/research/ntfs-driver.md`, whose last section lists the decisions it needs. Until then a disk mounted with it is `readonly`.
 
 ## Pure core still without vectors (specs.md §29.4)
 

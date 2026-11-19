@@ -25,7 +25,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **Configuration and rules.** The TOML configuration with its schema and presets, ordered rules giving each file its policy, the in-house glob matcher and the regex subset shared with Rust (§11, §24, §29.5).
 - **Names.** Name compatibility per filesystem, NFC and NTFS collisions, path lengths, and the name report (§15.7 to §15.9).
 - **Solver and catalog.** Placement, the capacity formula and the original of each file (§7, §12, §13), in a pure solver. The SQLite catalog, with its migrations (§9).
-- **Disks.** Identity read from the superblock, the mount check, and the confirmation of a disk past the page cache before any write (§10).
+- **Disks.** Identity read from the superblock, the mount check, and the confirmation of a disk past the page cache before any write (§10); the type `ntfs` of Linux 7.1, Debian 14's only kernel NTFS driver, supported as ntfs3 with `errors=remount-ro` (§10, §22).
 - **Commands.** `atoll init`, `scan`, `status`, `rules check` and `explain`, `names check`, and `disk list` (§15.9 to §15.11, §25).
 - **Copies.** The copy pipeline (`atoll replicate`), verified before it is renamed into place, and journaled with its reprise after a crash (§14, §17.2).
 - **Propagation.** `atoll daemon --until-idle` propagates renames, deletions and modifications, and applies changes of modification time, mode and owner to the other copies. It runs the `deferred` mode (§12.3, §15.12).
