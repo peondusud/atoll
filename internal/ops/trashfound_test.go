@@ -101,4 +101,13 @@ func TestFoundTrash(t *testing.T) {
 	if none, err := empty.FoundTrash(func(string, string) { t.Error("told of something") }, watch.Unbounded); err != nil || none != nil {
 		t.Errorf("%v, %v", none, err)
 	}
+	// What is past the limits of a walk of the disk's own folders is not read: the entry is told of, and stays.
+	left = nil
+	found, err = d.FoundTrash(func(place, why string) { left = append(left, place+": "+why) }, watch.Limits{MaxPath: len("2026-01-02/9/a/b.mkv") - 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(found, func(e FoundEntry) bool { return e.OpID == 9 }) || !slices.Contains(left, "2026-01-02/9: holds a place past the limit of a mergerfs branch") {
+		t.Errorf("past the limit: found %+v, left %q", found, left)
+	}
 }

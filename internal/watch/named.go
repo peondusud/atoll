@@ -310,6 +310,8 @@ func (n *nameReader) leaf(ctx context.Context, dir fsx.Dir, prefix, name, path s
 			n.w.OtherMounts = append(n.w.OtherMounts, path)
 			return nil
 		}
+		// The folder that holds it is the walk's root, which it never lets go of, and the disk's root is held besides: a
+		// look at names holds one more than walk.max_open at most (specs.md §15.8).
 		k := newWalker(ctx, dir, strings.TrimSuffix(prefix, "/"), n.top, n.w, n.limits)
 		return k.walkBelow(k.stack[0], name, path, st)
 	case fsx.KindSymlink:

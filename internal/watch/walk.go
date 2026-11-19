@@ -78,8 +78,7 @@ type Limits struct {
 	MaxOpen int
 }
 
-// Unbounded walks everything, holding every folder it is below: a walk of Atoll's own folders, whose depth the
-// library's bounds, or of a test.
+// Unbounded walks everything, holding every folder it is below, as a walk did before walk.long_paths: for a test.
 var Unbounded = Limits{MaxPath: NoBound}
 
 // LimitsOf gives the limits of the walks of a disk, as walk.long_paths and walk.max_open say (specs.md §15.8, §24).

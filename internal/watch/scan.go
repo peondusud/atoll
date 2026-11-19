@@ -58,8 +58,8 @@ type Report struct {
 	// not be opened for their hash, for a reason that says nothing of their disk, come after them.
 	Refused []string
 	// TooLong holds the names the walk neither recorded nor went below, as their path through the disk's mount is past
-	// the limit of its mergerfs branch while their folder's is not (specs.md §15.8). Nothing is concluded of them, of
-	// what is below them, or, while there is one, of a copy the walk did not find: it may be there.
+	// the limit of its mergerfs branch while their folder's is not (specs.md §15.8). Nothing is concluded of them or of
+	// what is below them, and while there is one, a copy the walk found nowhere is uncertain, never gone: it may be there.
 	TooLong []string
 	// Seen holds the verdict about each copy that is not as its row says, by file id, and FolderMoves
 	// the folders renamed: what a pass decides on (specs.md §15.12).
