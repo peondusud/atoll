@@ -213,7 +213,7 @@ func (b *bench) on(disk, path string) string {
 
 func (b *bench) create(path, text string) {
 	b.t.Helper()
-	f, _, err := b.w.Create(b.t.Context(), path, 0o644, Owner{})
+	f, _, err := b.w.Create(b.t.Context(), path, 0o644, root)
 	if err != nil {
 		b.t.Fatalf("create %s: %v", path, err)
 	}
@@ -238,14 +238,14 @@ func TestWriter(t *testing.T) {
 	if n := b.lookup("Films/new.mkv"); n == nil || n.Disk != "t1" || n.Size != 3 {
 		t.Errorf("a new file presents: %+v", n)
 	}
-	if _, _, err := b.w.Create(ctx, "Films/new.mkv", 0o644, Owner{}); !errors.Is(err, ErrExists) {
+	if _, _, err := b.w.Create(ctx, "Films/new.mkv", 0o644, root); !errors.Is(err, ErrExists) {
 		t.Errorf("made twice: %v", err)
 	}
-	if _, _, err := b.w.Create(ctx, "Nowhere/x.mkv", 0o644, Owner{}); !errors.Is(err, ErrNotFound) {
+	if _, _, err := b.w.Create(ctx, "Nowhere/x.mkv", 0o644, root); !errors.Is(err, ErrNotFound) {
 		t.Errorf("made in a folder that presents nothing: %v", err)
 	}
 
-	f, err := b.w.Open(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"))
+	f, err := b.w.Open(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,21 +257,21 @@ func TestWriter(t *testing.T) {
 		t.Errorf("a write reaches the original alone: t1 %q, t2 %q", b.on("t1", "Films/a.mkv"), b.on("t2", "Films/a.mkv"))
 	}
 
-	if _, err := b.w.Mkdir(ctx, "Series", 0o750, Owner{}); err != nil {
+	if _, err := b.w.Mkdir(ctx, "Series", 0o750, root); err != nil {
 		t.Fatal(err)
 	}
 	b.create("Series/e01.mkv", "e01")
-	if err := b.w.Rmdir(ctx, "Series"); !errors.Is(err, ErrNotEmpty) {
+	if err := b.w.Rmdir(ctx, "Series", root); !errors.Is(err, ErrNotEmpty) {
 		t.Errorf("a folder that presents something removed: %v", err)
 	}
 
-	if err := b.w.Rename(ctx, "Films/new.mkv", "Films/renamed.mkv", false); err != nil {
+	if err := b.w.Rename(ctx, "Films/new.mkv", "Films/renamed.mkv", false, root); err != nil {
 		t.Fatal(err)
 	}
 	if n := b.lookup("Films/new.mkv"); n != nil {
 		t.Errorf("a file renamed, at its old name: %+v", n)
 	}
-	if err := b.w.Rename(ctx, "Films", "Movies", false); err != nil {
+	if err := b.w.Rename(ctx, "Films", "Movies", false, root); err != nil {
 		t.Fatal(err)
 	}
 	for _, disk := range []string{"t1", "t2"} {
@@ -286,7 +286,7 @@ func TestWriter(t *testing.T) {
 		t.Errorf("a file renamed, then its folder: %+v", n)
 	}
 
-	if err := b.w.Unlink(ctx, "Movies/renamed.mkv"); err != nil {
+	if err := b.w.Unlink(ctx, "Movies/renamed.mkv", root); err != nil {
 		t.Fatal(err)
 	}
 	if n := b.lookup("Movies/renamed.mkv"); n != nil || b.on("t1", "Movies/renamed.mkv") != "absent" {
@@ -299,10 +299,10 @@ func TestWriter(t *testing.T) {
 
 	b.create("Movies/a.nfo", "old nfo")
 	b.create("Movies/a.nfo.tmp", "new nfo")
-	if err := b.w.Rename(ctx, "Movies/a.nfo.tmp", "Movies/a.nfo", true); !errors.Is(err, ErrExists) {
+	if err := b.w.Rename(ctx, "Movies/a.nfo.tmp", "Movies/a.nfo", true, root); !errors.Is(err, ErrExists) {
 		t.Errorf("a rename that must replace nothing: %v", err)
 	}
-	if err := b.w.Rename(ctx, "Movies/a.nfo.tmp", "Movies/a.nfo", false); err != nil {
+	if err := b.w.Rename(ctx, "Movies/a.nfo.tmp", "Movies/a.nfo", false, root); err != nil {
 		t.Fatal(err)
 	}
 	if b.on("t1", "Movies/a.nfo") != "new nfo" || b.on("t1", "Movies/a.nfo.tmp") != "absent" {
@@ -311,20 +311,20 @@ func TestWriter(t *testing.T) {
 	if entries, err = catalog.TrashEntries(ctx, b.w.db); err != nil || len(entries) != 2 {
 		t.Errorf("the trash after a replacement: %+v, %v", entries, err)
 	}
-	if err := b.w.Rename(ctx, "Movies/a.nfo", "Movies/a.mkv", false); !errors.Is(err, ErrCrossDisk) {
+	if err := b.w.Rename(ctx, "Movies/a.nfo", "Movies/a.mkv", false, root); !errors.Is(err, ErrCrossDisk) {
 		t.Errorf("onto a name presented from another disk: %v", err)
 	}
 
-	if err := b.w.Unlink(ctx, "Series/e01.mkv"); err != nil {
+	if err := b.w.Unlink(ctx, "Series/e01.mkv", root); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.w.Rmdir(ctx, "Series"); err != nil {
+	if err := b.w.Rmdir(ctx, "Series", root); err != nil {
 		t.Fatal(err)
 	}
 	if n := b.lookup("Series"); n != nil || b.on("t1", "Series") != "absent" {
 		t.Errorf("an empty folder removed: %+v", n)
 	}
-	if err := b.w.Rename(ctx, "Movies", "Movies/Inner", false); !errors.Is(err, ErrInvalid) {
+	if err := b.w.Rename(ctx, "Movies", "Movies/Inner", false, root); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a folder into itself: %v", err)
 	}
 }
@@ -333,13 +333,13 @@ func TestWriter(t *testing.T) {
 // which refuses ':'.
 func TestWriterRefusesANameADiskRefuses(t *testing.T) {
 	b := newBench(t, "ntfs")
-	if err := b.w.Rename(t.Context(), "Films/a.mkv", "Films/a:b.mkv", false); !errors.Is(err, ErrRefused) {
+	if err := b.w.Rename(t.Context(), "Films/a.mkv", "Films/a:b.mkv", false, root); !errors.Is(err, ErrRefused) {
 		t.Errorf("a name NTFS refuses: %v", err)
 	}
 	if b.on("t2", "Films/a.mkv") != "from t2" {
 		t.Errorf("something changed: %q", b.on("t2", "Films/a.mkv"))
 	}
-	if err := b.w.Rename(t.Context(), "Films", "Fi:lms", false); !errors.Is(err, ErrRefused) {
+	if err := b.w.Rename(t.Context(), "Films", "Fi:lms", false, root); !errors.Is(err, ErrRefused) {
 		t.Errorf("a folder name NTFS refuses: %v", err)
 	}
 	// Written through the view, the file presents its original alone, while its other copy, on NTFS, is still on its
@@ -350,12 +350,12 @@ func TestWriterRefusesANameADiskRefuses(t *testing.T) {
 	if n := b.lookup("Films/a.mkv"); n == nil || n.Disk != "t1" {
 		t.Fatalf("the original: %+v", n)
 	}
-	f, err := b.w.Open(t.Context(), "Films/a.mkv", b.lookup("Films/a.mkv"))
+	f, err := b.w.Open(t.Context(), "Films/a.mkv", b.lookup("Films/a.mkv"), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = f.Close()
-	if err := b.w.Rename(t.Context(), "Films/a.mkv", "Films/a:b.mkv", false); !errors.Is(err, ErrRefused) {
+	if err := b.w.Rename(t.Context(), "Films/a.mkv", "Films/a:b.mkv", false, root); !errors.Is(err, ErrRefused) {
 		t.Errorf("a name NTFS refuses, once written through the view: %v", err)
 	}
 }
@@ -380,13 +380,13 @@ func TestWriterLinks(t *testing.T) {
 	if n := b.lookup("Films/a.mkv"); n == nil || n.Disk != "t2" {
 		t.Fatalf("the original: %+v", n)
 	}
-	if _, err := b.w.Mkdir(ctx, "Series", 0o750, Owner{}); err != nil {
+	if _, err := b.w.Mkdir(ctx, "Series", 0o750, root); err != nil {
 		t.Fatal(err)
 	}
 	if n := b.lookup("Series"); n == nil || n.Disk != "t1" {
 		t.Fatalf("a folder made on t1 alone: %+v", n)
 	}
-	n, err := b.w.Link(ctx, "Films/a.mkv", "Series/a.mkv")
+	n, err := b.w.Link(ctx, "Films/a.mkv", "Series/a.mkv", root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestWriterLinks(t *testing.T) {
 		{"of nothing", "Films/none.mkv", "Series/none.mkv", ErrNotFound},
 		{"a name its disk refuses", "Films/a.mkv", "Films/a:b.mkv", ErrCrossDisk},
 	} {
-		if _, err := b.w.Link(ctx, tc.from, tc.to); !errors.Is(err, tc.want) {
+		if _, err := b.w.Link(ctx, tc.from, tc.to, root); !errors.Is(err, tc.want) {
 			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
 		}
 	}
@@ -433,7 +433,7 @@ func TestWriterLinks(t *testing.T) {
 	}
 	// Something at the new name on the disk that the view does not present, as a stale copy, takes it there too.
 	mustWrite(t, filepath.Join(b.mount["t2"], "media", "Films", "hidden.mkv"), "stale")
-	if _, err := b.w.Link(ctx, "Films/a.mkv", "Films/hidden.mkv"); !errors.Is(err, ErrCrossDisk) {
+	if _, err := b.w.Link(ctx, "Films/a.mkv", "Films/hidden.mkv", root); !errors.Is(err, ErrCrossDisk) {
 		t.Errorf("onto what the disk holds and the view does not present: %v", err)
 	}
 	if b.on("t2", "Films/hidden.mkv") != "stale" {
@@ -442,7 +442,7 @@ func TestWriterLinks(t *testing.T) {
 	// The disk of the original is mounted with the kernel's ntfs driver, whose link moves the file's modification time:
 	// a program copies instead, and the file keeps its time.
 	b.machine.fsType[b.mount["t2"]] = "ntfs"
-	if _, err := b.w.Link(ctx, "Films/a.mkv", "Series/b.mkv"); !errors.Is(err, ErrCrossDisk) {
+	if _, err := b.w.Link(ctx, "Films/a.mkv", "Series/b.mkv", root); !errors.Is(err, ErrCrossDisk) {
 		t.Errorf("a disk of the type ntfs: %v", err)
 	}
 	if b.on("t2", "Series/b.mkv") != "absent" {
@@ -451,7 +451,7 @@ func TestWriterLinks(t *testing.T) {
 	b.machine.fsType[b.mount["t2"]] = "ntfs3"
 	// The disk of the original may not be written now: a program copies instead.
 	b.w.handles.Drop("t2")
-	if _, err := b.w.Link(ctx, "Films/a.mkv", "Series/b.mkv"); !errors.Is(err, ErrCrossDisk) {
+	if _, err := b.w.Link(ctx, "Films/a.mkv", "Series/b.mkv", root); !errors.Is(err, ErrCrossDisk) {
 		t.Errorf("its disk not writable: %v", err)
 	}
 }
@@ -497,7 +497,7 @@ func TestWriterXattrs(t *testing.T) {
 	if n.Disk != "t2" {
 		t.Fatalf("the original: %+v", n)
 	}
-	if err := b.w.SetXattr(ctx, "Films/a.mkv", n, "user.DOSATTRIB", []byte("0x20"), 0); err != nil {
+	if err := b.w.SetXattr(ctx, "Films/a.mkv", n, "user.DOSATTRIB", []byte("0x20"), 0, root); err != nil {
 		t.Fatal(err)
 	}
 	if got := b.xattrsOn("t2", "Films/a.mkv"); got["user.DOSATTRIB"] != "0x20" || len(b.xattrsOn("t1", "Films/a.mkv")) != 0 {
@@ -516,21 +516,21 @@ func TestWriterXattrs(t *testing.T) {
 		last.FileKey != fmt.Sprintf("%d", b.inode("t2", "Films/a.mkv")) {
 		t.Errorf("the journal: %+v", last)
 	}
-	if err := b.w.SetXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB", []byte("0x21"), fsx.XattrCreate); !errors.Is(err, syscall.EEXIST) {
+	if err := b.w.SetXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB", []byte("0x21"), fsx.XattrCreate, root); !errors.Is(err, syscall.EEXIST) {
 		t.Errorf("created twice: %v, want EEXIST as the disk answers", err)
 	}
-	if err := b.w.RemoveXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB"); err != nil {
+	if err := b.w.RemoveXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB", root); err != nil {
 		t.Fatal(err)
 	}
 	if got := b.xattrsOn("t2", "Films/a.mkv"); len(got) != 0 {
 		t.Errorf("removed: %v", got)
 	}
-	if err := b.w.RemoveXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB"); !errors.Is(err, syscall.ENODATA) {
+	if err := b.w.RemoveXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB", root); !errors.Is(err, syscall.ENODATA) {
 		t.Errorf("removed twice: %v, want ENODATA", err)
 	}
 
 	// A folder the catalog holds on both disks takes it on each.
-	if err := b.w.SetXattr(ctx, "Films", b.lookup("Films"), "user.DOSATTRIB", []byte("0x10"), 0); err != nil {
+	if err := b.w.SetXattr(ctx, "Films", b.lookup("Films"), "user.DOSATTRIB", []byte("0x10"), 0, root); err != nil {
 		t.Fatal(err)
 	}
 	for _, disk := range []string{"t1", "t2"} {
@@ -538,13 +538,13 @@ func TestWriterXattrs(t *testing.T) {
 			t.Errorf("the folder on %s: %v", disk, got)
 		}
 	}
-	if _, err := b.w.Symlink(ctx, "Films/l", "a.mkv", Owner{}); err != nil {
+	if _, err := b.w.Symlink(ctx, "Films/l", "a.mkv", root); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.w.SetXattr(ctx, "Films/l", b.lookup("Films/l"), "user.x", []byte("1"), 0); !errors.Is(err, ErrXattrOnLink) {
+	if err := b.w.SetXattr(ctx, "Films/l", b.lookup("Films/l"), "user.x", []byte("1"), 0, root); !errors.Is(err, ErrXattrOnLink) {
 		t.Errorf("a symbolic link: %v", err)
 	}
-	if err := b.w.SetXattr(ctx, "", b.tree.Root(), "user.x", []byte("1"), 0); !errors.Is(err, ErrXattrOfRoot) {
+	if err := b.w.SetXattr(ctx, "", b.tree.Root(), "user.x", []byte("1"), 0, root); !errors.Is(err, ErrXattrOfRoot) {
 		t.Errorf("the root: %v", err)
 	}
 	if attrs, err := b.tree.Xattrs("", b.tree.Root()); err != nil || len(attrs) != 0 {
@@ -690,7 +690,7 @@ func TestANewFileLandsOnTheCache(t *testing.T) {
 		})
 	}
 	b := cacheBench(t, "[cache]\nenabled = true\n", 100)
-	if n, err := b.w.Mkdir(t.Context(), "Shows", 0o755, Owner{}); err != nil || n.Disk != "t1" {
+	if n, err := b.w.Mkdir(t.Context(), "Shows", 0o755, root); err != nil || n.Disk != "t1" {
 		t.Errorf("a folder: %+v, %v", n, err)
 	}
 }
