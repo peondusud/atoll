@@ -267,7 +267,9 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     Unavailable:
-      description: An answer that could not be made, as when the catalog cannot be used.
+      description: >-
+        An answer that could not be made, as when the catalog cannot be used, or whose turn did not come within its 60 s:
+        the answers that read the catalog are made one at a time, and so are those that check the disks' mounts.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

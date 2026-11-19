@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,9 +26,11 @@ import (
 	"github.com/peondusud/atoll/internal/value"
 )
 
-// What a request may take (specs.md §25.1).
+// What a request may take (specs.md §25.1): its headers, then the whole request, its body included, so that a client
+// that sends slowly holds no handler, nor its connection, for long.
 const (
 	apiHeaderTimeout = 10 * time.Second
+	apiReadTimeout   = 15 * time.Second
 	apiWriteTimeout  = 60 * time.Second
 	apiIdleTimeout   = 60 * time.Second
 	apiMaxHeader     = 16 << 10
@@ -46,6 +49,11 @@ type apiServer struct {
 	// reading lets one answer at a time read the catalog: each is made in the daemon's own process, beside its passes,
 	// and one may plan the whole pool.
 	reading chan struct{}
+	// checking lets one answer at a time check the disks' mounts: each reads the mount table and each disk's device.
+	checking chan struct{}
+	// unreadable says when the log last told of a token file that cannot be read, and how many requests it refused
+	// since: once a minute at most, as a client with no token could fill the log otherwise.
+	unreadable onceAMinute
 	// onCatalog runs an answer to a guard on the catalog, under its lock: in the daemon, its loop does, between two
 	// steps (answerThrough). Nil takes no answer.
 	onCatalog func(ctx context.Context, do func(ctx context.Context, db *sql.DB) error) error
@@ -59,7 +67,7 @@ type apiServer struct {
 }
 
 func newAPIServer(c *config.Config, m disks.Machine, log *slog.Logger, rec *metrics.Recorder) *apiServer {
-	a := &apiServer{machine: m, log: log, metrics: rec, reading: make(chan struct{}, 1)}
+	a := &apiServer{machine: m, log: log, metrics: rec, reading: make(chan struct{}, 1), checking: make(chan struct{}, 1)}
 	a.uid, a.gid = uint32(os.Geteuid()), uint32(os.Getegid()) //nolint:gosec // an account's number, never negative on Linux
 	a.current.Store(c)
 	return a
@@ -80,14 +88,16 @@ func (a *apiServer) answers() map[string]apiAnswer {
 		"/v1/status": a.one(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			return http.StatusOK, writeStatus(r.Context(), c, statusArgs{asJSON: true}, w)
 		}),
-		"/v1/disks": func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
+		"/v1/disks": a.checks(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			verdicts, err := disks.CheckAll(r.Context(), a.machine, c.Disks)
 			if err != nil {
 				return 0, fmt.Errorf("%w", err)
 			}
 			return http.StatusOK, writeJSON(w, diskListFrom(c.Disks, verdicts))
-		},
-		"/v1/disks/{id}": func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
+		}),
+		// It reads the catalog too: it takes its turn there first, as a mount check is quick and a catalog's answer
+		// may not be, and a check must not wait for one while holding its own turn.
+		"/v1/disks/{id}": a.one(a.checks(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			at := slices.IndexFunc(c.Disks, func(d config.Disk) bool { return d.ID == r.PathValue("id") })
 			if at < 0 {
 				return http.StatusNotFound, writeJSON(w, apiError{"no such disk"})
@@ -97,7 +107,7 @@ func (a *apiServer) answers() map[string]apiAnswer {
 				return 0, err
 			}
 			return http.StatusOK, writeJSON(w, out)
-		},
+		})),
 		"/v1/trash": a.one(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			return http.StatusOK, writeTrash(r.Context(), c, true, w)
 		}),
@@ -116,10 +126,21 @@ func (a *apiServer) answers() map[string]apiAnswer {
 // one makes an answer that reads the catalog wait for the one before it, and give up with its request: a client that
 // asks again before its answer came adds no work to the daemon (specs.md §25.1).
 func (a *apiServer) one(answer apiAnswer) apiAnswer {
+	return inTurn(a.reading, answer)
+}
+
+// checks makes an answer that checks the disks' mounts wait for the one before it that does, as one does for the
+// catalog (specs.md §25.1).
+func (a *apiServer) checks(answer apiAnswer) apiAnswer {
+	return inTurn(a.checking, answer)
+}
+
+// inTurn makes an answer wait for the turn that holds one place, and give up with its request.
+func inTurn(turn chan struct{}, answer apiAnswer) apiAnswer {
 	return func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 		select {
-		case a.reading <- struct{}{}:
-			defer func() { <-a.reading }()
+		case turn <- struct{}{}:
+			defer func() { <-turn }()
 		case <-r.Context().Done():
 			return 0, fmt.Errorf("waiting for another answer: %w", r.Context().Err())
 		}
@@ -218,7 +239,10 @@ func (a *apiServer) withToken(next http.Handler) http.Handler {
 		got, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if err != nil || want == "" || !bearer || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 			if err != nil {
-				a.log.Warn("the local API's token cannot be read: every request over TCP is refused", "file", file, "error", err)
+				if refused, due := a.unreadable.due(a.machine.Now()); due {
+					a.log.Warn("the local API's token cannot be read: every request over TCP is refused", "file", file, "error", err,
+						"refused", refused)
+				}
 			}
 			w.Header().Set("WWW-Authenticate", `Bearer realm="atoll"`)
 			w.WriteHeader(http.StatusUnauthorized)
@@ -226,6 +250,28 @@ func (a *apiServer) withToken(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), tokenFileKey{}, tokenFile{path: file, owner: owner})))
 	})
+}
+
+// onceAMinute counts what happens, and says when the log may tell of it: the first time, then once a minute at most.
+type onceAMinute struct {
+	mu     sync.Mutex
+	told   bool
+	lastNS int64
+	since  int
+}
+
+// due counts one more, and says whether the log may tell of it now, with how many there were since it last did,
+// this one included.
+func (o *onceAMinute) due(nowNS int64) (int, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.since++
+	if o.told && nowNS-o.lastNS < time.Minute.Nanoseconds() {
+		return 0, false
+	}
+	n := o.since
+	o.told, o.lastNS, o.since = true, nowNS, 0
+	return n, true
 }
 
 // tokenFileKey marks a request that came over TCP, with the token file it came with.
@@ -307,7 +353,8 @@ func readToken(file string) (token string, owner fsx.Owner, err error) {
 // httpServer is a server with the limits of specs.md §25.1.
 func httpServer(h http.Handler) *http.Server {
 	return &http.Server{
-		Handler: h, ReadHeaderTimeout: apiHeaderTimeout, WriteTimeout: apiWriteTimeout, IdleTimeout: apiIdleTimeout, MaxHeaderBytes: apiMaxHeader,
+		Handler: h, ReadHeaderTimeout: apiHeaderTimeout, ReadTimeout: apiReadTimeout, WriteTimeout: apiWriteTimeout, IdleTimeout: apiIdleTimeout,
+		MaxHeaderBytes: apiMaxHeader,
 	}
 }
 
@@ -315,8 +362,10 @@ func httpServer(h http.Handler) *http.Server {
 // off, with a line of the log: answering questions is no reason to stop the daemon.
 func (a *apiServer) start(ctx context.Context, c *config.Config) func() {
 	var servers []*http.Server
+	// Each listener holds apiMaxConns connections at once, its own: a flood over TCP takes no place of the socket's.
 	serve := func(s *http.Server, l net.Listener) {
 		servers = append(servers, s)
+		l = capConns(l, apiMaxConns)
 		go func() {
 			if err := s.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				a.log.Warn("the local API stopped", "address", l.Addr().String(), "error", err)
