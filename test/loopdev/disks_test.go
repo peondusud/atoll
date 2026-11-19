@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -134,6 +135,10 @@ func mountVolume(t *testing.T, v *volume, driver string, at string, options ...s
 		command = append(command, v.device)
 	default:
 		command = []string{"mount"}
+		if driver == "ntfs" {
+			// No mount.ntfs helper, which ntfs-3g's package installs, and which would mount ntfs-3g instead.
+			command = append(command, "-i")
+		}
 		if driver != "" {
 			command = append(command, "-t", driver)
 		}
@@ -211,6 +216,54 @@ func TestDiskIdentity(t *testing.T) {
 		}
 		want(t, check(t, diskOf(v, at)), disks.Online, "")
 	})
+	t.Run("ntfs", func(t *testing.T) {
+		v := newVolume(t, names.NTFS)
+		at := mountPoint(t)
+		mountVolume(t, v, ntfsType(t), at, ntfsOptions...)
+		if err := os.Mkdir(filepath.Join(at, "media"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		d := diskOf(v, at)
+		want(t, check(t, d), disks.Online, "")
+		d.UUID = "01D9F3A2B4C5E6F8"
+		want(t, check(t, d), disks.Missing, disks.WrongIdentifier)
+	})
+}
+
+// ntfsType skips where the kernel has no driver of the type ntfs, the read-write NTFS driver Linux 7.1 added beside
+// ntfs3: Debian 13's 6.12 has none, and the mainline 7.3 that test/qemu boots has it (docs/research/ntfs-driver.md).
+func ntfsType(t *testing.T) string {
+	t.Helper()
+	_ = exec.CommandContext(context.Background(), "modprobe", "ntfs").Run()
+	data, err := os.ReadFile("/proc/filesystems")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "\tntfs\n") {
+		t.Skip("no driver of the type ntfs in this kernel")
+	}
+	return "ntfs"
+}
+
+// needDriver skips where the kernel lacks a driver of its own, ntfs3 or the type ntfs.
+func needDriver(t *testing.T, driver string) {
+	t.Helper()
+	switch driver {
+	case "ntfs3":
+		ntfs3Type(t)
+	case "ntfs":
+		ntfsType(t)
+	}
+}
+
+// ntfsOptions is what the mount check asks of the type ntfs (specs.md §10): iocharset=utf8, which its kernel's default
+// may not give, and errors=remount-ro, without which it writes to a volume Windows left hibernated.
+var ntfsOptions = []string{"errors=remount-ro", "iocharset=utf8"}
+
+// kernelNTFS says whether a driver is one of the kernel's two NTFS drivers, ntfs3 and the type ntfs, which keep no
+// journal of their own: writes lost with a device can leave a name and its record that disagree (specs.md §17.1).
+func kernelNTFS(driver string) bool {
+	return driver == "ntfs3" || driver == "ntfs"
 }
 
 // ntfs3Type skips where the kernel has no ntfs3.
@@ -462,24 +515,65 @@ func TestNameVariants(t *testing.T) {
 		withMedia(t, at)
 		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.ADS)
 	})
-	t.Run("the ntfs driver", func(t *testing.T) {
-		_ = exec.CommandContext(context.Background(), "modprobe", "ntfs").Run()
-		data, err := os.ReadFile("/proc/filesystems")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), "\tntfs\n") {
-			t.Skip("no driver of the type ntfs in this kernel")
-		}
+	// The type ntfs is taken as ntfs3 is, and asked errors=remount-ro too (specs.md §10, §22).
+	t.Run("ntfs", func(t *testing.T) {
+		kind := ntfsType(t)
+		v := newVolume(t, names.NTFS)
+		at := mountPoint(t)
+		mountVolume(t, v, kind, at, ntfsOptions...)
+		withMedia(t, at)
+		want(t, check(t, diskOf(v, at)), disks.Online, "")
+	})
+	t.Run("ntfs errors=continue", func(t *testing.T) {
+		kind := ntfsType(t)
+		v := newVolume(t, names.NTFS)
+		at := mountPoint(t)
+		mountVolume(t, v, kind, at)
+		withMedia(t, at)
+		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.ErrorsContinue)
+	})
+	t.Run("ntfs nocase", func(t *testing.T) {
+		kind := ntfsType(t)
+		v := newVolume(t, names.NTFS)
+		at := mountPoint(t)
+		mountVolume(t, v, kind, at, append(slices.Clone(ntfsOptions), "nocase")...)
+		withMedia(t, at)
+		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.NoCase)
+	})
+	t.Run("ntfs iocharset", func(t *testing.T) {
+		kind := ntfsType(t)
 		v := newVolume(t, names.NTFS)
 		at := mountPoint(t)
 		if err := os.MkdirAll(at, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		must(t, "mount", "-i", "-t", "ntfs", v.device, at)
+		args := []string{"-i", "-t", kind, "-o", "errors=remount-ro,iocharset=iso8859-1", v.device, at}
+		if err := attempt(t, "mount", args...); err != nil {
+			t.Skipf("this kernel has no such character set: %v", err)
+		}
 		t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "umount", "-l", at).Run() })
 		withMedia(t, at)
-		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.UnsupportedDriver)
+		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.IOCharset)
+	})
+	// A hiberfil.sys of 10 bytes at the top stands for Windows hibernated, as the driver's source reads it: with
+	// errors=remount-ro the volume is mounted read-only, which the check reads as any mount read-only (measured,
+	// docs/research/ntfs-driver.md).
+	t.Run("ntfs hibernated", func(t *testing.T) {
+		kind := ntfsType(t)
+		v := newVolume(t, names.NTFS)
+		at := mountPoint(t)
+		mountVolume(t, v, kind, at)
+		withMedia(t, at)
+		if err := os.WriteFile(filepath.Join(at, "hiberfil.sys"), []byte("0123456789"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		must(t, "umount", at)
+		time.Sleep(200 * time.Millisecond)
+		mountVolume(t, v, kind, at, ntfsOptions...)
+		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.ReadOnlyMount)
+		if err := os.WriteFile(filepath.Join(at, "media", "x"), []byte("x"), 0o644); err == nil {
+			t.Error("a file was written to a hibernated volume")
+		}
 	})
 }
 
@@ -498,12 +592,11 @@ func TestDeviceFailures(t *testing.T) {
 		{"ext4", names.Ext4, ""},
 		{"xfs", names.XFS, ""},
 		{"ntfs3", names.NTFS, "ntfs3"},
+		{"ntfs", names.NTFS, "ntfs"},
 		{"ntfs-3g", names.NTFS, "ntfs-3g"},
 	} {
 		t.Run("dm-error/"+tc.name, func(t *testing.T) {
-			if tc.driver == "ntfs3" {
-				ntfs3Type(t)
-			}
+			needDriver(t, tc.driver)
 			v := newVolume(t, tc.fs)
 			sectors := must(t, "blockdev", "--getsz", v.device)
 			name := "atoll-" + strings.ReplaceAll(t.Name(), "/", "-")
@@ -542,8 +635,11 @@ func TestDeviceFailures(t *testing.T) {
 
 func optionsFor(t *testing.T, driver string) []string {
 	t.Helper()
-	if driver == "ntfs3" {
+	switch driver {
+	case "ntfs3":
 		return ntfs3Options(t)
+	case "ntfs":
+		return slices.Clone(ntfsOptions)
 	}
 	return nil
 }

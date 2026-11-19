@@ -75,6 +75,7 @@ var repairDrivers = []struct {
 	{"xfs", names.XFS, ""},
 	{"btrfs", names.Btrfs, ""},
 	{"ntfs3", names.NTFS, "ntfs3"},
+	{"ntfs", names.NTFS, "ntfs"},
 	{"ntfs-3g", names.NTFS, "ntfs-3g"},
 	{"lowntfs-3g", names.NTFS, "lowntfs-3g"},
 }

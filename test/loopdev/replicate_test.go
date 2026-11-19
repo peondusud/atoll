@@ -301,7 +301,7 @@ func TestADeviceThatFailsDuringACopy(t *testing.T) {
 				after := b.replicate("big")
 				dropCaches(t)
 				target := filepath.Join(at, "media", "big")
-				if tc.driver == "ntfs3" {
+				if kernelNTFS(tc.driver) {
 					part := filepath.Join(at, "Atoll", "tmp", b.text("SELECT COALESCE(max(CAST(path2 AS TEXT)), '') FROM ops WHERE kind = 'create'"))
 					skipWhereNamesDisagree(t, target, part)
 					// Both names lead to the copy: nothing is concluded, and the job waits with it (§17.2).
