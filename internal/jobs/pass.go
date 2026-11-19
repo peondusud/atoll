@@ -525,6 +525,10 @@ func (p *pass) toWalk(ctx context.Context, planned []catalog.Op) (Scope, error) 
 	}
 	for i := range p.viewOps {
 		v := &p.viewOps[i]
+		if v.Kind == catalog.ViewPart {
+			// A part written in parallel is in tmp/: nothing of the root to look at.
+			continue
+		}
 		walk[v.Disk] = Whole
 		if v.Kind != catalog.ViewRmdir {
 			continue

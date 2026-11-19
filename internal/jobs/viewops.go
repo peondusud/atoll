@@ -37,7 +37,7 @@ func (p *pass) viewPlannedOn(disk string) []string {
 	var paths []string
 	for i := range p.viewOps {
 		v := &p.viewOps[i]
-		if v.State != catalog.OpPlanned || v.Disk != disk {
+		if v.State != catalog.OpPlanned || v.Disk != disk || v.Kind == catalog.ViewPart {
 			continue
 		}
 		paths = append(paths, v.Path)
@@ -104,13 +104,15 @@ func (p *pass) takeInViewOps(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	open := p.viewOps
-	if len(waiting) > 0 {
-		open = slices.Clone(p.viewOps)
-		for i := range open {
-			if waiting[open[i].ID] {
-				open[i].State = catalog.OpPlanned
-			}
+	// A part written in parallel is taken in by the job that adopts it, or as the pass drops it, never as what the
+	// catalog presents: it is no name of the root.
+	if err := p.settleParts(ctx); err != nil {
+		return err
+	}
+	open := slices.DeleteFunc(slices.Clone(p.viewOps), func(v catalog.ViewOp) bool { return v.Kind == catalog.ViewPart })
+	for i := range open {
+		if waiting[open[i].ID] {
+			open[i].State = catalog.OpPlanned
 		}
 	}
 	taken, err := view.TakenIn(ctx, p.db, open, walkedAll, settings.InView, p.lookForView)

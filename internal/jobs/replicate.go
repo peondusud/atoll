@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -462,7 +463,7 @@ func (c *copier) copy(ctx context.Context, resume bool) (*ops.Moved, error) {
 		return nil, c.sourceFailed(ctx, err)
 	}
 	defer func() { _ = source.Close() }()
-	if err := c.fill(ctx, part, source, start, read.Size); err != nil {
+	if err := c.fill(ctx, part, source, start, read.Size, resume); err != nil {
 		return nil, err
 	}
 	c.r.machine.Checkpoint("copied")
@@ -495,7 +496,8 @@ func (c *copier) copy(ctx context.Context, resume bool) (*ops.Moved, error) {
 }
 
 // openPart makes the part, or opens the one the job resumes and keeps what of it still matches the hashes
-// recorded: the copy goes on from the first chunk missing or wrong (specs.md §14).
+// recorded: the copy goes on from the first chunk missing or wrong (specs.md §14). A part Atoll's own view wrote in
+// parallel has no hash recorded, and goes on from its start, each chunk compared with the source's (specs.md §12.3).
 func (c *copier) openPart(ctx context.Context, resume bool) (*ops.Part, int, error) {
 	if resume {
 		part, err := c.dst.OpenPart(c.op)
@@ -534,7 +536,8 @@ func (c *copier) openPart(ctx context.Context, resume bool) (*ops.Part, int, err
 	return part, 0, nil
 }
 
-// kept re-reads a part chunk by chunk against the hashes recorded, and gives the first chunk to copy.
+// kept re-reads a part chunk by chunk against the hashes recorded, and gives the first chunk to copy. What the part
+// holds past it stays, for fill to compare with the source rather than write again.
 func (c *copier) kept(ctx context.Context, part *ops.Part) (int, error) {
 	recorded, err := catalog.JobChunks(ctx, c.r.db, c.job.ID)
 	if err != nil {
@@ -542,9 +545,6 @@ func (c *copier) kept(ctx context.Context, part *ops.Part) (int, error) {
 	}
 	buf := make([]byte, integrity.ChunkSize)
 	good := 0
-	// The bytes of the chunks that match: only the source's last chunk is shorter than the others, so a
-	// short chunk that matches is the last one, and the part is whole.
-	var keptBytes int64
 	for ; good*integrity.HashSize < len(recorded); good++ {
 		n, err := part.ReadAt(buf, int64(good)*integrity.ChunkSize)
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -554,20 +554,23 @@ func (c *copier) kept(ctx context.Context, part *ops.Part) (int, error) {
 		if n == 0 || string(sum[:]) != string(recorded[good*integrity.HashSize:(good+1)*integrity.HashSize]) {
 			break
 		}
-		keptBytes += int64(n)
 	}
 	if err := catalog.DropChunksFrom(ctx, c.r.db, c.job.ID, good); err != nil {
 		return 0, fmt.Errorf("%w: %w", errCatalog, err)
 	}
-	if err := part.Truncate(keptBytes); err != nil {
-		return 0, classifyDisk(err)
-	}
 	return good, nil
 }
 
-// fill copies the source into the part from a chunk on, and records each chunk's hash as it goes.
-func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, start int, size int64) error {
+// fill copies the source into the part from a chunk on, and records each chunk's hash as it goes. A part resumed is
+// compared with the source chunk by chunk, and written only where it differs, as one the view wrote in parallel holds
+// the source's bytes already; what it holds past the source's size goes. Either way, the re-read without cache checks
+// every chunk against the source's hashes afterwards (specs.md §14, step 5).
+func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, start int, size int64, compare bool) error {
 	buf := make([]byte, integrity.ChunkSize)
+	var held []byte
+	if compare {
+		held = make([]byte, integrity.ChunkSize)
+	}
 	var hashes []byte
 	first := start
 	record := func() error {
@@ -592,11 +595,21 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 		case err != nil && !errors.Is(err, io.EOF):
 			return c.sourceFailed(ctx, err)
 		}
-		if _, err := part.WriteAt(buf[:n], off); err != nil {
-			if isNoRoom(err) {
-				return c.drop(ctx, OutcomeNoRoom, true)
+		same := false
+		if compare {
+			m, err := part.ReadAt(held[:n], off)
+			if err != nil && !errors.Is(err, io.EOF) {
+				return classifyDisk(err)
 			}
-			return classifyDisk(err)
+			same = m == n && bytes.Equal(held[:m], buf[:n])
+		}
+		if !same {
+			if _, err := part.WriteAt(buf[:n], off); err != nil {
+				if isNoRoom(err) {
+					return c.drop(ctx, OutcomeNoRoom, true)
+				}
+				return classifyDisk(err)
+			}
 		}
 		sum := integrity.ChunkSum(buf[:n])
 		hashes = append(hashes, sum[:]...)
@@ -604,6 +617,11 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 			if err := record(); err != nil {
 				return err
 			}
+		}
+	}
+	if compare {
+		if err := part.Truncate(size); err != nil {
+			return classifyDisk(err)
 		}
 	}
 	return record()

@@ -61,6 +61,8 @@ type Writer struct {
 	log       *slog.Logger
 	// mu lets one change of names run at a time: what each looks at before it changes must still hold when it does.
 	mu sync.Mutex
+	// par holds the copies written in parallel (specs.md §12.3).
+	par *parts
 }
 
 // New makes the writer of a view.
@@ -74,16 +76,19 @@ func New(db *sql.DB, c *config.Config, m disks.Machine, tree *view.Tree, handles
 	if err != nil {
 		return nil, fmt.Errorf("placement.min_free: %w", err)
 	}
-	return &Writer{db: db, config: c, machine: m, tree: tree, handles: handles, retention: retention, minFree: minFree, log: log}, nil
+	return &Writer{db: db, config: c, machine: m, tree: tree, handles: handles, retention: retention, minFree: minFree, log: log,
+		par: &parts{files: map[string]*parallel{}, rooms: map[string]*roomOf{}}}, nil
 }
 
 // Tree gives what the writer looks at what the view presents through.
 func (w *Writer) Tree() *view.Tree { return w.tree }
 
-// File is a file the view opened for writing.
+// File is a file the view opened for writing, and for a new file in immediate mode the copies written in parallel
+// that follow what is written to it (specs.md §12.3).
 type File struct {
 	fsx.WritableFile
 	Disk, Path string
+	par        *parallel
 }
 
 func (w *Writer) disk(id string) *config.Disk {
@@ -172,7 +177,8 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Owner
 	if err != nil {
 		return nil, nil, err
 	}
-	if disk == "" {
+	cached := disk != ""
+	if !cached {
 		if disk, err = w.place(ctx, path); err != nil {
 			return nil, nil, err
 		}
@@ -191,7 +197,11 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Owner
 	if err := w.finish(ctx, v, err); err != nil {
 		return nil, nil, err
 	}
-	return &File{WritableFile: f, Disk: disk, Path: path}, view.NodeOfStat(disk, &st, ""), nil
+	file := &File{WritableFile: f, Disk: disk, Path: path}
+	if !cached {
+		file.par = w.startParallel(ctx, disk, path)
+	}
+	return file, view.NodeOfStat(disk, &st, ""), nil
 }
 
 // Mkdir makes a new folder, where a new file would go.
@@ -444,6 +454,8 @@ func (w *Writer) Open(ctx context.Context, path string, n *view.Node) (*File, er
 	if n.Kind == view.NodeDir {
 		return nil, ErrIsFolder
 	}
+	// Opened again to be written, a file is no new file written once: its copies in parallel go.
+	w.abandonAt(path, "opened again to be written")
 	if err := w.journalWrite(ctx, path, n); err != nil {
 		return nil, err
 	}
@@ -467,6 +479,10 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node) er
 	}
 	for i := len(open) - 1; i >= 0; i-- {
 		v := &open[i]
+		if v.Kind == catalog.ViewPart {
+			// A part is in tmp/ of another disk, and nothing at the path.
+			continue
+		}
 		touches := v.Path == path || v.Path2 == path || strings.HasPrefix(path, v.Path+"/") || (v.Path2 != "" && strings.HasPrefix(path, v.Path2+"/"))
 		if !touches {
 			continue
@@ -484,6 +500,9 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node) er
 func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.UserAttrs) (*view.Node, error) {
 	if n.Kind == view.NodeDir && a.Size != nil {
 		return nil, ErrIsFolder
+	}
+	if a.Size != nil {
+		w.abandonAt(path, "truncated")
 	}
 	targets := []string{n.Disk}
 	if n.Kind == view.NodeDir {
@@ -680,6 +699,7 @@ func (w *Writer) linkMovesTimes(d *config.Disk) bool {
 func (w *Writer) Unlink(ctx context.Context, path string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.abandonAt(path, "deleted")
 	n, err := w.tree.Lookup(ctx, path)
 	switch {
 	case err != nil:
@@ -822,6 +842,7 @@ func (w *Writer) Rename(ctx context.Context, from, to string, noReplace bool) er
 	case n.Kind == view.NodeDir && strings.HasPrefix(to, from+"/"):
 		return ErrInvalid
 	}
+	w.abandonAt(from, "renamed")
 	if dir, _ := split(to); dir != "" {
 		if err := w.folder(ctx, dir); err != nil {
 			return err
@@ -1026,7 +1047,7 @@ func (w *Writer) folderHolders(ctx context.Context, path string) ([]string, erro
 		if o.Kind == view.OpRename || o.Kind == view.OpReplace {
 			target = o.Path2
 		}
-		if o.Kind == view.OpUnlink || o.Kind == view.OpRmdir {
+		if o.Kind == view.OpUnlink || o.Kind == view.OpRmdir || o.Kind == catalog.ViewPart {
 			continue
 		}
 		for _, newer := range open[k+1:] {

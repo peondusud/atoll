@@ -39,6 +39,10 @@ func (p *pass) copies(ctx context.Context) error {
 	if err := watch.SettleFor(ctx, p.db, p.config, p.now, rep); err != nil {
 		return fmt.Errorf("%w", err)
 	}
+	// What the view wrote in parallel goes to the jobs just queued, before any runs (specs.md §12.3).
+	if err := p.adoptParts(ctx); err != nil {
+		return err
+	}
 	if !p.apply {
 		// The queue is read once the plan has gone, so that both are never held at once.
 		lines, err := p.dueLines(ctx, lines)
@@ -101,10 +105,12 @@ func (p *pass) copies(ctx context.Context) error {
 // one file come together.
 func (p *pass) settledCopies(jobs []watch.PlannedJob) []watch.PlannedJob {
 	last := int64(-1)
+	// The view saw the program close a file it wrote in parallel: that is closed and stable too.
+	parts := p.partPaths()
 	return slices.DeleteFunc(jobs, func(j watch.PlannedJob) bool {
 		size := j.Size
 		policy := p.config.Policy(j.Path, &size)
-		if policy.Mode == "immediate" && p.closed[j.Path] {
+		if policy.Mode == "immediate" && (p.closed[j.Path] || parts[j.Path]) {
 			return false
 		}
 		due := j.FirstSeenNS + policy.Settle.Nanoseconds()

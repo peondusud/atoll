@@ -69,6 +69,19 @@ func (w *Writer) resolve(ctx context.Context, d *ops.Disk, v *catalog.ViewOp) (s
 		return catalog.OpUndone, !left, err
 	case catalog.ViewReplace:
 		return w.resolveReplace(ctx, d, v)
+	case catalog.ViewPart:
+		// What was written in parallel when the view stopped is no copy of a file closed: its part goes, and the
+		// ordinary job makes that replica (specs.md §12.3).
+		op, found, err := catalog.OpByID(ctx, w.db, v.OpID)
+		if err != nil {
+			return "", false, fmt.Errorf("%w", err)
+		}
+		if found && op.Path2 != "" {
+			if err := d.DropPart(op.Path2); err != nil {
+				return "", false, fmt.Errorf("%w", err)
+			}
+		}
+		return catalog.OpUndone, false, nil
 	}
 	return catalog.OpDone, false, nil
 }

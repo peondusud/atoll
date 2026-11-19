@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 
@@ -25,6 +26,24 @@ type machine struct {
 	free   map[string]int64
 	fsType map[string]string
 	now    int64
+	// fail makes calls on a disk fail, by mount, as fsx.Fault does; a part's writer reads it as a test sets it.
+	mu   sync.Mutex
+	fail map[string]func(call, name string) error
+}
+
+func (m *machine) setFail(mount string, fail func(call, name string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail == nil {
+		m.fail = map[string]func(string, string) error{}
+	}
+	m.fail[mount] = fail
+}
+
+func (m *machine) failOf(mount string) func(call, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.fail[mount]
 }
 
 func (m *machine) Mount(mount string) disks.MountSeen {
@@ -43,6 +62,9 @@ func (m *machine) ReadPastCache(names.Filesystem, *disks.MountEntry) disks.Devic
 }
 func (m *machine) Checkpoint(string) {}
 func (m *machine) Now() int64 {
+	// A part's end is written apart from the program, and asks the time too.
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.now += 1_000_000_000
 	return m.now
 }
@@ -51,7 +73,16 @@ func (m *machine) OpenRoot(mount, root string) (fsx.Dir, error) {
 	return fsx.OpenDir(filepath.Join(mount, root)) //nolint:wrapcheck // a test double
 }
 func (m *machine) OpenTop(mount string) (fsx.Dir, error) {
-	return fsx.OpenDir(mount) //nolint:wrapcheck // a test double
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return fsx.Fault(top, func(call, name string) error {
+		if fail := m.failOf(mount); fail != nil {
+			return fail(call, name)
+		}
+		return nil
+	}), nil
 }
 
 type bench struct {
