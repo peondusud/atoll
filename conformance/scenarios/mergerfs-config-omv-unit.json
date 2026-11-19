@@ -1,0 +1,242 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a721.1, \u00a724, \u00a725",
+  "description": "The form takes a whole count of K, M or G, at most 99999, which the plugin reads as powers of 1024. A size is written in the largest of them that holds it exactly; otherwise it is rounded up, in the smallest that holds the count, with the warning minfreespace-rounded: 5% of 1,000,000 bytes, 50,000, is 49K; 5% of 4 TB, 200,000,000,000, exactly 195,312,500K, is 187G. 1536 MiB is 1536M. A size past 99999G is refused with exit 1 and nothing on standard output, as the form cannot hold it; the line of mergerfs still has it.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "x1",
+      "uuid": "6e5d4c3b-2a19-4f8e-8d7c-6b5a4f3e2d1c",
+      "fs": "xfs",
+      "capacity": 4000000000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"/srv/mergerfs/pool\"\n[placement]\nmin_free = [\"5%\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"x1\"\nuuid = \"6e5d4c3b-2a19-4f8e-8d7c-6b5a4f3e2d1c\"\nmount = \"${SANDBOX}/disks/x1\"\nfs = \"xfs\"\nstate = \"draining\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--omv",
+        "--json"
+      ],
+      "stdout_json": {
+        "mount": "/srv/mergerfs/pool",
+        "branches": [
+          {
+            "disk": "t1",
+            "path": "${SANDBOX}/disks/t1/media",
+            "mode": "RW",
+            "minfreespace_bytes": 50000
+          },
+          {
+            "disk": "x1",
+            "path": "${SANDBOX}/disks/x1/media",
+            "mode": "NC",
+            "minfreespace_bytes": 200000000000
+          }
+        ],
+        "options": [
+          "category.search=ff",
+          "category.action=epall",
+          "category.create=mfs",
+          "moveonenospc=false",
+          "rename-exdev=passthrough",
+          "link-exdev=passthrough",
+          "cache.attr=1",
+          "cache.entry=1",
+          "cache.negative_entry=0"
+        ],
+        "largest_file_bytes": null,
+        "fstab": "${SANDBOX}/disks/t1/media=RW,50000:${SANDBOX}/disks/x1/media=NC,195312500K /srv/mergerfs/pool mergerfs category.search=ff,category.action=epall,category.create=mfs,moveonenospc=false,rename-exdev=passthrough,link-exdev=passthrough,cache.attr=1,cache.entry=1,cache.negative_entry=0 0 0",
+        "omv": {
+          "rpc": {
+            "name": "pool",
+            "paths": "${SANDBOX}/disks/t1/media=RW\n${SANDBOX}/disks/x1/media=NC",
+            "createpolicy": "mfs",
+            "minfreespace": 49,
+            "minfreespaceunit": "K",
+            "options": "category.search=ff,category.action=epall,moveonenospc=false,rename-exdev=passthrough,link-exdev=passthrough,cache.attr=1,cache.entry=1,cache.negative_entry=0"
+          },
+          "mount": "/srv/mergerfs/pool",
+          "warnings": [
+            "minfreespace-rounded"
+          ]
+        }
+      }
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"/srv/mergerfs/pool\"\n[placement]\nmin_free = [\"5%\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"x1\"\nuuid = \"6e5d4c3b-2a19-4f8e-8d7c-6b5a4f3e2d1c\"\nmount = \"${SANDBOX}/disks/x1\"\nfs = \"xfs\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--omv",
+        "--json"
+      ],
+      "stdout_json": {
+        "mount": "/srv/mergerfs/pool",
+        "branches": [
+          {
+            "disk": "t1",
+            "path": "${SANDBOX}/disks/t1/media",
+            "mode": "RW",
+            "minfreespace_bytes": 50000
+          },
+          {
+            "disk": "x1",
+            "path": "${SANDBOX}/disks/x1/media",
+            "mode": "RW",
+            "minfreespace_bytes": 200000000000
+          }
+        ],
+        "options": [
+          "category.search=ff",
+          "category.action=epall",
+          "category.create=mfs",
+          "moveonenospc=false",
+          "rename-exdev=passthrough",
+          "link-exdev=passthrough",
+          "cache.attr=1",
+          "cache.entry=1",
+          "cache.negative_entry=0"
+        ],
+        "largest_file_bytes": null,
+        "fstab": "${SANDBOX}/disks/t1/media=RW,50000:${SANDBOX}/disks/x1/media=RW,195312500K /srv/mergerfs/pool mergerfs category.search=ff,category.action=epall,category.create=mfs,moveonenospc=false,rename-exdev=passthrough,link-exdev=passthrough,cache.attr=1,cache.entry=1,cache.negative_entry=0 0 0",
+        "omv": {
+          "rpc": {
+            "name": "pool",
+            "paths": "${SANDBOX}/disks/t1/media=RW\n${SANDBOX}/disks/x1/media=RW",
+            "createpolicy": "mfs",
+            "minfreespace": 187,
+            "minfreespaceunit": "G",
+            "options": "category.search=ff,category.action=epall,moveonenospc=false,rename-exdev=passthrough,link-exdev=passthrough,cache.attr=1,cache.entry=1,cache.negative_entry=0"
+          },
+          "mount": "/srv/mergerfs/pool",
+          "warnings": [
+            "minfreespace-rounded"
+          ]
+        }
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--omv"
+      ]
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"/srv/mergerfs/pool\"\n[placement]\nmin_free = [\"1536MiB\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"x1\"\nuuid = \"6e5d4c3b-2a19-4f8e-8d7c-6b5a4f3e2d1c\"\nmount = \"${SANDBOX}/disks/x1\"\nfs = \"xfs\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--omv",
+        "--json"
+      ],
+      "stdout_json": {
+        "mount": "/srv/mergerfs/pool",
+        "branches": [
+          {
+            "disk": "t1",
+            "path": "${SANDBOX}/disks/t1/media",
+            "mode": "RW",
+            "minfreespace_bytes": 1610612736
+          },
+          {
+            "disk": "x1",
+            "path": "${SANDBOX}/disks/x1/media",
+            "mode": "RW",
+            "minfreespace_bytes": 1610612736
+          }
+        ],
+        "options": [
+          "category.search=ff",
+          "category.action=epall",
+          "category.create=mfs",
+          "moveonenospc=false",
+          "rename-exdev=passthrough",
+          "link-exdev=passthrough",
+          "cache.attr=1",
+          "cache.entry=1",
+          "cache.negative_entry=0"
+        ],
+        "largest_file_bytes": null,
+        "fstab": "${SANDBOX}/disks/t1/media=RW,1536M:${SANDBOX}/disks/x1/media=RW,1536M /srv/mergerfs/pool mergerfs category.search=ff,category.action=epall,category.create=mfs,moveonenospc=false,rename-exdev=passthrough,link-exdev=passthrough,cache.attr=1,cache.entry=1,cache.negative_entry=0 0 0",
+        "omv": {
+          "rpc": {
+            "name": "pool",
+            "paths": "${SANDBOX}/disks/t1/media=RW\n${SANDBOX}/disks/x1/media=RW",
+            "createpolicy": "mfs",
+            "minfreespace": 1536,
+            "minfreespaceunit": "M",
+            "options": "category.search=ff,category.action=epall,moveonenospc=false,rename-exdev=passthrough,link-exdev=passthrough,cache.attr=1,cache.entry=1,cache.negative_entry=0"
+          },
+          "mount": "/srv/mergerfs/pool",
+          "warnings": []
+        }
+      }
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"/srv/mergerfs/pool\"\n[placement]\nmin_free = [\"100TiB\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"x1\"\nuuid = \"6e5d4c3b-2a19-4f8e-8d7c-6b5a4f3e2d1c\"\nmount = \"${SANDBOX}/disks/x1\"\nfs = \"xfs\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--omv"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--omv",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config"
+      ]
+    }
+  ]
+}

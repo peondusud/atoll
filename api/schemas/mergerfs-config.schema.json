@@ -31,6 +31,62 @@
       "description": "The line the command prints without --json, with no line feed: branches, mount point, type, options, 0 and 0, with what fstab(5) needs escaped.",
       "type": "string",
       "minLength": 1
+    },
+    "omv": {
+      "description": "With --omv only: the same pool as the openmediavault mergerfs plugin's form takes it, for the plugin 8.0.5 and mergerfs 2.42 or later (specs.md §21.1, docs/research/omv-mergerfs.md).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rpc", "mount", "warnings"],
+      "properties": {
+        "rpc": {
+          "description": "The parameters of the plugin's RPC, omv-rpc -u admin MergerFS set, as its form sends them. The RPC also needs the pool's uuid: fa4b1c66-ef79-11e5-87a0-0002b3a176b4, openmediavault's for a new object, makes a new pool.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "paths", "createpolicy", "minfreespace", "minfreespaceunit", "options"],
+          "properties": {
+            "name": {
+              "description": "The pool's name: the last component of view.mount when it is /srv/mergerfs/<name>; otherwise that last component still, or pool_id when the form would refuse it.",
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$"
+            },
+            "paths": {
+              "description": "Each branch as <path>=<mode>, a line each, in the order of branches, with no line feed after the last; not escaped.",
+              "type": "string",
+              "minLength": 1
+            },
+            "createpolicy": {
+              "description": "category.create, from placement.new_files.",
+              "enum": ["mfs", "ff", "pfrd"]
+            },
+            "minfreespace": {
+              "description": "The pool's one minimum free space, a count of minfreespaceunit, which view.omv_min_free decides from the branches that take new files; null when none can be given: none of them has a minfreespace of its own, or with view.omv_min_free = \"same\" theirs differ.",
+              "type": ["integer", "null"],
+              "minimum": 0,
+              "maximum": 99999
+            },
+            "minfreespaceunit": {
+              "description": "K, M or G, powers of 1024; null with minfreespace.",
+              "enum": ["K", "M", "G", null]
+            },
+            "options": {
+              "description": "The options, as key=value joined by a comma, in the order of specs.md §21.1, but category.create, which createpolicy gives.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "mount": {
+          "description": "Where the plugin mounts the pool: /srv/mergerfs/<name>.",
+          "type": "string",
+          "pattern": "^/srv/mergerfs/[a-zA-Z0-9_][a-zA-Z0-9_.-]*$"
+        },
+        "warnings": {
+          "description": "In byte order; each is also said on standard error. minfreespace-differs: with view.omv_min_free = \"same\", the branches that take new files have different minfreespace, so the pool has none, and the command exits with 4. minfreespace-rounded: no count of K, M or G up to 99999 holds the pool's minfreespace exactly, so it is rounded up. mount-elsewhere: view.mount is not the mount point the plugin gives the pool.",
+          "type": "array",
+          "items": { "enum": ["minfreespace-differs", "minfreespace-rounded", "mount-elsewhere"] },
+          "uniqueItems": true
+        }
+      }
     }
   },
   "$defs": {
