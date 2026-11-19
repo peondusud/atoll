@@ -526,8 +526,9 @@ func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.
 // Link gives the file a path presents a second name, on the disk it is presented from, as a hard link on that disk
 // (specs.md §21.2): the folders above the new name that the disk lacks are made as for what is new. ErrIsFolder for a
 // folder, as on any filesystem; ErrCrossDisk when it cannot be made there, as across two filesystems, so that a
-// program copies instead: a symbolic link, a disk the view may not write to now, a name that disk refuses, collides
-// with one it holds, or puts past its branch's limit, or a driver that makes no such name. Each name is then a file of
+// program copies instead: a symbolic link, a disk the view may not write to now, a disk whose driver moves the file's
+// modification time as it links it, a name that disk refuses, collides with one it holds, or puts past its branch's
+// limit, or a driver that makes no such name. Each name is then a file of
 // its own, which the passes replicate as any other, never as a link (specs.md §14, §15.1).
 func (w *Writer) Link(ctx context.Context, from, to string) (*view.Node, error) {
 	w.mu.Lock()
@@ -547,7 +548,7 @@ func (w *Writer) Link(ctx context.Context, from, to string) (*view.Node, error) 
 		return nil, err
 	}
 	d := w.disk(n.Disk)
-	if d == nil || !w.handles.Has(n.Disk) {
+	if d == nil || !w.handles.Has(n.Disk) || w.linkMovesTimes(d) {
 		return nil, ErrCrossDisk
 	}
 	refused, err := w.refusedOn(ctx, d, to, "")
@@ -583,6 +584,16 @@ func (w *Writer) Link(ctx context.Context, from, to string) (*view.Node, error) 
 		return nil, err
 	}
 	return view.NodeOfStat(n.Disk, &made, ""), nil
+}
+
+// linkMovesTimes says whether a hard link made on a disk would move its file's modification time, as the kernel's ntfs
+// driver of Linux 7.1 does when mounted with the type ntfs (specs.md §22): the view refuses such a link with EXDEV, so
+// that the program copies, as the next pass would otherwise give every other copy that new time. A disk whose mount
+// cannot be read now is refused too. Merge note: beta's disks.LinkMovesTimes(fstype), or (*ops.Disk).LinkMovesTimes(),
+// says the same, and takes this one's place.
+func (w *Writer) linkMovesTimes(d *config.Disk) bool {
+	seen := w.machine.Mount(d.Mount)
+	return seen.Entry == nil || seen.Entry.FSType == "ntfs"
 }
 
 // Unlink deletes what a path presents, but a folder: a file goes to the trash from the disk it is presented from,

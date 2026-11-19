@@ -19,13 +19,21 @@ import (
 	"github.com/peondusud/atoll/internal/view"
 )
 
-// machine is the disks as folders, with the free space a test gives each.
+// machine is the disks as folders, with the free space a test gives each, mounted with the type a test gives each,
+// ext4 when it gives none.
 type machine struct {
-	free map[string]int64
-	now  int64
+	free   map[string]int64
+	fsType map[string]string
+	now    int64
 }
 
-func (m *machine) Mount(string) disks.MountSeen { return disks.MountSeen{} }
+func (m *machine) Mount(mount string) disks.MountSeen {
+	fsType := m.fsType[mount]
+	if fsType == "" {
+		fsType = "ext4"
+	}
+	return disks.MountSeen{Path: disks.PathOK, Entry: &disks.MountEntry{MountPoint: mount, Root: "/", FSType: fsType}}
+}
 func (m *machine) Device(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
 	return disks.DeviceSeen{}
 }
@@ -47,12 +55,13 @@ func (m *machine) OpenTop(mount string) (fsx.Dir, error) {
 }
 
 type bench struct {
-	t     *testing.T
-	top   string
-	db    interface{ Close() error }
-	tree  *view.Tree
-	w     *Writer
-	mount map[string]string
+	t       *testing.T
+	top     string
+	db      interface{ Close() error }
+	tree    *view.Tree
+	w       *Writer
+	mount   map[string]string
+	machine *machine
 }
 
 func newBench(t *testing.T, t2fs string) *bench {
@@ -71,7 +80,7 @@ func newBenchEdited(t *testing.T, t2fs, placement string, free1, free2 int64, ed
 	t.Helper()
 	top := t.TempDir()
 	b := &bench{t: t, top: top, mount: map[string]string{}}
-	m := &machine{free: map[string]int64{}}
+	m := &machine{free: map[string]int64{}, fsType: map[string]string{}}
 	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = \"/srv/pool\"\n[placement]\nmin_free = [\"5%%\"]\n", filepath.Join(top, "catalog.db")) + placement
 	for i, id := range []string{"t1", "t2"} {
 		mount := filepath.Join(top, id)
@@ -149,6 +158,7 @@ func newBenchEdited(t *testing.T, t2fs, placement string, free1, free2 int64, ed
 		t.Fatal(err)
 	}
 	b.db = db
+	b.machine = m
 	return b
 }
 
@@ -398,6 +408,16 @@ func TestWriterLinks(t *testing.T) {
 	if b.on("t2", "Films/hidden.mkv") != "stale" {
 		t.Errorf("what the disk held there: %q", b.on("t2", "Films/hidden.mkv"))
 	}
+	// The disk of the original is mounted with the kernel's ntfs driver, whose link moves the file's modification time:
+	// a program copies instead, and the file keeps its time.
+	b.machine.fsType[b.mount["t2"]] = "ntfs"
+	if _, err := b.w.Link(ctx, "Films/a.mkv", "Series/b.mkv"); !errors.Is(err, ErrCrossDisk) {
+		t.Errorf("a disk of the type ntfs: %v", err)
+	}
+	if b.on("t2", "Series/b.mkv") != "absent" {
+		t.Error("a link made on a disk of the type ntfs")
+	}
+	b.machine.fsType[b.mount["t2"]] = "ntfs3"
 	// The disk of the original may not be written now: a program copies instead.
 	b.w.handles.Drop("t2")
 	if _, err := b.w.Link(ctx, "Films/a.mkv", "Series/b.mkv"); !errors.Is(err, ErrCrossDisk) {
