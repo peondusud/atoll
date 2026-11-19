@@ -40,9 +40,10 @@ const (
 	settle = 3 * time.Minute
 )
 
-// TestPlex tries the notifications on Plex, with the token of the server, which run.sh reads once PLEX_CLAIM has
-// claimed it, as notify.plex.token_file gives it (specs.md §21.5). Plex 1.43.5 unclaimed answers 401 to another host
-// of an allowed network: the test then has nothing to try.
+// TestPlex tries the notifications on Plex (specs.md §21.5). By default run.sh leaves it unclaimed, in no account, and
+// runs the test in its network namespace, with no token: Plex 1.43.5 unclaimed answers 401 to every other host, an
+// allowed network's included, but takes its own host's requests (measured on 2026-11-20). With PLEX_CLAIM, run.sh has
+// it claimed, and the test sends its token as notify.plex.token_file does.
 func TestPlex(t *testing.T) {
 	t.Parallel()
 	base := need(t, "ATOLL_PLEX_URL")
@@ -69,8 +70,8 @@ func TestPlex(t *testing.T) {
 	t.Logf("Plex %s, claimed: %v", identity.MediaContainer.Version, identity.MediaContainer.Claimed)
 	ctx := context.Background()
 	if err := c.do(ctx, http.MethodGet, "/library/sections", nil, nil); err != nil {
-		if tokenFile == "" && strings.Contains(err.Error(), "401") {
-			t.Skipf("Plex takes no request from this host without a token: run with PLEX_CLAIM set (%v)", err)
+		if tokenFile == "" {
+			t.Fatalf("Plex takes no request without a token from %s, which run.sh makes its own host: %v", base, err)
 		}
 		t.Fatal(err)
 	}
@@ -123,6 +124,13 @@ func TestPlex(t *testing.T) {
 		}
 		return files, nil
 	}
+	// The library is scanned once from the server itself, as Scan Library Files does, before Atoll's partial scans
+	// count: Plex ignores one in a library none of whose scans found a file yet (specs.md §21.5).
+	must(t, c.do(ctx, http.MethodGet, "/library/sections/"+key+"/refresh", nil, nil))
+	waitFor(t, "the library lists its seed", settle, func(ctx context.Context) (bool, error) {
+		files, err := list(ctx)
+		return slices.Contains(files, notify.Seen(viewMount, seed("plex"), pathMap)), err
+	})
 	scenario(t, "plex", &notify.Plex{URL: base, TokenFile: tokenFile, ViewMount: viewMount, PathMap: pathMap}, list)
 	if tokenFile != "" {
 		// Without token_file, Plex must take this host's requests without a token, as its allowedNetworks says,
@@ -398,7 +406,7 @@ func mkdir(t *testing.T, p string) {
 
 // seed is the movie a library holds when it is made, as a library in use does. Plex 1.43.5 and Jellyfin 12.4 ignore
 // what they are told of in a library none of whose scans found a file yet, until a scan of the whole library finds
-// one (measured on 2026-11-19).
+// one (measured on 2026-11-19, and on Plex unclaimed on 2026-11-20).
 func seed(kind string) string { return kind + "/Movies/Atoll Seed (2000)/Atoll Seed (2000).mkv" }
 
 // plant makes the folder of kind's library, with its seed.
