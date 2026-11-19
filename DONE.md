@@ -2,6 +2,22 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Plex tried unclaimed, from its own host, 2026-11-20 (specs.md §21.5, §27)
+
+The maintainer asked whether the Plex test could run on a test Plex without his account ("tu peux pas faire avec un plex de test sans mon compte"). The Plex test of `test/mediaservers` ran only with `PLEX_CLAIM`, a claim token of his account, and was skipped without it; it now runs with no account and no token. Commits `6df2c40`, `576b797` and `3cb78ec`, merged by `8f8d520`.
+
+- **Measured**, with `plexinc/pms-docker:latest`, Plex 1.43.5.11079, unclaimed and with no token:
+  - **From another host of its Docker network**: `GET /library/sections` and `GET /:/prefs` answer 401, with `ALLOWED_NETWORKS` set to the private ranges or not; Plex's log reads the request as "Allowed Network (Subnet)" and answers 401 all the same.
+  - **From its own network namespace** ("Loopback"): every request the test makes answers 2xx, a library made with `tv.plex.agents.none` and the scanner Plex Movie included (201), `refresh` and `refresh?path=` too. A library made while `/identity` still says `startingPlugins` answers 400, which the test's wait for an empty start state avoids.
+  - **The scan by hand still counts**: in a library made empty, a partial scan of a new movie's folder, then one of the library's folder, found nothing in 30 s each; a scan of the whole library found it in 2 s, and a partial scan of a second movie's folder then found it in 4 s.
+- **`run.sh`**: without `PLEX_CLAIM`, Plex starts unclaimed, with no `ALLOWED_NETWORKS`. The test runs in its network namespace (`--network container:`) and reaches it at `http://127.0.0.1:32400` with no token file; Jellyfin and Emby are reached by name, as before. With `PLEX_CLAIM`, nothing changes. Its cleanup now removes the volumes the images declare (`docker rm -v`), which each run had left dangling, a server's whole configuration among them.
+- **The test**: scans the library once by hand, as Scan Library Files does, and waits for its seed before the notifications, as §21.5 says. Without a token, a 401 now fails the test where it skipped it, so the weekly run says when Plex stops taking its own host's requests.
+- **Plex's image talks to plex.tv on its own**, unclaimed: at start it calls `servers.plex.tv` with an empty token (privacy, release channels, features every 5 minutes, and `POST /devices/<id>/unclaimed` with its private Docker address), and its crash uploader runs. The test sends nothing there; the weekly workflow now runs Plex with no secret, and so registers an unclaimed device with plex.tv each week.
+- **Tests**: the Plex test passed twice in a row on `6df2c40`, listing the movie once told of it, at its new name alone after the rename, and no more after the deletion, every request in Plex's log from 127.0.0.1 with no token; all three servers passed on `3cb78ec` (Plex, Jellyfin 12.4.0, Emby 4.10.2), then Plex again alone; no volume, container or network left behind; lint with the build tag, `go vet` and shellcheck pass.
+- **Docs**: `specs.md` §21.5's measured line and §27, `test/mediaservers/doc.go`, the comments of `run.sh` and of `.github/workflows/mediaservers.yml`, whose weekly run now tries Plex.
+- **Left**: the claimed path has never run, nor with it the `allowed-network` subtest; whether a claimed Plex takes its own host's requests with no token is not measured; the maintainer's real Plex, its libraries on the merged view, is still to try.
+- **Decided without the maintainer, to confirm**: the unclaimed server tried from its own host as the default, the claimed path kept behind `PLEX_CLAIM`; no `ALLOWED_NETWORKS` on the unclaimed server; a 401 failing the test rather than skipping it; the scan of the whole library by hand in the test before the notifications; `docker rm -v` in the cleanup.
+
 ## The maintainer's answers of 2026-11-20 (specs.md §10, §14.2, §15.6, §15.12, §21.5, §26; threat model G5, G22)
 
 He was asked the choices of 2026-11-19 made without him and the decisions TODO.md still held, eleven questions in three rounds; he took the option put first each time.
