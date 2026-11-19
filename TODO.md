@@ -60,7 +60,15 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 ## Hardware not yet measured (specs.md §29.7)
 
-- **BLAKE3**: run `conformance/vectors/blake3.json` on real arm64 and AVX-512 hardware, and measure throughput there. `zeebo/blake3` stays pinned to commit `28a397d`: its last tag, v0.2.4, has no arm64 backend (`docs/research/blake3.md`). The maintainer's machine has neither: its i7-12700K is an Alder Lake, whose AVX-512 Intel turned off. Under emulation, qemu-user for arm64 and Intel's SDE for AVX-512, the vectors can run, never the throughput.
+- **BLAKE3**: run `conformance/vectors/blake3.json` on real arm64 and AVX-512 hardware, and measure throughput there. `zeebo/blake3` stays pinned to commit `28a397d`: its last tag, v0.2.4, has no arm64 backend (`docs/research/blake3.md`). The maintainer's machine has neither: its i7-12700K is an Alder Lake, whose AVX-512 Intel turned off. Under emulation, qemu-user for arm64 and Intel's SDE for AVX-512, the vectors can run, never the throughput. The CI's `arm64` job runs `blake3.json` and the throughput benchmarks on GitHub's arm64 runners, and `blake3-amd64` logs whether its CPU has AVX-512: record the numbers of the first runs in `docs/research/blake3.md`.
+
+## GitHub Actions and releases (DONE.md, 2026-11-19)
+
+- Read the first runs on GitHub: KVM on `ubuntu-latest`, container jobs on `ubuntu-24.04-arm`, the unit tests on real arm64, the caches.
+- Protect `main` after the first green run, requiring `race`, `integration`, `conformance`, `lint`, `govulncheck`, `qemu` and `arm64` (the maintainer's choice).
+- The first release, `v0.1.0-beta.1`, after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
+- GoReleaser v2.20.2 or later once two weeks old.
+- **confirm**: the choices made alone, first the sample configuration outside `/etc`.
 
 ## The review's decisions, made by the maintainer on 2026-11-13, to do
 
@@ -113,4 +121,4 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 
 - **Passes that walk only what changed, in phase 2b**, as the maintainer decided on 2026-11-14: under a change every second on 200,000 files, passes that walk every copy follow one another, about one core's worth on a machine, against the 5 % of §26 (DONE.md, the soak on 200,000 files). Done by disk on 2026-11-16, to spare the disks' sleep (§15.13): a disk that nothing changed on is not walked. Done by name on 2026-11-17 (DONE.md): a pass for events looks at the names the watcher heard alone, and plans only what may have changed, 12 ms for a pass given one name on 50,000 files a disk, against 1 s. Measured over 12 hours on 2026-11-18 (DONE.md): about 7 s a pass for 105 s, 2 hours of passes in the 12 for 9. Still to do: the soak of 24 hours, to measure it over days; and the operations of Atoll's own view, which still walk their disks whole, by their names too.
 - **A write that runs out of space, moved to another disk as it goes** (§19, §21.2), on every disk, the SSD cache's included: to do on its own, as the maintainer chose on 2026-11-17. Until then a write through Atoll's own view that meets `ENOSPC` fails with it, and a file lands on the cache only while it has room past `min_free`.
-- **Observability, for phase 3 (the Rust rewrite)**, as the maintainer asked on 2026-11-12: OpenTelemetry, Vector, or both. OpenTelemetry would give the daemon's traces, metrics and logs over OTLP. Vector (vector.dev) would collect the logs and metrics and send them on. Phase 2b brought Prometheus's `/metrics` (specs.md §23.1), whose names `api/metrics.json` pins; what the rewrite exports besides, and through which, is to decide then.
+- **Observability**: done in Go, as the maintainer chose on 2026-11-19 (DONE.md): the log in OpenTelemetry's data model, and an optional OTLP/HTTP export of the metrics and the log (§23.2); traces left out. Still to do: measure `TestScale` again in qemu with the new binary, OTLP off and on, as about 5 MiB more of the binary's pages come near the 190.7 MiB; try the export against a real Vector, Elastic Agent and OpenTelemetry Collector in containers, as `test/mediaservers` does; confirm the choices made alone.

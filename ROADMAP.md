@@ -41,7 +41,8 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **The disk commands.** `atoll disk add`, `show`, `remove` with `--evacuate`, `fail` and `replace`, which edit the configuration keeping every other byte, check the topology and the mount point, and drain a disk through the daemon's passes (§10, §18).
 - **Tests.** The break-glass test, and the failed-mount test (§27).
 - **Contracts and conformance.** 67 vector files and 617 black-box scenarios shared with the Rust version (§29).
-- **Local CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3 (`test/ci/run.sh`).
+- **CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3, on the maintainer's machine (`test/ci/run.sh`) and on GitHub Actions on each push to `beta` and `main` and each pull request, with govulncheck and the unit tests on arm64 (`.github/workflows/ci.yml`).
+- **Releases.** GoReleaser on a tag the maintainer pushes, drafted for him to publish: a `.tar.gz` and a `.deb` for amd64 and arm64, `SHA256SUMS`, an SBOM per archive and provenance attestations (DONE.md, 2026-11-19). The first, `v0.1.0-beta.1`, after the soak of 24 hours.
 
 ### Remaining
 
@@ -81,5 +82,6 @@ Every item of phase 1b is done. What the beta still needs is the alpha's: the me
 - Done, the UPS through NUT (§20, R-27, DONE.md, 2026-11-17): the daemon reads `ups.status` from `upsd` every 5 s; on battery, nothing that moves data starts; with the battery low, it stops its work, writes out the disks, and waits for line power.
 - Done, `balance.equalize` (§12.4, DONE.md, 2026-11-17): with `percent`, Atoll's own copies go by the most free share of capacity, whatever `new_files` says; nothing is moved.
 - Done, Prometheus `/metrics` (§23.1, DONE.md, 2026-11-17): on the local API with its token and on `metrics.listen` with none; the counts of the catalog after each pass, the rest as the daemon holds it; names pinned in `api/metrics.json`.
+- Done, OpenTelemetry (§23.1, §23.2, DONE.md, 2026-11-19): the log as JSON records of OpenTelemetry's data model by default, each metric's OpenTelemetry name pinned to its Prometheus name, and an optional export over OTLP/HTTP of the metrics and the log.
 - Done, passes that look at what changed (§15.13, DONE.md, 2026-11-17): a pass for events looks at the names the watcher heard alone, and plans only what may have changed; on 50,000 files a disk, 12 ms for a pass given one name, against 1 s for a pass of everything.
 - Phase 2b is done but for a write that runs out of space moved to another disk as it goes, left apart by the maintainer. What follows it: the soak of 24 hours and the try with a real Plex (TODO.md); the openmediavault plugin's form is given since 2026-11-19 (`atoll mergerfs-config --omv`). A soak of 12 hours on it passed on 2026-11-18: about 7 s a pass for 105 s, and a peak under the 200 MB at every tenth.
