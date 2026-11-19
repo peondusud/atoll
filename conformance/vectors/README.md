@@ -97,8 +97,9 @@ A percentage is checked through its use: the share of a total, such as `min_free
 | `input` | string | the value as written in the configuration |
 | `of` | integer | the total, in bytes |
 | `result` | integer | the share of `of` that `input` gives, in bytes |
-| `count` | integer | with `below`: a count to compare with that share |
+| `count` | integer | with `below` and `exceeded`: a count to compare with that share |
 | `below` | boolean | whether `count` is below `input` of `of`, compared exactly: `count` × 100 < percentage × `of`. The share of bytes correctly placed falls below `[balance].trigger.ratio_below` so (`specs.md` §13.3) |
+| `exceeded` | boolean | whether `count` is above `input` of `of`, compared exactly: `count` × 100 > percentage × `of`. The mass guards' `percent`, `trash.max_size` and `cache.max_fill` are exceeded so (`specs.md` §15.6, §17, §19) |
 | `error` | boolean | `true` when `input` is rejected |
 
 ### `window.json` — time windows (§29.5)

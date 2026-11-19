@@ -1,6 +1,8 @@
 package value
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +50,18 @@ func TestListenVectors(t *testing.T) {
 			t.Errorf("ParseListen(%q): %v", v.Input, err)
 		case !v.Error && (got.Address() != *v.Address || got.Port != *v.Port):
 			t.Errorf("ParseListen(%q) = %v, want %s port %d", v.Input, got, *v.Address, *v.Port)
+		case !v.Error:
+			// String is what the daemon listens on (cmd/atoll/api.go): the canonical address, in brackets for IPv6,
+			// then the port; ParseListen takes it back as it was.
+			want := *v.Address + ":" + strconv.Itoa(int(*v.Port))
+			if strings.Contains(*v.Address, ":") {
+				want = "[" + *v.Address + "]:" + strconv.Itoa(int(*v.Port))
+			}
+			if s := got.String(); s != want {
+				t.Errorf("ParseListen(%q).String() = %q, want %q", v.Input, s, want)
+			} else if again, err := ParseListen(s); err != nil || again != got {
+				t.Errorf("ParseListen(%q) = %v, %v, want %v", s, again, err, got)
+			}
 		}
 	}
 }
@@ -116,17 +130,18 @@ func TestSizeVectors(t *testing.T) {
 
 func TestPercentVectors(t *testing.T) {
 	type vector struct {
-		Input  string `json:"input"`
-		Of     *int64 `json:"of"`
-		Result *int64 `json:"result"`
-		Count  *int64 `json:"count"`
-		Below  *bool  `json:"below"`
-		Error  bool   `json:"error"`
-		Note   string `json:"note"`
+		Input    string `json:"input"`
+		Of       *int64 `json:"of"`
+		Result   *int64 `json:"result"`
+		Count    *int64 `json:"count"`
+		Below    *bool  `json:"below"`
+		Exceeded *bool  `json:"exceeded"`
+		Error    bool   `json:"error"`
+		Note     string `json:"note"`
 	}
 	for _, v := range vectors.Load[vector](t, "percent.json") {
-		if (v.Count == nil) != (v.Below == nil) {
-			t.Errorf("vector %q: want count and below together", v.Input)
+		if (v.Count == nil) != (v.Below == nil) || (v.Count == nil) != (v.Exceeded == nil) {
+			t.Errorf("vector %q: want count, below and exceeded together", v.Input)
 		}
 		p, err := ParsePercent(v.Input)
 		switch {
@@ -142,6 +157,9 @@ func TestPercentVectors(t *testing.T) {
 			}
 			if v.Count != nil && p.Below(*v.Count, *v.Of) != *v.Below {
 				t.Errorf("ParsePercent(%q).Below(%d, %d): want %v (%s)", v.Input, *v.Count, *v.Of, *v.Below, v.Note)
+			}
+			if v.Exceeded != nil && p.Exceeded(*v.Count, *v.Of) != *v.Exceeded {
+				t.Errorf("ParsePercent(%q).Exceeded(%d, %d): want %v (%s)", v.Input, *v.Count, *v.Of, *v.Exceeded, v.Note)
 			}
 			if p.String() != v.Input {
 				t.Errorf("ParsePercent(%q).String() = %q", v.Input, p.String())
@@ -259,5 +277,12 @@ func TestPercentZeroValue(t *testing.T) {
 	}
 	if got := p.String(); got != "0%" {
 		t.Errorf("Percent{}.String() = %q, want 0%%", got)
+	}
+	// As 0 %: no count is below it, and any above nothing exceeds it.
+	if p.Below(0, 1000) {
+		t.Error("Percent{}.Below(0, 1000) = true, want false")
+	}
+	if p.Exceeded(0, 1000) || !p.Exceeded(1, 1000) {
+		t.Errorf("Percent{}.Exceeded(0, 1000), Exceeded(1, 1000) = %v, %v, want false, true", p.Exceeded(0, 1000), p.Exceeded(1, 1000))
 	}
 }

@@ -1,0 +1,68 @@
+# Mutation testing of the pure core (specs.md §27), each night and on demand, never on a push: gremlins changes each
+# package's code one mutant at a time and runs the package's tests against each (test/ci/mutation.sh, make mutation).
+# The score per package and the mutants that lived go to the run's summary, gremlins' logs and JSON to an artifact.
+# Nothing fails on a score yet: the threshold comes once a baseline is known.
+name: Mutation
+
+on:
+  schedule:
+    # Each night at 02:41 UTC, on beta, where the work is.
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "The packages to mutate, by folder and separated by spaces, such as ./internal/glob; the pure core when empty"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# As in ci.yml: git trusts the checkout of a container job.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+concurrency:
+  group: mutation
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    # The image of ci.yml and test/ci/run.sh.
+    container: golangci/golangci-lint:v2.15.0
+    timeout-minutes: 240
+    steps:
+      # A dispatch mutates the branch it was started on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'beta' || github.ref }}
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-mutation-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-mutation-${{ runner.arch }}-
+      # The input reaches the script as words of an environment variable, never as text of the shell's command, and
+      # names no file by a pattern.
+      - run: |
+          set -f
+          # One package a word, split on purpose.
+          # shellcheck disable=SC2086
+          bash test/ci/mutation.sh $PACKAGES
+        env:
+          PACKAGES: ${{ inputs.packages }}
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation
+          path: |
+            bin/mutation/*.log
+            bin/mutation/*.json
+            bin/mutation/lived.txt
+          if-no-files-found: ignore
+          retention-days: 30

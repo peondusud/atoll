@@ -56,6 +56,13 @@ test-qemu: qemu-build
 test-mediaservers:
 	bash test/mediaservers/run.sh
 
+# Mutation testing with gremlins (test/ci/mutation.sh) of one package, PKG=./internal/glob, or of the whole pure core
+# without PKG, as .github/workflows/mutation.yml runs it each night. The log and gremlins' JSON go to bin/mutation/;
+# WORKERS mutants at once, the CPUs by default.
+.PHONY: mutation
+mutation:
+	bash test/ci/mutation.sh $(PKG)
+
 # The conformance build holds code the delivered binary does not, so it gets a run of its own.
 lint:
 	$(GOLANGCI_LINT) run ./...
