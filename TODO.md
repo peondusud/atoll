@@ -77,7 +77,9 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 - **confirm**: the choices made alone for G1, G4, G5 and G6 (DONE.md).
 - G5, for the maintainer to weigh: a guard on what a day changed, or not purging `overwritten` versions for room while modifications run high.
-- The threat model's low gaps G7 to G17 and G19 to G21, and G2, G3 and G18 once merged.
+- The threat model's low gaps G7 to G17 and G19 to G21, and G18 once merged.
+- **confirm**: the choices made alone for G2 and G3 (DONE.md), the fallback without `/proc`, which checks root by its account alone, first.
+- The view (experimental): a file or folder it makes takes the caller's group, not a setgid folder's; a non-owner's write to a setuid file whose presented mode differs from its disk's fails until a pass. Run `TestViewAsAnotherAccount` on Linux 7.3 too.
 
 ## The tests after the gaps of 2026-11-19 (DONE.md)
 
