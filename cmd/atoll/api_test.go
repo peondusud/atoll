@@ -654,6 +654,48 @@ func TestTheUnitsAreHardened(t *testing.T) {
 	}
 }
 
+// deploy/50-atoll.rules lets the account atoll start a mount unit, and nothing else: one action, one account, the verb
+// start alone, a unit whose name ends in .mount (specs.md §15.13). The .deb installs it where polkitd reads it, and the
+// archive holds it. Measured with polkitd 122 (Debian 12) and 126 (Debian 13) through pkcheck, and in qemu by the
+// daemon's own remount (test/loopdev/units_test.go, TestTheRemountUnderSystemd).
+func TestThePolkitRuleLetsAtollStartAMountUnitAlone(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "deploy", "50-atoll.rules"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := string(data)
+	var code []string
+	for _, line := range strings.Split(rule, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+			code = append(code, line)
+		}
+	}
+	program := strings.Join(code, "\n")
+	for _, want := range []string{`action.id === "org.freedesktop.systemd1.manage-units"`, `subject.user === "atoll"`,
+		`action.lookup("verb") === "start"`, `\.mount$/.test(action.lookup("unit") || "")`, "return polkit.Result.YES;",
+		"return polkit.Result.NOT_HANDLED;"} {
+		if !strings.Contains(program, want) {
+			t.Errorf("deploy/50-atoll.rules has no %s", want)
+		}
+	}
+	if n := strings.Count(program, "polkit.Result.YES"); n != 1 {
+		t.Errorf("deploy/50-atoll.rules says yes %d times", n)
+	}
+	if n := strings.Count(program, "action.lookup(\"verb\")"); n != 1 {
+		t.Errorf("deploy/50-atoll.rules reads the verb %d times", n)
+	}
+	release, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(release), "      - src: deploy/50-atoll.rules\n        dst: /usr/share/polkit-1/rules.d/50-atoll.rules\n") {
+		t.Error(".goreleaser.yaml does not install deploy/50-atoll.rules in /usr/share/polkit-1/rules.d/")
+	}
+	if strings.Count(string(release), "- src: deploy/50-atoll.rules\n") != 2 {
+		t.Error(".goreleaser.yaml does not put deploy/50-atoll.rules in both the archive and the package")
+	}
+}
+
 // serve asks a handler for a path, with a request of that context, and gives the status of its answer.
 func serve(ctx context.Context, h http.Handler, path string) int {
 	w := httptest.NewRecorder()

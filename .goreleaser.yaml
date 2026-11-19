@@ -52,6 +52,8 @@ archives:
         info: *file
       - src: deploy/atoll-mount.service
         info: *file
+      - src: deploy/50-atoll.rules
+        info: *file
       - src: deploy/atoll.toml
         info: *file
 
@@ -79,10 +81,11 @@ nfpms:
     bindir: /usr/bin
     mtime: "{{ .CommitDate }}"
     # The account is made with useradd (specs.md §26). Atoll runs without the others: mergerfs is the view of phase 1,
-    # smartctl reads SMART (§23), fusermount3 mounts Atoll's own view where mount(2) is not allowed (§21.2), and
-    # ntfs-3g mounts NTFS disks where ntfs3 does not (§22).
+    # smartctl reads SMART (§23), polkitd lets the account atoll start a disk's mount unit through the rule below, so
+    # that the remount after a USB reset goes through systemd (§15.13), fusermount3 mounts Atoll's own view where
+    # mount(2) is not allowed (§21.2), and ntfs-3g mounts NTFS disks where ntfs3 does not (§22).
     dependencies: [passwd]
-    recommends: [mergerfs, smartmontools]
+    recommends: [mergerfs, smartmontools, polkitd]
     suggests: [fuse3, ntfs-3g]
     contents:
       - src: bin/deb/atoll.service
@@ -92,6 +95,11 @@ nfpms:
           mtime: "{{ .CommitDate }}"
       - src: bin/deb/atoll-mount.service
         dst: /usr/lib/systemd/system/atoll-mount.service
+        file_info: *deb
+      # polkit's rule: the account atoll may start a mount unit, and nothing else (specs.md §15.13, §26). The polkitd of
+      # Debian 12 and 13 reads it there; it changes nothing where polkitd is not installed.
+      - src: deploy/50-atoll.rules
+        dst: /usr/share/polkit-1/rules.d/50-atoll.rules
         file_info: *deb
       # The sample is no configuration of this machine: atoll init writes one, and refuses to when one is there (§25).
       - src: deploy/atoll.toml

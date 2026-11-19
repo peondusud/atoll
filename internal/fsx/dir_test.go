@@ -430,6 +430,26 @@ func TestWriteNewNeverReplaces(t *testing.T) {
 	}
 }
 
+// A device's name under /dev/disk/ is a link: it leads somewhere while its device is there, and nowhere once the
+// device went and the link stayed.
+func TestReachableFollowsLinks(t *testing.T) {
+	top := t.TempDir()
+	device, link, gone := filepath.Join(top, "sdb1"), filepath.Join(top, "by-uuid"), filepath.Join(top, "dangling")
+	if err := os.WriteFile(device, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range [][2]string{{device, link}, {filepath.Join(top, "sdc1"), gone}} {
+		if err := os.Symlink(l[0], l[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, want := range map[string]bool{device: true, link: true, gone: false, filepath.Join(top, "none"): false} {
+		if got, err := Reachable(path); got != want || err != nil {
+			t.Errorf("%s: %v, %v, want %v", filepath.Base(path), got, err, want)
+		}
+	}
+}
+
 func TestSumSizes(t *testing.T) {
 	top := t.TempDir()
 	for name, size := range map[string]int{"a": 3, "sub/b": 5, "sub/deep/c": 7} {

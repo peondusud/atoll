@@ -912,6 +912,20 @@ func Exists(path string) (bool, error) {
 	}
 }
 
+// Reachable says whether a path leads somewhere, through its symbolic links, as a device's name under /dev/disk/ does
+// once udev made it: a link whose target is gone leads nowhere. It fails when that cannot be told.
+func Reachable(path string) (bool, error) {
+	_, err := os.Stat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, fmt.Errorf("stat: %w", err)
+	}
+}
+
 // MkdirAll makes a folder and its parents, for what is not on a pool disk: the configuration and
 // the catalog.
 func MkdirAll(path string) error {
