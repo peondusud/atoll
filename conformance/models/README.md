@@ -7,7 +7,7 @@ Atoll's worst bugs are interleavings: Atoll killed between two syncs of a move w
 ```bash
 make model-check                         # every instance, each against what it expects
 test/tla/run.sh Copy.cfg Live.cfg        # some of them
-make model-flaws                         # the black-box scenarios of the flaws below: they fail until a remedy lands
+make model-flaws                         # the black-box scenarios of the flaws still open: none now
 ```
 
 `test/tla/run.sh` needs only Docker: it runs TLC in `eclipse-temurin:21.0.12_8-jre-noble`, with 2 workers, a 2 GiB heap and 2 CPUs, so that it leaves the machine to whatever else runs there. It downloads `tla2tools.jar` 1.7.4 once into `bin/tla/`, git-ignored, and checks its SHA-256. Each instance's log, with the full trace of a violation, goes to `bin/tla/<instance>.log`. With `--inside`, it runs TLC where it is, in that image, as the CI's `tla` job and `test/ci/run.sh` do.
@@ -29,7 +29,7 @@ The first line of each `.cfg` says what TLC must find there: `\* expect: pass`, 
 
 **The world.** Disks hold objects, each standing for an inode with its creation time (the identity of §15.1), with a content (a version number) and a change count (what size, modification and change time say). Each disk has its names twice: as the kernel shows them, and as they would survive a power cut, so that what a sync makes durable is explicit. The names are a file's logical path, a part `<op-id>.part` in `<workdir>/tmp/`, and an entry `<date>/<op-id>/…` in `<workdir>/trash/`. A disk is up, or gone: answering `EIO`, or an empty mount point; mounted again it is a new mount (a new mount id) and has lost what it had not made durable, as XFS brings a rename back after a remount (§17.1). A user writes into a copy (a new version, same inode), replaces it (an atomic save: a new inode), deletes it, or makes a file where none was, on any disk at any moment, durably, with what came before on that disk. Atoll is killed (kill -9: the catalog keeps what it committed, the process loses the rest), or the power is cut (every disk keeps only what was durable).
 
-**Atoll.** One process that runs passes, step by step, as the conformance build does, one copy at a time (§29.4): the mount check of every disk and the session's confirmation, which binds the session's handles to that mount (§10); the reprise of each disk's planned operations, in two steps, what it does on the disk then its commit (§17.2, §14.2 Reprise); a part in `tmp/` no job owns, dropped (§14.2); the walk of each disk, then its confirmation, and the verdicts there, edited, replaced, gone, own and unknown (§15.10, §15.12); the decisions Deletion, Kept and Gone (§15.12), with peers; the modifications, `modified`, `metadata` and `conflict`, with their waits (§15.4); a stale copy's trash job queued again (§15.4); the trash jobs and the operation `trash` step by step, with `link` and `unlink` on a disk without `RENAME_NOREPLACE` (§15.12, §17.1); the plan, which keeps or cancels pending copies, counts the copies, finds a source, and places a copy where no disk on the same physical disk holds one (§13.4, §14.1); the copies, the operation `create` step by step: journaled, the part made and its inode recorded, copied, the source looked at again, synced, verified, renamed without replacing anything, the file then its folder synced, the folder of `tmp/` synced, the commit (§14, §14.2). A disk that fails at any step leaves its operation planned for the reprise. A decision may always wait, which stands for the debounce, `settle` and the guards.
+**Atoll.** One process that runs passes, step by step, as the conformance build does, one copy at a time (§29.4): the mount check of every disk and the session's confirmation, which binds the session's handles to that mount (§10); the reprise of each disk's planned operations, in two steps, what it does on the disk then its commit (§17.2, §14.2 Reprise); a part in `tmp/` no job owns, dropped (§14.2); the walk of each disk, then its confirmation, and the verdicts there, edited, replaced, gone, own and unknown (§15.10, §15.12); the decisions Deletion, Kept and Gone (§15.12), with peers, which wait while a job of the file is running (§14.1); the modifications, `modified`, `metadata` and `conflict`, with their waits (§15.4); a stale copy's trash job queued again (§15.4); the trash jobs and the operation `trash` step by step, with `link` and `unlink` on a disk without `RENAME_NOREPLACE` (§15.12, §17.1); the plan, which keeps or cancels pending copies, counts the copies, finds a source, and places a copy where no disk on the same physical disk holds one (§13.4, §14.1); the copies, the operation `create` step by step: journaled, the part made and its inode recorded, copied, the source looked at again, synced, verified, renamed without replacing anything, the file then its folder synced, the folder of `tmp/` synced, the commit (§14, §14.2). A disk that fails at any step leaves its operation planned for the reprise. A decision may always wait, which stands for the debounce, `settle` and the guards.
 
 **The catalog.** Files (their hash as the version it describes, conflict), copies (state `ok`, `stale` or `pending`, inode, change count, `verified_ns`, `created_by`, `gone_kind`, `first_seen_ns` as a clock), the jobs `replicate` and `trash`, the journal `ops` (`planned`, `done`, `undone`), and each disk's state from the last mount check.
 
@@ -61,14 +61,14 @@ Measured with `make model-check` on the maintainer's machine, 2 workers, on 2026
 | `TwoFiles` | pass | a file to replicate and one at its level, in the same passes | 1,097,319 | 36 s |
 | `Live` | pass | liveness: one user action, one kill, one disk lost and mounted again in time | 394,080 | 29 s |
 | `FlawReplicaEdited` | pass | flaw 1, fixed: its trace, with the remedy | 3,657 | 3 s |
-| `FlawJobDroppedGone` | `Inv11_OwnOpsNotUsers` | flaw 2, through a deletion | about 5,000 | 1 s |
-| `FlawJobDroppedPlan` | `ReplicaInSync` | flaw 2, through the plan | about 35,000 | 3 s |
+| `FlawJobDroppedGone` | pass | flaw 2, fixed: its trace through a deletion, with the remedy | 6,982 | 2 s |
+| `FlawJobDroppedPlan` | pass | flaw 2, fixed: its trace through the plan, with the remedy | 72,029 | 5 s |
 
-The instances that expect `pass` take the remedy proposed for flaw 2 (`Fixes`), so that TLC looks past it; the `Flaw…` instances take `specs.md` as it is. Flaw 1's remedy is `specs.md`'s now, and its instance expects `pass`.
+Both flaws are fixed, their remedies `specs.md`'s, and every instance takes `specs.md` as it is: `Fixes` is empty. The `Flaw…` instances stay, each the smallest pool that showed its flaw.
 
 ## Flaws found in specs.md
 
-Both are real: each trace was replayed on the conformance build, and each had a black-box scenario in `flaws/` that failed (`make model-flaws`) until its remedy, the maintainer's to decide; the model's `Fixes` holds the one proposed for a flaw still open. Once a remedy is in `specs.md`, the model takes it whatever `Fixes` says, the flaw's name leaves `Fixes`, its instance expects `pass`, and its scenario moves to `../scenarios/`.
+Both were real: each trace was replayed on the conformance build, and each had a black-box scenario in `flaws/` that failed (`make model-flaws`) until its remedy, the maintainer's to decide; the model's `Fixes` holds the one proposed for a flaw still open, so that the instances that expect `pass` look past it. Once a remedy is in `specs.md`, the model takes it whatever `Fixes` says, the flaw's name leaves `Fixes`, its instance expects `pass`, and its scenario moves to `../scenarios/`. Both are fixed now.
 
 ### Flaw 1: a write into a new replica before its row is written is recorded as verified
 
@@ -88,9 +88,11 @@ The remedy (`create-look`, approved by the maintainer on 2026-11-19): the row ta
 
 ### Flaw 2: a job running is dropped while its operation is still planned
 
+Fixed on 2026-11-19, with the remedy the maintainer approved (below): `specs.md` §9, §13.4, §14.1 and §15.12, `conformance/vectors/plan.json` and `propagation.json` (`running`), `FlawJobDroppedGone.cfg` and `FlawJobDroppedPlan.cfg` expecting `pass`, and `../scenarios/replica-of-deleted-file.json` and `replica-of-old-version.json`.
+
 `specs.md` §14.1 says that a job whose operation the reprise could not conclude "stays running, and does not run: what is at its target may be its own copy, and nothing is decided of it until that operation is". But two decisions drop such a job: the plan cancels a pending copy that no longer counts, "its row goes, with its job" (§13.4, §14.1), as one on a disk `missing` does; and the decision Gone deletes the file, with its jobs (§15.12, §9). Back, the disk's reprise finishes the operation with no job (§14.2), which `catalog.FinishCreate` records as an `ok` copy by Atoll, never verified, when the file still has a row, and not at all when it has none.
 
-Through a deletion (`FlawJobDroppedGone.cfg`, `flaws/replica-of-deleted-file.json`):
+Through a deletion (`FlawJobDroppedGone.cfg`, `replica-of-deleted-file.json`):
 
 1. A file of version 1 on disk 1; its replica's operation reaches `target-synced` on disk 2, which is then lost (`EIO`): the operation stays planned, the job running.
 2. The user deletes the file's copy on disk 1.
@@ -98,11 +100,11 @@ Through a deletion (`FlawJobDroppedGone.cfg`, `flaws/replica-of-deleted-file.jso
 4. Disk 2 comes back. Its reprise finds the copy at its name and finishes the operation: no job, no file, nothing recorded.
 5. Atoll's copy sits in the library unknown to the catalog (`Inv11_OwnOpsNotUsers` broken): the next walk records it as a user's new file, and the file the user deleted is back, with no trash.
 
-Through the plan (`FlawJobDroppedPlan.cfg`, `flaws/replica-of-old-version.json`): the same lost disk; the plan cancels its pending copy and the running job; the user writes version 2 into the copy on disk 1, and the modification, which waits for a running job (§15.4), finds none and is decided; back, disk 2's reprise records its copy of version 1 as `ok`, by Atoll, at the file's level (`ReplicaInSync` broken): one real copy of version 2, where the catalog counts two, until a scrub reads it.
+Through the plan (`FlawJobDroppedPlan.cfg`, `replica-of-old-version.json`): the same lost disk; the plan cancels its pending copy and the running job; the user writes version 2 into the copy on disk 1, and the modification, which waits for a running job (§15.4), finds none and is decided; back, disk 2's reprise records its copy of version 1 as `ok`, by Atoll, at the file's level (`ReplicaInSync` broken): one real copy of version 2, where the catalog counts two, until a scrub reads it.
 
 In the code: `internal/solver/plan.go` (`counts`: a pending copy on a disk `missing` is canceled), `catalog.cancelPending` (deletes the job whatever its state), the foreign key of `jobs` (`ON DELETE CASCADE`), and `internal/ops/recover.go` (`recoverCreate` with no job).
 
-Proposed remedy (`running-job`): what §14.1 says, everywhere: a pending copy whose job is running is kept, and counts, as a copy on a disk not yet past `missing_grace` does; and a file with a job running waits for its decisions, as its modifications already do (§15.4), until the reprise concludes the operation. Another would be a reprise that finds no job sends the copy to the trash; it leaves the plan's cancel, and the decision taken in the meantime, as they are.
+The remedy (`running-job`, approved by the maintainer on 2026-11-19): what §14.1 says, everywhere: a pending copy whose job is running is kept, and counts, as a copy on a disk not yet past `missing_grace` does; and a file with a job running waits for its decisions, as its modifications already do (§15.4), until the reprise concludes the operation. The other, a reprise that finds no job sending the copy to the trash, was not chosen. As it landed: the caller tells the plan which pending copies have their job running; such a copy counts as an `ok` copy on its disk would, so no longer past `missing_grace`, nor on a disk `draining`, `failed` or `retired`, holds no room, and is never canceled, by the level, the room, the file leaving or its disk; every decision of its file waits, Rename included, but not a file that only follows a folder renamed; and nothing else takes the file, the job or its pending copy away: a file whose last copy goes otherwise keeps that pending copy and its job (`catalog.dropFileIfEmpty`), as the model's `Emptied` does, and a modification keeps it too.
 
 ## Modelling mistakes, found by TLC and fixed
 

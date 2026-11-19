@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §14.2, §15.12, §17.2; conformance/models/README.md, flaw 2",
-  "description": "A copy left at its name by a crash, on a disk then lost, while the user deletes the file's only other copy: once the disk is back, the deletion reaches that copy too, which goes to the trash, and the file is gone. Fails while flaw 2 stands: the decision Gone drops the file with the copy's running job, the reprise finishes the copy with no job and no file and records nothing, and the next walk takes Atoll's copy for a user's new file.",
+  "description": "A copy left at its name by a crash, on a disk then lost, while the user deletes the file's only other copy: the file waits for its decisions while the copy's job is running, and once the disk is back and the reprise has finished the copy, the deletion reaches it too, which goes to the trash, and the file is gone. Before the remedy of flaw 2, the decision Gone dropped the file with the copy's running job, the reprise finished the copy with no job and no file and recorded nothing, and the next walk took Atoll's copy for a user's new file.",
   "clock": "2030-01-01T00:00:00Z",
   "disks": [
     {

@@ -257,10 +257,16 @@ func finishCopy(ctx context.Context, tx *sql.Tx, op *Op) error {
 }
 
 // dropFileIfEmpty removes a file with no copy left, with its chunks and jobs. A pending copy is nothing
-// on a disk, and has no source left to be made from: it goes with its file (specs.md §14.1).
+// on a disk, and has no source left to be made from: it goes with its file (specs.md §14.1). But for one whose job is
+// running: its operation is left planned, the copy may be at its target already, and only the reprise of its disk may
+// end it. The file stays with it, and with that job, its other jobs going (§14.1).
 func dropFileIfEmpty(ctx context.Context, tx *sql.Tx, fileID int64) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM copies WHERE file_id = ?1 AND state = 'pending' AND NOT EXISTS(SELECT 1 FROM copies o WHERE o.file_id = ?1 AND o.state <> 'pending')", fileID); err != nil {
+	const empty = "NOT EXISTS(SELECT 1 FROM copies o WHERE o.file_id = ?1 AND o.state <> 'pending')"
+	if _, err := tx.ExecContext(ctx, "DELETE FROM copies AS c WHERE c.file_id = ?1 AND c.state = 'pending' AND "+empty+" AND NOT "+runningThere, fileID); err != nil {
 		return fmt.Errorf("pending copies: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE file_id = ?1 AND state <> 'running' AND "+empty, fileID); err != nil {
+		return fmt.Errorf("jobs: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE id = ?1 AND NOT EXISTS(SELECT 1 FROM copies WHERE file_id = ?1)", fileID); err != nil {
 		return fmt.Errorf("file: %w", err)

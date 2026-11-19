@@ -101,7 +101,8 @@ func applyModified(ctx context.Context, tx *sql.Tx, nowNS int64, m *Modification
 	if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE file_id = ? AND state = ?", m.FileID, JobQueued); err != nil {
 		return fmt.Errorf("jobs: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM copies WHERE file_id = ? AND state = 'pending'", m.FileID); err != nil {
+	// A pending copy whose job is running stays: a modification waits for such a job (specs.md §14.1, §15.4).
+	if _, err := tx.ExecContext(ctx, "DELETE FROM copies AS c WHERE c.file_id = ? AND c.state = 'pending' AND NOT "+runningThere, m.FileID); err != nil {
 		return fmt.Errorf("pending copies: %w", err)
 	}
 	return markStale(ctx, tx, m)

@@ -201,6 +201,83 @@ func TestFinishCreate(t *testing.T) {
 	}
 }
 
+// A pending copy whose job is running, its operation left planned, is never canceled by a plan, nor taken with its file
+// when the file's last copy goes, nor by a modification; one whose job is queued is (specs.md §13.4, §14.1). The plan's
+// cancel and the file's going took the job running with them, and its reprise then finished a copy no row knew.
+func TestARunningJobKeepsItsPendingCopy(t *testing.T) {
+	running := func(t *testing.T) (*testDB, *ReplicateJob) {
+		t.Helper()
+		b, job := newReplicateDB(t)
+		b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u3', 'u3', 'ext4', '/u3', 'media', 'Atoll', 'data', 2, '[]', 'online')")
+		if err := QueueReplicate(t.Context(), b.sql(), 10, []Queue{{FileID: 1, Src: "u1", Dst: "u3"}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BeginCreate(t.Context(), b.sql(), job, 20); err != nil {
+			t.Fatal(err)
+		}
+		return b, job
+	}
+	left := func(b *testDB) string {
+		t.Helper()
+		var copies, jobs string
+		if err := b.sql().QueryRowContext(t.Context(), `SELECT
+			(SELECT COALESCE(group_concat(disk_id || ' ' || state, ','), '') FROM (SELECT * FROM copies ORDER BY disk_id)),
+			(SELECT COALESCE(group_concat(dst_disk || ' ' || state, ','), '') FROM (SELECT * FROM jobs ORDER BY dst_disk))`).Scan(&copies, &jobs); err != nil {
+			t.Fatal(err)
+		}
+		return copies + " | " + jobs
+	}
+	t.Run("found running", func(t *testing.T) {
+		b, _ := running(t)
+		copies, err := RunningCopies(t.Context(), b.sql())
+		if err != nil || len(copies) != 1 || len(copies[1]) != 1 || copies[1][0] != "u2" {
+			t.Errorf("%v, %v", copies, err)
+		}
+		files, err := RunningFiles(t.Context(), b.sql())
+		if err != nil || len(files) != 1 || !files[1] {
+			t.Errorf("%v, %v", files, err)
+		}
+	})
+	t.Run("a plan's cancel", func(t *testing.T) {
+		b, _ := running(t)
+		err := inTransaction(t.Context(), b.sql(), func(tx *sql.Tx) error {
+			if err := cancelPlanned(t.Context(), tx, 1, "u2"); err != nil {
+				return err
+			}
+			return cancelPlanned(t.Context(), tx, 1, "u3")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := left(b); got != "u1 ok,u2 pending | u2 running" {
+			t.Errorf("%s", got)
+		}
+	})
+	t.Run("the last copy gone", func(t *testing.T) {
+		b, _ := running(t)
+		b.exec("DELETE FROM copies WHERE disk_id = 'u1'")
+		if err := inTransaction(t.Context(), b.sql(), func(tx *sql.Tx) error { return dropFileIfEmpty(t.Context(), tx, 1) }); err != nil {
+			t.Fatal(err)
+		}
+		if got := left(b); got != "u2 pending | u2 running" {
+			t.Errorf("%s", got)
+		}
+		if got := b.count("SELECT count(*) FROM files"); got != 1 {
+			t.Error("the file went with its job running")
+		}
+	})
+	t.Run("a modification", func(t *testing.T) {
+		b, _ := running(t)
+		m := &Modification{FileID: 1, Path: "a", Kind: ModModified, Changed: []ChangedCopy{{Disk: "u1", FileKey: "7", Nlink: 1, Size: 2, MtimeNS: 2, CtimeNS: 2}}}
+		if err := ApplyModification(t.Context(), b.sql(), 30, m); err != nil {
+			t.Fatal(err)
+		}
+		if got := left(b); got != "u1 ok,u2 pending | u2 running" {
+			t.Errorf("%s", got)
+		}
+	})
+}
+
 // A job that ends goes with its pending copy, and a copy found where one was pending takes its place, with
 // no job left to meet it (specs.md §14.1).
 func TestAJobEnds(t *testing.T) {

@@ -29,11 +29,15 @@ conformance:
 model-check:
 	bash test/tla/run.sh
 
-# The black-box scenarios of the flaws the model found in specs.md (conformance/models/flaws/): they fail until the
-# maintainer decides a remedy, and then move to conformance/scenarios/.
+# The black-box scenarios of the flaws the model found in specs.md and still open (conformance/models/flaws/): they
+# fail until the maintainer decides a remedy, and then move to conformance/scenarios/. With none open, the folder is gone.
 model-flaws:
+ifeq ($(wildcard conformance/models/flaws/*.json),)
+	@echo "model-flaws: no flaw open (conformance/models/README.md)"
+else
 	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
 	$(GO) run ./conformance/runner --bin $(BIN)-conformance --scenarios conformance/models/flaws
+endif
 
 # The next two depend on the machine, not only on the code, so they never reuse
 # a cached result (-count=1).

@@ -60,6 +60,10 @@ type Copy struct {
 	// Unverified says that it was not read back since it last changed (copies.verified_ns NULL): no transfer of the
 	// SSD cache leans on it (specs.md §19).
 	Unverified bool
+	// Running says, of a pending copy, that its job is running: its operation is left planned, and only a reprise can
+	// say what is at its target, maybe the copy itself. It counts as a copy ok on its disk would, holds no room, as what
+	// it wrote is on its disk, and is never canceled, whatever its disk, the level or the file (specs.md §13.4, §14.1).
+	Running bool
 }
 
 // Residency is what the SSD cache says of a file with a copy on a cache disk (specs.md §19).
@@ -605,12 +609,12 @@ func (p *planner) addCopies(f *planFile) error {
 			p.cacheCopy(f, c, d)
 		} else if slices.Contains(f.misplacedDisks(), d) {
 			// It counts for nothing, so that one is made where the setting wants it; it is no loss.
-		} else if counts(c, d) && (!f.Leaving || c.State != CopyPending) {
+		} else if counts(c, d) && (!f.Leaving || c.State != CopyPending || c.Running) {
 			// A file leaving keeps no pending copy: the copy made would end its deletion (specs.md §13.4).
 			counted = append(counted, countedCopy{c, d})
 		} else {
 			f.lost = true
-			if c.State == CopyPending {
+			if cancelable(c) {
 				f.mark().cancel = append(f.mark().cancel, d)
 			}
 		}
@@ -645,11 +649,16 @@ func (p *planner) cacheCopy(f *planFile, c *Copy, d *planDisk) {
 		if d.State != DiskMissing {
 			f.more().cacheReached++
 		}
-	case c.State == CopyPending:
+	case cancelable(c):
 		f.mark().cancel = append(f.mark().cancel, d)
-	case counts(c, d) && d.State != DiskMissing:
+	case counts(c, d) && d.State != DiskMissing && c.State != CopyPending:
 		f.more().cacheReached++
 	}
+}
+
+// cancelable says whether a plan may cancel a copy: a pending one whose job is not running (specs.md §14.1).
+func cancelable(c *Copy) bool {
+	return c.State == CopyPending && !c.Running
 }
 
 // cacheWant is how many copies on cache disks a file resident on the SSD cache may have: one, and a second with
@@ -682,12 +691,16 @@ func checkCopy(c *Copy) error {
 	if c.CreatedBy != CreatedByUser && c.CreatedBy != CreatedByAtoll {
 		return fmt.Errorf("unknown created_by %q", c.CreatedBy)
 	}
+	if c.Running && c.State != CopyPending {
+		return fmt.Errorf("a job running for a copy %s, not pending", c.State)
+	}
 	return nil
 }
 
-// counts reports whether a copy counts toward the level of its file (specs.md §13.4).
+// counts reports whether a copy counts toward the level of its file (specs.md §13.4). A pending copy whose job is
+// running counts as a copy ok there would: its operation may have made it already, and only a reprise can tell.
 func counts(c *Copy, d *planDisk) bool {
-	readable := c.State == CopyOK || c.State == CopySurplus
+	readable := c.State == CopyOK || c.State == CopySurplus || c.State == CopyPending && c.Running
 	switch d.State {
 	case DiskOnline, DiskStandby:
 		return readable || c.State == CopyPending && d.writable()
@@ -784,7 +797,7 @@ func (f *planFile) keep(counted []countedCopy) {
 			f.mark().back = append(f.mark().back, c.disk)
 		case !kept && c.copy.State == CopyOK:
 			f.mark().surplus = append(f.mark().surplus, c.disk)
-		case !kept && c.copy.State == CopyPending:
+		case !kept && cancelable(c.copy):
 			f.mark().cancel = append(f.mark().cancel, c.disk)
 		case kept && c.copy.State == CopyPending:
 			f.pending++
@@ -800,7 +813,8 @@ func (f *planFile) keep(counted []countedCopy) {
 // holdRoom takes the size of each pending copy a file keeps off its disk, by position, when the file fits in what that
 // disk has left after min_free. One that does not fit is canceled, and counts no more: its file is then below its
 // level, and is placed again as any other, on a disk with room, or waits there (specs.md §12.4, §13.4). Kept whatever
-// room was left, a copy queued while there was room was written later into the reserve of min_free.
+// room was left, a copy queued while there was room was written later into the reserve of min_free. One whose job is
+// running holds none, and stays: what it wrote is on its disk, and only its reprise may end it (specs.md §14.1).
 func (p *planner) holdRoom(f *planFile) {
 	if f.pending == 0 {
 		return
@@ -809,7 +823,7 @@ func (p *planner) holdRoom(f *planFile) {
 	for i := range f.Copies {
 		d := p.byID[f.Copies[i].Disk]
 		// A resident file's second copy on the SSD cache holds its room as any (specs.md §19).
-		if f.Copies[i].State == CopyPending && (slices.Contains(f.counted, d) || slices.Contains(f.cachedDisks(), d)) {
+		if cancelable(&f.Copies[i]) && (slices.Contains(f.counted, d) || slices.Contains(f.cachedDisks(), d)) {
 			kept = append(kept, d)
 		}
 	}

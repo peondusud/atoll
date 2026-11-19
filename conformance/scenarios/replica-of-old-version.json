@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §13.4, §14.1, §14.2, §15.4, §17.2; conformance/models/README.md, flaw 2",
-  "description": "A copy left at its name by a crash, on a disk then lost, while the user writes a new version into the file's other copy: once the disk is back, its copy, of the version before, is found stale, goes to the trash and is made again from the new version. Fails while flaw 2 stands: the plan cancels the pending copy of the disk lost, its running job with it, the modification is decided at once, and the reprise records Atoll's copy of the version before as ok, at the file's level.",
+  "description": "A copy left at its name by a crash, on a disk then lost, while the user writes a new version into the file's other copy: the plan keeps the pending copy whose job is running, the modification waits for that job, and once the disk is back its copy, of the version before, is found stale, goes to the trash and is made again from the new version. Before the remedy of flaw 2, the plan canceled the pending copy of the disk lost, its running job with it, the modification was decided at once, and the reprise recorded Atoll's copy of the version before as ok, at the file's level.",
   "clock": "2030-01-01T00:00:00Z",
   "disks": [
     {

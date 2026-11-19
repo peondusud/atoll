@@ -838,7 +838,10 @@ func planEntries(list []catalog.EntryKey) []solver.Entry {
 // says what else must be remembered of each, in the same order.
 func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input, released func(string) bool,
 	residency map[int64]solver.Residency) ([]settled, error) {
-	k := newPlanKit(c, diskList, released)
+	k, err := newPlanKit(ctx, db, c, diskList, released)
+	if err != nil {
+		return nil, err
+	}
 	// Sized once: grown file by file, each list is for a moment both its old size and its new one.
 	count, err := catalog.FileCount(ctx, db)
 	if err != nil {
@@ -958,7 +961,10 @@ func filesOnly(ctx context.Context, db *sql.DB, c *config.Config, diskList []cat
 		return nil, err
 	}
 	slices.SortFunc(rows, func(a, b catalog.FileRow) int { return strings.Compare(a.Path, b.Path) })
-	k := newPlanKit(c, diskList, released)
+	k, err := newPlanKit(ctx, db, c, diskList, released)
+	if err != nil {
+		return nil, err
+	}
 	input.Files = slices.Grow(input.Files, len(rows))
 	remembered := make([]settled, 0, len(rows))
 	for i := range rows {
@@ -997,16 +1003,22 @@ type planKit struct {
 	state      map[string]solver.DiskState
 	placements map[placementKey]*solver.Placement
 	released   func(string) bool
+	// running gives, by file, the disks of its pending copies whose job is running (specs.md §14.1).
+	running map[int64][]string
 }
 
-func newPlanKit(c *config.Config, diskList []catalog.Disk, released func(string) bool) *planKit {
+func newPlanKit(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, released func(string) bool) (*planKit, error) {
+	running, err := catalog.RunningCopies(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
 	k := &planKit{c: c, position: make(map[string]int, len(diskList)), state: make(map[string]solver.DiskState, len(diskList)),
-		placements: map[placementKey]*solver.Placement{}, released: released}
+		placements: map[placementKey]*solver.Placement{}, released: released, running: running}
 	for i := range diskList {
 		k.position[diskList[i].ID] = diskList[i].Position
 		k.state[diskList[i].ID] = solver.DiskState(diskList[i].State)
 	}
-	return k
+	return k, nil
 }
 
 // planFile gives the plan a file of the catalog, and what its original and policy make of its row.
@@ -1031,6 +1043,8 @@ func (k *planKit) planFile(f *catalog.FileRow, leaving bool, residency solver.Re
 		// A copy whose clock runs is no source: nothing is at its name until its file is decided (specs.md §13.4).
 		plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS, Away: cp.GoneNS.Valid,
 			Unverified: !cp.VerifiedNS.Valid}
+		// A pending copy whose job is running is kept and counted, never canceled (specs.md §13.4, §14.1).
+		plan.Running = plan.State == solver.CopyPending && slices.Contains(k.running[f.ID], cp.Disk)
 		if cp.OldPath != nil {
 			plan.OldPath = *cp.OldPath
 		}

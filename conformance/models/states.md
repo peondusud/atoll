@@ -77,7 +77,7 @@ stateDiagram-v2
 | (none) | `ok` | a walk finds a copy new to the catalog: a user's, never verified | §15.10 |
 | (none) | `pending` | the plan queues a replicate job and its pending copy | §13.4, §14.1 |
 | `pending` | `ok` | the operation create committed, or finished by a reprise | §14.2, §17.2 |
-| `pending` | (none) | no longer kept or counted by the plan, or its job ended | §13.4, §14.1 |
+| `pending` | (none) | no longer kept or counted by the plan, or its job ended; never while its job is running | §13.4, §14.1 |
 | `ok` | `surplus` | more copies count than the level, and this one is not kept | §13.4 |
 | `surplus` | `ok` | kept toward the level again | §13.4 |
 | `ok` | `stale` | a modification of another copy, or a change of metadata it could not be given | §15.4 |
@@ -99,4 +99,4 @@ No transition enters:
 | [1] | `pending` → (none) | a pending copy kept past min_free was written into the reserve | DONE.md, The review's sixteen decisions, made by the maintainer on 2026-11-13 |
 | [2] | `ok` → `stale` | a copy no user changed went over the others | DONE.md, Two more decisions of the maintainer, made on 2026-11-14 |
 | [3] | `pending` → `ok` | flaw 1, fixed: a write before the commit recorded as verified | README.md, Flaw 1, fixed |
-| [4] | `pending` → (none) | open, flaw 2: a job running canceled with its pending copy | README.md, Flaw 2, open |
+| [4] | `pending` → (none) | flaw 2, fixed: a job running canceled with its pending copy | README.md, Flaw 2, fixed |

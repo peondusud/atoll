@@ -59,6 +59,7 @@ type copyVector struct {
 	OldPath     string  `json:"old_path"`
 	Away        bool    `json:"away"`
 	Unverified  bool    `json:"unverified"`
+	Running     bool    `json:"running"`
 }
 
 type policyVector struct {
@@ -164,6 +165,7 @@ func (v *planVector) input() (Input, error) {
 			file.Copies = append(file.Copies, Copy{
 				Disk: c.Disk, State: CopyState(or(c.State, "ok")),
 				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS, OldPath: c.OldPath, Away: c.Away, Unverified: c.Unverified,
+				Running: c.Running,
 			})
 		}
 		in.Files = append(in.Files, file)
@@ -612,7 +614,12 @@ func checkPlan(t reporter, round int, in Input, plan Plan) {
 	kept := map[string]bool{}
 	for _, f := range in.Files {
 		for _, c := range f.Copies {
-			if c.State == CopyPending && !slices.Contains(results[f.Path].Cancel, c.Disk) {
+			// A pending copy whose job is running is never canceled, and holds no room: what it wrote is on its disk
+			// (specs.md §13.4, §14.1).
+			if c.Running && results[f.Path] != nil && slices.Contains(results[f.Path].Cancel, c.Disk) {
+				t.Errorf("round %d: %q on %s, whose job is running, is canceled", round, f.Path, c.Disk)
+			}
+			if cancelable(&c) && !slices.Contains(results[f.Path].Cancel, c.Disk) {
 				room[c.Disk] -= f.Size
 				kept[c.Disk] = true
 			}
@@ -804,7 +811,7 @@ func checkMarks(t reporter, round int, f File, r *Result, disks map[string]*Disk
 		if c.State == CopyPending && slices.Contains(r.Cancel, c.Disk) {
 			continue
 		}
-		if c.State == CopyPending && f.Leaving {
+		if cancelable(c) && f.Leaving {
 			t.Errorf("round %d: %q, whose deletion waits, keeps its pending copy on %s", round, f.Path, c.Disk)
 		}
 		if onCache(&f, disks[c.Disk]) {

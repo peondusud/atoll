@@ -682,3 +682,20 @@ func cancelPending(ctx context.Context, tx *sql.Tx, fileID int64, disk string) e
 	}
 	return nil
 }
+
+// runningThere is true of a pending copy whose replicate job is running: its operation is left planned, and only a
+// reprise may end it (specs.md §14.1). It reads the copy's file_id and disk_id from the row c.
+const runningThere = "EXISTS(SELECT 1 FROM jobs j WHERE j.kind = 'replicate' AND j.file_id = c.file_id AND j.dst_disk = c.disk_id AND j.state = 'running')"
+
+// cancelPlanned cancels a pending copy a plan no longer keeps, with its job, but for one whose job is running, which the
+// plan never cancels (specs.md §13.4, §14.1).
+func cancelPlanned(ctx context.Context, tx *sql.Tx, fileID int64, disk string) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM copies AS c WHERE c.file_id = ? AND c.disk_id = ? AND c.state = 'pending' AND NOT "+runningThere,
+		fileID, disk); err != nil {
+		return fmt.Errorf("pending copy: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE kind = 'replicate' AND file_id = ? AND dst_disk = ? AND state <> 'running'", fileID, disk); err != nil {
+		return fmt.Errorf("job: %w", err)
+	}
+	return nil
+}
