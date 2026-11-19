@@ -117,6 +117,7 @@ docs/research/         research reports behind open design decisions (not contra
 - Sort every output explicitly; never depend on map iteration order or random seeds.
 - Reject regexes outside the grammar of specs.md §29.5, the common Go/Rust subset, when the configuration loads; Atoll checks it itself before the engine compiles.
 - The conformance runner talks to the binary only through the CLI and the filesystem; it imports nothing from `internal/`.
+- A change to a section of specs.md that the TLA+ model formalizes (`conformance/models/fingerprints.json`) updates `conformance/models/Replication.tla`, or confirms it unchanged, and that section's fingerprint, in the same commit; `make model-check` passes.
 
 ## Cross-platform rules (Linux now, Windows in the Rust version)
 - Logical key: the exact relative path, `/` separator; bytes on Linux, WTF-8 on Windows (keeps unpaired UTF-16 surrogates).
