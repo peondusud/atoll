@@ -40,6 +40,7 @@ const (
 	KeyWorkdirOwner = "workdir-owner:"
 	KeyUPS          = "ups-unreachable"
 	KeyTooLong      = "branch-path-too-long:"
+	KeyVersions     = "versions-purged:"
 )
 
 // FirstN is how many paths an alert names, at most.
@@ -89,8 +90,11 @@ type Facts struct {
 	// TrashFull holds the disks that hold their files now whose trash holds more than trash.max_size of their capacity,
 	// in the catalog's order of the disks.
 	TrashFull []TrashFull
-	// MaxSize is trash.max_size, as the configuration writes it.
-	MaxSize string
+	// MaxSize is trash.max_size, and Retention trash.retention, as the configuration writes them.
+	MaxSize, Retention string
+	// Versions holds the disks whose trash purged, for room, versions a modification replaced before their retention
+	// ended, by id (specs.md §17).
+	Versions []VersionsPurged
 	// Smart holds the last reading of SMART of each disk that has one, neither failed nor retired, in the catalog's
 	// order of the disks.
 	Smart []SmartLine
@@ -156,6 +160,14 @@ type SmartLine struct {
 	disks.SmartRecord
 }
 
+// VersionsPurged is a disk whose trash purged, for room under trash.max_size, entries of the reason overwritten,
+// versions of files a modification replaced, before their retention ended: how many, and their first paths in byte
+// order (specs.md §17, §23).
+type VersionsPurged struct {
+	ID    string
+	Paths Refused
+}
+
 // TrashFull is a disk whose trash holds more than trash.max_size of its capacity: Used bytes of Capacity.
 type TrashFull struct {
 	ID             string
@@ -172,6 +184,7 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 	}
 	f := &Facts{Disks: o.Disks, Guards: o.Guards, Refused: *refused, SeenByNS: nowNS - wait.Nanoseconds(), ManualAfter: after}
 	f.MaxSize, _ = c.Effective()["trash.max_size"].(string)
+	f.Retention, _ = c.Effective()["trash.retention"].(string)
 	maxSize, err := value.ParsePercent(f.MaxSize)
 	if err != nil {
 		return nil, fmt.Errorf("trash.max_size: %w", err)
@@ -282,6 +295,11 @@ func Holdings(f *Facts) []Holding {
 	for _, d := range f.TrashFull {
 		counts[KeyTrashFull+d.ID] = 1
 	}
+	for _, v := range f.Versions {
+		if v.Paths.Count > 0 {
+			counts[KeyVersions+v.ID] = v.Paths.Count
+		}
+	}
 	for _, id := range f.Dirty {
 		counts[KeyNTFSDirty+id] = 1
 	}
@@ -364,6 +382,24 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Body = fmt.Sprintf("The trash of disk %s holds %d bytes, more than trash.max_size (%s) of its %d bytes, once purged: "+
 			"what is left there, deleted or renamed files, waits for its retention. atoll trash list shows it; "+
 			"atoll trash purge --older-than <duration> --yes purges it sooner.", id, d.Used, f.MaxSize, d.Capacity)
+	case strings.HasPrefix(h.Key, KeyVersions):
+		id := strings.TrimPrefix(h.Key, KeyVersions)
+		var first []string
+		for _, v := range f.Versions {
+			if v.ID == id {
+				first = v.Paths.First
+			}
+		}
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: the trash of disk %s purged %d versions of files before their time", id, h.Count)
+		if h.Count == 1 {
+			m.Title = fmt.Sprintf("Atoll: the trash of disk %s purged 1 version of a file before its time", id)
+		}
+		m.Body = list(fmt.Sprintf("To make room under trash.max_size (%s), the trash of disk %s purged %d %s that a modification "+
+			"replaced, before their %s of retention ended: those versions are lost, and the trash no longer holds what these files "+
+			"were. A library rewritten slowly, as by a tool that encrypts it, ends so with no clean version. Look at what changes "+
+			"them; raise trash.max_size, or free room on the disk, to keep the versions to come. Backups are the answer to "+
+			"ransomware.", f.MaxSize, id, h.Count, plural(h.Count, "version", "versions"), f.Retention), first, h.Count)
 	case strings.HasPrefix(h.Key, KeyNTFSDirty):
 		id := strings.TrimPrefix(h.Key, KeyNTFSDirty)
 		m.Priority = priorityHigh

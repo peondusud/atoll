@@ -20,6 +20,7 @@ import (
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/notify"
+	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/ups"
 	"github.com/peondusud/atoll/internal/value"
@@ -217,6 +218,9 @@ type loop struct {
 	readDecided bool
 	// purgePending says that the purge of the trash stopped at its slice with entries left (specs.md §17).
 	purgePending bool
+	// versions counts, by disk, the versions a modification replaced that the trash purged for room before their
+	// retention ended, for the alert of that (specs.md §17, §23).
+	versions map[string]*purgedVersions
 	// unsent holds what the last pass left to send that did not go, alertDue when it is tried again, alone, and
 	// alertTries how many tries in a row left some unsent (specs.md §23).
 	unsent     *alerts.Due
@@ -952,6 +956,7 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 		facts.Dirty = l.dirtyDisks()
 		facts.Foreign = l.foreignWorkdirs(outcome)
 		facts.Unopened = l.stillUnopened()
+		facts.Versions = l.versionsPurged(now)
 		if l.power.get().Unreachable {
 			facts.UPSUnreachable, _ = l.opt.Config.Effective()["ups.nut"].(string)
 		}
@@ -1302,6 +1307,7 @@ func (l *loop) purgeSlice(ctx context.Context, db *sql.DB) bool {
 		} else {
 			stayed++
 		}
+		l.notePurged(e, l.opt.Machine.Now())
 		return nil
 	})
 	if err == nil {
@@ -1315,6 +1321,51 @@ func (l *loop) purgeSlice(ctx context.Context, db *sql.DB) bool {
 	}
 	l.log.Info("the trash was purged", "entries", purged, "bytes", summary.Bytes, "stayed", stayed, "full", summary.Full, "left", left)
 	return left
+}
+
+// purgedVersions counts, on a disk, the versions a modification replaced that the trash purged for room before their
+// retention ended, since the alert of that began, with when the last of them went (specs.md §17, §23).
+type purgedVersions struct {
+	paths  alerts.Refused
+	lastNS int64
+}
+
+// versionsHeld is how long the alert of versions purged early holds after the last of them: as long as a reminder
+// waits, so that an alert a channel could not take is tried again while it holds, and a loss that goes on is told of
+// again as its count grows (specs.md §23).
+const versionsHeld = alerts.Remind
+
+// notePurged counts an entry a purge removed when it was a version a modification replaced, purged for room before
+// its retention ended: that version is lost, as a library rewritten slowly would lose them all (specs.md §17).
+func (l *loop) notePurged(e *trash.EntryItem, nowNS int64) {
+	if e.Outcome != trash.OutcomePurged || e.Why != string(solver.PurgeMaxSize) || e.Reason != catalog.ReasonOverwritten {
+		return
+	}
+	if l.versions == nil {
+		l.versions = map[string]*purgedVersions{}
+	}
+	p := l.versions[e.Disk]
+	if p == nil {
+		p = &purgedVersions{}
+		l.versions[e.Disk] = p
+	}
+	p.paths.Add(e.Path)
+	p.lastNS = nowNS
+}
+
+// versionsPurged gives, by disk id, the disks whose trash purged versions early within versionsHeld of now, for the
+// alerts, and forgets the others: their alert ends, and one that comes later begins again.
+func (l *loop) versionsPurged(nowNS int64) []alerts.VersionsPurged {
+	var out []alerts.VersionsPurged
+	for _, id := range slices.Sorted(maps.Keys(l.versions)) {
+		p := l.versions[id]
+		if nowNS-p.lastNS >= versionsHeld.Nanoseconds() {
+			delete(l.versions, id)
+			continue
+		}
+		out = append(out, alerts.VersionsPurged{ID: id, Paths: p.paths})
+	}
+	return out
 }
 
 // locked runs fn on the catalog, under its lock, which it takes after the others' and lets go of last.
