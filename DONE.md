@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## An idle disk systemd unmounted itself, mounted again when its device left, 2026-11-19 (specs.md §15.13)
+
+The maintainer's answer to the finding of the remount through systemd ("Yes, if its device left"): count `not-mounted` as a USB reset when the device the disk was mounted from left. Commit `f482efe`.
+
+- **Why**: with udev, systemd unmounts an idle `/etc/fstab` mount within a second of its device going, and the check then found the disk `not-mounted`, no reason a USB reset gives: an idle USB disk was never mounted again, unless a pass's confirmation happened to see it first.
+- **The rule** (`disks.DeviceLeft`, `conformance/vectors/device_left.json`, 12 cases): each check that finds a disk mounted keeps the device the mount table names and what that name leads to, a block device, its numbers, and the kernel's `diskseq` of its disk (its disk's for a partition), which a disk plugged again gets anew (`fsx.DeviceNodeOf`, a name under `/dev` and a file of `/sys`, no disk woken). Found `not-mounted` after that, the disk went for a USB reset when the name leads nowhere, to no block device, to other numbers, or to the same numbers with another `diskseq`, both known; the log says so, and the remount follows as for the other reasons. Its device where it was, as after an administrator's `umount`, the disk stays `missing` and nothing is tried; so too for a disk not mounted when the daemon started, a machine that cannot say (the conformance build), and a name that cannot be read. The same holds when a pass's confirmation finds it first.
+- **Tests that failed first**: `TestDeviceLeftVectors`, `TestACheckGivesTheSourceOfADiskFound`, `TestDiskSeqIn`, `TestDeviceNodeOf`, `TestADiskNoLongerMountedIsResetWhenItsDeviceLeft` (seven cases through `check`), and in qemu `TestAnIdleDiskUnpluggedUnderSystemd`: ext4 and ntfs-3g mounted by systemd from `/etc/fstab` with udev's rules, their device renamed away, systemd unmounts the idle disk, the daemon finds it `not-mounted`, says its device left, waits while it is away, and has systemd mount it again once it is back; on Linux 6.12 and 7.3, beside `TestTheRemountUnderSystemd`. `go test ./...`, race on `daemon`, `disks` and `fsx`, `make conformance` (634 scenarios) and lint pass; GitHub's run `44601968714` is green in every job.
+- **Decided without the maintainer, to confirm**: `diskseq` as what tells a disk plugged anew under the same name and numbers, and a sequence number unknown on either side read as no departure; the log line at `WARN`; a name that cannot be read is no departure, said at `WARN`.
+
 ## The remount after a USB reset through systemd, 2026-11-19 (specs.md §15.13, §26)
 
 The maintainer's answer: have systemd mount the disk again ("Remonter via systemd"), so that an ntfs-3g disk outlives a stop of the daemon. Commits `25cf996`, `deb08b6`, `aaa2baa` and `1c103dc`, merged by `63fc671`.

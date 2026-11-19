@@ -79,7 +79,8 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - **confirm**: the choices made alone for G1, G4, G5 and G6 (DONE.md).
 - G5, for the maintainer to weigh: a guard on what a day changed, or not purging `overwritten` versions for room while modifications run high.
 - The threat model's low gaps G7 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask).
-- **decision**: with udev, systemd itself unmounts an idle fstab mount as soon as its device goes (`StopPropagatedFrom=`, measured in qemu, DONE.md). The disk then reads `not-mounted`, which is no reset reason, so the remount after a USB reset happens only if a pass recorded `io-error` or `device-gone` first: an idle USB disk may never be mounted again. Should a disk `online` until then, with an fstab entry, that becomes `not-mounted` count as a reset?
+- **confirm**: the choices made alone for an idle disk whose device left (DONE.md), `diskseq` first.
+- An empty mount point under another mount reads `not-mounted` with "the mount is at /tmp: write that path, not one through a symlink" (seen in qemu): the parent's entry, which the message takes for a symlink. Say "nothing is mounted at that path" when the entry's mount point is a parent of the disk's.
 - **decision**: G22, a polkit rule limited to the pool's units: a command that prints it, or a check of the unit's `SourcePath` through `polkit.spawn`.
 - **confirm**: the choices made alone for the remount through systemd (DONE.md).
 - Measure the remount through systemd with systemd 252 (Debian 12, openmediavault 7): the polkit rule is checked there, the remount itself is not.
