@@ -1,0 +1,145 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §13.4, §14.1, §14.2, §15.4, §17.2; conformance/models/README.md, flaw 2",
+  "description": "A copy left at its name by a crash, on a disk then lost, while the user writes a new version into the file's other copy: once the disk is back, its copy, of the version before, is found stale, goes to the trash and is made again from the new version. Fails while flaw 2 stands: the plan cancels the pending copy of the disk lost, its running job with it, the modification is decided at once, and the reprise records Atoll's copy of the version before as ok, at the file's level.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a",
+        "--now"
+      ],
+      "crash_at": "source-synced",
+      "exit": 137
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "unmount",
+      "disk": "t2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/a",
+      "text": "yy"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "mount",
+      "disk": "t2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "yy"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/a",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state, verified_ns IS NOT NULL FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "user",
+          "ok",
+          1
+        ],
+        [
+          "t2",
+          "atoll",
+          "ok",
+          1
+        ]
+      ]
+    }
+  ]
+}
