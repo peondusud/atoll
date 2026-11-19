@@ -71,6 +71,14 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - GoReleaser v2.20.2 or later once two weeks old.
 - **confirm**: the choices made alone, first the sample configuration outside `/etc`.
 
+## The tests after the gaps of 2026-11-19 (DONE.md)
+
+- Read the first nights of mutation tests on `names`, `rules`, `config`, `integrity` and `solver`, sort the mutants that lived, then set the gate (95 % efficacy, 85 % mutant coverage a pure package); then `jobs`, `ops`, `trash` and `watch`.
+- Read the first `cover` table, and count the scenarios too: the conformance build with `-cover` and `GOCOVERDIR`, merged by `go tool covdata`.
+- **decision**, each: the threat model's medium gaps G1 to G6 and G18 (`docs/threat-model.md`); G4's warning on `http://` and G8's new reason touch contracts.
+- Update the CI's image from Go 1.27.2, whose standard library has GO-2026-6859 and GO-2026-6809 (fixed in 1.27.3 and 1.27.4, which GitHub's govulncheck and the releases use already).
+- **confirm**: the choices made alone for the four gaps (DONE.md).
+
 ## Atoll's own view, after 2026-11-19 (DONE.md)
 
 - Run in qemu `TestViewWrites`, `TestViewXattrs`, `TestViewWritesInParallel`, and again the replicate, cache, link guard and break-glass tests, as the copy pipeline changed (a resume compares, `restore` gives the attributes).

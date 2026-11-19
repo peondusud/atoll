@@ -19,12 +19,12 @@
 <text x="38" y="249" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="248" font-size="13" font-weight="600" fill="#2C2C2A">Component tests</text>
 <text x="60" y="263" font-size="11" fill="#5F5E5A">daemon, view, jobs, ops, catalog</text>
-<text x="38" y="285" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="38" y="285" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="284" font-size="13" font-weight="600" fill="#2C2C2A">Fuzz tests</text>
-<text x="60" y="299" font-size="11" fill="#5F5E5A">three only: glob, names, regex (gap 4)</text>
-<text x="38" y="321" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="60" y="299" font-size="11" fill="#5F5E5A">19 targets, 5 min each nightly</text>
+<text x="38" y="321" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="320" font-size="13" font-weight="600" fill="#2C2C2A">Property-based tests</text>
-<text x="60" y="335" font-size="11" fill="#5F5E5A">solver, hand-written properties (gap 4)</text>
+<text x="60" y="335" font-size="11" fill="#5F5E5A">rapid: solver properties, a state machine</text>
 <text x="38" y="357" font-size="15" font-weight="600" fill="#A32D2D">✗</text>
 <text x="60" y="356" font-size="13" font-weight="600" fill="#2C2C2A">Formal verification</text>
 <text x="60" y="371" font-size="11" fill="#5F5E5A">none yet: model checking (gap 1)</text>
@@ -33,10 +33,10 @@
 <text x="60" y="407" font-size="11" fill="#5F5E5A">golangci-lint, depguard, govulncheck</text>
 <text x="38" y="429" font-size="15" font-weight="600" fill="#854F0B">◐</text>
 <text x="60" y="428" font-size="13" font-weight="600" fill="#2C2C2A">Mutation tests</text>
-<text x="60" y="443" font-size="11" fill="#5F5E5A">by hand on some changes, not in CI (gap 2)</text>
-<text x="38" y="465" font-size="15" font-weight="600" fill="#A32D2D">✗</text>
+<text x="60" y="443" font-size="11" fill="#5F5E5A">gremlins nightly on the pure core, no gate</text>
+<text x="38" y="465" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="464" font-size="13" font-weight="600" fill="#2C2C2A">Coverage tests</text>
-<text x="60" y="479" font-size="11" fill="#5F5E5A">never measured (gap 3)</text>
+<text x="60" y="479" font-size="11" fill="#5F5E5A">measured in CI by package, no gate</text>
 <text x="38" y="501" font-size="15" font-weight="600" fill="#854F0B">◐</text>
 <text x="60" y="500" font-size="13" font-weight="600" fill="#2C2C2A">Benchmark tests</text>
 <text x="60" y="515" font-size="11" fill="#5F5E5A">BLAKE3 throughput, memory of TestScale</text>
@@ -64,9 +64,9 @@
 <text x="38" y="789" font-size="15" font-weight="600" fill="#A32D2D">✗</text>
 <text x="60" y="788" font-size="13" font-weight="600" fill="#2C2C2A">Penetration tests</text>
 <text x="60" y="803" font-size="11" fill="#5F5E5A">none</text>
-<text x="38" y="825" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="38" y="825" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="824" font-size="13" font-weight="600" fill="#2C2C2A">Threat modeling</text>
-<text x="60" y="839" font-size="11" fill="#5F5E5A">security review, no model written (gap 5)</text>
+<text x="60" y="839" font-size="11" fill="#5F5E5A">docs/threat-model.md: 21 gaps listed</text>
 <text x="38" y="861" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="860" font-size="13" font-weight="600" fill="#2C2C2A">Performance tests</text>
 <text x="60" y="875" font-size="11" fill="#5F5E5A">200,000 files a disk under 200 MB</text>
@@ -74,7 +74,7 @@
 <text x="390" y="146" font-size="15" font-weight="600" fill="#444441">Deploy</text>
 <text x="390" y="177" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="412" y="176" font-size="13" font-weight="600" fill="#2C2C2A">Integration tests</text>
-<text x="412" y="191" font-size="11" fill="#5F5E5A">loop devices: 7 drivers, 2 kernels, qemu</text>
+<text x="412" y="191" font-size="11" fill="#5F5E5A">7 drivers, 2 kernels, qemu with KVM in CI</text>
 <text x="390" y="213" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="412" y="212" font-size="13" font-weight="600" fill="#2C2C2A">Tap compare</text>
 <text x="412" y="227" font-size="11" fill="#5F5E5A">own view against mergerfs; break glass</text>
