@@ -51,7 +51,8 @@ ProtectHostname=yes
 UMask=0027
 # Left out, as each breaks what the daemon does:
 # - RestrictSUIDSGID: a copy, a folder made for it and a mode carried to the other copies take setuid and setgid with
-#   the rest of the mode (specs.md §14, §15.12), as a shared folder made 2775, the mode openmediavault gives them, has.
+#   the rest of the mode (specs.md §14, §15.12), as a shared folder made 2775, the mode openmediavault gives them, has:
+#   with it, nothing of such a folder was copied ("make folder: operation not permitted", measured).
 # - DevicePolicy, DeviceAllow: the remount opens the disk's block device for writing, under the number it comes back
 #   with after a USB reset, and systemd reads the device groups such a list names once, when the unit starts; a list
 #   would refuse a disk whose driver loads after that. The capabilities reach every device all the same.

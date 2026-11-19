@@ -48,7 +48,8 @@ ProtectHostname=yes
 UMask=0027
 # Left out, as each breaks what the view does:
 # - RestrictSUIDSGID: a user may make a file or a folder setuid or setgid through the view that writes, as on a disk,
-#   and a folder made 2775, the mode openmediavault gives shared folders, takes setgid from its mode (specs.md §21.2).
+#   and a folder made 2775, the mode openmediavault gives shared folders, takes setgid from its mode (specs.md §21.2):
+#   with it, chmod 2775 through the view was refused (measured).
 # - DevicePolicy, DeviceAllow: systemd reads the device groups such a list names once, when the unit starts, and a
 #   list would refuse the confirmation of a disk whose driver loads after that.
 # No PrivateTmp, ProtectHome, ProtectSystem, ProtectKernelTunables, ProtectKernelModules, ProtectKernelLogs,
