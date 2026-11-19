@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The third soak of 12 hours, stopped after 9 hours, 2026-11-19 (specs.md §26)
+
+`TestDaemonSoak` on `ab9e21f`, the first pass held apart (`931c71b`), in qemu without KVM on Linux 6.12, `SOAK=12h SOAK_FILES=200000`, from 2026-11-18 at 19:53. The maintainer had it stopped after 9 hours 17 minutes, on 2026-11-19 at 05:10, to run a soak again once the features he decided that day are merged ("enlève le soak … on en relancera un après les merges de toutes les nouvelles fonctionnalités"). Its log is `bin/soak12c/soak-12h.log`.
+
+- **No fault**: 672 passes, none held nor partial, no error, and one warning, expected, no `smartctl` in the guest.
+- **Memory, at each of the seven tenths it reached**: 3.5 to 4.0 MiB of heap in use, 9 goroutines, 14 open files, with no growth; 37 to 44 MiB resident; a peak of 170.8 to 172.6 MiB, under the 200 MB (190.7 MiB) at every tenth, for 172.8 to 180.7 MiB on `2d016b3`. The first pass peaked at 180.5 MiB, for 195.2 MiB on `2d016b3`: the fix of `931c71b` holds in the soak too, as `TestScale` had measured. The catalog grew from 76.8 to 100.4 MiB, events and journal, as before.
+- **The passes**: the one that starts took 7 min 4 s, for 5 min 56 s. Those after it took 7.1 s at the median for six hours, as on `2d016b3`, then 12 to 20 s from 02:00 to 05:00, with 130 to 160 operations a pass for 92, and 9.5 s again by 05:00. The machine ran the containers of the media servers and of openmediavault from about 02:00 (the entry below), and a pass that takes longer gathers more of the soak's changes, so it runs more operations. That it was the load alone is not shown: the next soak, with nothing else on the machine, is to tell.
+
 ## Media servers and openmediavault tried in containers, 2026-11-19 (specs.md §21.1, §21.5)
 
 The maintainer asked for the try of the notifications in a container, with Plex or an alternative, and for openmediavault the same ("pour plex je veux que tu fasse le test dans un container avec un plex/alternative", "pour openmediavault pareil dans un container").
