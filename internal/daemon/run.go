@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os/exec"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -36,9 +37,10 @@ const checkEvery = 30 * time.Second
 // asked again and again.
 const retryAfter = time.Minute
 
-// remountTimeout is how long umount, then mount, may each take at a remount, which is what systemd gives a mount: a
-// disk that died halfway can hold one for good, and the loop does nothing else meanwhile. remountLinger is how long
-// one that was killed is then waited for: a helper it started may keep its output open.
+// remountTimeout is how long umount, then mount or the job of the mount unit systemd starts, may each take at a
+// remount, which is what systemd gives a mount: a disk that died halfway can hold one for good, and the loop does
+// nothing else meanwhile. remountLinger is how long one that was killed is then waited for: a helper it started may
+// keep its output open.
 const (
 	remountTimeout = 90 * time.Second
 	remountLinger  = time.Second
@@ -93,7 +95,9 @@ type settings struct {
 	checkEvery  time.Duration
 	fstab       string
 	// remountWait is for tests: remountTimeout.
-	remountWait  time.Duration
+	remountWait time.Duration
+	// systemd is how the remount reaches systemd: the machine's, or for tests one of their own (specs.md §15.13).
+	systemd      systemdWay
 	resetReasons []disks.Reason
 	channels     []alerts.Channel
 	servers      []notify.Server
@@ -124,8 +128,9 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 		s.checkEvery = checkEvery
 	}
 	if s.fstab == "" {
-		s.fstab = "/etc/fstab"
+		s.fstab = machineSystemd.fstab
 	}
+	s.systemd = machineSystemd
 	var err error
 	text := func(key string) string { v, _ := e[key].(string); return v }
 	if s.debounce, err = value.ParseDuration(text("deletes.debounce")); err != nil {
@@ -276,6 +281,8 @@ type loop struct {
 	// power reads the UPS, and lastPower is what the loop last made of it (specs.md §20).
 	power     *power
 	lastPower ups.Reading
+	// mountWhys holds why a remount mounted a disk itself rather than through systemd, each said once (specs.md §15.13).
+	mountWhys map[string]bool
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -642,7 +649,9 @@ func remountWanted(d *config.Disk, st *diskState) bool {
 	return st.state == disks.Missing && st.reset && d.State != config.DiskFailed && !st.dirty
 }
 
-// remount tries umount -l then mount of a disk a USB reset took, through its fstab entry (specs.md §15.13).
+// remount mounts again a disk a USB reset took, through its fstab entry (specs.md §15.13): umount -l, then systemd
+// starts the disk's mount unit, so that what the mount starts, as ntfs-3g's FUSE process, belongs to that unit and not
+// to the daemon's service. Where systemd cannot or will not, the daemon runs mount itself, as before.
 func (l *loop) remount(ctx context.Context, d *config.Disk) {
 	if !l.set.remount || !l.opt.Apply {
 		return
@@ -651,11 +660,18 @@ func (l *loop) remount(ctx context.Context, d *config.Disk) {
 	if err != nil || !fstabHas(table, d.Mount) {
 		return
 	}
+	unit, why, detail := l.mountUnitOf(ctx, d)
 	if out, err := l.command(ctx, "umount", "-l", d.Mount); err != nil {
 		l.log.Info("umount before the remount", "disk", d.ID, "error", err, "output", string(out))
 	}
+	if unit != "" {
+		if why, detail = l.startUnit(ctx, d, unit); why == "" {
+			return
+		}
+	}
+	l.mountsItself(ctx, d, why, detail)
 	args := []string{d.Mount}
-	if l.set.fstab != "/etc/fstab" {
+	if l.set.fstab != machineSystemd.fstab {
 		args = []string{"-T", l.set.fstab, d.Mount}
 	}
 	if out, err := l.command(ctx, "mount", args...); err != nil {
@@ -665,13 +681,28 @@ func (l *loop) remount(ctx context.Context, d *config.Disk) {
 	l.log.Info("remounted after a reset", "disk", d.ID, "mount", d.Mount)
 }
 
-// command runs a command of the remount and gives what it wrote. Past remountTimeout it is killed, with what it
+// remountWait is how long each command of the remount may take: remountTimeout, or a test's own.
+func (l *loop) remountWait() time.Duration {
+	if l.set.remountWait > 0 {
+		return l.set.remountWait
+	}
+	return remountTimeout
+}
+
+// command runs a command of the remount and gives what it wrote. Past remountWait it is killed, with what it
 // started, and is waited for no longer than remountLinger: the next check tries again (specs.md §15.13).
 func (l *loop) command(ctx context.Context, name string, args ...string) ([]byte, error) {
-	wait := l.set.remountWait
-	if wait <= 0 {
-		wait = remountTimeout
-	}
+	return l.runCommand(ctx, true, name, args...)
+}
+
+// output runs a command as command does, and gives what it wrote to its standard output alone; its error holds what
+// it wrote to its standard error.
+func (l *loop) output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return l.runCommand(ctx, false, name, args...)
+}
+
+func (l *loop) runCommand(ctx context.Context, combined bool, name string, args ...string) ([]byte, error) {
+	wait := l.remountWait()
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -679,7 +710,18 @@ func (l *loop) command(ctx context.Context, name string, args ...string) ([]byte
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = remountLinger
-	out, err := cmd.CombinedOutput()
+	var out []byte
+	var err error
+	if combined {
+		out, err = cmd.CombinedOutput()
+	} else {
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err = cmd.Output()
+		if err != nil && stderr.Len() > 0 {
+			err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+	}
 	if err != nil && ctx.Err() != nil {
 		return out, fmt.Errorf("no answer within %v: %w", wait, err)
 	}
