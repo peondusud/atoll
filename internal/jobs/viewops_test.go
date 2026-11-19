@@ -13,6 +13,10 @@ import (
 	"github.com/peondusud/atoll/internal/view/writer"
 )
 
+// viewer asks the view as the account that runs the tests, with every capability: these tests are of the passes, not of
+// what the view lets a caller do, which the writer's own tests are.
+var viewer = writer.Caller{Owner: writer.Owner{UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}, Creds: &view.Credentials{Caps: ^view.Caps(0)}}
+
 // viewOf gives the bench's pool a view that writes, over the same catalog and disks, as atoll mount serves it.
 func (b *bench) viewOf() *writer.Writer {
 	b.t.Helper()
@@ -65,7 +69,7 @@ func TestAPassTakesInADeletionThroughTheView(t *testing.T) {
 			b.write("t2", "Films/a.mkv", "x")
 			b.scan(true)
 			w := b.viewOf()
-			if err := w.Unlink(t.Context(), "Films/a.mkv"); err != nil {
+			if err := w.Unlink(t.Context(), "Films/a.mkv", viewer); err != nil {
 				t.Fatal(err)
 			}
 			left := 0
@@ -104,7 +108,7 @@ func TestAPassTakesInWhatTheViewMade(t *testing.T) {
 	b.write("t2", "Films/a.mkv", "x")
 	b.scan(true)
 	w := b.viewOf()
-	f, _, err := w.Create(t.Context(), "Films/new.mkv", 0o644, writer.Owner{UID: uint32(os.Getuid()), GID: uint32(os.Getgid())})
+	f, _, err := w.Create(t.Context(), "Films/new.mkv", 0o644, viewer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,11 +136,11 @@ func TestAPassTakesInWhatTheViewMade(t *testing.T) {
 	if err := os.Remove(filepath.Join(b.dirs["t2"], "media", "Sub", "held.mkv")); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Rmdir(t.Context(), "Sub"); err == nil {
+	if err := w.Rmdir(t.Context(), "Sub", viewer); err == nil {
 		t.Fatal("removed while the catalog still presents what it holds")
 	}
 	b.settle()
-	if err := w.Rmdir(t.Context(), "Sub"); err != nil {
+	if err := w.Rmdir(t.Context(), "Sub", viewer); err != nil {
 		t.Fatal(err)
 	}
 	b.settle()

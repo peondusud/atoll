@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,7 +27,7 @@ func parallelPool(t *testing.T, more string) (*bench, *writer.Writer) {
 // writeThroughView makes a file through the view, writes it, closes it, and waits until its parts are handed over.
 func writeThroughView(b *bench, w *writer.Writer, path, text string) {
 	b.t.Helper()
-	f, _, err := w.Create(b.t.Context(), path, 0o644, writer.Owner{UID: uint32(os.Getuid()), GID: uint32(os.Getgid())})
+	f, _, err := w.Create(b.t.Context(), path, 0o644, viewer)
 	if err != nil {
 		b.t.Fatal(err)
 	}

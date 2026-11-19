@@ -508,6 +508,15 @@ func (d *Disk) setFolderAttrs(parent fsx.Dir, name string, a *UserAttrs, uid, gi
 	return nil
 }
 
+// StatUser looks at a logical path on this disk, as the view checks what is there before it acts there for a user
+// (specs.md §21.2): "" is the root itself, the folder <root>/ of the disk.
+func (d *Disk) StatUser(logical string) (fsx.Stat, bool, error) {
+	if logical == "" {
+		return d.stat(components(d.config.Root))
+	}
+	return d.StatRoot(logical)
+}
+
 // StatTrash looks at a place of the trash, as the reprise of an operation that sent a copy there looks at it.
 func (d *Disk) StatTrash(trashPath string) (fsx.Stat, bool, error) {
 	return d.stat(d.trashPlace(trashPath))

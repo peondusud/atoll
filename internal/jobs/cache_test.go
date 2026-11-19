@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/peondusud/atoll/internal/config"
-	"github.com/peondusud/atoll/internal/view/writer"
 )
 
 // cacheBench gives a pool with Atoll's own view, a cache disk c, and two data disks t1 and t2, in UTC, with more after
@@ -220,7 +219,7 @@ func TestATransferStoppedAtEachPoint(t *testing.T) {
 func TestATransferWaitsForTheViewsOperation(t *testing.T) {
 	b := cacheBench(t, "[cache]\nenabled = true\nmin_age = \"0s\"\n"+windowOpen)
 	b.scan(false)
-	f, _, err := b.viewOf().Create(t.Context(), "a.mkv", 0o644, writer.Owner{})
+	f, _, err := b.viewOf().Create(t.Context(), "a.mkv", 0o644, viewer)
 	if err != nil {
 		t.Fatal(err)
 	}

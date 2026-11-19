@@ -61,7 +61,7 @@ func (b *bench) partRows() []string {
 // writeNew makes a file through the view and writes text to it, in writes of a few bytes, without closing it.
 func (b *bench) writeNew(path, text string) *File {
 	b.t.Helper()
-	f, _, err := b.w.Create(b.t.Context(), path, 0o644, Owner{})
+	f, _, err := b.w.Create(b.t.Context(), path, 0o644, root)
 	if err != nil {
 		b.t.Fatalf("create %s: %v", path, err)
 	}
@@ -156,11 +156,11 @@ func TestTheParallelPartsGo(t *testing.T) {
 	}{
 		{name: "truncated", free2: 400, do: func(_ *bench, f *File) { must(t, f.Truncate(2)) }},
 		{name: "renamed", free2: 400, do: func(b *bench, _ *File) {
-			must(t, b.w.Rename(context.Background(), "Films/new.mkv", "Films/other.mkv", false))
+			must(t, b.w.Rename(context.Background(), "Films/new.mkv", "Films/other.mkv", false, root))
 		}},
-		{name: "deleted", free2: 400, do: func(b *bench, _ *File) { must(t, b.w.Unlink(context.Background(), "Films/new.mkv")) }},
+		{name: "deleted", free2: 400, do: func(b *bench, _ *File) { must(t, b.w.Unlink(context.Background(), "Films/new.mkv", root)) }},
 		{name: "opened again", free2: 400, do: func(b *bench, _ *File) {
-			g, err := b.w.Open(context.Background(), "Films/new.mkv", b.lookup("Films/new.mkv"))
+			g, err := b.w.Open(context.Background(), "Films/new.mkv", b.lookup("Films/new.mkv"), root)
 			must(t, err)
 			must(t, g.Close())
 		}},

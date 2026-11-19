@@ -1,7 +1,6 @@
 package jobs
 
 import (
-	"os"
 	"slices"
 	"testing"
 
@@ -46,7 +45,7 @@ func (b *bench) takeInByNames(t *testing.T) {
 // recorded (specs.md §15.13, §21.2).
 func TestThePassTakesInTheViewByNames(t *testing.T) {
 	t.Parallel()
-	who := writer.Owner{UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}
+	who := viewer
 	for _, tc := range []struct {
 		name  string
 		do    func(t *testing.T, b *bench, w *writer.Writer)
@@ -67,7 +66,7 @@ func TestThePassTakesInTheViewByNames(t *testing.T) {
 			}
 		}},
 		{"a file deleted", func(t *testing.T, b *bench, w *writer.Writer) {
-			if err := w.Unlink(t.Context(), "Films/a.mkv"); err != nil {
+			if err := w.Unlink(t.Context(), "Films/a.mkv", viewer); err != nil {
 				t.Fatal(err)
 			}
 		}, func(t *testing.T, b *bench) {
@@ -81,7 +80,7 @@ func TestThePassTakesInTheViewByNames(t *testing.T) {
 			}
 		}},
 		{"a file renamed", func(t *testing.T, b *bench, w *writer.Writer) {
-			if err := w.Rename(t.Context(), "Films/a.mkv", "Films/b.mkv", false); err != nil {
+			if err := w.Rename(t.Context(), "Films/a.mkv", "Films/b.mkv", false, viewer); err != nil {
 				t.Fatal(err)
 			}
 		}, func(t *testing.T, b *bench) {
@@ -104,7 +103,7 @@ func TestThePassTakesInTheViewByNames(t *testing.T) {
 			}
 		}},
 		{"a folder renamed on both disks", func(t *testing.T, b *bench, w *writer.Writer) {
-			if err := w.Rename(t.Context(), "Séries/D", "Séries/E", false); err != nil {
+			if err := w.Rename(t.Context(), "Séries/D", "Séries/E", false, viewer); err != nil {
 				t.Fatal(err)
 			}
 		}, func(t *testing.T, b *bench) {
@@ -119,7 +118,7 @@ func TestThePassTakesInTheViewByNames(t *testing.T) {
 			}
 		}},
 		{"a folder removed from both disks", func(t *testing.T, b *bench, w *writer.Writer) {
-			if err := w.Rmdir(t.Context(), "Empty"); err != nil {
+			if err := w.Rmdir(t.Context(), "Empty", viewer); err != nil {
 				t.Fatal(err)
 			}
 		}, func(t *testing.T, b *bench) {

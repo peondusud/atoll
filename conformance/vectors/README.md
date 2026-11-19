@@ -483,6 +483,33 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `classes` | array of strings | `read.classes` |
 | `read` | array of strings | the disks whose copy the view opens, best first |
 
+### `view_access.json` — what Atoll's own view checks on a disk before it acts there for a caller (§21.2)
+
+The kernel checked the caller against what the view presents. Where the disk holds what a check reads as presented, its mode with setuid (`04000`), setgid (`02000`) and sticky (`01000`), its owner and its group, and for `delete` those of the folder too, nothing more is checked, and `chmod` applies the mode asked. Otherwise the caller is checked against what the disk holds, as Linux checks it without ACLs: the owner's bits for its owner, the group's for a member of its group, its own or another of its groups, the others' for any other; `dac_override` reads and writes any file and searches any folder, `dac_read_search` reads any file and reads and searches any folder.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `asks` | string | what the operation asks: `write`, to write a file or a folder's own entry, refused `EPERM` too for a file that holds setuid, or setgid with the group's execution (`0010`), that the view does not present, to a caller without `fsetid`; `xattr`, an extended attribute of the `user.` namespace, of a file or a folder alone, of a sticky folder its owner or `fowner` alone, then `write`; `create`, a name made in the folder given; `delete`, a name removed from its folder, which needs writing and searching it, and of a sticky folder the owner of the name or of the folder, or `fowner`; `chmod`, its owner or `fowner`, but a mode that changes nothing but takes setuid or setgid off, never refused; `chown`, with `chown` anything, otherwise its owner, the owner it has, and one of its own groups; `times`, its owner or `fowner`; `touch`, the times now, its owner, `fowner` or `write`; `link`, with `fs.protected_hardlinks` on, its owner, `fowner`, or a regular file neither setuid nor setgid with the group's execution, that it may read and write |
+| `caller` | object | `uid` and `gid`, the account and group it acts on files as; `groups`, its other groups, none when left out; `caps`, its effective capabilities among `chown`, `dac_override`, `dac_read_search`, `fowner` and `fsetid`, none when left out |
+| `presented`, `disk` | object | what the operation acts on, as the view presents it and as the disk holds it, for `create` the folder the name is made in: `kind` (`file`, `dir` or `symlink`), `mode` with setuid, setgid and sticky, `uid`, `gid` |
+| `presented_folder`, `disk_folder` | object | for `delete` alone: the folder the name is removed from, likewise |
+| `mode` | integer | for `chmod` alone: the mode asked |
+| `uid`, `gid` | integer | for `chown`, the owner and the group asked, each left out when it is left as it is; for `chmod`, `gid`, the group given with the mode, if any |
+| `refused` | string | `EACCES` or `EPERM`, as Linux answers on the disk; left out when it allows the operation |
+| `applied` | integer | for `chmod` allowed: the mode applied, without setgid when the caller is in neither the file's group, the one given with the mode if any, nor holds `fsetid` |
+
+### `proc_status.json` — what Atoll's own view reads of the thread that asks it (§21.2)
+
+The text of `/proc/<pid>/task/<pid>/status`, one `Name:\tvalue` line each. `Uid`, `Gid`, `Groups` and `CapEff` are required, each once, and every other line is left as it is.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | string | the text |
+| `fsuid`, `fsgid` | integer | the fourth of the four ids of `Uid` and `Gid`, the filesystem's |
+| `groups` | array of integers | the ids of `Groups`, unsigned 32-bit, in their order, separated by spaces |
+| `cap_eff` | integer | `CapEff`, a hexadecimal mask of 64 bits whose bit n is capability n |
+| `error` | boolean | `true` when the text cannot be read |
+
 ### `creation_time.json` — a creation time into `btime_ns` (§7)
 
 | Field | Type | Meaning |

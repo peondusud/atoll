@@ -72,12 +72,13 @@ func errnoOf(what, p string, err error) syscall.Errno {
 	return failed(what, p, err)
 }
 
-// owner is who asks, as the kernel says.
-func owner(ctx context.Context) writer.Owner {
+// caller is who asks, as the kernel names it: its account and group, which own what it makes, and the thread that asks,
+// whose other groups and capabilities a check on a disk reads (specs.md §21.2).
+func caller(ctx context.Context) writer.Caller {
 	if c, ok := fuse.FromContext(ctx); ok {
-		return writer.Owner{UID: c.Uid, GID: c.Gid}
+		return writer.Caller{Owner: writer.Owner{UID: c.Uid, GID: c.Gid}, PID: c.Pid}
 	}
-	return writer.Owner{}
+	return writer.Caller{}
 }
 
 func (n *node) Create(ctx context.Context, name string, _ uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
@@ -85,7 +86,7 @@ func (n *node) Create(ctx context.Context, name string, _ uint32, mode uint32, o
 		return nil, nil, 0, syscall.EROFS
 	}
 	p := join(n.logical(), name)
-	f, v, err := n.w.Create(whole(ctx), p, mode&0o7777, owner(ctx))
+	f, v, err := n.w.Create(whole(ctx), p, mode&0o7777, caller(ctx))
 	if err != nil {
 		return nil, nil, 0, errnoOf("the view cannot make a file", p, err)
 	}
@@ -98,7 +99,7 @@ func (n *node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.En
 		return nil, syscall.EROFS
 	}
 	p := join(n.logical(), name)
-	v, err := n.w.Mkdir(whole(ctx), p, mode&0o7777, owner(ctx))
+	v, err := n.w.Mkdir(whole(ctx), p, mode&0o7777, caller(ctx))
 	if err != nil {
 		return nil, errnoOf("the view cannot make a folder", p, err)
 	}
@@ -111,7 +112,7 @@ func (n *node) Symlink(ctx context.Context, target, name string, out *fuse.Entry
 		return nil, syscall.EROFS
 	}
 	p := join(n.logical(), name)
-	v, err := n.w.Symlink(whole(ctx), p, target, owner(ctx))
+	v, err := n.w.Symlink(whole(ctx), p, target, caller(ctx))
 	if err != nil {
 		return nil, errnoOf("the view cannot make a symbolic link", p, err)
 	}
@@ -124,7 +125,7 @@ func (n *node) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EROFS
 	}
 	p := join(n.logical(), name)
-	return errnoOf("the view cannot delete a file", p, n.w.Unlink(whole(ctx), p))
+	return errnoOf("the view cannot delete a file", p, n.w.Unlink(whole(ctx), p, caller(ctx)))
 }
 
 func (n *node) Rmdir(ctx context.Context, name string) syscall.Errno {
@@ -132,7 +133,7 @@ func (n *node) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return syscall.EROFS
 	}
 	p := join(n.logical(), name)
-	return errnoOf("the view cannot remove a folder", p, n.w.Rmdir(whole(ctx), p))
+	return errnoOf("the view cannot remove a folder", p, n.w.Rmdir(whole(ctx), p, caller(ctx)))
 }
 
 // The flags of renameat2 that reach a FUSE server.
@@ -153,7 +154,7 @@ func (n *node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedd
 		return syscall.EINVAL
 	}
 	from := join(n.logical(), name)
-	return errnoOf("the view cannot rename", from, n.w.Rename(whole(ctx), from, join(to.logical(), newName), flags&renameNoReplace != 0))
+	return errnoOf("the view cannot rename", from, n.w.Rename(whole(ctx), from, join(to.logical(), newName), flags&renameNoReplace != 0, caller(ctx)))
 }
 
 // Link gives a file a second name on the disk it is presented from (specs.md §21.2). A folder answers EPERM, as on any
@@ -170,7 +171,7 @@ func (n *node) Link(ctx context.Context, target fs.InodeEmbedder, name string, o
 	if from == "" {
 		return nil, syscall.EPERM
 	}
-	v, err := n.w.Link(whole(ctx), from, to)
+	v, err := n.w.Link(whole(ctx), from, to, caller(ctx))
 	switch {
 	case errors.Is(err, writer.ErrIsFolder):
 		return nil, syscall.EPERM
@@ -199,7 +200,7 @@ func (n *node) Setxattr(ctx context.Context, attr string, data []byte, flags uin
 	if errno != 0 {
 		return errno
 	}
-	return errnoOf("the view cannot set an extended attribute", p, n.w.SetXattr(whole(ctx), p, v, attr, data, int(flags)))
+	return errnoOf("the view cannot set an extended attribute", p, n.w.SetXattr(whole(ctx), p, v, attr, data, int(flags), caller(ctx)))
 }
 
 // Removexattr removes an extended attribute of the user. namespace, as Setxattr sets one.
@@ -215,7 +216,7 @@ func (n *node) Removexattr(ctx context.Context, attr string) syscall.Errno {
 	if errno != 0 {
 		return errno
 	}
-	return errnoOf("the view cannot remove an extended attribute", p, n.w.RemoveXattr(whole(ctx), p, v, attr))
+	return errnoOf("the view cannot remove an extended attribute", p, n.w.RemoveXattr(whole(ctx), p, v, attr, caller(ctx)))
 }
 
 // Getxattr gives an extended attribute of the user. namespace from the copy or the entry the view presents, on its disk
@@ -271,7 +272,7 @@ func (n *node) xattrs(ctx context.Context) (map[string][]byte, syscall.Errno) {
 	return nil, failed("the view cannot read extended attributes", p, err)
 }
 
-func (n *node) Setattr(ctx context.Context, _ fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+func (n *node) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	if n.w == nil {
 		return syscall.EROFS
 	}
@@ -304,7 +305,11 @@ func (n *node) Setattr(ctx context.Context, _ fs.FileHandle, in *fuse.SetAttrIn,
 	if t, ok := in.GetMTime(); ok {
 		a.Mtime = timeOf(t)
 	}
-	got, err := n.w.Setattr(whole(ctx), p, v, a)
+	// Through a file open for writing, as ftruncate, a truncation needs nothing more; times that are not given are the
+	// time now, as touch sets them, which write access allows.
+	given := in.Valid&fuse.FATTR_ATIME != 0 && in.Valid&fuse.FATTR_ATIME_NOW == 0 || in.Valid&fuse.FATTR_MTIME != 0 && in.Valid&fuse.FATTR_MTIME_NOW == 0
+	how := writer.Asked{Caller: caller(ctx), Open: fh != nil, Now: !given}
+	got, err := n.w.Setattr(whole(ctx), p, v, a, how)
 	if err != nil {
 		return errnoOf("the view cannot change attributes", p, err)
 	}
@@ -327,7 +332,7 @@ func (n *node) openToWrite(ctx context.Context, flags uint32) (fs.FileHandle, ui
 	if errno != 0 {
 		return nil, 0, errno
 	}
-	f, err := n.w.Open(whole(ctx), p, v)
+	f, err := n.w.Open(whole(ctx), p, v, caller(ctx))
 	if err != nil {
 		return nil, 0, errnoOf("the view cannot open a file to write it", p, err)
 	}

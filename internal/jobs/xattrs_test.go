@@ -76,7 +76,7 @@ func setThroughView(b *bench, w *writer.Writer, path, name, value string) {
 	if err != nil || n == nil {
 		b.t.Fatalf("%s presents %+v, %v", path, n, err)
 	}
-	if err := w.SetXattr(b.t.Context(), path, n, name, []byte(value), 0); err != nil {
+	if err := w.SetXattr(b.t.Context(), path, n, name, []byte(value), 0, viewer); err != nil {
 		b.t.Fatal(err)
 	}
 }
@@ -139,7 +139,7 @@ func TestAPassGivesTheOtherCopyAnAttributeSetThroughTheView(t *testing.T) {
 	if err != nil || n == nil {
 		t.Fatal(err)
 	}
-	if err := w.RemoveXattr(t.Context(), "Films/a.mkv", n, "user.org.netatalk.Metadata"); err != nil {
+	if err := w.RemoveXattr(t.Context(), "Films/a.mkv", n, "user.org.netatalk.Metadata", viewer); err != nil {
 		t.Fatal(err)
 	}
 	b.settleAll(2)

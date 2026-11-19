@@ -18,7 +18,7 @@ func linkedPool(t *testing.T, more string) (b *bench, disk, other string) {
 	b.write("t1", "Films/a.mkv", "a film")
 	b.write("t2", "Films/a.mkv", "a film")
 	b.scan(true)
-	n, err := b.viewOf().Link(t.Context(), "Films/a.mkv", "Films/b.mkv")
+	n, err := b.viewOf().Link(t.Context(), "Films/a.mkv", "Films/b.mkv", viewer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestAPassTakesInAHardLinkThroughTheView(t *testing.T) {
 		t.Errorf("a pass after: %+v, %+v", again.Decisions, again.Operations)
 	}
 
-	if err := b.viewOf().Unlink(t.Context(), "Films/a.mkv"); err != nil {
+	if err := b.viewOf().Unlink(t.Context(), "Films/a.mkv", viewer); err != nil {
 		t.Fatal(err)
 	}
 	b.settle()
@@ -113,7 +113,7 @@ func TestTheLinkGuardWithAFileOfTwoNames(t *testing.T) {
 	if got := b.text("SELECT group_concat(nlink, ' ') FROM (SELECT c.nlink FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? ORDER BY f.lpath)", disk); got != "2 2" {
 		t.Errorf("the names of the copies on %s: %s, want both names and not the guard's", disk, got)
 	}
-	if err := b.viewOf().Unlink(t.Context(), "Films/a.mkv"); err != nil {
+	if err := b.viewOf().Unlink(t.Context(), "Films/a.mkv", viewer); err != nil {
 		t.Fatal(err)
 	}
 	b.settle()
@@ -134,7 +134,7 @@ func TestAFileOfTwoNamesLeavesTheCache(t *testing.T) {
 	b := cacheBench(t, "[cache]\nenabled = true\nmin_age = \"0s\"\n"+windowOpen)
 	b.write("c", "show/e1.mkv", "episode")
 	b.scan(false)
-	n, err := b.viewOf().Link(t.Context(), "show/e1.mkv", "show/e1-again.mkv")
+	n, err := b.viewOf().Link(t.Context(), "show/e1.mkv", "show/e1-again.mkv", viewer)
 	if err != nil || n.Disk != "c" {
 		t.Fatalf("the link: %+v, %v", n, err)
 	}
