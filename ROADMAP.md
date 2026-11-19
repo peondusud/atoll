@@ -34,7 +34,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **mergerfs.** `atoll mergerfs-config` (§21.1), and `--omv` for the openmediavault plugin's form.
 - **The daemon that runs for good.** fanotify, or inotify, with the events grouped per path; the catalog's lock taken per pass, with commands waiting for it; rescans and new files' hashes inside the maintenance window; the mount check every 30 s; mergerfs's branches changed at runtime; the remount after a USB reset; reload on `SIGHUP`; a systemd unit (§15.13).
 - **The command line.** `--help`, a French translation chosen by the locale, and durations written as the configuration writes them (§25).
-- **The local API.** The daemon answers status, disks, trash and guards over a Unix socket, and over TCP with a token on loopback or Tailscale (§25.1).
+- **The local API.** The daemon answers status, disks, trash and guards over a Unix socket, and over TCP with a token on loopback or Tailscale (§25.1). Since 2026-11-19 it takes one write, an answer to a guard, with its dry run (DONE.md).
 - **Alerts.** ntfy alerts after each pass, kept in the catalog so that a restart sends again only what is due, and `atoll notify test` (§23).
 - **The catalog.** `atoll catalog backup`, every night by the daemon too, `verify` against the disks, and `rebuild` from them (§9).
 - **The scrub.** `atoll scrub`, and the daemon inside `integrity.window`, check each chunk of the copies due, quarantine a corrupt copy when a healthy one exists, and resume at the chunk the budget reached (§16).

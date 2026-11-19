@@ -62,12 +62,6 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 - **BLAKE3**: run `conformance/vectors/blake3.json` on real arm64 and AVX-512 hardware, and measure throughput there. `zeebo/blake3` stays pinned to commit `28a397d`: its last tag, v0.2.4, has no arm64 backend (`docs/research/blake3.md`). The maintainer's machine has neither: its i7-12700K is an Alder Lake, whose AVX-512 Intel turned off. Under emulation, qemu-user for arm64 and Intel's SDE for AVX-512, the vectors can run, never the throughput.
 
-## Contracts not yet defined (specs.md §29.3)
-
-Every item here is a **decision**:
-
-- The local API's commands that write (moving, deleting, answering a guard), which the alpha leaves to the CLI (§25.1).
-
 ## The review's decisions, made by the maintainer on 2026-11-13, to do
 
 Each point the review left to decide was put to the maintainer as a question, with its options and what each costs. What he chose is below; the reasons and the costs are in the entries of the sections that follow, which stay until each is done. Each is done as any fix: a test that fails first, the spec, DONE.md.
