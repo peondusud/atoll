@@ -96,6 +96,13 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 	if err := s.countUnnamed(ctx, id, unnamed); err != nil {
 		return err
 	}
+	if len(makes) > 0 && handle.LinkMovesTimes() {
+		// A link there sets its file's modification time to now (measured): the guard would change the very copy it
+		// guards, and the next pass would give that time to every other copy (specs.md §17, §22).
+		slog.Warn("the link guard makes no link on a disk mounted with the type ntfs, where a link moves its file's modification time",
+			"disk", id, "copies", len(makes))
+		makes = nil
+	}
 	if _, err := s.linkOps(ctx, handle, catalog.OpUnlink, unlinks); err != nil || s.lostDisk(id) {
 		return err
 	}

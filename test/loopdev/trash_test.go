@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -140,17 +141,41 @@ var trashDrivers = []struct {
 	{"xfs", names.XFS, ""},
 	{"btrfs", names.Btrfs, ""},
 	{"ntfs3", names.NTFS, "ntfs3"},
+	{"ntfs", names.NTFS, "ntfs"},
 	{"ntfs-3g", names.NTFS, "ntfs-3g"},
 	{"lowntfs-3g", names.NTFS, "lowntfs-3g"},
 }
 
+// driverOptions skips where the kernel lacks the driver, and gives what it is mounted with: ads=0 for ntfs3 where the
+// kernel knows it, and for the type ntfs what the mount check asks of it (specs.md §10, §22).
 func driverOptions(t *testing.T, driver string) []string {
 	t.Helper()
-	if driver == "ntfs3" {
+	switch driver {
+	case "ntfs3":
 		ntfs3Type(t)
 		return ntfs3Options(t)
+	case "ntfs":
+		ntfsType(t)
+		return slices.Clone(ntfsOptions)
 	}
 	return nil
+}
+
+// mountableAgain gives the options a volume a device failure left dirty needs to be mounted read-write again. ntfs3
+// refuses it without force. The type ntfs, with errors=remount-ro, mounts it read-only, which the check reads as
+// readonly: its flag is cleared first, as ntfsfix -d does, and as a user does before mounting it again.
+func mountableAgain(t *testing.T, device, driver string, options []string) []string {
+	t.Helper()
+	switch driver {
+	case "ntfs3":
+		return append(slices.Clone(options), "force")
+	case "ntfs":
+		if _, err := exec.LookPath("ntfsfix"); err != nil {
+			t.Skip("no ntfsfix")
+		}
+		must(t, "ntfsfix", "-d", device)
+	}
+	return options
 }
 
 // TestPruneOnEachDriver: a copy goes to the trash, comes back and goes for good, on each driver, and
@@ -522,6 +547,7 @@ var failingDrivers = []struct {
 	{"ext4", names.Ext4, ""},
 	{"xfs", names.XFS, ""},
 	{"ntfs3", names.NTFS, "ntfs3"},
+	{"ntfs", names.NTFS, "ntfs"},
 	{"ntfs-3g", names.NTFS, "ntfs-3g"},
 }
 
@@ -648,10 +674,7 @@ func deviceFailure(t *testing.T, fs names.Filesystem, driver, point string, op i
 		time.Sleep(time.Second)
 	}
 	m.heal(t)
-	// Dirty, ntfs3 refuses to mount without force.
-	if driver == "ntfs3" {
-		options = append(options, "force")
-	}
+	options = mountableAgain(t, m.device, driver, options)
 	if err := remount(t, m.volume, driver, at, options); err != nil {
 		t.Skipf("the volume did not mount again: %v", err)
 	}
@@ -660,10 +683,10 @@ func deviceFailure(t *testing.T, fs names.Filesystem, driver, point string, op i
 
 	source := filepath.Join(at, "media", "a")
 	dropCaches(t)
-	// ntfs3 keeps no journal of its own: writes lost with the device can leave a name and its record
-	// that disagree, which it answers with ESTALE or EINVAL (measured). Atoll concludes nothing from
-	// that, and only a repair can say more.
-	if driver == "ntfs3" {
+	// ntfs3 and the type ntfs keep no journal of their own: writes lost with the device can leave a name
+	// and its record that disagree, which ntfs3 answers with ESTALE or EINVAL (measured). Atoll concludes
+	// nothing from that, and only a repair can say more.
+	if kernelNTFS(driver) {
 		inTrash := filepath.Join(at, "Atoll", "trash", filepath.FromSlash(b.text("SELECT CAST(path2 AS TEXT) FROM ops WHERE id = 1")))
 		for _, path := range []string{source, inTrash} {
 			file, err := os.Open(path)
@@ -716,6 +739,9 @@ func remount(t *testing.T, v *volume, driver, at string, options []string) error
 		command = []string{driver}
 	case "":
 		command = []string{"mount"}
+	case "ntfs":
+		// No mount.ntfs helper, which would mount ntfs-3g instead.
+		command = []string{"mount", "-i", "-t", driver}
 	default:
 		command = []string{"mount", "-t", driver}
 	}

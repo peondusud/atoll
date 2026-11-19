@@ -102,6 +102,37 @@ func TestTheGuardLinksEachCopy(t *testing.T) {
 	}
 }
 
+// On the type ntfs, link sets its file's modification time to now, measured: the guard makes no link there, as it would
+// change the very copy it guards, whose new time the next pass would give every other copy (specs.md §17, §22). On
+// ntfs3, as on any other driver, it makes one.
+func TestTheGuardMakesNoLinkOnTheTypeNTFS(t *testing.T) {
+	for _, tc := range []struct {
+		driver string
+		links  bool
+	}{
+		{"ntfs", false},
+		{"ntfs3", true},
+	} {
+		t.Run(tc.driver, func(t *testing.T) {
+			b := newBenchOf(t, tc.driver)
+			if items, lost := b.guarded("t3", true); len(items) != 0 || lost {
+				t.Fatalf("%+v, lost %v", items, lost)
+			}
+			if got := inodeOf(t, b.linkOf("t3", 1)) != 0; got != tc.links {
+				t.Errorf("a link made: %v", got)
+			}
+			if got := b.count("SELECT count(*) FROM ops") == 1; got != tc.links {
+				t.Errorf("%d operations", b.count("SELECT count(*) FROM ops"))
+			}
+			if !tc.links {
+				if _, err := os.Lstat(filepath.Dir(b.linkOf("t3", 1))); !os.IsNotExist(err) {
+					t.Errorf("the links folder: %v", err)
+				}
+			}
+		})
+	}
+}
+
 // lostItsName makes t3's link, then takes the copy away as a deletion through the merged view does, and its row as the
 // pass that saw it does.
 func (b *bench) lostItsName() uint64 {

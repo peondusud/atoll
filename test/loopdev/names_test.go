@@ -37,7 +37,7 @@ type mounter func(img, dir string) error
 // On ext4, XFS and btrfs, whose only rule is the length, a refused name must
 // also fail. On NTFS the Windows rules are stricter than every Linux driver,
 // so only accepted names are checked, on each driver this machine has (ntfs3,
-// ntfs-3g, lowntfs-3g), with and without windows_names.
+// the type ntfs, ntfs-3g, lowntfs-3g), with and without windows_names.
 func TestNameCorpus(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root: sudo make test-loopdev")
@@ -57,6 +57,8 @@ func TestNameCorpus(t *testing.T) {
 		{"btrfs", 128, []string{"mkfs.btrfs", "-q", "-f"}, loop, func(c corpusName) []string { return c.Btrfs }, true},
 		{"ntfs3", 64, mkntfs, ntfs3(""), ntfsVerdict, false},
 		{"ntfs3-windows_names", 64, mkntfs, ntfs3(",windows_names"), ntfsVerdict, false},
+		{"ntfs", 64, mkntfs, ntfsKernel(""), ntfsVerdict, false},
+		{"ntfs-windows_names", 64, mkntfs, ntfsKernel(",windows_names"), ntfsVerdict, false},
 		{"ntfs-3g", 64, mkntfs, fuse("ntfs-3g", ""), ntfsVerdict, false},
 		{"ntfs-3g-windows_names", 64, mkntfs, fuse("ntfs-3g", "windows_names"), ntfsVerdict, false},
 		{"lowntfs-3g", 64, mkntfs, fuse("lowntfs-3g", ""), ntfsVerdict, false},
@@ -102,6 +104,14 @@ func ntfsVerdict(c corpusName) []string { return c.NTFS }
 func ntfs3(opts string) mounter {
 	return func(img, dir string) error {
 		return try("mount", "-t", "ntfs3", "-o", "loop,iocharset=utf8"+opts, img, dir)
+	}
+}
+
+// ntfsKernel mounts with the driver of the type ntfs of Linux 7.1 and later, past any mount.ntfs helper, which would
+// mount ntfs-3g, and with what the mount check asks of it (specs.md §10). A kernel without it cannot mount.
+func ntfsKernel(opts string) mounter {
+	return func(img, dir string) error {
+		return try("mount", "-i", "-t", "ntfs", "-o", "loop,iocharset=utf8,errors=remount-ro"+opts, img, dir)
 	}
 }
 

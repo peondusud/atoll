@@ -1,6 +1,6 @@
 # The in-kernel `ntfs` driver of Linux 7.1 and later
 
-This report measures the read-write NTFS driver of the type `ntfs` against what Atoll relies on from an NTFS driver, for a decision on `specs.md` §10, §15.8 and §22. It is research, not a contract, and it changes nothing: until the maintainer decides, a disk mounted with this driver stays `readonly` with the reason `unsupported-driver` (§10).
+This report measures the read-write NTFS driver of the type `ntfs` against what Atoll relies on from an NTFS driver, for a decision on `specs.md` §10, §15.8 and §22. It is research, not a contract. When it was written, a disk mounted with this driver was `readonly` with the reason `unsupported-driver` (§10), as the measurements below still say. On 2026-11-19 the maintainer chose option C with the author's suggestion (below): the type `ntfs` is supported as ntfs3 is, and `readonly` with the new reason `errors-continue` unless mounted with `errors=remount-ro`; `EINVAL` from `renameat2` there is a name refused, and `link` is not tried; `umask=022` is recommended and the `link` bug documented (§22). Point 3, hibernated volumes on every driver, stays open.
 
 ## Why it matters
 
@@ -278,6 +278,8 @@ All passed but four:
 7. **Tests.** Whatever the choice, add `ntfs` to `test/loopdev`, and consider booting Debian sid's 7.3.3 in `test/qemu` beside Ubuntu's mainline, as it is the kernel without ntfs3.
 
 The author's suggestion, for what it is worth: C, with `errors=remount-ro` required (point 2), `EINVAL` from `renameat2` read as a refused name on `ntfs` (point 4), `umask=022` recommended (point 5), the `link` bug reported upstream (point 6), and point 3 decided apart, as it concerns ntfs3 already.
+
+**Decided on 2026-11-19**: C, with that suggestion. Point 1: supported as ntfs3 (`specs.md` §10, §22). Point 2: `errors=remount-ro` required, the reason `errors-continue` otherwise. Point 3: not decided. Point 4: `EINVAL` from `renameat2` is `name-refused` on the type `ntfs`, with no `link`, and for a folder no plain `rename` (§17.1). Point 5: `umask=022` recommended (§22). Point 6: documented in §22; reporting it upstream is the maintainer's. As a link of the guard would move the modification time of the copy it guards, the guard makes no link on that type (§17). Point 7: `ntfs` is in the driver lists of `test/loopdev`, skipped where the kernel has no such module.
 
 ## Not measured
 

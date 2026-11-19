@@ -60,6 +60,7 @@ type disk struct {
 	// Said of a disk, so that a folder can behave as a driver does.
 	Renameat2 *bool    `json:"renameat2"`
 	Refuses   []string `json:"refuses"`
+	Driver    string   `json:"driver"`
 	// Said of a disk for atoll disk add: the whole disk it stands for, and whether the folder under its mount point
 	// is immutable.
 	Device    string `json:"device"`
@@ -167,6 +168,9 @@ func parseScenario(data []byte) (*scenario, error) {
 		if err := checkEntries(s.Disks[i].Tree); err != nil {
 			return nil, fmt.Errorf("disk %q: %w", s.Disks[i].ID, err)
 		}
+		if err := checkDriver(&s.Disks[i]); err != nil {
+			return nil, fmt.Errorf("disk %q: %w", s.Disks[i].ID, err)
+		}
 	}
 	for i := range s.Steps {
 		st := &s.Steps[i]
@@ -223,6 +227,22 @@ func checkSteps(data []byte) error {
 				return fmt.Errorf("step %d (%s): %q does not apply to it", i, do, field)
 			}
 		}
+	}
+	return nil
+}
+
+// checkDriver refuses a driver that means nothing for a disk: one of NTFS only, ntfs3 or ntfs, and with ntfs, which
+// always knows RENAME_NOREPLACE, no renameat2 at false. A typo would check nothing.
+func checkDriver(d *disk) error {
+	switch {
+	case d.Driver == "":
+		return nil
+	case d.Driver != "ntfs3" && d.Driver != "ntfs":
+		return fmt.Errorf("driver %q: ntfs3 or ntfs", d.Driver)
+	case d.FS != "ntfs":
+		return fmt.Errorf("driver %q on a disk of %q: only on ntfs", d.Driver, d.FS)
+	case d.Driver == "ntfs" && d.Renameat2 != nil && !*d.Renameat2:
+		return errors.New("driver ntfs knows RENAME_NOREPLACE: no renameat2 at false")
 	}
 	return nil
 }
@@ -423,6 +443,7 @@ func (b *sandbox) writeControl() error {
 		Capacity  int64    `json:"capacity"`
 		Renameat2 *bool    `json:"renameat2,omitempty"`
 		Refuses   []string `json:"refuses,omitempty"`
+		Driver    string   `json:"driver,omitempty"`
 		Device    string   `json:"device,omitempty"`
 		Immutable bool     `json:"immutable,omitempty"`
 		Full      bool     `json:"full,omitempty"`
@@ -435,8 +456,8 @@ func (b *sandbox) writeControl() error {
 	for i := range b.s.Disks {
 		d := &b.s.Disks[i]
 		if !b.away[d.ID] {
-			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses, d.Device, d.Immutable,
-				slices.Contains(b.full, d.ID)})
+			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses, d.Driver, d.Device,
+				d.Immutable, slices.Contains(b.full, d.ID)})
 		}
 	}
 	data, err := json.MarshalIndent(control, "", "  ")

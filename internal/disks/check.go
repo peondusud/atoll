@@ -37,12 +37,15 @@ const (
 	NoRoot          Reason = "no-root"
 )
 
-// The reasons of a disk that is read-only.
+// The reasons of a disk that is read-only. UnsupportedDriver is a driver whose name rules were never measured: no type
+// a check allows has been one since 2026-11-19, when the type ntfs was measured, and the value stays, as every value of
+// format version 1 does (specs.md §10, §29.3).
 const (
 	UnsupportedDriver Reason = "unsupported-driver"
 	ADS               Reason = "ads"
 	NoCase            Reason = "nocase"
 	IOCharset         Reason = "iocharset"
+	ErrorsContinue    Reason = "errors-continue"
 	IgnoreCase        Reason = "ignore-case"
 	Casefold          Reason = "casefold"
 	ASCIICI           Reason = "ascii-ci"
@@ -208,8 +211,9 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	}
 	verdict := judgeWrites(e, device.Identity, root.OtherCase, d.Root)
 	verdict.TimePrecisionNS = device.Identity.TimePrecisionNS
-	// ntfs3 keeps an owner and a mode for each file, measured; through FUSE, NTFS keeps none, and every file shows what
-	// the mount gives, which a mount by another account changes for all of them at once.
+	// ntfs3 and the type ntfs keep an owner and a mode for each file, measured, the latter as WSL attributes; through
+	// FUSE, NTFS keeps none, and every file shows what the mount gives, which a mount by another account changes for all
+	// of them at once.
 	verdict.MountOwner = e.FSType == "fuseblk"
 	return verdict
 }
@@ -266,19 +270,37 @@ func typeAllowed(fs names.Filesystem, fstype string) bool {
 	}
 }
 
+// RenameTellsNames says whether EINVAL from renameat2 with RENAME_NOREPLACE is, on a mount of that type, a name its
+// driver refuses, so that link is not tried (specs.md §17.1). It is on the type ntfs, which always knows the flag, and
+// does not apply windows_names to link while it does to unlink: link would give the file a second name, and the unlink
+// after it would fail (measured, docs/research/ntfs-driver.md). ntfs-3g and lowntfs-3g give EINVAL whatever the name,
+// and only link tells there; the other drivers keep that too.
+func RenameTellsNames(fstype string) bool {
+	return fstype == "ntfs"
+}
+
+// LinkMovesTimes says whether link, on a mount of that type, sets every time of its file to now, the modification time
+// included: the type ntfs does, an upstream bug, where ntfs3 and the others move the change time alone (measured,
+// specs.md §22).
+func LinkMovesTimes(fstype string) bool {
+	return fstype == "ntfs"
+}
+
 // judgeWrites decides whether Atoll may write to a disk it has identified: the second table of
-// specs.md §10, in its order.
+// specs.md §10, in its order. ntfs3 and the type ntfs, the two NTFS drivers of the kernel, show their options among the
+// superblock options; the type ntfs has no ads.
 func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string) Verdict {
 	ntfs3, variant := e.FSType == "ntfs3", id.Variant
+	kernelNTFS := ntfs3 || e.FSType == "ntfs"
 	switch {
-	case e.FSType == "ntfs":
-		return readOnly(UnsupportedDriver, "mounted with a driver whose name rules were never measured: use ntfs3 or ntfs-3g")
 	case ntfs3 && slices.Contains(e.SuperOptions, "ads"):
 		return readOnly(ADS, "ntfs3 with ads can destroy another file: remount with ads=0")
-	case ntfs3 && slices.Contains(e.SuperOptions, "nocase"):
-		return readOnly(NoCase, "ntfs3 with nocase changes name rules: remount without it")
-	case ntfs3 && !slices.Contains(e.SuperOptions, "iocharset=utf8"):
-		return readOnly(IOCharset, "ntfs3 without iocharset=utf8 does not keep names as they are: remount with it")
+	case kernelNTFS && slices.Contains(e.SuperOptions, "nocase"):
+		return readOnly(NoCase, e.FSType+" with nocase changes name rules: remount without it")
+	case kernelNTFS && !slices.Contains(e.SuperOptions, "iocharset=utf8"):
+		return readOnly(IOCharset, e.FSType+" without iocharset=utf8 does not keep names as they are: remount with it")
+	case e.FSType == "ntfs" && !slices.Contains(e.SuperOptions, "errors=remount-ro"):
+		return readOnly(ErrorsContinue, "ntfs without errors=remount-ro writes to a volume Windows left hibernated, or one marked dirty: remount with it")
 	case variant == VariantCasefold:
 		return readOnly(Casefold, "this ext4 has the casefold feature, which changes name rules")
 	case variant == VariantASCIICI:

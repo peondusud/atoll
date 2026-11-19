@@ -313,7 +313,8 @@ func TestCheckStopsAtTheFirstFailure(t *testing.T) {
 }
 
 // TestDiskCheckCoversEveryReason: a reason no vector gives would be a reason no other version
-// has to agree on.
+// has to agree on. unsupported-driver is one no check gives since the type ntfs was supported, and no vector may give
+// it either (specs.md §10).
 func TestDiskCheckCoversEveryReason(t *testing.T) {
 	seen := map[string]bool{}
 	cases := vectors.Load[checkCase](t, "disk_check.json")
@@ -322,10 +323,26 @@ func TestDiskCheckCoversEveryReason(t *testing.T) {
 	}
 	for _, r := range []Reason{
 		NotMounted, IOError, PartialMount, WrongFilesystem, DeviceGone, DeviceUnread, WrongIdentifier, NoRoot,
-		UnsupportedDriver, ADS, NoCase, IOCharset, IgnoreCase, Casefold, ASCIICI, ReadOnlyMount,
+		ADS, NoCase, IOCharset, ErrorsContinue, IgnoreCase, Casefold, ASCIICI, NoJournal, ReadOnlyMount, OtherMarker,
 	} {
 		if !seen[string(r)] {
 			t.Errorf("no vector gives %q", r)
+		}
+	}
+	if seen[string(UnsupportedDriver)] {
+		t.Errorf("a vector gives %q, which no check gives any more", UnsupportedDriver)
+	}
+}
+
+// The type ntfs is the one whose EINVAL from renameat2 with RENAME_NOREPLACE is a name refused, where on the other
+// drivers link tells (specs.md §17.1), and the one whose link moves its file's modification time (§22).
+func TestWhatTheTypeNTFSDoesOtherwise(t *testing.T) {
+	for fstype, want := range map[string]bool{"ntfs": true, "ntfs3": false, "fuseblk": false, "ext4": false, "xfs": false, "btrfs": false, "": false} {
+		if got := RenameTellsNames(fstype); got != want {
+			t.Errorf("a rename on %q: %v", fstype, got)
+		}
+		if got := LinkMovesTimes(fstype); got != want {
+			t.Errorf("a link on %q: %v", fstype, got)
 		}
 	}
 }
