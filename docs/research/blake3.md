@@ -61,7 +61,17 @@ The maintainer chose zeebo's main branch, pinned to commit `28a397d` (`v0.2.5-0.
 
 An empty file has no chunks (§16).
 
+## Measured on real hardware (2026-11-19)
+
+GitHub's hosted runners, in the CI's jobs `arm64` and `blake3-amd64` (`test/ci/blake3.sh`, run `44491299109` on `ca8fee9`), each a VM of 4 CPUs. The unit tests ran `conformance/vectors/blake3.json` on each, and passed: the vectors hold on both backends.
+
+| CPU | Backend zeebo/blake3 took | `BenchmarkHashReader` (one read feeding the whole-file hash and the 4 MiB chunks') | `BenchmarkChunkSum` (the chunks' alone) |
+|---|---|---|---|
+| arm64, Neoverse-N2 | SVE2 | 909 to 916 MB/s | 1,934 to 1,935 MB/s |
+| x86-64, AMD EPYC 9V45 | AVX-512 | 2,329 to 2,443 MB/s | 5,436 to 5,518 MB/s |
+
+Hashing is never the bottleneck there (§26): a hard disk reads some 250 MB/s, a USB 3 link carries at most some 450.
+
 ## Open
 
 - Move to a tagged release when one holds these backends.
-- Run the vectors on real arm64 and AVX-512 hardware, and measure throughput there.

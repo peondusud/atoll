@@ -59,14 +59,8 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 - **Reachable capacity** (§13.3): `atoll capacity` has five scenarios and no vector. It is worked out in `internal/watch/capacity.go`, outside the pure core, from `solver.PlanEach` and `solver.Capacity`: a vector file needs that part moved into `internal/solver` first. Moving copies when rebalancing, the hysteresis of `balance.trigger`, and a file whose copies cover too few domains have their vectors (`plan.json`, `percent.json`, `daemon_wake.json`).
 
-## Hardware not yet measured (specs.md §29.7)
-
-- **BLAKE3**: run `conformance/vectors/blake3.json` on real arm64 and AVX-512 hardware, and measure throughput there. `zeebo/blake3` stays pinned to commit `28a397d`: its last tag, v0.2.4, has no arm64 backend (`docs/research/blake3.md`). The maintainer's machine has neither: its i7-12700K is an Alder Lake, whose AVX-512 Intel turned off. Under emulation, qemu-user for arm64 and Intel's SDE for AVX-512, the vectors can run, never the throughput. The CI's `arm64` job runs `blake3.json` and the throughput benchmarks on GitHub's arm64 runners, and `blake3-amd64` logs whether its CPU has AVX-512: record the numbers of the first runs in `docs/research/blake3.md`.
-
 ## GitHub Actions and releases (DONE.md, 2026-11-19)
 
-- Read the first runs on GitHub: KVM on `ubuntu-latest`, container jobs on `ubuntu-24.04-arm`, the unit tests on real arm64, the caches.
-- Protect `main` after the first green run, requiring `race`, `integration`, `conformance`, `lint`, `govulncheck`, `qemu` and `arm64` (the maintainer's choice).
 - The first release, `v0.1.0-beta.1`, after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
 - GoReleaser v2.20.2 or later once two weeks old.
 - **confirm**: the choices made alone, first the sample configuration outside `/etc`.

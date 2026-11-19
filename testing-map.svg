@@ -37,9 +37,9 @@
 <text x="38" y="465" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="464" font-size="13" font-weight="600" fill="#2C2C2A">Coverage tests</text>
 <text x="60" y="479" font-size="11" fill="#5F5E5A">measured in CI by package, no gate</text>
-<text x="38" y="501" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="38" y="501" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="500" font-size="13" font-weight="600" fill="#2C2C2A">Benchmark tests</text>
-<text x="60" y="515" font-size="11" fill="#5F5E5A">BLAKE3 throughput, memory of TestScale</text>
+<text x="60" y="515" font-size="11" fill="#5F5E5A">BLAKE3 on arm64 and AVX-512 in CI, TestScale</text>
 <text x="38" y="537" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
 <text x="60" y="536" font-size="13" font-weight="600" fill="#2C2C2A">Contract tests</text>
 <text x="60" y="551" font-size="11" fill="#5F5E5A">contracts frozen at v1, vectors, schemas</text>

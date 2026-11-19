@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The CI green on GitHub, main protected, BLAKE3 measured on real hardware, 2026-11-19 (specs.md §27, §29.7)
+
+The first runs of GitHub Actions on `beta`, after the merges of the day. Two faults of the CI itself, fixed in `7ff4ae0`: git refused the checkout in the container jobs, which stopped `go build` from stamping the version (`GIT_CONFIG_*` set `safe.directory`); govulncheck found GO-2026-6610 to 6617 in `golang.org/x/net` v0.59.0, which the OpenTelemetry exporters bring, taken to v0.60.0 at once. Then the loop-device tests, in qemu with KVM (25 minutes for both kernels, where it took hours without), which no one had run on the day's features:
+
+- four failures were the tests' own: files of copies at once that did not fit the bench's volume, an ambiguous column in a test's query, a prune past PATH_MAX that needs `walk.long_paths = "walk"` since the bound on depth, the name corpus on the type `ntfs` under `errors=remount-ro`;
+- **one was a finding on the type `ntfs`**: without `windows_names`, a name holding `" * < > ?` can be made there, and once its file is closed the driver errs and, under `errors=remount-ro`, sets the whole volume read-only; with `windows_names` the creation is refused (`TestAForbiddenNameOnTheTypeNTFS`, §22, a decision in TODO.md);
+- **one was a bug of the view's copies written in parallel**, on ntfs-3g: the part adopted as a replica on the other disk, with a time of creation where ntfs-3g gives none, became the original, and the view's create waited for the catalog to present the copy on its own disk, for good, holding back every later operation at that path. Taken in now once the catalog holds the copy the view wrote in sync at the size and time a look finds (`ca8fee9`, `TestAFileTakenInWhenItsOriginalMovedToAnotherCopy`, §21.2).
+
+Run `44491299109` on `ca8fee9`: every job green, `race`, `integration`, `conformance`, `lint`, `govulncheck`, `qemu`, `arm64`, `tla`, `cover`, `blake3-amd64`. **`main` is protected** as the maintainer chose: a merge needs `race`, `integration`, `conformance`, `lint`, `govulncheck`, `qemu`, `arm64` and `tla` green; no force push, no deletion; an administrator may pass over it.
+
+**BLAKE3 on real hardware** (`docs/research/blake3.md`), the vectors passing on both: arm64 Neoverse-N2 with SVE2, 909 to 916 MB/s for a read feeding both hashes and 1,934 MB/s for the chunks' alone; x86-64 AMD EPYC 9V45 with AVX-512, 2,329 to 2,443 and 5,436 to 5,518 MB/s. The item of TODO.md "Hardware not yet measured" is closed.
+
 ## The TLA+ model, checked by TLC, 2026-11-19 (specs.md §6.1, §9, §10, §13.4, §14, §14.1, §14.2, §15.4, §15.5, §15.10, §15.12, §17.1, §17.2, §20, §27, §29.4)
 
 The maintainer chose formal verification of the most dangerous mechanism, the first gap of the test map: TLA+ checked by TLC, Java in a container only ("TLA+ et TLC"), and the model kept beside specs.md with a fingerprint against drift. Commits `45457cd`, `cdc7b77`, `b2c0121` and `c17472d`, merged by `fb3ca0a`.
