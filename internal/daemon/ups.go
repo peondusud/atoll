@@ -245,8 +245,8 @@ func (l *loop) powerChanged() {
 
 // park stops the daemon's work as the UPS's battery runs low (specs.md §20): the step under way has ended, at its next
 // step, as SIGTERM ends it, and the daemon writes out every disk, then only reads the UPS, hears the watcher and SIGHUP,
-// until line power is back. It then takes its work up again as at a start. It says whether the daemon was asked to stop
-// meanwhile.
+// until line power is back, and refuses what the local API hands it at once (specs.md §25.1). It then takes its work
+// up again as at a start. It says whether the daemon was asked to stop meanwhile.
 func (l *loop) park(ctx context.Context) bool {
 	l.log.Warn("the UPS's battery runs low: the daemon stops its work, writes out the disks, and waits for line power")
 	l.notify("STATUS=Low battery: stopped until line power is back")
@@ -259,6 +259,8 @@ func (l *loop) park(ctx context.Context) bool {
 			l.add(e)
 		case <-l.opt.Reload:
 			l.reload()
+		case w := <-l.opt.Catalog:
+			w.done <- ErrParked
 		case <-l.power.signal():
 		}
 	}
