@@ -8,12 +8,16 @@
 # holds it. Each run has a network and a volume of its own, and publishes no port on the host. The
 # servers read the library on the volume at /data, and the test writes it at /pool, as the merged
 # view holds it: path_map /pool = /data takes one to the other. Each server is set up from scratch.
-# Plex answers 401 to other hosts until it is claimed: with PLEX_CLAIM set in the environment, a
-# claim token from https://plex.tv/claim valid for 4 minutes, the server is claimed by that account,
-# where it stays listed until removed there, and the test reads its token from a volume of its own;
-# without it, the Plex test is skipped. Jellyfin and Emby go through their first-run wizard, with an
-# account and an API key made for the run. No token, key or password is printed. The three images
-# take about 4.4 GB. --keep leaves the servers running, and prints how to remove them.
+# Plex is left unclaimed, in no account, and gets no token: unclaimed, it answers 401 to every other
+# host, allowedNetworks or not, but takes its own host's requests, so the test runs in Plex's
+# network namespace and reaches it at 127.0.0.1 (Plex 1.43.5, measured on 2026-11-20). With
+# PLEX_CLAIM set in the environment, a claim token from https://plex.tv/claim valid for 4 minutes,
+# the server is claimed by that account instead, where it stays listed until removed there: the test
+# then reaches it by name with its token, which it reads from a volume of its own, and once without
+# it from an allowed network. Plex's image talks to plex.tv on its own, claimed or not. Jellyfin and
+# Emby go through their first-run wizard, with an account and an API key made for the run. No token,
+# key or password is printed. The three images take about 4.4 GB. --keep leaves the servers
+# running, and prints how to remove them.
 set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
@@ -25,7 +29,7 @@ for a in "$@"; do
 	--keep) keep=1 ;;
 	plex | jellyfin | emby) servers="$servers $a" ;;
 	-h | --help)
-		sed -n '2,16p' "$0"
+		sed -n '2,20p' "$0"
 		exit 0
 		;;
 	-*)
@@ -52,12 +56,12 @@ run=atoll-media-${sha:0:12}-$$
 names=""
 cleanup() {
 	if [ $keep = 1 ]; then
-		echo "kept: docker rm -f$names; docker volume rm $run $run-src $run-secret; docker network rm $run"
+		echo "kept: docker rm -f -v$names; docker volume rm $run $run-src $run-secret; docker network rm $run"
 		return
 	fi
-	# One name a word, split on purpose.
+	# -v takes the volumes the images declare, which no name holds. One name a word, split on purpose.
 	# shellcheck disable=SC2086
-	[ -n "$names" ] && docker rm -f $names >/dev/null 2>&1
+	[ -n "$names" ] && docker rm -f -v $names >/dev/null 2>&1
 	docker volume rm -f "$run" "$run-src" "$run-secret" >/dev/null 2>&1
 	docker network rm "$run" >/dev/null 2>&1
 }
@@ -73,15 +77,23 @@ if ! git archive --format=tar "$sha" | docker run -i --rm -v "$run-src:/src" "$i
 	exit 2
 fi
 
-env=()
+env=() net=$run
 for s in $servers; do
 	name=$run-$s
 	case $s in
 	plex)
-		# -e PLEX_CLAIM with no value passes the environment's, so the claim is on no command line.
-		set -- -e TZ=UTC -e ALLOWED_NETWORKS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 \
-			${PLEX_CLAIM:+-e PLEX_CLAIM} plexinc/pms-docker:latest
-		env+=(-e "ATOLL_PLEX_URL=http://$name:32400")
+		if [ -n "${PLEX_CLAIM:-}" ]; then
+			# -e PLEX_CLAIM with no value passes the environment's, so the claim is on no command line.
+			set -- -e TZ=UTC -e ALLOWED_NETWORKS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 -e PLEX_CLAIM \
+				plexinc/pms-docker:latest
+			env+=(-e "ATOLL_PLEX_URL=http://$name:32400")
+		else
+			# The test shares Plex's network namespace, which is on the run's network, so it still
+			# reaches the other servers by name.
+			set -- -e TZ=UTC plexinc/pms-docker:latest
+			env+=(-e ATOLL_PLEX_URL=http://127.0.0.1:32400)
+			net=container:$name
+		fi
 		;;
 	jellyfin)
 		set -- jellyfin/jellyfin:latest
@@ -112,6 +124,6 @@ if [ -n "${PLEX_CLAIM:-}" ] && [ "${servers#*plex}" != "$servers" ]; then
 	env+=(-e ATOLL_PLEX_TOKEN_FILE=/secret/plex.token)
 fi
 
-docker run --rm --name "$run-test" --network "$run" -v "$run:/pool" -v "$run-src:/src:ro" -v "$run-secret:/secret:ro" \
+docker run --rm --name "$run-test" --network "$net" -v "$run:/pool" -v "$run-src:/src:ro" -v "$run-secret:/secret:ro" \
 	-v atoll-ci-gomod:/go/pkg/mod "${env[@]}" "$image" \
 	bash -c "cp -r /src /w && cd /w && go test -count=1 -tags mediaservers -v ./test/mediaservers"
