@@ -45,7 +45,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **The disk commands.** `atoll disk add`, `show`, `remove` with `--evacuate`, `fail` and `replace`, which edit the configuration keeping every other byte, check the topology and the mount point, and drain a disk through the daemon's passes (§10, §18).
 - **Tests.** The break-glass test, and the failed-mount test (§27).
 - **Contracts and conformance.** 67 vector files and 617 black-box scenarios shared with the Rust version (§29).
-- **Formal verification.** A TLA+ model of copies, propagation and the trash, checked by TLC in the CI (2026-11-19, DONE.md); two flaws of specs.md it found wait for the maintainer's remedy.
+- **Formal verification.** A TLA+ model of copies, propagation and the trash, checked by TLC in the CI (2026-11-19, DONE.md); the two flaws of specs.md it found are fixed, the model passing with their remedies.
 - **CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3, on the maintainer's machine (`test/ci/run.sh`) and on GitHub Actions on each push to `beta` and `main` and each pull request, with govulncheck and the unit tests on arm64 (`.github/workflows/ci.yml`).
 - **Releases.** GoReleaser on a tag the maintainer pushes, drafted for him to publish: a `.tar.gz` and a `.deb` for amd64 and arm64, `SHA256SUMS`, an SBOM per archive and provenance attestations (DONE.md, 2026-11-19). The first, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven: the series is `v0.Y.Z`, then `v1.0.0`.
 

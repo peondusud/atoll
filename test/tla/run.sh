@@ -48,6 +48,9 @@ if [ "$inside" = 0 ]; then
 	# The folder as Docker Desktop reads it on Windows, and as it is elsewhere. What the container writes, the jar and
 	# the logs below bin/tla/, belongs to whoever runs this script.
 	host=$(pwd -W 2>/dev/null || pwd)
+	# Made here, by the host's account: on Docker Desktop for Windows, the container's account may not make a folder in
+	# the bind mount (found on a fresh checkout, 2026-11-19).
+	mkdir -p bin/tla || exit 2
 	exec docker run --rm --cpus 2 --memory 3g --user "$(id -u):$(id -g)" -v "$host:/src" -w /src "$image" \
 		bash test/tla/run.sh --inside "$@"
 fi

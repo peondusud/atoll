@@ -65,11 +65,12 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - GoReleaser v2.20.2 or later once two weeks old.
 - **confirm**: the choices made alone, first the sample configuration outside `/etc`.
 
-## The two flaws TLC found, 2026-11-19 (DONE.md)
+## After the two flaws TLC found, fixed on 2026-11-19 (DONE.md)
 
-- **decision**: the remedy of flaw 1, a write into a new replica before its row is written recorded as verified (§14.2, §17.2): the row takes what the part was when verified, or another (`conformance/models/README.md`).
-- **decision**: the remedy of flaw 2, a job running dropped while its operation is planned (§13.4, §14.1, §15.12): §14.1 everywhere, or a reprise that sends such a copy to the trash.
-- Once a remedy lands: a test that fails first, its scenario moved from `conformance/models/flaws/` to `conformance/scenarios/`, its `Flaw…cfg` expecting `pass`, its name out of `Fixes`.
+- **decision**: the limit of flaw 1's fix, a write that keeps size, times, mode and owner and moves only the change time: (a) a reprise that finds another change time than the verified one records the copy unverified (it stops `balance --move-originals` there), or (b) the job records the change time right after the rename, one more commit a copy.
+- A file renamed while a job runs reappears at its old name on that disk once the reprise finishes the copy: the reprise could take `first_seen_ns` from the operation's `started_ns`.
+- `atoll scan` and `conflicts resolve` still touch a running job; `restore --to` records the look after its syncs.
+- Run in qemu the loop-device tests these two fixes touch: replicate, a device failing during a copy, copies at once, precision, mode, owner, break glass, the failed mount; ntfs-3g first.
 - The copy state `unavailable`: say what sets it, or say in §4 that nothing does.
 - Next TLA+ models, by risk: the view's journal and its parts written in parallel, renames and folders, the SSD cache's transfer, the link guard, copies at once. tla2tools 1.8.0 once released.
 
