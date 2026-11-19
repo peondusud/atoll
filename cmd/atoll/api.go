@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -52,10 +53,14 @@ type apiServer struct {
 	apply bool
 	// told tells the daemon of an answer recorded, as SIGHUP would, so that its pass takes it at once.
 	told func()
+	// uid and gid are the account and the group the daemon runs as: with root's, those whose token file an answer
+	// over TCP takes (tokenDoubts).
+	uid, gid uint32
 }
 
 func newAPIServer(c *config.Config, m disks.Machine, log *slog.Logger, rec *metrics.Recorder) *apiServer {
 	a := &apiServer{machine: m, log: log, metrics: rec, reading: make(chan struct{}, 1)}
+	a.uid, a.gid = uint32(os.Geteuid()), uint32(os.Getegid()) //nolint:gosec // an account's number, never negative on Linux
 	a.current.Store(c)
 	return a
 }
@@ -205,11 +210,11 @@ func send(w http.ResponseWriter, status int, v any) {
 
 // withToken asks every request for the token api.token_file holds, read again each time, so that a new one takes
 // effect at once (specs.md §25.1). Without it, or with another, the answer is 401 with nothing more. A request let
-// through knows whether other accounts may read that file (looseToken).
+// through carries whose that file is and its mode, which an answer to a guard looks at (tokenRefusal).
 func (a *apiServer) withToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		file, _ := a.current.Load().Effective()["api.token_file"].(string)
-		want, loose, err := readToken(file)
+		want, owner, err := readToken(file)
 		got, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if err != nil || want == "" || !bearer || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 			if err != nil {
@@ -219,30 +224,84 @@ func (a *apiServer) withToken(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), looseTokenKey{}, loose)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), tokenFileKey{}, tokenFile{path: file, owner: owner})))
 	})
 }
 
-// looseTokenKey marks a request that came with a token from a file other accounts may read.
-type looseTokenKey struct{}
+// tokenFileKey marks a request that came over TCP, with the token file it came with.
+type tokenFileKey struct{}
 
-// looseToken says that a request came over TCP with a token from a file other accounts may read: any account of the
-// machine may then send it, and it answers questions only (specs.md §25.1).
-func looseToken(ctx context.Context) bool {
-	loose, _ := ctx.Value(looseTokenKey{}).(bool)
-	return loose
+// tokenFile is the token file a request over TCP came with: its path, and whose the file read was, with its mode.
+type tokenFile struct {
+	path  string
+	owner fsx.Owner
 }
 
-// readToken reads a token file, its last line break left out, and says whether other accounts may read it.
-func readToken(file string) (token string, othersMayRead bool, err error) {
-	if file == "" {
-		return "", false, errors.New("no token file")
+// tokenRefusal says why an answer to a guard that came over TCP cannot be taken with the token file it came with, ""
+// when it can, or when it came over the socket (specs.md §25.1): any account that could set the token could send it.
+func (a *apiServer) tokenRefusal(ctx context.Context) string {
+	t, overTCP := ctx.Value(tokenFileKey{}).(tokenFile)
+	if !overTCP {
+		return ""
 	}
-	data, othersMayRead, err := fsx.ReadSecretFile(file, apiMaxToken)
+	folders, err := fsx.SecretFolders(t.path)
+	doubts := tokenDoubts(t.owner, folders, a.uid, a.gid)
 	if err != nil {
-		return "", false, fmt.Errorf("token: %w", err)
+		doubts = append(doubts, "the folders on the way to api.token_file cannot be looked at: "+err.Error())
 	}
-	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), othersMayRead, nil
+	if len(doubts) == 0 {
+		return ""
+	}
+	return "an answer over TCP takes a token file that only root or the account the daemon runs as can change, and other " +
+		"accounts cannot read: " + strings.Join(doubts, "; ")
+}
+
+// tokenDoubts says why a token file cannot be taken for an answer to a guard, each reason in a fixed order, and
+// nothing when it can (specs.md §25.1): the file must belong to root or to the account the daemon runs as (uid), with
+// no write for its group or other accounts and no read for other accounts; and each folder that holds its name, or
+// the name of a symbolic link on the way to it, must belong to root or that account, with no write for other
+// accounts, sticky or not, and none for its group unless that group is root's or the daemon's own (gid). Any account
+// that could write either could set the token it then sends. Its group may read it: Prometheus's, say.
+func tokenDoubts(file fsx.Owner, folders []fsx.Folder, uid, gid uint32) []string {
+	ours := func(id uint32) bool { return id == 0 || id == uid }
+	var out []string
+	if !ours(file.UID) {
+		out = append(out, fmt.Sprintf("api.token_file belongs to the account %d, neither root nor the one the daemon runs as (chown root)", file.UID))
+	}
+	perm := file.Mode.Perm()
+	if perm&0o020 != 0 {
+		out = append(out, "its group may write api.token_file (chmod g-w)")
+	}
+	if perm&0o004 != 0 {
+		out = append(out, "other accounts may read api.token_file (chmod o-r)")
+	}
+	if perm&0o002 != 0 {
+		out = append(out, "other accounts may write api.token_file (chmod o-w)")
+	}
+	for _, f := range folders {
+		if !ours(f.UID) {
+			out = append(out, fmt.Sprintf("the folder %s belongs to the account %d, neither root nor the one the daemon runs as (chown root)", f.Path, f.UID))
+		}
+		if f.Mode.Perm()&0o002 != 0 {
+			out = append(out, fmt.Sprintf("other accounts may write the folder %s (chmod o-w)", f.Path))
+		}
+		if f.Mode.Perm()&0o020 != 0 && f.GID != 0 && f.GID != gid {
+			out = append(out, fmt.Sprintf("the group %d may write the folder %s, neither root's nor the daemon's (chmod g-w)", f.GID, f.Path))
+		}
+	}
+	return out
+}
+
+// readToken reads a token file, its last line break left out, and gives whose the file it read is, with its mode.
+func readToken(file string) (token string, owner fsx.Owner, err error) {
+	if file == "" {
+		return "", fsx.Owner{}, errors.New("no token file")
+	}
+	data, owner, err := fsx.ReadSecretFile(file, apiMaxToken)
+	if err != nil {
+		return "", fsx.Owner{}, fmt.Errorf("token: %w", err)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), owner, nil
 }
 
 // httpServer is a server with the limits of specs.md §25.1.

@@ -18,7 +18,7 @@ servers:
     description: >-
       HTTP over TCP on api.listen, a loopback address or one of the Tailscale network (specs.md §29.5). Every request
       carries the Bearer token api.token_file holds, and an answer to a guard takes one that other accounts of the
-      machine cannot read.
+      machine can neither read nor set.
     variables:
       listen:
         default: 127.0.0.1:7341
@@ -156,8 +156,11 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
           description: >-
-            Over TCP, an answer with yes when other accounts of the machine can read api.token_file: any of them could
-            send it. A dry run is answered.
+            Over TCP, an answer with yes when another account of the machine could read or set the token: api.token_file
+            belongs to neither root nor the account the daemon runs as, its group or other accounts may write it, other
+            accounts may read it, or a folder that holds its name, or the name of a link on the way to it, belongs to
+            another account, or other accounts, or a group neither root's nor the daemon's, may write it. The error
+            says each reason. A dry run is answered.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
