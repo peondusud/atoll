@@ -220,6 +220,15 @@ func mediaBrowser(t *testing.T, kind, base, authHeader string) (string, func(con
 		}
 		return files, nil
 	}
+	// The scan the wizard starts as it completes may still run as the library is made: Jellyfin 12.4 leaves the new
+	// library out of it, and drops the scan the library's creation asks for. Ask again until the seed is listed.
+	waitFor(t, "the library lists its seed", settle, func(ctx context.Context) (bool, error) {
+		files, err := list(ctx)
+		if err != nil || slices.Contains(files, notify.Seen(viewMount, seed(kind), pathMap)) {
+			return err == nil, err
+		}
+		return false, c.do(ctx, http.MethodPost, "/Library/Refresh", nil, nil)
+	})
 	return file, list
 }
 
