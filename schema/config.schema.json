@@ -151,10 +151,24 @@
           "$ref": "#/$defs/window"
         },
         "max_parallel_per_disk": {
+          "description": "Copies at once that read or write each disk, whatever its kind. Left out: max_parallel_per_hdd or max_parallel_per_ssd, by the disk's kind (specs.md §14).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "max_parallel_per_hdd": {
+          "description": "Copies at once that read or write a disk with a spindle, or whose kind is unknown, when max_parallel_per_disk is left out.",
           "type": "integer",
           "minimum": 1,
           "maximum": 16,
           "default": 1
+        },
+        "max_parallel_per_ssd": {
+          "description": "Copies at once that read or write a disk with no spindle under it, a SATA SSD or an NVMe drive, when max_parallel_per_disk is left out.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 4
         }
       }
     },

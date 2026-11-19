@@ -147,6 +147,8 @@ type replicator struct {
 	position map[string]int
 	// force runs the copies at the disk's normal I/O priority (specs.md §14).
 	force bool
+	// on is the session as the copies under way share it, while runAll runs them.
+	on *sharedSession
 }
 
 func (r *replicator) positions(ctx context.Context) error {
@@ -206,26 +208,22 @@ func (r *replicator) give(item *ReplicateItem) error {
 	return r.each(item)
 }
 
-// runJobs runs every job of the files below the path, one at a time, in the order of their lines.
+// runJobs runs every job of the files below the path, several at once as their disks allow (specs.md §14), and lists
+// each in the order of their lines.
 func (r *replicator) runJobs(ctx context.Context, path string) error {
 	list, err := catalog.ReplicateJobs(ctx, r.db, path)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
-	for i := range list {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("replicate: %w", err)
-		}
-		job := &list[i]
-		outcome, err := r.run(ctx, job)
-		if err != nil {
-			return err
-		}
-		if err := r.give(&ReplicateItem{Path: job.Path, Disk: job.Dst, Source: job.Src, Size: job.Size, Outcome: outcome}); err != nil {
-			return err
-		}
+	next := func(context.Context) ([]catalog.ReplicateJob, error) {
+		page := list
+		list = nil
+		return page, nil
 	}
-	return nil
+	never := func(*catalog.ReplicateJob) bool { return false }
+	return r.runAll(ctx, next, never, func(job *catalog.ReplicateJob, outcome string) error {
+		return r.give(&ReplicateItem{Path: job.Path, Disk: job.Dst, Source: job.Src, Size: job.Size, Outcome: outcome})
+	})
 }
 
 // errDropped says that a copy was dropped, with the outcome it ends with.
@@ -233,18 +231,10 @@ type errDropped struct{ outcome string }
 
 func (e *errDropped) Error() string { return e.outcome }
 
-// run runs one job as one operation create (specs.md §14.2). An error is one of the catalog, which ends
-// the command; what a disk answers is an outcome.
-func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string, error) {
-	// Still running after the reprise, a job's operation is one the reprise could not conclude: what is at
-	// its target may be its own copy, and nothing may be decided of it until that operation is (§17.2).
-	if job.State == catalog.JobRunning {
-		return trash.OutcomeIOError, nil
-	}
-	dst, src, outcome, err := r.handles(ctx, job)
-	if err != nil || outcome != "" {
-		return outcome, err
-	}
+// runOn runs one job as one operation create (specs.md §14.2), on the handles prepare opened. An error is one of the
+// catalog, which ends the command; what a disk answers is an outcome. Copies beside it may run at once: what it asks the
+// session goes through r.on, and what makes or removes a name on its target holds that disk's lock of names.
+func (r *replicator) runOn(ctx context.Context, job *catalog.ReplicateJob, dst, src *ops.Disk) (string, error) {
 	file, err := catalog.FileByID(ctx, r.db, job.FileID)
 	if err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
@@ -261,7 +251,7 @@ func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string
 	// found at the rename.
 	switch target, _, err := dst.LookAtTarget(job.Path); {
 	case errors.Is(err, ops.ErrDiskLost):
-		if err := r.session.Lose(ctx, job.Dst, err); err != nil {
+		if err := r.on.Lose(ctx, job.Dst, err); err != nil {
 			return "", fmt.Errorf("%w", err)
 		}
 		return trash.OutcomeIOError, nil
@@ -278,6 +268,11 @@ func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string
 		if outcome, err := r.lookAtSource(ctx, job, src, row); err != nil || outcome != "" {
 			return outcome, err
 		}
+	}
+	// A copy beside it lost one of its disks since it started: it is journaled nothing, as one that starts now would not
+	// run.
+	if lostSrc, lostDst := r.halted(job); lostSrc || lostDst {
+		return OutcomeUnavailable, nil
 	}
 	op, err := catalog.BeginCreate(ctx, r.db, job, r.now)
 	if err != nil {
@@ -327,7 +322,7 @@ func (r *replicator) lookAtSource(ctx context.Context, job *catalog.ReplicateJob
 		return trash.OutcomeChanged, nil
 	}
 	if fsx.IsDiskLost(err) || errors.Is(err, ops.ErrDiskLost) {
-		if err := r.session.Lose(ctx, job.Src, err); err != nil {
+		if err := r.on.Lose(ctx, job.Src, err); err != nil {
 			return "", fmt.Errorf("%w", err)
 		}
 	}
@@ -340,13 +335,13 @@ func (r *replicator) lookAtSource(ctx context.Context, job *catalog.ReplicateJob
 
 // handles opens the target and the source, or says why a job cannot run in this run.
 func (r *replicator) handles(ctx context.Context, job *catalog.ReplicateJob) (dst, src *ops.Disk, outcome string, err error) {
-	if !r.session.Writable(job.Dst) || !r.session.Readable(job.Src) {
+	if !r.on.Writable(job.Dst) || !r.on.Readable(job.Src) {
 		return nil, nil, OutcomeUnavailable, nil
 	}
-	if dst, err = r.session.Handle(ctx, job.Dst); err != nil || dst == nil {
+	if dst, err = r.on.Handle(ctx, job.Dst); err != nil || dst == nil {
 		return nil, nil, OutcomeUnavailable, err
 	}
-	if src, err = r.session.Handle(ctx, job.Src); err != nil || src == nil {
+	if src, err = r.on.Handle(ctx, job.Src); err != nil || src == nil {
 		return nil, nil, OutcomeUnavailable, err
 	}
 	return dst, src, "", nil
@@ -382,7 +377,7 @@ func (r *replicator) commit(ctx context.Context, job *catalog.ReplicateJob, op *
 	if err := catalog.FinishCreate(ctx, r.db, op, job, ops.NewCopyOf(&found), r.machine.Now()); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
 	}
-	r.session.MarkChanged()
+	r.on.MarkChanged()
 	return OutcomeReplicated, nil
 }
 
@@ -390,16 +385,19 @@ func (r *replicator) commit(ctx context.Context, job *catalog.ReplicateJob, op *
 // planned, for the reprise; anything else is resolved at once, as a reprise would (specs.md §14.2, §17.1).
 func (r *replicator) failed(ctx context.Context, job *catalog.ReplicateJob, op *catalog.Op, dst *ops.Disk, cause error) (string, error) {
 	if errors.Is(cause, ops.ErrDiskLost) {
-		if err := r.session.Lose(ctx, op.Disk, cause); err != nil {
+		if err := r.on.Lose(ctx, op.Disk, cause); err != nil {
 			return "", fmt.Errorf("%w", err)
 		}
 		return trash.OutcomeIOError, nil
 	}
 	slog.Warn("a copy did not happen", "disk", op.Disk, "op", op.ID, "error", cause)
+	names := r.on.namesOf(op.Disk)
+	names.Lock()
 	finished, err := dst.ResolveNow(ctx, r.db, op, r.now, 0)
+	names.Unlock()
 	switch {
 	case errors.Is(err, ops.ErrDiskLost):
-		if err := r.session.Lose(ctx, op.Disk, err); err != nil {
+		if err := r.on.Lose(ctx, op.Disk, err); err != nil {
 			return "", fmt.Errorf("%w", err)
 		}
 		return trash.OutcomeIOError, nil
@@ -408,7 +406,7 @@ func (r *replicator) failed(ctx context.Context, job *catalog.ReplicateJob, op *
 		slog.Warn("an operation stays planned", "disk", op.Disk, "op", op.ID, "error", err)
 		return trash.OutcomeIOError, nil //nolint:nilerr // what stays planned is the job's outcome
 	case finished:
-		r.session.MarkChanged()
+		r.on.MarkChanged()
 		return OutcomeReplicated, nil
 	}
 	// The reprise put the job back in the queue: this one counts as an attempt.
@@ -455,6 +453,14 @@ func (c *copier) copy(ctx context.Context, resume bool) (*ops.Moved, error) {
 		return nil, err
 	}
 	c.r.machine.Checkpoint("copied")
+	// A source a copy beside this one lost says nothing of the file now: it is read again by the next run. A target lost
+	// so is written no more.
+	switch lostSrc, lostDst := c.r.halted(c.job); {
+	case lostDst:
+		return nil, fmt.Errorf("%w: %w", ops.ErrDiskLost, errHalted)
+	case lostSrc:
+		return nil, c.sourceFailed(ctx, fmt.Errorf("%w: %w", ops.ErrDiskLost, errHalted))
+	}
 	switch still, err := c.src.SourceStill(c.row.Path, &read); {
 	case err != nil:
 		return nil, c.sourceFailed(ctx, err)
@@ -483,7 +489,7 @@ func (c *copier) copy(ctx context.Context, resume bool) (*ops.Moved, error) {
 // recorded: the copy goes on from the first chunk missing or wrong (specs.md §14).
 func (c *copier) openPart(ctx context.Context, resume bool) (*ops.Part, int, error) {
 	if resume {
-		part, err := c.dst.OpenPart(c.op)
+		part, err := c.openOrMake(c.dst.OpenPart)
 		switch {
 		case err == nil:
 			if err := catalog.SetCreateKey(ctx, c.r.db, c.op, strconv.FormatUint(part.Stat.Ino, 10)); err != nil {
@@ -504,7 +510,7 @@ func (c *copier) openPart(ctx context.Context, resume bool) (*ops.Part, int, err
 			return nil, 0, fmt.Errorf("%w: %w", errCatalog, err)
 		}
 	}
-	part, err := c.dst.MakePart(c.op)
+	part, err := c.openOrMake(c.dst.MakePart)
 	switch {
 	case err != nil && isNoRoom(err):
 		// No block or no inode left for the part, or for its folder: no room, as when a write to it finds none.
@@ -517,6 +523,14 @@ func (c *copier) openPart(ctx context.Context, resume bool) (*ops.Part, int, err
 		return nil, 0, fmt.Errorf("%w: %w", errCatalog, err)
 	}
 	return part, 0, nil
+}
+
+// openOrMake opens or makes the part with the target's lock of names held: tmp/ may be made then.
+func (c *copier) openOrMake(open func(*ops.Op) (*ops.Part, error)) (*ops.Part, error) {
+	names := c.r.on.namesOf(c.op.Disk)
+	names.Lock()
+	defer names.Unlock()
+	return open(c.op)
 }
 
 // kept re-reads a part chunk by chunk against the hashes recorded, and gives the first chunk to copy.
@@ -566,6 +580,12 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 	for idx := start; int64(idx)*integrity.ChunkSize < size; idx++ {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("replicate: %w", err)
+		}
+		switch lostSrc, lostDst := c.r.halted(c.job); {
+		case lostDst:
+			return fmt.Errorf("%w: %w", ops.ErrDiskLost, errHalted)
+		case lostSrc:
+			return c.sourceFailed(ctx, fmt.Errorf("%w: %w", ops.ErrDiskLost, errHalted))
 		}
 		off := int64(idx) * integrity.ChunkSize
 		want := min(integrity.ChunkSize, size-off)
@@ -640,6 +660,9 @@ func (c *copier) verify(ctx context.Context, part *ops.Part, size int64) ([]byte
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("replicate: %w", err)
 		}
+		if _, lostDst := c.r.halted(c.job); lostDst {
+			return nil, fmt.Errorf("%w: %w", ops.ErrDiskLost, errHalted)
+		}
 		n, err := part.ReadAt(buf[:min(integrity.ChunkSize, size-off)], off)
 		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, classifyDisk(err)
@@ -665,6 +688,12 @@ func (c *copier) verify(ctx context.Context, part *ops.Part, size int64) ([]byte
 // place resolves the target and moves the part there: each missing parent made as an operation mkdir of
 // its own, with the mode and owner of the same folder on the source disk (specs.md §14.2).
 func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
+	names := c.r.on.namesOf(c.op.Disk)
+	names.Lock()
+	defer names.Unlock()
+	if _, lostDst := c.r.halted(c.job); lostDst {
+		return nil, fmt.Errorf("%w: %w", ops.ErrDiskLost, errHalted)
+	}
 	target, missing, err := c.dst.LookAtTarget(c.job.Path)
 	if err != nil {
 		return nil, err
@@ -767,7 +796,7 @@ func settleOf(c *config.Config, job *catalog.ReplicateJob) time.Duration {
 // lost for this run; the copy keeps its part for the job to resume.
 func (c *copier) sourceFailed(ctx context.Context, cause error) error {
 	if fsx.IsDiskLost(cause) || errors.Is(cause, ops.ErrDiskLost) {
-		if err := c.r.session.Lose(ctx, c.job.Src, cause); err != nil {
+		if err := c.r.on.Lose(ctx, c.job.Src, cause); err != nil {
 			return fmt.Errorf("%w", err)
 		}
 	}

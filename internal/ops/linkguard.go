@@ -43,18 +43,28 @@ type LinkEntry struct {
 // Links reads the links folder: each entry, and what it leads to, by name in byte order. A disk with no such folder
 // has none.
 func (d *Disk) Links() ([]LinkEntry, error) {
+	list, own, err := d.links()
+	if err == nil {
+		d.ownMu.Lock()
+		d.own = own
+		d.ownMu.Unlock()
+	}
+	return list, err
+}
+
+// links reads the links folder, and what leads to each inode.
+func (d *Disk) links() ([]LinkEntry, map[uint64][]int64, error) {
 	dir, err := d.open(d.linksPlace())
 	switch {
 	case fsx.IsAbsent(err):
-		d.own = map[uint64][]int64{}
-		return nil, nil
+		return nil, map[uint64][]int64{}, nil
 	case err != nil:
-		return nil, classify(err)
+		return nil, nil, classify(err)
 	}
 	defer dir.close()
 	names, err := dir.Names()
 	if err != nil {
-		return nil, classify(fmt.Errorf("list the links: %w", err))
+		return nil, nil, classify(fmt.Errorf("list the links: %w", err))
 	}
 	list := make([]LinkEntry, 0, len(names))
 	own := make(map[uint64][]int64, len(names))
@@ -64,16 +74,15 @@ func (d *Disk) Links() ([]LinkEntry, error) {
 		case fsx.IsAbsent(err):
 			continue
 		case err != nil:
-			return nil, classify(err)
+			return nil, nil, classify(err)
 		}
 		list = append(list, LinkEntry{Name: name, File: st.Kind == fsx.KindFile, Ino: st.Ino, Size: st.Size})
 		if id, ok := layout.LinkID(name); ok && st.Kind == fsx.KindFile {
 			own[st.Ino] = append(own[st.Ino], id)
 		}
 	}
-	d.own = own
 	slices.SortFunc(list, func(a, b LinkEntry) int { return cmp.Compare(a.Name, b.Name) })
-	return list, nil
+	return list, own, nil
 }
 
 // HighestLinkID gives the highest file id the links folder names, 0 when there is none: a new catalog starts its files
@@ -103,17 +112,23 @@ func (d *Disk) HighestLinkID() (int64, error) {
 // ownLinks says how many links of the guard lead to an inode: names of Atoll's, which no count of a file's names
 // includes (specs.md §17). The links folder is read once a session; the guard's own operations keep the count.
 func (d *Disk) ownLinks(ino uint64) []int64 {
+	d.ownMu.Lock()
+	defer d.ownMu.Unlock()
 	if d.own == nil {
-		if _, err := d.Links(); err != nil {
+		_, own, err := d.links()
+		if err != nil {
 			slog.Warn("the links folder cannot be read: link counts include the guard's", "disk", d.ID, "error", err)
-			d.own = map[uint64][]int64{}
+			own = map[uint64][]int64{}
 		}
+		d.own = own
 	}
-	return d.own[ino]
+	return slices.Clone(d.own[ino])
 }
 
 // forget says that a link of the guard is gone.
 func (d *Disk) forget(ino uint64, fileID int64) {
+	d.ownMu.Lock()
+	defer d.ownMu.Unlock()
 	if d.own != nil {
 		d.own[ino] = slices.DeleteFunc(d.own[ino], func(id int64) bool { return id == fileID })
 	}
@@ -274,9 +289,11 @@ func (d *Disk) MakeLink(op *Op, links *LinksFolder) (*catalog.Links, error) {
 	if err := syncEntry(links.dir.Dir, name); err != nil {
 		return nil, err
 	}
+	d.ownMu.Lock()
 	if d.own != nil {
 		d.own[st.Ino] = append(d.own[st.Ino], op.Link)
 	}
+	d.ownMu.Unlock()
 	// Its own row records the change time too, which the link moved: what it had just before says whether it holds a
 	// change nobody has looked at.
 	d.withoutOwn(&st)

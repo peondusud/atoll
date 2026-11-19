@@ -150,7 +150,13 @@ func newBench(t *testing.T, ids ...string) *bench {
 // newBenchWith is newBench with more of the configuration: tables that come after the disks.
 func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 	t.Helper()
-	top := t.TempDir()
+	return benchIn(t, t.TempDir(), more, true, ids...)
+}
+
+// benchIn is newBenchWith at a folder: a new pool, or with create false the one a bench made there, as a process that
+// stands for a crash opens it again.
+func benchIn(t *testing.T, top, more string, create bool, ids ...string) *bench {
+	t.Helper()
 	var text strings.Builder
 	fmt.Fprintf(&text, "pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(top, "catalog.db"), filepath.Join(top, "pool"))
 	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, walkFail: map[string]func(string, string) error{}, bare: map[string]string{}, pastCache: map[string]int{}, unread: map[string]bool{}, ro: map[string]bool{},
@@ -176,8 +182,10 @@ func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 	}
 	b.config = c
 	file := filepath.Join(top, "catalog.db")
-	if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
-		t.Fatal(err)
+	if create {
+		if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	db, err := catalog.OpenPool(t.Context(), file, "p")
 	if err != nil {
