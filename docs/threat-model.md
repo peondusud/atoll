@@ -1,6 +1,6 @@
 # Threat model
 
-What could go wrong with Atoll's security, who could make it go wrong, what Atoll already does about it, and what is left. It covers the Go version on Linux, phases 1 to 2b (`specs.md` §28), as of 2026-11-19. It is a working document, not a contract: `specs.md` stays the source of truth, and the gaps at the end are proposals for the maintainer, none of them made. It was written from the code, the units in `deploy/`, the workflows and `specs.md`, read on that date; what could not be checked says so.
+What could go wrong with Atoll's security, who could make it go wrong, what Atoll already does about it, and what is left. It covers the Go version on Linux, phases 1 to 2b (`specs.md` §28), as of 2026-11-19. It is a working document, not a contract: `specs.md` stays the source of truth, and the gaps at the end are proposals for the maintainer, and those he decided and that were made since say so. It was written from the code, the units in `deploy/`, the workflows and `specs.md`, read on that date; what could not be checked says so.
 
 ## What Atoll is, for this model
 
