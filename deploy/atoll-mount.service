@@ -14,19 +14,47 @@ Type=notify
 ExecStart=/usr/local/bin/atoll mount
 User=atoll
 Group=atoll
-# Reading a device's head to confirm a disk (specs.md §10).
-SupplementaryGroups=disk
+# No supplementary group: CAP_DAC_READ_SEARCH reads a device's head to confirm a disk (specs.md §10) whatever the
+# device's mode, and the group disk, which writes every block device, gave nothing more.
 # mount(2) of the view takes CAP_SYS_ADMIN, and /dev/fuse open to the user, as udev's mode 0666 has it: fusermount,
 # setuid, gains nothing under NoNewPrivileges. Each read opens a copy as it is on its disk, whatever its mode:
 # CAP_DAC_READ_SEARCH. The view that writes does so on a user's behalf, where the library's owners allow the dedicated
 # user nothing: CAP_DAC_OVERRIDE; it gives what it makes the owner who asked, CAP_CHOWN, and changes the mode and times
-# of what that user owns, CAP_FOWNER. The kernel checks each user against what the view presents (default_permissions).
-AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+# of what that user owns, CAP_FOWNER, setgid included where the group is not atoll's, CAP_FSETID, as the kernel takes
+# it off otherwise without a word (measured). The kernel checks each user against what the view presents
+# (default_permissions), and takes setgid off a mode a user may not give before the view sees it.
+AmbientCapabilities=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_FSETID
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_FSETID
 NoNewPrivileges=yes
-# No PrivateTmp, ProtectHome, ProtectSystem or other setting that gives the service a mount namespace of its own: in
-# one, the view would be mounted for this service alone, and no media server would see it (systemd.exec(5)). A test
-# forbids them.
+# The calls the view makes, measured in qemu on Linux 6.12 and 7.3 (test/loopdev/units_test.go, which starts this unit
+# as it is, a call out of the list ending the process): systemd's set for system services, and @mount for its own
+# mount(2) and umount2(2). Any other call fails with EPERM, as systemd's own units have it.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service @mount
+SystemCallErrorNumber=EPERM
+# sd_notify; OTLP over IPv4 and IPv6, when the log is sent there (specs.md §23.2); netlink, through which Go reads the
+# machine's addresses.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+# A filter of calls, and a namespace of its own for the host's name alone: no mount namespace and no device policy
+# (measured, as above).
+ProtectClock=yes
+ProtectHostname=yes
+# The view gives what it makes the mode asked for, and each folder made on the way the mode the view presents of it,
+# whatever the mask; what it makes with no mode to copy, its folders of the trash, is closed to other accounts.
+UMask=0027
+# Left out, as each breaks what the view does:
+# - RestrictSUIDSGID: a user may make a file or a folder setuid or setgid through the view that writes, as on a disk,
+#   and a folder made 2775, the mode openmediavault gives shared folders, takes setgid from its mode (specs.md §21.2).
+# - DevicePolicy, DeviceAllow: systemd reads the device groups such a list names once, when the unit starts, and a
+#   list would refuse the confirmation of a disk whose driver loads after that.
+# No PrivateTmp, ProtectHome, ProtectSystem, ProtectKernelTunables, ProtectKernelModules, ProtectKernelLogs,
+# ProtectControlGroups, PrivateDevices or other setting that gives the service a mount namespace of its own: in one,
+# the view would be mounted for this service alone, and no media server would see it (systemd.exec(5)). A test
+# forbids them, and one in qemu checks that the view is mounted in the host's mount namespace.
 # A stop unmounts the view; a view still read from is detached, and what is open there fails.
 TimeoutStopSec=30s
 Restart=on-failure

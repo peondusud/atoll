@@ -111,7 +111,7 @@ func TestReadonlyMount(t *testing.T) {
 }
 
 // mountCapabilities are those deploy/atoll-mount.service gives the dedicated user, and no others.
-const mountCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown,+fowner"
+const mountCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown,+fowner,+fsetid"
 
 // childEnv names the configuration TestReadonlyMountChild serves the view of, at the point childPointEnv names.
 const (
@@ -120,9 +120,9 @@ const (
 )
 
 // TestReadonlyMountAsTheUnit: the view served as deploy/atoll-mount.service serves it, as another account than root,
-// with the group disk, CAP_SYS_ADMIN and CAP_DAC_READ_SEARCH alone, and no new privileges. It confirms the disks,
-// mounts by mount(2), and reads a copy only root may read for root; the kernel refuses that file to another account
-// and gives it the others, as the view presents them. SIGTERM unmounts it, with exit 0.
+// with no supplementary group, the unit's capabilities alone, and no new privileges. It confirms the disks, reading
+// their devices, mounts by mount(2), and reads a copy only root may read for root; the kernel refuses that file to
+// another account and gives it the others, as the view presents them. SIGTERM unmounts it, with exit 0.
 func TestReadonlyMountAsTheUnit(t *testing.T) {
 	needRoot(t)
 	if _, err := exec.LookPath("setpriv"); err != nil {
@@ -151,7 +151,7 @@ func TestReadonlyMountAsTheUnit(t *testing.T) {
 	mustDo(t, os.Chmod(point, 0o755))
 	t.Cleanup(func() { _ = os.Remove(point) })
 
-	unit := []string{"setpriv", "--reuid=990", "--regid=990", "--groups=6", "--no-new-privs",
+	unit := []string{"setpriv", "--reuid=990", "--regid=990", "--clear-groups", "--no-new-privs",
 		"--inh-caps=" + mountCapabilities, "--ambient-caps=" + mountCapabilities, "--bounding-set=" + mountCapabilities, "--"}
 	view := startView(t, b, point, unit)
 	view.mounted(t)

@@ -318,14 +318,14 @@ func TestDaemonRemountsAfterAReset(t *testing.T) {
 }
 
 // unitCapabilities are those deploy/atoll.service gives the dedicated user, and no others.
-const unitCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown,+fowner,+sys_rawio"
+const unitCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown,+fowner,+fsetid,+sys_rawio"
 
 // asTheUnit runs a command as the daemon's dedicated user runs it under deploy/atoll.service: another account than
-// root, the group disk, the unit's capabilities alone, ambient, and no new privileges, so that a setuid program gains
-// nothing. It gives what the command wrote, and its error.
+// root, with no supplementary group, the unit's capabilities alone, ambient, and no new privileges, so that a setuid
+// program gains nothing. It gives what the command wrote, and its error.
 func asTheUnit(t *testing.T, name string, args ...string) (string, error) {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), "setpriv", append([]string{"--reuid=990", "--regid=990", "--groups=6", "--no-new-privs",
+	cmd := exec.CommandContext(t.Context(), "setpriv", append([]string{"--reuid=990", "--regid=990", "--clear-groups", "--no-new-privs",
 		"--inh-caps=" + unitCapabilities, "--ambient-caps=" + unitCapabilities, "--bounding-set=" + unitCapabilities, "--", name}, args...)...)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err //nolint:wrapcheck // what the command said is the test's to report
