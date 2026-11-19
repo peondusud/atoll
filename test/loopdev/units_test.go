@@ -21,6 +21,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/names"
+	"github.com/peondusud/atoll/internal/vectors"
 	"github.com/peondusud/atoll/internal/view"
 	"github.com/peondusud/atoll/internal/view/fusefs"
 )
@@ -331,10 +332,11 @@ func ownerAndMode(t *testing.T, path string) string {
 // included, and modes and owners as they are; it answers on its socket, of mode 0660; it reads the configuration again
 // on systemctl reload, through the unit's own kill; it sets mergerfs's branches when the disk goes and comes back; it
 // remounts the disk through /etc/fstab when its device comes back under another name, as after a USB reset, running
-// umount and mount, and mount.ntfs-3g for NTFS (§15.13); it confirms every disk by reading its device, and asks the
-// whole disk below a mount, a SCSI disk below a partition and device-mapper, or a loop device, whether it spins, through
-// SG_IO (§10); it runs smartctl (§23); and it stops with exit 0 on systemctl stop. Nothing it ran was ended by its
-// filter.
+// umount and mount, and mount.ntfs-3g for NTFS, itself, as the guest has no system bus here through which systemctl
+// would reach systemd (§15.13; TestTheRemountUnderSystemd has one); it confirms every disk by reading its device, and
+// asks the whole disk below a mount, a SCSI disk below a partition and device-mapper, or a loop device, whether it
+// spins, through SG_IO (§10); it runs smartctl (§23); and it stops with exit 0 on systemctl stop. Nothing it ran was
+// ended by its filter.
 func TestTheDaemonUnderSystemd(t *testing.T) {
 	needSystemd(t)
 	needMergerfs(t)
@@ -504,6 +506,258 @@ func TestTheDaemonUnderSystemd(t *testing.T) {
 				t.Errorf("once the daemon stopped, %s holds %q", at, source)
 			}
 		})
+	}
+}
+
+// polkitRule is where the .deb installs deploy/50-atoll.rules (.goreleaser.yaml).
+const polkitRule = "/usr/share/polkit-1/rules.d/50-atoll.rules"
+
+// machineServices starts, until the test ends, what a machine runs and the guest leaves out with sysinit.target: the
+// system bus, through which systemctl reaches systemd as any account but root; polkit, which systemd asks whether
+// such an account may start a unit; and udev, whose devices systemd waits for before it mounts one. With rule, polkit
+// has Atoll's rule, where and as the .deb installs it. Each unit that would pull sysinit.target in gets a drop-in that
+// keeps it out, as installUnit's does.
+func machineServices(t *testing.T, rule bool) {
+	t.Helper()
+	for _, name := range []string{"dbus.socket", "dbus.service", "polkit.service"} {
+		dropin := filepath.Join("/run/systemd/system", name+".d")
+		mustDo(t, os.MkdirAll(dropin, 0o755))
+		mustDo(t, os.WriteFile(filepath.Join(dropin, "test.conf"), []byte("[Unit]\nDefaultDependencies=no\n"), 0o644))
+		t.Cleanup(func() { _ = os.RemoveAll(dropin) })
+	}
+	_ = os.Remove(polkitRule)
+	if rule {
+		data, err := os.ReadFile(filepath.Join("..", "..", "deploy", "50-atoll.rules"))
+		mustDo(t, err)
+		mustDo(t, os.MkdirAll(filepath.Dir(polkitRule), 0o755))
+		mustDo(t, os.WriteFile(polkitRule, data, 0o644))
+		t.Cleanup(func() { _ = os.Remove(polkitRule) })
+	}
+	must(t, "systemctl", "daemon-reload")
+	services := []string{"dbus.socket", "dbus.service", "polkit.service", "systemd-udevd.service"}
+	t.Cleanup(func() {
+		_ = exec.CommandContext(context.Background(), "systemctl", append([]string{"stop", "systemd-udevd-control.socket",
+			"systemd-udevd-kernel.socket"}, services...)...).Run()
+		// libdevmapper takes udev for running while its control socket is there, and would wait for it forever.
+		_ = os.Remove("/run/udev/control")
+		_ = exec.CommandContext(context.Background(), "systemctl", "daemon-reload").Run()
+	})
+	if err := attempt(t, "systemctl", append([]string{"start"}, services...)...); err != nil {
+		for _, s := range services {
+			out, _ := exec.CommandContext(t.Context(), "systemctl", "status", "--no-pager", "-l", s).CombinedOutput()
+			t.Logf("%s", out)
+		}
+		t.Fatal(err)
+	}
+	// systemd joins the bus once it is up: atoll reads a unit through it, which takes no authorization.
+	waitFor(t, "systemd on the system bus", func() bool {
+		return attempt(t, "setpriv", "--reuid="+strconv.Itoa(unitUID), "--regid="+strconv.Itoa(unitUID), "--clear-groups", "--",
+			"systemctl", "show", "-p", "Version") == nil
+	})
+}
+
+// fusePIDs gives the processes whose command line names a path, as the FUSE process of a mount there does.
+func fusePIDs(t *testing.T, at string) []string {
+	t.Helper()
+	entries, err := os.ReadDir("/proc")
+	mustDo(t, err)
+	var pids []string
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		cmdline, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		if err == nil && slices.Contains(strings.Split(string(cmdline), "\x00"), at) {
+			pids = append(pids, e.Name())
+		}
+	}
+	return pids
+}
+
+// TestTheRemountUnderSystemd: the remount after a USB reset as a machine runs it (specs.md §15.13), deploy/atoll.service
+// started by systemd as it is, with the system bus, polkit and udev. With Atoll's polkit rule installed as the .deb
+// installs it, the daemon has systemd start the disk's mount unit once its device comes back under another name: the
+// disk is mounted again, an ntfs-3g disk's FUSE process belongs to the mount unit, and the disk stays mounted, and
+// readable, after systemctl stop atoll, a start, and systemctl restart atoll; atoll may not stop the unit. On ext4 too.
+// Without the rule, systemd refuses the start, the daemon mounts the disk itself and says why, as before 2026-11-19:
+// ntfs-3g's FUSE process is then the service's, and a stop of the daemon unmounts the disk. Nothing the daemon ran
+// was ended by its filter of calls.
+func TestTheRemountUnderSystemd(t *testing.T) {
+	needSystemd(t)
+	theAccount(t)
+	original, err := os.ReadFile("/etc/fstab")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.WriteFile("/etc/fstab", original, 0o644) })
+	for _, tc := range []struct {
+		name, driver, fstype string
+		fs                   names.Filesystem
+		rule                 bool
+	}{
+		{"ntfs-3g through its mount unit", "ntfs-3g", "ntfs-3g", names.NTFS, true},
+		{"ext4 through its mount unit", "", "ext4", names.Ext4, true},
+		{"ntfs-3g without the polkit rule", "ntfs-3g", "ntfs-3g", names.NTFS, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = exec.CommandContext(t.Context(), "dmesg", "-C").Run()
+			machineServices(t, tc.rule)
+			m := newMapped(t, tc.fs)
+			at := mountPoint(t)
+			mustDo(t, os.MkdirAll(at, 0o755))
+			openAbove(t, at)
+			if tc.driver == "ntfs-3g" && !tc.rule {
+				// mount.ntfs-3g, run by atoll, mounts only on a mount point atoll may write to (deploy/README.md).
+				mustDo(t, os.Chown(at, unitUID, unitUID))
+			}
+			mountVolume(t, m.volume, tc.driver, at)
+			renamed := m.name + "-again"
+			t.Cleanup(func() {
+				_ = exec.CommandContext(context.Background(), "umount", "-l", at).Run()
+				time.Sleep(200 * time.Millisecond)
+				_ = exec.CommandContext(context.Background(), "dmsetup", "remove", "-f", "--noudevsync", renamed).Run()
+			})
+			kept := newVolume(t, names.Ext4)
+			keep := mountPoint(t)
+			mountVolume(t, kept, "", keep)
+			mustDo(t, os.MkdirAll(filepath.Join(keep, "media"), 0o755))
+			write(t, at, "film.mkv", "a film")
+			film := filepath.Join(at, "media", "film.mkv")
+			readable := func() bool { data, err := os.ReadFile(film); return err == nil && string(data) == "a film" }
+			source := func() string {
+				out, _ := exec.CommandContext(t.Context(), "findmnt", "-n", "-o", "SOURCE", at).Output()
+				return strings.TrimSpace(string(out))
+			}
+			// No mergerfs at view.mount: the daemon sets no branch.
+			poolConfig(t, kept, keep, m.volume, at, "[defaults]\nsettle = \"0s\"\n[view]\nmount = "+
+				strconv.Quote(filepath.Join(t.TempDir(), "pool"))+"\n")
+			mustDo(t, os.WriteFile("/etc/fstab", append(slices.Clone(original), []byte("/dev/mapper/"+renamed+" "+at+" "+tc.fstype+" defaults 0 0\n")...), 0o644))
+			// installUnit has systemd read its units again, and its fstab generator make the unit of that entry.
+			u := installUnit(t, "atoll.service")
+			unit := must(t, "systemd-escape", "--path", "--suffix=mount", at)
+			t.Cleanup(func() {
+				if t.Failed() {
+					out, _ := exec.CommandContext(context.Background(), "systemctl", "status", "--no-pager", "-l", unit).CombinedOutput()
+					t.Logf("%s", out)
+					out, _ = exec.CommandContext(context.Background(), "systemctl", "list-units", "--all", "--no-pager", "*.device").CombinedOutput()
+					t.Logf("%s", out)
+				}
+			})
+			if got := must(t, "systemctl", "show", "-p", "SourcePath", "--value", unit); got != "/etc/fstab" {
+				t.Fatalf("%s comes from %q, not /etc/fstab", unit, got)
+			}
+			u.start()
+			u.checkRunsAsShipped()
+
+			// The device goes from under the mount and comes back under another name, as after a USB reset; udev hears
+			// of it, as on a machine, and systemd then holds a device unit of that name.
+			must(t, "dmsetup", "rename", "--noudevsync", m.name, renamed)
+			must(t, "udevadm", "settle")
+			must(t, "dmsetup", "mknodes")
+			if _, err := os.Lstat("/dev/mapper/" + m.name); err == nil {
+				mustDo(t, os.Remove("/dev/mapper/"+m.name))
+			}
+			// A check every 30 s, as the unit has it.
+			for deadline := time.Now().Add(3 * time.Minute); source() != "/dev/mapper/"+renamed && time.Now().Before(deadline); {
+				time.Sleep(time.Second)
+			}
+			if got := source(); got != "/dev/mapper/"+renamed {
+				t.Fatalf("the disk was not mounted again by the daemon within 3 minutes: %q", got)
+			}
+			waitFor(t, "the disk readable once mounted again", readable)
+			said := u.said()
+			for _, line := range strings.Split(said, "\n") {
+				if strings.Contains(line, "remount") {
+					t.Logf("%s", line)
+				}
+			}
+			throughUnit := strings.Contains(said, strings.ReplaceAll(unit, `\`, `\\`))
+			fuse := fusePIDs(t, at)
+			if tc.driver == "ntfs-3g" && len(fuse) == 0 {
+				t.Errorf("no FUSE process serves %s", at)
+			}
+			if !tc.rule {
+				if n := strings.Count(said, "systemd refused to start the mount unit"); n != 1 {
+					t.Errorf("why the daemon mounted the disk itself, said %d times", n)
+				}
+				u.stop()
+				u.checkNothingRefused()
+				// The FUSE process was the service's: the stop ended it, and the disk with it (deploy/README.md).
+				if tc.driver == "ntfs-3g" {
+					waitFor(t, "the disk gone with the service", func() bool { return !readable() })
+					t.Logf("%s once the daemon stopped: %q", at, source())
+				}
+				return
+			}
+			if !throughUnit || strings.Contains(said, "the remount mounts the disk itself") {
+				t.Errorf("not remounted through %s", unit)
+			}
+			if got := must(t, "systemctl", "show", "-p", "ActiveState", "--value", unit); got != "active" {
+				t.Errorf("%s is %s", unit, got)
+			}
+			for _, pid := range fuse {
+				cgroup, err := os.ReadFile(filepath.Join("/proc", pid, "cgroup"))
+				mustDo(t, err)
+				if !strings.HasSuffix(strings.TrimSpace(string(cgroup)), "/"+unit) {
+					t.Errorf("the FUSE process %s is in %s, not in %s's", pid, strings.TrimSpace(string(cgroup)), unit)
+				}
+			}
+
+			// The service stops, starts, and restarts: the disk stays.
+			stays := func(after string) {
+				t.Helper()
+				if got := source(); got != "/dev/mapper/"+renamed || !readable() {
+					t.Errorf("after %s, %s holds %q, readable %v", after, at, got, readable())
+				}
+			}
+			u.stop()
+			u.checkNothingRefused()
+			time.Sleep(2 * time.Second)
+			stays("systemctl stop atoll")
+			u.start()
+			stays("systemctl start atoll")
+			must(t, "systemctl", "restart", u.name)
+			time.Sleep(2 * time.Second)
+			stays("systemctl restart atoll")
+			if got := u.show("ActiveState"); got != "active" {
+				t.Errorf("after systemctl restart: %s\n%s", got, u.said())
+			}
+			// The rule lets atoll start a mount unit, and nothing else.
+			if err := attempt(t, "setpriv", "--reuid="+strconv.Itoa(unitUID), "--regid="+strconv.Itoa(unitUID), "--clear-groups", "--",
+				"systemctl", "--no-ask-password", "stop", "--", unit); err == nil {
+				t.Errorf("atoll stopped %s", unit)
+			} else {
+				t.Logf("atoll's stop refused: %v", err)
+			}
+			stays("atoll's stop of the unit")
+			u.stop()
+			u.checkNothingRefused()
+		})
+	}
+}
+
+// Atoll's names of mount units are systemd's: each name of conformance/vectors/mount_unit.json is what this machine's
+// systemd-escape --path --suffix=mount writes (specs.md §15.13).
+func TestMountUnitNamesAreSystemds(t *testing.T) {
+	if _, err := exec.LookPath("systemd-escape"); err != nil {
+		if os.Getenv("ATOLL_QEMU") != "" {
+			t.Fatal("no systemd-escape in the qemu guest: test/qemu/run.sh installs systemd")
+		}
+		t.Skip("no systemd-escape")
+	}
+	type vector struct {
+		Path  string `json:"path"`
+		Unit  string `json:"unit"`
+		Error bool   `json:"error"`
+		Note  string `json:"note"`
+	}
+	for _, v := range vectors.Load[vector](t, "mount_unit.json") {
+		if v.Error {
+			continue
+		}
+		if got := must(t, "systemd-escape", "--path", "--suffix=mount", "--", v.Path); got != v.Unit {
+			t.Errorf("%q: systemd-escape writes %q, the vector %q", v.Path, got, v.Unit)
+		}
 	}
 }
 

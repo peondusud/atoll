@@ -42,10 +42,11 @@ echo "installing the guest's tools and Debian's kernel"
 # What the tests call, and what makes the initramfs. The kernel's package brings its modules. mergerfs brings
 # mount.mergerfs, which the break-glass test mounts through, as a boot would; iproute2 the loopback the init brings up;
 # systemd, PID 1 of the second run, smartmontools, whose smartctl the daemon runs there, and fdisk, whose sfdisk
-# partitions a SCSI disk there.
+# partitions a SCSI disk there; dbus, polkitd and udev, which the remount through systemd needs there, and which only
+# the test of it starts (test/loopdev/units_test.go).
 "${apt[@]}" install -y --no-install-recommends linux-image-amd64 ntfs-3g e2fsprogs xfsprogs btrfs-progs \
 	util-linux dmsetup procps kmod cpio curl ca-certificates zstd mergerfs iproute2 systemd smartmontools \
-	fdisk >/dev/null || exit 2
+	fdisk dbus polkitd udev >/dev/null || exit 2
 versions=(/usr/lib/modules/*)
 debian_version=${versions[0]##*/}
 echo "debian kernel: $debian_version"
