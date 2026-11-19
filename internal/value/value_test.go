@@ -9,14 +9,67 @@ import (
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
+// durationVector is a case of conformance/vectors/duration.json.
+type durationVector struct {
+	Input       string `json:"input"`
+	Nanoseconds *int64 `json:"nanoseconds"`
+	Error       bool   `json:"error"`
+	Note        string `json:"note"`
+}
+
+// listenVector is a case of conformance/vectors/listen.json.
+type listenVector struct {
+	Input   string  `json:"input"`
+	Address *string `json:"address"`
+	Port    *uint16 `json:"port"`
+	Error   bool    `json:"error"`
+	Note    string  `json:"note"`
+}
+
+// nutVector is a case of conformance/vectors/ups_address.json.
+type nutVector struct {
+	NUT   string  `json:"nut"`
+	UPS   *string `json:"ups"`
+	Host  *string `json:"host"`
+	Port  *int    `json:"port"`
+	Error bool    `json:"error"`
+	Note  string  `json:"note"`
+}
+
+// sizeVector is a case of conformance/vectors/size.json.
+type sizeVector struct {
+	Input string `json:"input"`
+	Bytes *int64 `json:"bytes"`
+	Error bool   `json:"error"`
+	Note  string `json:"note"`
+}
+
+// percentVector is a case of conformance/vectors/percent.json.
+type percentVector struct {
+	Input    string `json:"input"`
+	Of       *int64 `json:"of"`
+	Result   *int64 `json:"result"`
+	Count    *int64 `json:"count"`
+	Below    *bool  `json:"below"`
+	Exceeded *bool  `json:"exceeded"`
+	Error    bool   `json:"error"`
+	Note     string `json:"note"`
+}
+
+// windowVector is a case of conformance/vectors/window.json.
+type windowVector struct {
+	Input  string  `json:"input"`
+	Zone   *string `json:"zone"`
+	At     *string `json:"at"`
+	Inside *bool   `json:"inside"`
+	Next   *string `json:"next"`
+	Opened *string `json:"opened"`
+	Error  bool    `json:"error"`
+	Note   string  `json:"note"`
+}
+
 func TestDurationVectors(t *testing.T) {
-	type vector struct {
-		Input       string `json:"input"`
-		Nanoseconds *int64 `json:"nanoseconds"`
-		Error       bool   `json:"error"`
-		Note        string `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "duration.json") {
+	for _, v := range vectors.Load[durationVector](t, "duration.json") {
 		got, err := ParseDuration(v.Input)
 		switch {
 		case v.Error == (v.Nanoseconds != nil):
@@ -32,14 +85,7 @@ func TestDurationVectors(t *testing.T) {
 }
 
 func TestListenVectors(t *testing.T) {
-	type vector struct {
-		Input   string  `json:"input"`
-		Address *string `json:"address"`
-		Port    *uint16 `json:"port"`
-		Error   bool    `json:"error"`
-		Note    string  `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "listen.json") {
+	for _, v := range vectors.Load[listenVector](t, "listen.json") {
 		got, err := ParseListen(v.Input)
 		switch {
 		case v.Error == (v.Address != nil) || (v.Address == nil) != (v.Port == nil):
@@ -67,15 +113,7 @@ func TestListenVectors(t *testing.T) {
 }
 
 func TestNUTVectors(t *testing.T) {
-	type vector struct {
-		NUT   string  `json:"nut"`
-		UPS   *string `json:"ups"`
-		Host  *string `json:"host"`
-		Port  *int    `json:"port"`
-		Error bool    `json:"error"`
-		Note  string  `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "ups_address.json") {
+	for _, v := range vectors.Load[nutVector](t, "ups_address.json") {
 		got, err := ParseNUT(v.NUT)
 		switch {
 		case v.Error == (v.UPS != nil) || (v.UPS == nil) != (v.Host == nil) || (v.UPS == nil) != (v.Port == nil):
@@ -107,13 +145,7 @@ func TestFormatDuration(t *testing.T) {
 }
 
 func TestSizeVectors(t *testing.T) {
-	type vector struct {
-		Input string `json:"input"`
-		Bytes *int64 `json:"bytes"`
-		Error bool   `json:"error"`
-		Note  string `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "size.json") {
+	for _, v := range vectors.Load[sizeVector](t, "size.json") {
 		got, err := ParseSize(v.Input)
 		switch {
 		case v.Error == (v.Bytes != nil):
@@ -129,17 +161,7 @@ func TestSizeVectors(t *testing.T) {
 }
 
 func TestPercentVectors(t *testing.T) {
-	type vector struct {
-		Input    string `json:"input"`
-		Of       *int64 `json:"of"`
-		Result   *int64 `json:"result"`
-		Count    *int64 `json:"count"`
-		Below    *bool  `json:"below"`
-		Exceeded *bool  `json:"exceeded"`
-		Error    bool   `json:"error"`
-		Note     string `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "percent.json") {
+	for _, v := range vectors.Load[percentVector](t, "percent.json") {
 		if (v.Count == nil) != (v.Below == nil) || (v.Count == nil) != (v.Exceeded == nil) {
 			t.Errorf("vector %q: want count, below and exceeded together", v.Input)
 		}
@@ -169,17 +191,7 @@ func TestPercentVectors(t *testing.T) {
 }
 
 func TestWindowVectors(t *testing.T) {
-	type vector struct {
-		Input  string  `json:"input"`
-		Zone   *string `json:"zone"`
-		At     *string `json:"at"`
-		Inside *bool   `json:"inside"`
-		Next   *string `json:"next"`
-		Opened *string `json:"opened"`
-		Error  bool    `json:"error"`
-		Note   string  `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "window.json") {
+	for _, v := range vectors.Load[windowVector](t, "window.json") {
 		w, err := ParseWindow(v.Input)
 		switch {
 		case v.Error == (v.Inside != nil) || (v.At == nil) != (v.Inside == nil):

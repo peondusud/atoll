@@ -470,7 +470,7 @@ func onCache(f *File, d *Disk) bool {
 // checkTransfer checks a transfer job (specs.md §19): of a file leaving the cache, from a copy there that can go, once
 // the copies on data disks that count reach its level, each ok, verified, at its path and on a disk that can be read,
 // and with no other job of its file but transfers.
-func checkTransfer(t *testing.T, round int, f *File, j Job, disks map[string]*Disk, plan Plan) {
+func checkTransfer(t reporter, round int, f *File, j Job, disks map[string]*Disk, plan Plan) {
 	t.Helper()
 	if f.Cache != CacheTransfer || f.Leaving || f.Hold || j.Dst != "" {
 		t.Errorf("round %d: transfer %+v of a file that does not leave the cache: %+v", round, j, *f)
@@ -577,8 +577,17 @@ func TestPlanProperties(t *testing.T) {
 	}
 }
 
+// reporter is what the checks of a plan report to: a *testing.T, or a *rapid.T, which then shrinks the input that
+// failed (rapid_test.go).
+type reporter interface {
+	Helper()
+	Errorf(format string, args ...any)
+	Fatalf(format string, args ...any)
+	Fatal(args ...any)
+}
+
 // checkPlan checks what no plan may ever do (CLAUDE.md, "solver: property tests").
-func checkPlan(t *testing.T, round int, in Input, plan Plan) {
+func checkPlan(t reporter, round int, in Input, plan Plan) {
 	t.Helper()
 	disks := map[string]*Disk{}
 	for i := range in.Disks {
@@ -728,7 +737,7 @@ func checkPlan(t *testing.T, round int, in Input, plan Plan) {
 	}
 }
 
-func checkNames(t *testing.T, round int, path string, d *Disk) {
+func checkNames(t reporter, round int, path string, d *Disk) {
 	t.Helper()
 	problems, err := names.CheckPath(path, d.FS)
 	if err != nil || len(problems) > 0 {
@@ -741,7 +750,7 @@ func checkNames(t *testing.T, round int, path string, d *Disk) {
 }
 
 // checkCollisions replays the jobs on each NTFS disk: none may collide with a name there.
-func checkCollisions(t *testing.T, round int, in Input, plan Plan) {
+func checkCollisions(t reporter, round int, in Input, plan Plan) {
 	t.Helper()
 	for i := range in.Disks {
 		d := &in.Disks[i]
@@ -783,7 +792,7 @@ func checkCollisions(t *testing.T, round int, in Input, plan Plan) {
 
 // checkMarks checks the marks of one file: never beyond its level, and never away from
 // its last readable copy or its last readable user copy.
-func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Disk, placed int) {
+func checkMarks(t reporter, round int, f File, r *Result, disks map[string]*Disk, placed int) {
 	t.Helper()
 	counted, readable, readableUser := 0, 0, 0
 	surplusReadable, surplusUser := 0, 0
@@ -856,7 +865,7 @@ func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Di
 
 // checkStable feeds a plan back: with its jobs as pending copies, there is nothing to
 // add. A plan that kept finding more would move data for nothing.
-func checkStable(t *testing.T, round int, in Input, plan Plan) {
+func checkStable(t reporter, round int, in Input, plan Plan) {
 	t.Helper()
 	second, err := MakePlan(applied(in, plan, false))
 	if err != nil {

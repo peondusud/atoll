@@ -72,6 +72,12 @@ cover:
 mutation:
 	bash test/ci/mutation.sh $(PKG)
 
+# The fuzz targets (test/ci/fuzz.sh), each for FUZZTIME, 1m by default, one after the other, or the one PKG and TARGET
+# name, as .github/workflows/fuzz.yml runs each for longer every night. A failing input goes to bin/fuzz/ too.
+.PHONY: fuzz
+fuzz:
+	bash test/ci/fuzz.sh $(if $(TARGET),$(PKG) $(TARGET))
+
 # The conformance build holds code the delivered binary does not, so it gets a run of its own.
 lint:
 	$(GOLANGCI_LINT) run ./...
