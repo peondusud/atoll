@@ -79,31 +79,68 @@ func TestTheLinkGuardOnTheTypeNTFS(t *testing.T) {
 }
 
 // TestAForbiddenNameOnTheTypeNTFS pins what the type ntfs does with a name holding one of " * < > ?, which Atoll never
-// writes to NTFS (specs.md §15.8) but another program may, through mergerfs or on the disk itself: without windows_names
-// it answers ERANGE, and under errors=remount-ro, which Atoll asks of the type (§10), it then sets the whole volume
-// read-only, which a mount check reads as read-only-mount; with windows_names it answers EINVAL, and the volume stays
-// as it was (measured in the CI's qemu on Linux 7.3, 2026-11-19).
+// writes to NTFS (specs.md §15.8) but another program may, through mergerfs or on the disk itself, or ntfs-3g and
+// Windows may have written: without windows_names it creates such a name, then answers ERANGE to its removal, and under
+// errors=remount-ro, which Atoll asks of the type (§10), that sets the whole volume read-only, which a mount check reads
+// as read-only-mount. With windows_names the creation is refused with EINVAL; a name already there is measured too.
+// Found by GitHub's qemu job on Linux 7.3, 2026-11-19.
 func TestAForbiddenNameOnTheTypeNTFS(t *testing.T) {
 	needRoot(t)
-	for _, tc := range []struct {
-		name     string
-		opts     string
-		refused  syscall.Errno
-		readOnly bool
-	}{
-		{"default", "", syscall.ERANGE, true},
-		{"windows_names", ",windows_names", syscall.EINVAL, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := mountImage(t, 64, mkntfs, ntfsKernel(tc.opts))
-			_, err := os.Create(filepath.Join(dir, "a\"b"))
-			if !errors.Is(err, tc.refused) {
-				t.Errorf("creating a\"b: %v, want %v", err, tc.refused)
-			}
-			err = os.Mkdir(filepath.Join(dir, "after"), 0o755)
-			if got := errors.Is(err, syscall.EROFS); got != tc.readOnly {
-				t.Errorf("a folder made after it: %v, read-only %v", err, tc.readOnly)
-			}
-		})
+	const forbidden = "a\"b"
+	t.Run("default", func(t *testing.T) {
+		dir := mountImage(t, 64, mkntfs, ntfsKernel(""))
+		f, err := os.Create(filepath.Join(dir, forbidden))
+		mustDo(t, err)
+		mustDo(t, f.Close())
+		if err := os.Remove(filepath.Join(dir, forbidden)); !errors.Is(err, syscall.ERANGE) {
+			t.Errorf("removing %s: %v, want ERANGE", forbidden, err)
+		}
+		if err := os.Mkdir(filepath.Join(dir, "after"), 0o755); !errors.Is(err, syscall.EROFS) {
+			t.Errorf("a folder made after the removal: %v, want EROFS, the volume set read-only", err)
+		}
+	})
+	t.Run("windows_names", func(t *testing.T) {
+		dir := mountImage(t, 64, mkntfs, ntfsKernel(",windows_names"))
+		if _, err := os.Create(filepath.Join(dir, forbidden)); !errors.Is(err, syscall.EINVAL) {
+			t.Errorf("creating %s: %v, want EINVAL", forbidden, err)
+		}
+		if err := os.Mkdir(filepath.Join(dir, "after"), 0o755); err != nil {
+			t.Errorf("a folder made after it: %v", err)
+		}
+	})
+	t.Run("windows_names over a name there", func(t *testing.T) {
+		img, dir := ntfsImageHolding(t, forbidden)
+		mustDo(t, ntfsKernel(",windows_names")(img, dir))
+		t.Cleanup(func() { _ = syscall.Unmount(dir, 0) })
+		err := os.Remove(filepath.Join(dir, forbidden))
+		t.Logf("removing %s under windows_names: %v", forbidden, err)
+		if errors.Is(err, syscall.ERANGE) {
+			t.Errorf("removing %s: ERANGE, which sets the volume read-only", forbidden)
+		}
+		if err := os.Mkdir(filepath.Join(dir, "after"), 0o755); err != nil {
+			t.Errorf("a folder made after it: %v", err)
+		}
+	})
+}
+
+// ntfsImageHolding makes an NTFS image holding a file of that name, written by the type ntfs under errors=continue,
+// unmounted, and gives the image and an empty folder to mount it at.
+func ntfsImageHolding(t *testing.T, name string) (string, string) {
+	t.Helper()
+	work := t.TempDir()
+	img, dir := filepath.Join(work, "fs.img"), filepath.Join(work, "mnt")
+	mustDo(t, os.Mkdir(dir, 0o755))
+	f, err := os.Create(img)
+	mustDo(t, err)
+	mustDo(t, f.Truncate(64<<20))
+	mustDo(t, f.Close())
+	run(t, append(mkntfs, img)...)
+	if err := ntfsKernelNames("")(img, dir); err != nil {
+		t.Skipf("cannot mount: %v", err)
 	}
+	g, err := os.Create(filepath.Join(dir, name))
+	mustDo(t, err)
+	mustDo(t, g.Close())
+	mustDo(t, syscall.Unmount(dir, 0))
+	return img, dir
 }

@@ -4,9 +4,11 @@ package loopdev
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -79,7 +81,11 @@ func TestViewWritesInParallel(t *testing.T) {
 			if len(open) != 0 {
 				b.settle()
 				if open, err = catalog.OpenViewOps(t.Context(), b.db); err != nil || len(open) != 0 {
-					t.Errorf("not taken in: %+v, %v", open, err)
+					// What the catalog holds of the file, against what its disks hold, says which look did not take it in.
+					t.Errorf("not taken in: %+v, %v; the file %s; its copies %s; on v %v", open, err,
+						b.text("SELECT COALESCE((SELECT state || ' size ' || size || ' mtime ' || mtime_ns FROM files WHERE CAST(lpath AS TEXT) = 'New.mkv'), 'none')"),
+						b.text("SELECT COALESCE(group_concat(c.disk_id || ' ' || c.state || ' ' || c.created_by || ' size ' || COALESCE(c.size, -1) || ' mtime ' || COALESCE(c.mtime_ns, -1) || ' ctime ' || COALESCE(c.ctime_ns, -1) || ' key ' || COALESCE(c.file_key, ''), '; '), 'none') FROM copies c JOIN files f ON f.id = c.file_id WHERE CAST(f.lpath AS TEXT) = 'New.mkv'"),
+						statOf(filepath.Join(b.at, "media", "New.mkv")))
 				}
 			}
 
@@ -95,4 +101,13 @@ func TestViewWritesInParallel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// statOf says what a disk holds at a path, as a failure's message gives it: size, times and inode, or the error.
+func statOf(path string) string {
+	var st syscall.Stat_t
+	if err := syscall.Lstat(path, &st); err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("size %d mtime %d ctime %d ino %d", st.Size, st.Mtim.Nano(), st.Ctim.Nano(), st.Ino)
 }
