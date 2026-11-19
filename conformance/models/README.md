@@ -23,6 +23,7 @@ The first line of each `.cfg` says what TLC must find there: `\* expect: pass`, 
 | `*.cfg` | The instances TLC checks, each with what it expects. |
 | `flaws/` | A black-box scenario for each flaw, in the format of `../scenarios/README.md`, which fails until the flaw is fixed and then moves to `../scenarios/`. |
 | `fingerprints.json`, `fingerprints_test.go` | The SHA-256 of each section of `specs.md` the model formalizes, and the test that compares them (below). |
+| `states.json`, `states.md`, `states_test.go` | The statecharts of a disk's states and a copy's, each transition with the section of `specs.md` that says it and the past bugs it caused, by their entry of `DONE.md`; `states.md` is drawn from `states.json`, and the test keeps both equal to the closed lists of `schema/migrations/` and `specs.md` §4. They show that no transition enters the copy state `unavailable`. |
 
 ## The model
 
