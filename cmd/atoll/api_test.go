@@ -583,14 +583,16 @@ func TestTheUnitClosesTheCatalogsFolder(t *testing.T) {
 // No unit of deploy/ gives its service a mount namespace of its own: in one, what the service mounts stays its own,
 // and the host never sees it, whatever MountFlags says (systemd.exec(5)). The daemon's remount after a USB reset then
 // mounted the disk again for Atoll alone, mergerfs and the media servers keeping the dead mount, and atoll view's
-// mount would reach no one (specs.md §15.13, §21.2). Each of these settings makes such a namespace.
+// mount would reach no one (specs.md §15.13, §21.2). Each of these settings makes such a namespace. ProtectClock and
+// ProtectHostname make none, nor a device policy: measured with systemd 252 and 257, and in qemu, where
+// test/loopdev/units_test.go checks the mount namespace of each unit's process.
 func TestNoUnitKeepsItsMountsToItself(t *testing.T) {
 	units, err := filepath.Glob(filepath.Join("..", "..", "deploy", "*.service"))
 	if err != nil || len(units) == 0 {
 		t.Fatalf("units %v, %v", units, err)
 	}
 	namespacing := []string{"PrivateTmp", "PrivateMounts", "PrivateDevices", "ProtectHome", "ProtectSystem", "ProtectKernelTunables",
-		"ProtectKernelModules", "ProtectKernelLogs", "ProtectControlGroups", "ProtectClock", "ProtectProc", "ProcSubset", "ReadOnlyPaths",
+		"ProtectKernelModules", "ProtectKernelLogs", "ProtectControlGroups", "ProtectProc", "ProcSubset", "ReadOnlyPaths",
 		"ReadWritePaths", "InaccessiblePaths", "ExecPaths", "NoExecPaths", "TemporaryFileSystem", "BindPaths", "BindReadOnlyPaths",
 		"RootDirectory", "RootImage", "MountFlags", "MountAPIVFS", "PrivateNetwork", "PrivateIPC", "PrivateUsers", "NetworkNamespacePath"}
 	for _, unit := range units {
@@ -603,6 +605,51 @@ func TestNoUnitKeepsItsMountsToItself(t *testing.T) {
 			if ok && slices.Contains(namespacing, key) {
 				t.Errorf("%s: %q gives the service a mount namespace of its own", filepath.Base(unit), line)
 			}
+		}
+	}
+}
+
+// Each unit of deploy/ keeps the hardening measured in qemu, where test/loopdev/units_test.go starts them as they are
+// (docs/threat-model.md, G18): its filter of calls, its sockets, its namespaces and its mask. Neither gives its account
+// a supplementary group, which the capabilities make useless, nor refuses setuid and setgid, which a copy, and a
+// folder made 2775, take with the rest of their mode (specs.md §14), nor sets a device policy, which would refuse a disk
+// that comes back under another number.
+func TestTheUnitsAreHardened(t *testing.T) {
+	units, err := filepath.Glob(filepath.Join("..", "..", "deploy", "*.service"))
+	if err != nil || len(units) == 0 {
+		t.Fatalf("units %v, %v", units, err)
+	}
+	want := []string{"NoNewPrivileges=yes", "SystemCallArchitectures=native", "SystemCallErrorNumber=EPERM",
+		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK", "RestrictNamespaces=yes", "LockPersonality=yes",
+		"MemoryDenyWriteExecute=yes", "RestrictRealtime=yes", "ProtectClock=yes", "ProtectHostname=yes", "UMask=0027"}
+	refused := []string{"SupplementaryGroups", "RestrictSUIDSGID", "DevicePolicy", "DeviceAllow"}
+	for _, unit := range units {
+		data, err := os.ReadFile(unit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range want {
+			if !slices.Contains(lines, line) {
+				t.Errorf("%s has no line %q", filepath.Base(unit), line)
+			}
+		}
+		filters := 0
+		for _, line := range lines {
+			key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+			switch {
+			case !ok:
+			case slices.Contains(refused, key):
+				t.Errorf("%s: %q", filepath.Base(unit), line)
+			case key == "SystemCallFilter":
+				filters++
+				if !strings.HasPrefix(value, "@system-service @mount") {
+					t.Errorf("%s: %q, want systemd's set for services and @mount first", filepath.Base(unit), line)
+				}
+			}
+		}
+		if filters != 1 {
+			t.Errorf("%s has %d lines SystemCallFilter=, want 1", filepath.Base(unit), filters)
 		}
 	}
 }

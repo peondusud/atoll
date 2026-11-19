@@ -50,19 +50,21 @@ test-integration:
 test-loopdev:
 	$(GO) test -count=1 -tags loopdev ./test/...
 
-# What test-qemu boots: the loopdev tests, static, with what they read above their folder.
+# What test-qemu boots: the loopdev tests, static, with what they read above their folder; and atoll itself, which
+# deploy/'s units start in the guest's run under systemd.
 qemu-build:
 	rm -rf bin/qemu
 	mkdir -p bin/qemu/repo
 	CGO_ENABLED=0 $(GO) test -c -tags loopdev,memory.counters -o bin/qemu/loopdev.test ./test/loopdev
+	CGO_ENABLED=0 $(GO) build -trimpath -o bin/qemu/atoll ./cmd/atoll
 	cp go.mod bin/qemu/repo/
-	cp -r conformance bin/qemu/repo/
+	cp -r conformance deploy bin/qemu/repo/
 
 # test-loopdev as root in qemu, on Debian's kernel and a mainline one, with neither root nor ntfs3 on
 # the host: only Docker (test/qemu/README.md). QEMU_CACHE, a folder of the host, keeps the packages and
 # the kernel it downloads from one run to the next, as the CI's qemu job does.
 test-qemu: qemu-build
-	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e COUNT -e VERBOSE \
+	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e SYSTEMD_RUN -e COUNT -e VERBOSE \
 		$(if $(QEMU_CACHE),-v "$(abspath $(QEMU_CACHE)):/var/cache/atoll-qemu" -e CACHE=/var/cache/atoll-qemu) \
 		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
 

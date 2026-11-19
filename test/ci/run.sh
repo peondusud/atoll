@@ -9,8 +9,8 @@
 # REV is HEAD by default. Each job writes its log to bin/ci/<commit>/<job>.log. The exit code is 0
 # when every job passed, 1 when one failed, 2 when nothing could run. --report also posts each job to
 # GitHub as a commit status, local/<job>, which a pull request on that commit lists among its checks:
-# the commit must be pushed, and gh signed in. KERNELS, MAINLINE, RUN, COUNT and VERBOSE reach the qemu
-# job as they reach make test-qemu (test/qemu/README.md).
+# the commit must be pushed, and gh signed in. KERNELS, MAINLINE, RUN, SYSTEMD_RUN, COUNT and VERBOSE reach
+# the qemu job as they reach make test-qemu (test/qemu/README.md).
 set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
@@ -119,7 +119,7 @@ job_qemu() {
 	go_job qemu-build 'make qemu-build && cp -r bin/qemu/. /qemu/' -v "$built:/qemu" || return 2
 	local kvm=()
 	[ -e /dev/kvm ] && kvm=(--device /dev/kvm)
-	docker run --rm --name "$id-qemu" ${kvm[@]+"${kvm[@]}"} -e KERNELS -e MAINLINE -e RUN -e COUNT -e VERBOSE \
+	docker run --rm --name "$id-qemu" ${kvm[@]+"${kvm[@]}"} -e KERNELS -e MAINLINE -e RUN -e SYSTEMD_RUN -e COUNT -e VERBOSE \
 		-v "$src:/src:ro" -v "$built:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
 }
 
