@@ -1777,6 +1777,8 @@ The daemon that runs for good (§15.13) answers questions about the pool over HT
 - Robustness: a hard kill (kill -9) or a power cut at any moment loses no file and leaves a consistent catalog after restart.
 - Security: local API over a socket with restricted permissions; HTTP limited to localhost or the Tailscale network, with a token (§25.1). The catalog and its backups, which hold what the API answers with, sit in a folder closed to other accounts (`StateDirectoryMode=0750` in `deploy/atoll.service`).
 - Distribution: a single binary. Go version: Linux amd64 and arm64. Rust version: the same, then Windows amd64 (phase 4).
+  - **Releases.** A tag `vX.Y.Z`, or `vX.Y.Z-beta.N` and the like for a prerelease, pushed by the maintainer alone, starts `.github/workflows/release.yml`. GoReleaser (`.goreleaser.yaml`) builds the binary static (`CGO_ENABLED=0`, `-trimpath`), its version read from the tag by `go build` and nothing of the time of the build in it, and drafts a GitHub release, which the maintainer publishes. For each of amd64 and arm64: a `.tar.gz` holding the binary, `deploy/`'s units, sample configuration and README, `LICENSE` and `README.md`, with its SBOM (SPDX, by syft); and a `.deb`. `SHA256SUMS` lists them all, and each archive and package has a build provenance attestation of GitHub's (Sigstore), which `gh attestation verify` checks. No signing key.
+  - **The `.deb`** installs the binary at `/usr/bin/atoll`, the units in `/usr/lib/systemd/system/`, which start it from there, and the sample configuration in `/usr/share/doc/atoll/examples/`, and creates the account `atoll` the units run as, once. It enables and starts nothing and writes no configuration: installing changes nothing until `atoll init`, and a unit started. Removing or purging it leaves the account, `/etc/atoll`, `/var/lib/atoll` and a unit that runs as they are. It recommends mergerfs and smartmontools and suggests fuse3 and ntfs-3g, without which Atoll runs (§10, §21, §23).
 
 ## 27. Test plan
 
@@ -1810,6 +1812,7 @@ The daemon that runs for good (§15.13) answers questions about the pool over HT
 - Plex through the merged view: no duplicate; rename, deletion and loss of a disk handled; metadata kept.
 - Media servers: `test/mediaservers` tells real Plex, Jellyfin and Emby, each in its vendor's container, of a movie written, renamed and deleted, through `internal/notify` and `path_map` (`make test-mediaservers`; Plex needs `PLEX_CLAIM`).
 - **Conformance suite** (§29.4): vectors and scenarios shared with the Rust version, run in CI on every change.
+- **CI.** GitHub Actions (`.github/workflows/ci.yml`), on each push to `beta` and `main` and each pull request to either: the race detector, integration, conformance and lint, in the image `test/ci/run.sh` uses; govulncheck; `test/loopdev` in qemu on both kernels; and on arm64 the unit tests. The throughput of the hashing on arm64 and amd64 goes to the run's summary, with the code it takes there (AVX-512, AVX2, SVE2 or NEON). The media-server test runs once a week and on demand (`.github/workflows/mediaservers.yml`). `test/ci/run.sh` runs the same `make` targets on the maintainer's machine, before a push.
 - Windows (phase 4, CI): long paths, case, reserved names, NTFS tunneling, `FILE_SHARE_DELETE`.
 
 ## 28. Roadmap
@@ -1995,6 +1998,7 @@ port     = nonzero digit, at most 5 digits                          ; 1 to 65535
 | Filesystem view | `github.com/hanwen/go-fuse/v2`, v2.12.1 or later: the kernel's FUSE protocol, no cgo, no libfuse | `fuser` (Linux), `winfsp` crate (Windows, GPL-3.0) |
 | Local API | `net/http` | `axum` or `hyper` |
 | Windows service and watcher | — | `windows-service`, `windows` crate |
+| Release | GoReleaser v2 (`.goreleaser.yaml`), a build tool, never shipped: archives, `.deb` through nfpm, checksums, SBOM through syft (§26) | the same archives and `.deb`, through GoReleaser's Rust builder or cargo-dist |
 
 ## 30. Risks and open questions
 

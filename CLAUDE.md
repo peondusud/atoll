@@ -34,6 +34,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 - SQLite: `modernc.org/sqlite` (no cgo). TOML: `github.com/pelletier/go-toml/v2`, read as a generic tree, never decoded straight into a struct (specs.md §24.3). Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
 - BLAKE3: `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`).
 - FUSE view: `github.com/hanwen/go-fuse/v2`, which speaks the kernel's protocol itself: no cgo and no libfuse (`docs/research/fuse-library.md`).
+- GitHub Actions: `.github/workflows/ci.yml` calls the `make` targets `test/ci/run.sh` calls, in its image, on each push to `beta` and `main` and each pull request; `mediaservers.yml` weekly; `release.yml` on a tag `v*`, which the maintainer alone pushes: GoReleaser (`.goreleaser.yaml`) drafts the release, he publishes it (specs.md §26, §27). Every third-party action pinned by commit SHA, `permissions` minimal, no secret but `GITHUB_TOKEN`.
 
 ```bash
 make build              # go build -o bin/atoll ./cmd/atoll
@@ -45,6 +46,7 @@ sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with
 make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
 make test-mediaservers  # the notifications on real Plex, Jellyfin and Emby, each in a container, with only Docker (test/mediaservers/run.sh)
 test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint and qemu on a commit, all at once; --report posts each to its pull request
+make release-snapshot   # a release as a tag makes one (.goreleaser.yaml), into dist/, with only Docker: nothing uploaded; from a clone, not a worktree
 golangci-lint run ./...
 ./bin/atoll --config <atoll.toml> daemon --foreground   # a test pool's configuration; deploy/atoll.toml is the sample
 ```
@@ -75,7 +77,8 @@ api/                   openapi.yaml, schemas/ for --json outputs, metrics.json f
 schema/                migrations/NNNN_name.sql, config.schema.json
 conformance/           vectors/, scenarios/, corpus/names/, runner/ (language-neutral)
 test/                  integration, faults, break glass, loopdev, qemu to run loopdev anywhere, and ci to run every check of a commit
-deploy/                systemd units, sample configuration
+deploy/                systemd units, sample configuration, the .deb's scripts in deb/
+.github/               workflows (CI, release, media servers), dependabot
 docs/research/         research reports behind open design decisions (not contracts)
 ```
 

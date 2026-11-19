@@ -5,6 +5,11 @@
 | `atoll.toml` | A sample configuration: the example of `specs.md` §24.1, byte for byte. A test compares the two, and loads it. |
 | `atoll.service` | The systemd unit of the daemon that runs for good (`specs.md` §15.13): `Type=notify`, as the dedicated user `atoll`. |
 | `atoll-mount.service` | The systemd unit of `atoll mount` (`specs.md` §21.2): Atoll's own view, at `view.mount` where it writes with `view.engine = "atoll"`, and read only at `view.readonly_mount`, as the same user. |
+| `deb/postinst`, `deb/postrm` | The scripts of the `.deb` a release holds (`specs.md` §26, `.goreleaser.yaml`): the account, and nothing else. |
+
+## The .deb
+
+A release's `.deb` (README.md, "Installing a release") installs the binary at `/usr/bin/atoll`, and these two units in `/usr/lib/systemd/system/`, with that path in `ExecStart` in place of `/usr/local/bin/atoll`. Its `postinst` makes the group and the account `atoll` when they are not there, as `useradd --system` does with no home and no shell, and has systemd read its units again. It enables and starts no unit, and writes no configuration: `atoll init` writes one, and refuses to where one is, so the sample is `/usr/share/doc/atoll/examples/atoll.toml`. An upgrade restarts nothing: `systemctl restart atoll atoll-mount` takes the new binary. Removed or purged, the package leaves the account, which may own each disk's work folder, `/etc/atoll`, `/var/lib/atoll` and a unit that runs as they are. It recommends mergerfs and smartmontools, and suggests fuse3, for `fusermount3` where `mount(2)` is not allowed, and ntfs-3g.
 
 ## The account
 

@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# A release of Atoll (specs.md §26): for linux amd64 and arm64, a .tar.gz with its SBOM, a .deb, SHA256SUMS, and a GitHub
+# release drafted for the maintainer to publish. .github/workflows/release.yml runs it on a tag v*, which the maintainer
+# alone pushes; make release-snapshot runs it on this machine, without a tag and without uploading anything. GoReleaser
+# is a build tool, never shipped.
+version: 2
+
+project_name: atoll
+
+before:
+  hooks:
+    # The .deb puts the binary at /usr/bin; deploy/'s units start it from /usr/local/bin, where one installed by hand goes.
+    # Its units are those of deploy/ with that path changed, in bin/, which git ignores.
+    - >-
+      sh -c 'mkdir -p bin/deb && for u in atoll atoll-mount; do
+      sed "s|^ExecStart=/usr/local/bin/atoll |ExecStart=/usr/bin/atoll |" deploy/$u.service >bin/deb/$u.service &&
+      grep -q "^ExecStart=/usr/bin/atoll " bin/deb/$u.service || exit 1; done'
+
+builds:
+  - id: atoll
+    main: ./cmd/atoll
+    binary: atoll
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    # Reproducible: no path of this machine, and no time but the commit's. go build reads the version from the tag, as
+    # atoll --version and atoll_build_info give it (cmd/atoll, atollVersion): so no -X, and no ldflags of GoReleaser's
+    # own, which hold the time of the build.
+    flags: [-trimpath]
+    ldflags: [-s -w]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: atoll
+    ids: [atoll]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    files:
+      - src: LICENSE
+        info: &file
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info: *file
+      - src: deploy/README.md
+        info: *file
+      - src: deploy/atoll.service
+        info: *file
+      - src: deploy/atoll-mount.service
+        info: *file
+      - src: deploy/atoll.toml
+        info: *file
+
+nfpms:
+  - id: atoll
+    ids: [atoll]
+    package_name: atoll
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: Atoll
+    homepage: https://github.com/peondusud/atoll
+    maintainer: peondusud <peondusud@users.noreply.github.com>
+    description: |-
+      File-level redundancy for the disks of a media library, without moving a file
+      Atoll keeps 0 to 2 full copies of each file under a disk's media/ folder on other disks, at the same path and
+      under the same name, verified by BLAKE3, and presents each file once through mergerfs or its own FUSE view.
+      Every disk stays a normal folder tree, readable on its own. Installing the package enables and starts nothing:
+      see /usr/share/doc/atoll/README.md and /usr/share/doc/atoll/deploy/README.md.
+    license: GPL-3.0-or-later
+    section: admin
+    priority: optional
+    formats: [deb]
+    bindir: /usr/bin
+    mtime: "{{ .CommitDate }}"
+    # The account is made with useradd (specs.md §26). Atoll runs without the others: mergerfs is the view of phase 1,
+    # smartctl reads SMART (§23), fusermount3 mounts Atoll's own view where mount(2) is not allowed (§21.2), and
+    # ntfs-3g mounts NTFS disks where ntfs3 does not (§22).
+    dependencies: [passwd]
+    recommends: [mergerfs, smartmontools]
+    suggests: [fuse3, ntfs-3g]
+    contents:
+      - src: bin/deb/atoll.service
+        dst: /usr/lib/systemd/system/atoll.service
+        file_info: &deb
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+      - src: bin/deb/atoll-mount.service
+        dst: /usr/lib/systemd/system/atoll-mount.service
+        file_info: *deb
+      # The sample is no configuration of this machine: atoll init writes one, and refuses to when one is there (§25).
+      - src: deploy/atoll.toml
+        dst: /usr/share/doc/atoll/examples/atoll.toml
+        file_info: *deb
+      - src: README.md
+        dst: /usr/share/doc/atoll/README.md
+        file_info: *deb
+      - src: deploy/README.md
+        dst: /usr/share/doc/atoll/deploy/README.md
+        file_info: *deb
+      - src: LICENSE
+        dst: /usr/share/doc/atoll/copyright
+        file_info: *deb
+    scripts:
+      postinstall: deploy/deb/postinst
+      postremove: deploy/deb/postrm
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot.{{ .ShortCommit }}"
+
+metadata:
+  mod_timestamp: "{{ .CommitTimestamp }}"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+
+release:
+  github:
+    owner: peondusud
+    name: atoll
+  # A draft: the maintainer publishes it once the workflow, its attestations included, has passed.
+  draft: true
+  replace_existing_draft: true
+  # v0.1.0-beta.1, -alpha.N and -rc.N are prereleases.
+  prerelease: auto
+  name_template: "Atoll {{ .Tag }}"
+  header: |
+    Atoll {{ .Tag }} for Linux, amd64 and arm64: a `.tar.gz` holding the static binary, the systemd units, a sample configuration, LICENSE and README, with its SBOM; and a `.deb`. Installing either enables and starts nothing (README.md, "Installing a release").
+
+    Check a download against `SHA256SUMS`, then against the provenance GitHub attested when it built it:
+
+    ```
+    sha256sum --ignore-missing -c SHA256SUMS
+    gh attestation verify atoll_{{ .Version }}_linux_amd64.tar.gz --repo peondusud/atoll
+    ```
