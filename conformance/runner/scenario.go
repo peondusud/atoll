@@ -1098,7 +1098,9 @@ func writeEntry(root, rel string, e *entry) error {
 		}
 	}
 	for _, x := range e.Xattrs {
-		if err := setXattr(full, x.Name, x.Text); err != nil {
+		if err := at.inRoot(func(r *os.Root) error {
+			return throughRoot(r, rel, func(proc string) error { return setXattr(proc, x.Name, x.Text) })
+		}); err != nil {
 			return err
 		}
 	}
@@ -1120,6 +1122,17 @@ func setXattr(full, name, text string) error {
 		return fmt.Errorf("setxattr %q: %w", name, err)
 	}
 	return nil
+}
+
+// throughRoot opens a file through a root, one name at a time, as a path past PATH_MAX needs (the walk past a branch's
+// limit), and hands fn the path of its descriptor in /proc, which the calls on attributes take.
+func throughRoot(r *os.Root, rel string, fn func(proc string) error) error {
+	f, err := r.Open(rel)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	return fn(fmt.Sprintf("/proc/self/fd/%d", f.Fd()))
 }
 
 // userXattrs reads the extended attributes of the user. namespace of a file, as getfattr does; none where its
@@ -1228,7 +1241,7 @@ func listBelow(r *os.Root, dir string, out map[string]*found) error {
 			if st, ok := info.Sys().(*syscall.Stat_t); ok {
 				f.uid, f.gid = int64(st.Uid), int64(st.Gid)
 			}
-			if f.xattrs, err = userXattrs(full); err != nil {
+			if err := throughRoot(r, rel, func(proc string) (err error) { f.xattrs, err = userXattrs(proc); return err }); err != nil {
 				return fmt.Errorf("%q: %w", rel, err)
 			}
 			out[rel] = f
