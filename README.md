@@ -42,7 +42,7 @@ gh attestation verify atoll_0.1.0~beta.1_amd64.deb --repo peondusud/atoll
 
 Installing either changes nothing on its own: no unit is enabled or started, and no configuration is written.
 
-- **The `.deb`**, for Debian 13 and the systems built on it, openmediavault included: `sudo apt install ./atoll_<version>_amd64.deb`. It installs `/usr/bin/atoll` and the units in `/usr/lib/systemd/system/`, makes the account `atoll` they run as, and brings mergerfs and smartmontools, which it recommends. The sample configuration is `/usr/share/doc/atoll/examples/atoll.toml`.
+- **The `.deb`**, for Debian 13 and the systems built on it, tried on Debian 13: `sudo apt install ./atoll_<version>_amd64.deb`. It installs `/usr/bin/atoll` and the units in `/usr/lib/systemd/system/`, makes the account `atoll` they run as, and brings mergerfs and smartmontools, which it recommends. The sample configuration is `/usr/share/doc/atoll/examples/atoll.toml`.
 - **The `.tar.gz`**: copy `atoll` to `/usr/local/bin/`, where the units of `deploy/` start it, then make the account and install the units as `deploy/README.md` says.
 
 Then `sudo atoll init --pool-id <id> --view-mount <path>` writes `/etc/atoll/atoll.toml` and the catalog, `sudo atoll disk add <mount point>` adds each disk, and `sudo systemctl enable --now atoll` starts the daemon (`deploy/README.md`). `atoll --version` says which release runs. Removing the package leaves the account, `/etc/atoll`, `/var/lib/atoll`, the disks and a unit that runs as they are: stop and disable the units first.
