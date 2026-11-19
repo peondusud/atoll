@@ -49,3 +49,16 @@ func KindOf(m Machine, d *config.Disk) Kind {
 	}
 	return KindSolid
 }
+
+// CopyLimit is how many copies may read or write a disk at once (specs.md §14): replication.max_parallel_per_disk when it
+// is set, on every disk alike, as format version 1 meant it; otherwise max_parallel_per_ssd on a disk with no spindle,
+// and max_parallel_per_hdd on one with a spindle, or whose kind the machine cannot tell.
+func CopyLimit(m Machine, d *config.Disk, set config.CopyLimits) int {
+	switch {
+	case set.PerDisk > 0:
+		return set.PerDisk
+	case KindOf(m, d) == KindSolid:
+		return set.SSD
+	}
+	return set.HDD
+}

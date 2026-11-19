@@ -54,14 +54,7 @@ func limitsOf(c *config.Config, m disks.Machine) copyLimits {
 	out := copyLimits{perDisk: make(map[string]int, len(c.Disks)), total: copiesAtOnce}
 	for i := range c.Disks {
 		d := &c.Disks[i]
-		switch {
-		case set.PerDisk > 0:
-			out.perDisk[d.ID] = set.PerDisk
-		case disks.KindOf(m, d) == disks.KindSolid:
-			out.perDisk[d.ID] = set.SSD
-		default:
-			out.perDisk[d.ID] = set.HDD
-		}
+		out.perDisk[d.ID] = disks.CopyLimit(m, d, set)
 	}
 	return out
 }

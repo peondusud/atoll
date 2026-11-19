@@ -281,6 +281,61 @@ func (d *Disk) RenameUser(from, to string, isFolder bool, fileKey string, like L
 	return nil
 }
 
+// ErrNoLink says that the driver would not give the file another name: hard links it does not make, or too many of
+// them already. Nothing was made, and a program copies instead (specs.md §21.2).
+var ErrNoLink = errors.New("the driver makes no other name for this file")
+
+// LinkUser gives the regular file at a logical path a second name at another, on this disk, after the folders missing
+// on the way to the new one, and never over anything: a hard link a user asked for (specs.md §21.2). fileKey is the
+// inode of the file, as a look right before found it. It says what is at the new name then.
+func (d *Disk) LinkUser(from, to string, fileKey string, like Like) (fsx.Stat, error) {
+	if err := d.Verify(); err != nil {
+		return fsx.Stat{}, err
+	}
+	src := d.rootPlace(from)
+	source, err := d.open(src[:len(src)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return fsx.Stat{}, classify(err)
+	}
+	defer source.close()
+	name := src[len(src)-1]
+	if _, err := holds(source.Dir, name, byKey(fileKey)); err != nil {
+		return fsx.Stat{}, err
+	}
+	target, newName, err := d.userParent(to, like)
+	if err != nil {
+		return fsx.Stat{}, err
+	}
+	defer target.close()
+	err = source.Link(name, target.Dir, newName)
+	switch {
+	case fsx.IsExisting(err):
+		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case fsx.IsNameRefused(err):
+		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrNameRefused, err)
+	case fsx.IsDiskLost(err):
+		return fsx.Stat{}, lost(err)
+	case fsx.IsAbsent(err):
+		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		// EPERM, EMLINK, EOPNOTSUPP: no such name on this driver, as across two filesystems.
+		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrNoLink, err)
+	}
+	// What a name made leads to first, then its folder: on NTFS a file keeps its names in its own record too (§17.1).
+	// A name that no longer leads to that file was taken since by someone else's, and stays theirs.
+	st, err := holds(target.Dir, newName, byKey(fileKey))
+	if err != nil {
+		return fsx.Stat{}, err
+	}
+	if err := d.durable(target.Dir, newName); err != nil {
+		return fsx.Stat{}, err
+	}
+	return st, nil
+}
+
 // RemoveUser removes a folder that holds nothing, or a symbolic link, at a logical path: a regular file goes to the
 // trash, never this way (specs.md §21.2).
 func (d *Disk) RemoveUser(logical string, isFolder bool) error {

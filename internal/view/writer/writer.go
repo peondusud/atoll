@@ -61,6 +61,8 @@ type Writer struct {
 	log       *slog.Logger
 	// mu lets one change of names run at a time: what each looks at before it changes must still hold when it does.
 	mu sync.Mutex
+	// par holds the copies written in parallel (specs.md §12.3).
+	par *parts
 }
 
 // New makes the writer of a view.
@@ -74,13 +76,19 @@ func New(db *sql.DB, c *config.Config, m disks.Machine, tree *view.Tree, handles
 	if err != nil {
 		return nil, fmt.Errorf("placement.min_free: %w", err)
 	}
-	return &Writer{db: db, config: c, machine: m, tree: tree, handles: handles, retention: retention, minFree: minFree, log: log}, nil
+	return &Writer{db: db, config: c, machine: m, tree: tree, handles: handles, retention: retention, minFree: minFree, log: log,
+		par: &parts{files: map[string]*parallel{}, rooms: map[string]*roomOf{}}}, nil
 }
 
-// File is a file the view opened for writing.
+// Tree gives what the writer looks at what the view presents through.
+func (w *Writer) Tree() *view.Tree { return w.tree }
+
+// File is a file the view opened for writing, and for a new file in immediate mode the copies written in parallel
+// that follow what is written to it (specs.md §12.3).
 type File struct {
 	fsx.WritableFile
 	Disk, Path string
+	par        *parallel
 }
 
 func (w *Writer) disk(id string) *config.Disk {
@@ -169,7 +177,8 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Owner
 	if err != nil {
 		return nil, nil, err
 	}
-	if disk == "" {
+	cached := disk != ""
+	if !cached {
 		if disk, err = w.place(ctx, path); err != nil {
 			return nil, nil, err
 		}
@@ -188,7 +197,11 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Owner
 	if err := w.finish(ctx, v, err); err != nil {
 		return nil, nil, err
 	}
-	return &File{WritableFile: f, Disk: disk, Path: path}, view.NodeOfStat(disk, &st, ""), nil
+	file := &File{WritableFile: f, Disk: disk, Path: path}
+	if !cached {
+		file.par = w.startParallel(ctx, disk, path)
+	}
+	return file, view.NodeOfStat(disk, &st, ""), nil
 }
 
 // Mkdir makes a new folder, where a new file would go.
@@ -441,6 +454,8 @@ func (w *Writer) Open(ctx context.Context, path string, n *view.Node) (*File, er
 	if n.Kind == view.NodeDir {
 		return nil, ErrIsFolder
 	}
+	// Opened again to be written, a file is no new file written once: its copies in parallel go.
+	w.abandonAt(path, "opened again to be written")
 	if err := w.journalWrite(ctx, path, n); err != nil {
 		return nil, err
 	}
@@ -464,6 +479,10 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node) er
 	}
 	for i := len(open) - 1; i >= 0; i-- {
 		v := &open[i]
+		if v.Kind == catalog.ViewPart {
+			// A part is in tmp/ of another disk, and nothing at the path.
+			continue
+		}
 		touches := v.Path == path || v.Path2 == path || strings.HasPrefix(path, v.Path+"/") || (v.Path2 != "" && strings.HasPrefix(path, v.Path2+"/"))
 		if !touches {
 			continue
@@ -481,6 +500,9 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node) er
 func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.UserAttrs) (*view.Node, error) {
 	if n.Kind == view.NodeDir && a.Size != nil {
 		return nil, ErrIsFolder
+	}
+	if a.Size != nil {
+		w.abandonAt(path, "truncated")
 	}
 	targets := []string{n.Disk}
 	if n.Kind == view.NodeDir {
@@ -523,11 +545,161 @@ func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.
 	return view.NodeOfStat(targets[0], first, target), nil
 }
 
+// Link gives the file a path presents a second name, on the disk it is presented from, as a hard link on that disk
+// (specs.md §21.2): the folders above the new name that the disk lacks are made as for what is new. ErrIsFolder for a
+// folder, as on any filesystem; ErrCrossDisk when it cannot be made there, as across two filesystems, so that a
+// program copies instead: a symbolic link, a disk the view may not write to now, a disk whose driver moves the file's
+// modification time as it links it, a name that disk refuses, collides with one it holds, or puts past its branch's
+// limit, or a driver that makes no such name. Each name is then a file of
+// its own, which the passes replicate as any other, never as a link (specs.md §14, §15.1).
+func (w *Writer) Link(ctx context.Context, from, to string) (*view.Node, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.tree.Lookup(ctx, from)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%w", err)
+	case n == nil:
+		return nil, ErrNotFound
+	case n.Kind == view.NodeDir:
+		return nil, ErrIsFolder
+	case n.Kind != view.NodeFile:
+		return nil, ErrCrossDisk
+	}
+	if err := w.free(ctx, to); err != nil {
+		return nil, err
+	}
+	d := w.disk(n.Disk)
+	if d == nil || !w.handles.Has(n.Disk) || w.linkMovesTimes(d) {
+		return nil, ErrCrossDisk
+	}
+	refused, err := w.refusedOn(ctx, d, to, "")
+	if err != nil {
+		return nil, err
+	}
+	if refused {
+		return nil, ErrCrossDisk
+	}
+	var made fsx.Stat
+	err = w.handles.Use(n.Disk, func(h *ops.Disk) error {
+		st, found, err := h.StatRoot(from)
+		switch {
+		case err != nil:
+			return err //nolint:wrapcheck // ops says what failed
+		case !found:
+			return ErrNotFound
+		case st.Kind != fsx.KindFile:
+			return ErrCrossDisk
+		}
+		v := &catalog.ViewOp{Kind: catalog.ViewLink, Disk: n.Disk, Path: from, Path2: to, FileKey: fmt.Sprintf("%d", st.Ino)}
+		if err := w.journal(ctx, v); err != nil {
+			return err
+		}
+		made, err = h.LinkUser(from, to, v.FileKey, w.like(ctx))
+		return w.finish(ctx, v, err)
+	})
+	switch {
+	case errors.Is(err, ops.ErrNameRefused), errors.Is(err, ops.ErrNoLink), errors.Is(err, ErrNoHandle), errors.Is(err, ops.ErrPathTaken):
+		// What the disk holds at the new name, as a stale copy the view does not present, takes it there too.
+		return nil, fmt.Errorf("%w: %w", ErrCrossDisk, err)
+	case err != nil:
+		return nil, err
+	}
+	return view.NodeOfStat(n.Disk, &made, ""), nil
+}
+
+// ErrXattrOnLink says that a symbolic link takes no extended attribute of the user. namespace, as Linux answers.
+var ErrXattrOnLink = errors.New("a symbolic link takes no user. attribute")
+
+// ErrXattrOfRoot says that the view keeps no extended attribute of its root, which stands for every disk's.
+var ErrXattrOfRoot = errors.New("the view keeps no attribute of its root")
+
+// SetXattr sets an extended attribute of the user. namespace on what a path presents, on a user's behalf, with the flags
+// of setxattr(2) (specs.md §21.2): a file's on the copy it is presented from, its original, alone, a folder's on every
+// disk that holds it. The pass that takes it in gives the file's other copies the same set. What the disk answers of
+// the attribute, as EEXIST, ENODATA, ENOTSUP or E2BIG, passes as it is.
+func (w *Writer) SetXattr(ctx context.Context, path string, n *view.Node, attr string, value []byte, flags int) error {
+	return w.changeXattr(ctx, path, n, func(d *ops.Disk) error { return d.SetUserXattr(path, attr, value, flags) })
+}
+
+// RemoveXattr removes an extended attribute of the user. namespace from what a path presents, as SetXattr sets one.
+func (w *Writer) RemoveXattr(ctx context.Context, path string, n *view.Node, attr string) error {
+	return w.changeXattr(ctx, path, n, func(d *ops.Disk) error { return d.RemoveUserXattr(path, attr) })
+}
+
+func (w *Writer) changeXattr(ctx context.Context, path string, n *view.Node, change func(*ops.Disk) error) error {
+	switch {
+	case path == "":
+		return ErrXattrOfRoot
+	case n.Kind == view.NodeSymlink:
+		return ErrXattrOnLink
+	}
+	targets := []string{n.Disk}
+	if n.Kind == view.NodeDir {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		holders, err := w.folderHolders(ctx, path)
+		if err != nil {
+			return err
+		}
+		targets = holders
+	}
+	if len(targets) == 0 {
+		return ErrNotFound
+	}
+	v := &catalog.ViewOp{Kind: catalog.ViewXattr, Disk: targets[0], Path: path, Folder: n.Kind == view.NodeDir}
+	if n.Kind != view.NodeDir {
+		// The file is found by its inode on that disk when a pass gives its other copies its attributes, wherever a
+		// rename took it since.
+		err := w.handles.Use(n.Disk, func(d *ops.Disk) error {
+			st, found, err := d.StatRoot(path)
+			switch {
+			case err != nil:
+				return err //nolint:wrapcheck // ops says what failed
+			case !found:
+				return ErrNotFound
+			}
+			v.FileKey = fmt.Sprintf("%d", st.Ino)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if err := w.journal(ctx, v); err != nil {
+		return err
+	}
+	var first error
+	for i, id := range targets {
+		err := w.handles.Use(id, change)
+		switch {
+		case i == 0:
+			first = err
+		case err == nil, errors.Is(err, ops.ErrGone), errors.Is(err, ErrNoHandle):
+		default:
+			// A folder's attributes are no file's: no pass takes them to a disk that missed them (specs.md §21.2).
+			w.log.Warn("a folder keeps an extended attribute on a disk", "disk", id, "path", path, "error", err)
+		}
+	}
+	return w.finish(ctx, v, first)
+}
+
+// linkMovesTimes says whether a hard link made on a disk would move its file's modification time, as the kernel's ntfs
+// driver of Linux 7.1 does when mounted with the type ntfs (specs.md §22): the view refuses such a link with EXDEV, so
+// that the program copies, as the next pass would otherwise give every other copy that new time. A disk whose mount
+// cannot be read now is refused too. Merge note: beta's disks.LinkMovesTimes(fstype), or (*ops.Disk).LinkMovesTimes(),
+// says the same, and takes this one's place.
+func (w *Writer) linkMovesTimes(d *config.Disk) bool {
+	seen := w.machine.Mount(d.Mount)
+	return seen.Entry == nil || seen.Entry.FSType == "ntfs"
+}
+
 // Unlink deletes what a path presents, but a folder: a file goes to the trash from the disk it is presented from,
 // `deleted`, and the pass sends its other copies (specs.md §15.5, §21.2); a symbolic link is removed.
 func (w *Writer) Unlink(ctx context.Context, path string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.abandonAt(path, "deleted")
 	n, err := w.tree.Lookup(ctx, path)
 	switch {
 	case err != nil:
@@ -670,6 +842,7 @@ func (w *Writer) Rename(ctx context.Context, from, to string, noReplace bool) er
 	case n.Kind == view.NodeDir && strings.HasPrefix(to, from+"/"):
 		return ErrInvalid
 	}
+	w.abandonAt(from, "renamed")
 	if dir, _ := split(to); dir != "" {
 		if err := w.folder(ctx, dir); err != nil {
 			return err
@@ -874,7 +1047,7 @@ func (w *Writer) folderHolders(ctx context.Context, path string) ([]string, erro
 		if o.Kind == view.OpRename || o.Kind == view.OpReplace {
 			target = o.Path2
 		}
-		if o.Kind == view.OpUnlink || o.Kind == view.OpRmdir {
+		if o.Kind == view.OpUnlink || o.Kind == view.OpRmdir || o.Kind == catalog.ViewPart {
 			continue
 		}
 		for _, newer := range open[k+1:] {

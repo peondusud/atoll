@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -20,6 +21,7 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -290,7 +292,15 @@ func (r *replicator) runOn(ctx context.Context, job *catalog.ReplicateJob, dst, 
 	}
 	moved, err := c.copy(ctx, resume)
 	if err == nil {
-		return r.commit(ctx, job, op, moved)
+		outcome, err := r.commit(ctx, job, op, moved)
+		if err == nil && len(c.refused) > 0 {
+			// The copy is made all the same: what its filesystem refused is said, never made stale (specs.md §14).
+			slog.Warn("a copy keeps no extended attribute its filesystem refuses", "disk", op.Disk, "path", job.Path, "names", c.refused)
+			if err := catalog.WriteXattrKept(ctx, r.db, op, c.refused, r.machine.Now()); err != nil {
+				return "", fmt.Errorf("catalog: %w", err)
+			}
+		}
+		return outcome, err
 	}
 	var dropped *errDropped
 	switch {
@@ -425,6 +435,8 @@ type copier struct {
 	src  *ops.Disk
 	row  *catalog.KnownCopy
 	hash []byte
+	// refused holds the extended attributes of the source the target's filesystem refused, in byte order.
+	refused []string
 }
 
 // copy runs the steps of specs.md §14.2 up to the copy at its name. An *errDropped is a copy dropped, the
@@ -449,7 +461,7 @@ func (c *copier) copy(ctx context.Context, resume bool) (*ops.Moved, error) {
 		return nil, c.sourceFailed(ctx, err)
 	}
 	defer func() { _ = source.Close() }()
-	if err := c.fill(ctx, part, source, start, read.Size); err != nil {
+	if err := c.fill(ctx, part, source, start, read.Size, resume); err != nil {
 		return nil, err
 	}
 	c.r.machine.Checkpoint("copied")
@@ -467,7 +479,11 @@ func (c *copier) copy(ctx context.Context, resume bool) (*ops.Moved, error) {
 	case !still:
 		return nil, c.drop(ctx, trash.OutcomeChanged, true)
 	}
-	if err := c.restore(part, &read); err != nil {
+	attrs, err := source.Xattrs(fsx.UserNamespace)
+	if err != nil {
+		return nil, c.sourceFailed(ctx, err)
+	}
+	if err := c.restore(part, &read, attrs); err != nil {
 		return nil, err
 	}
 	whole, err := c.verify(ctx, part, read.Size)
@@ -486,7 +502,8 @@ func (c *copier) copy(ctx context.Context, resume bool) (*ops.Moved, error) {
 }
 
 // openPart makes the part, or opens the one the job resumes and keeps what of it still matches the hashes
-// recorded: the copy goes on from the first chunk missing or wrong (specs.md §14).
+// recorded: the copy goes on from the first chunk missing or wrong (specs.md §14). A part Atoll's own view wrote in
+// parallel has no hash recorded, and goes on from its start, each chunk compared with the source's (specs.md §12.3).
 func (c *copier) openPart(ctx context.Context, resume bool) (*ops.Part, int, error) {
 	if resume {
 		part, err := c.openOrMake(c.dst.OpenPart)
@@ -533,7 +550,8 @@ func (c *copier) openOrMake(open func(*ops.Op) (*ops.Part, error)) (*ops.Part, e
 	return open(c.op)
 }
 
-// kept re-reads a part chunk by chunk against the hashes recorded, and gives the first chunk to copy.
+// kept re-reads a part chunk by chunk against the hashes recorded, and gives the first chunk to copy. What the part
+// holds past it stays, for fill to compare with the source rather than write again.
 func (c *copier) kept(ctx context.Context, part *ops.Part) (int, error) {
 	recorded, err := catalog.JobChunks(ctx, c.r.db, c.job.ID)
 	if err != nil {
@@ -541,9 +559,6 @@ func (c *copier) kept(ctx context.Context, part *ops.Part) (int, error) {
 	}
 	buf := make([]byte, integrity.ChunkSize)
 	good := 0
-	// The bytes of the chunks that match: only the source's last chunk is shorter than the others, so a
-	// short chunk that matches is the last one, and the part is whole.
-	var keptBytes int64
 	for ; good*integrity.HashSize < len(recorded); good++ {
 		n, err := part.ReadAt(buf, int64(good)*integrity.ChunkSize)
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -553,20 +568,23 @@ func (c *copier) kept(ctx context.Context, part *ops.Part) (int, error) {
 		if n == 0 || string(sum[:]) != string(recorded[good*integrity.HashSize:(good+1)*integrity.HashSize]) {
 			break
 		}
-		keptBytes += int64(n)
 	}
 	if err := catalog.DropChunksFrom(ctx, c.r.db, c.job.ID, good); err != nil {
 		return 0, fmt.Errorf("%w: %w", errCatalog, err)
 	}
-	if err := part.Truncate(keptBytes); err != nil {
-		return 0, classifyDisk(err)
-	}
 	return good, nil
 }
 
-// fill copies the source into the part from a chunk on, and records each chunk's hash as it goes.
-func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, start int, size int64) error {
+// fill copies the source into the part from a chunk on, and records each chunk's hash as it goes. A part resumed is
+// compared with the source chunk by chunk, and written only where it differs, as one the view wrote in parallel holds
+// the source's bytes already; what it holds past the source's size goes. Either way, the re-read without cache checks
+// every chunk against the source's hashes afterwards (specs.md §14, step 5).
+func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, start int, size int64, compare bool) error {
 	buf := make([]byte, integrity.ChunkSize)
+	var held []byte
+	if compare {
+		held = make([]byte, integrity.ChunkSize)
+	}
 	var hashes []byte
 	first := start
 	record := func() error {
@@ -597,11 +615,21 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 		case err != nil && !errors.Is(err, io.EOF):
 			return c.sourceFailed(ctx, err)
 		}
-		if _, err := part.WriteAt(buf[:n], off); err != nil {
-			if isNoRoom(err) {
-				return c.drop(ctx, OutcomeNoRoom, true)
+		same := false
+		if compare {
+			m, err := part.ReadAt(held[:n], off)
+			if err != nil && !errors.Is(err, io.EOF) {
+				return classifyDisk(err)
 			}
-			return classifyDisk(err)
+			same = m == n && bytes.Equal(held[:m], buf[:n])
+		}
+		if !same {
+			if _, err := part.WriteAt(buf[:n], off); err != nil {
+				if isNoRoom(err) {
+					return c.drop(ctx, OutcomeNoRoom, true)
+				}
+				return classifyDisk(err)
+			}
 		}
 		sum := integrity.ChunkSum(buf[:n])
 		hashes = append(hashes, sum[:]...)
@@ -611,12 +639,19 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 			}
 		}
 	}
+	if compare {
+		if err := part.Truncate(size); err != nil {
+			return classifyDisk(err)
+		}
+	}
 	return record()
 }
 
 // restore gives the part the source's times and attributes, never its creation time, and syncs it
-// (specs.md §14, step 4). What the target's filesystem cannot hold is clamped, and read back at the end.
-func (c *copier) restore(part *ops.Part, read *fsx.Stat) error {
+// (specs.md §14, step 4). What the target's filesystem cannot hold is clamped, and read back at the end. The user.
+// extended attributes it is given are the source's, attrs; one the target's filesystem refuses is left out and noted,
+// and the copy is made all the same.
+func (c *copier) restore(part *ops.Part, read *fsx.Stat, attrs map[string][]byte) error {
 	if err := part.SetTimes(fsx.OmitTime, read.Mtime); err != nil {
 		return classifyDisk(err)
 	}
@@ -634,8 +669,39 @@ func (c *copier) restore(part *ops.Part, read *fsx.Stat) error {
 	if err := part.SetMode(mode); err != nil {
 		return classifyDisk(err)
 	}
+	if err := c.giveXattrs(part, attrs); err != nil {
+		return err
+	}
 	if err := part.Sync(); err != nil {
 		return fmt.Errorf("%w: %w", ops.ErrDiskLost, err)
+	}
+	return nil
+}
+
+// giveXattrs gives the part the source's user. extended attributes, and takes off any other it holds, as a part
+// resumed may hold those of an earlier try (specs.md §14). What its filesystem refuses is left out, and noted.
+func (c *copier) giveXattrs(part *ops.Part, attrs map[string][]byte) error {
+	have, err := part.Xattrs(fsx.UserNamespace)
+	if err != nil {
+		return classifyDisk(err)
+	}
+	plan := solver.PlanXattrs(attrs, have)
+	c.refused = nil
+	for _, name := range plan.Remove {
+		if err := part.RemoveXattr(name); err != nil && !fsx.IsNoXattr(err) && !fsx.IsXattrRefused(err) {
+			return classifyDisk(err)
+		}
+	}
+	for _, name := range plan.Set {
+		switch err := part.SetXattr(name, attrs[name], 0); {
+		case err == nil:
+		case fsx.IsDiskLost(err):
+			return classifyDisk(err)
+		case fsx.IsXattrRefused(err):
+			c.refused = append(c.refused, name)
+		default:
+			return classifyDisk(err)
+		}
 	}
 	return nil
 }

@@ -444,12 +444,23 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
-| `ops` | array of objects | the view's operations no pass has taken in, oldest first: `kind` (`create`, `mkdir`, `symlink`, `write`, `rename`, `replace`, `unlink` or `rmdir`), `disk` and `path`, required; `path2`, the new path of a `rename` or a `replace`; `folder`, `true` for one that names a folder, left out otherwise |
+| `ops` | array of objects | the view's operations no pass has taken in, oldest first: `kind` (`create`, `mkdir`, `symlink`, `write`, `xattr`, `rename`, `replace`, `link`, `unlink` or `rmdir`), `disk` and `path`, required; `path2`, the new path of a `rename` or a `replace`, or the new name a `link` gives the file at `path`; `folder`, `true` for one that names a folder, left out otherwise |
 | `path` | string | a case of resolution: the logical path asked |
 | `source` | object | what it resolves to: `kind` `disk`, with `disk`, what that disk holds at the path; `absent`; or `catalog`, with `paths`, the catalog's rows at the first of them that presents something |
 | `dir` | string | a case of listing, instead of `path`: the folder listed, `""` for the root |
 | `catalog_dirs` | array of strings | the folders of the catalog whose names the listing may hold |
-| `names` | array of strings | the names the operations made or renamed directly below `dir`, in byte order |
+| `names` | array of strings | the names the operations made, renamed or hard-linked directly below `dir`, in byte order |
+
+### `xattrs.json` — the extended attributes Atoll keeps and gives a copy (§14, §21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | a case of the namespace: the name of an attribute |
+| `kept` | boolean | whether Atoll keeps it: one of the `user.` namespace, a name past `user.`, compared byte for byte |
+| `want` | array of objects | a case of a plan, instead of `name`: the attributes of the copy given from, each a `name` and its `value` as text |
+| `have` | array of objects | the attributes the copy given to holds, likewise |
+| `set` | array of strings | the kept names it lacks or holds with another value, in byte order |
+| `remove` | array of strings | the kept names `want` does not hold, in byte order |
 
 ### `view_statfs.json` — `statfs` of Atoll's own view (§21.2)
 

@@ -11,7 +11,7 @@ import (
 
 // Reprise resolves what the view left planned, on each disk it has a handle on, before it mounts (specs.md §21.2): what
 // makes a name is done when something is there, and undone otherwise; a rename is done when its new name holds what
-// moved, and undone otherwise; a copy sent to the trash is done when the trash holds it, and undone when its name
+// moved, and undone otherwise, and a hard link when its new name leads to the file it linked; a copy sent to the trash is done when the trash holds it, and undone when its name
 // still does; a rename onto a name whose copy reached the trash is finished. An operation on a disk the view cannot
 // write to now stays planned, for its next start.
 func (w *Writer) Reprise(ctx context.Context) error {
@@ -52,7 +52,8 @@ func (w *Writer) resolve(ctx context.Context, d *ops.Disk, v *catalog.ViewOp) (s
 		return doneIf(found), false, err //nolint:wrapcheck // ops says what failed
 	case catalog.ViewRmdir:
 		return catalog.OpDone, false, nil
-	case catalog.ViewRename:
+	case catalog.ViewRename, catalog.ViewLink:
+		// A hard link is done when its new name leads to the file it linked, and undone otherwise.
 		at, err := holdsAt(d, v.Path2, v.FileKey, v.Folder)
 		return doneIf(at), false, err
 	case catalog.ViewUnlink:
@@ -68,6 +69,19 @@ func (w *Writer) resolve(ctx context.Context, d *ops.Disk, v *catalog.ViewOp) (s
 		return catalog.OpUndone, !left, err
 	case catalog.ViewReplace:
 		return w.resolveReplace(ctx, d, v)
+	case catalog.ViewPart:
+		// What was written in parallel when the view stopped is no copy of a file closed: its part goes, and the
+		// ordinary job makes that replica (specs.md §12.3).
+		op, found, err := catalog.OpByID(ctx, w.db, v.OpID)
+		if err != nil {
+			return "", false, fmt.Errorf("%w", err)
+		}
+		if found && op.Path2 != "" {
+			if err := d.DropPart(op.Path2); err != nil {
+				return "", false, fmt.Errorf("%w", err)
+			}
+		}
+		return catalog.OpUndone, false, nil
 	}
 	return catalog.OpDone, false, nil
 }

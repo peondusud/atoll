@@ -1,0 +1,26 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14, §21.2",
+  "description": "The extended attributes Atoll keeps and gives a copy: those of the user. namespace, a name past user., compared byte for byte; never security., trusted. or system., ACLs among them. A case with name says whether that attribute is kept. A case with want and have, each a list of attributes, a name and its value, gives what a copy holding have must be given to hold the user. attributes of want: set, the names it lacks or holds with another value, and remove, those want does not hold, each in byte order; what is outside user. is never set nor removed. Values are given as text, and an empty value is a value.",
+  "cases": [
+    {"name": "user.DOSATTRIB", "kept": true, "note": "what Samba keeps of a file's DOS attributes"},
+    {"name": "user.com.apple.FinderInfo", "kept": true, "note": "what macOS writes through Samba"},
+    {"name": "user.org.netatalk.Metadata", "kept": true, "note": "and Samba's fruit module"},
+    {"name": "user.", "kept": false, "note": "the namespace alone names nothing"},
+    {"name": "security.selinux", "kept": false, "note": "a label of the machine, never copied"},
+    {"name": "security.capability", "kept": false, "note": "what a program may do, never copied"},
+    {"name": "trusted.overlay.opaque", "kept": false, "note": "what only root sees"},
+    {"name": "system.posix_acl_access", "kept": false, "note": "no ACLs"},
+    {"name": "User.x", "kept": false, "note": "the namespace is compared byte for byte"},
+    {"name": "userx", "kept": false, "note": "a name that only starts like it"},
+    {"want": [], "have": [], "set": [], "remove": [], "note": "nothing to give"},
+    {"want": [{"name": "user.a", "value": "1"}], "have": [{"name": "user.a", "value": "1"}], "set": [], "remove": [], "note": "the same set"},
+    {"want": [{"name": "user.a", "value": "1"}], "have": [], "set": ["user.a"], "remove": [], "note": "one it lacks"},
+    {"want": [{"name": "user.a", "value": "1"}], "have": [{"name": "user.a", "value": "2"}], "set": ["user.a"], "remove": [], "note": "one it holds with another value"},
+    {"want": [], "have": [{"name": "user.a", "value": "1"}], "set": [], "remove": ["user.a"], "note": "one the other does not hold"},
+    {"want": [{"name": "user.a", "value": ""}], "have": [], "set": ["user.a"], "remove": [], "note": "an empty value is a value"},
+    {"want": [{"name": "user.a", "value": "1"}], "have": [{"name": "user.a", "value": ""}], "set": ["user.a"], "remove": [], "note": "and differs from another"},
+    {"want": [{"name": "user.B", "value": "1"}, {"name": "user.a", "value": "1"}, {"name": "user.b", "value": "1"}], "have": [{"name": "user.A", "value": "1"}, {"name": "user.c", "value": "1"}], "set": ["user.B", "user.a", "user.b"], "remove": ["user.A", "user.c"], "note": "each list in byte order"},
+    {"want": [{"name": "security.selinux", "value": "x"}, {"name": "user.a", "value": "1"}], "have": [{"name": "trusted.t", "value": "y"}], "set": ["user.a"], "remove": [], "note": "outside user., nothing is set nor removed"}
+  ]
+}

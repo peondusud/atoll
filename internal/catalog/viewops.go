@@ -14,10 +14,16 @@ const (
 	ViewMkdir   = "mkdir"
 	ViewSymlink = "symlink"
 	ViewWrite   = "write"
+	// ViewXattr is an extended attribute of the user. namespace set or removed on a user's behalf: on the disk a file is
+	// presented from, FileKey its inode, or on every disk that holds a folder (specs.md §21.2).
+	ViewXattr   = "xattr"
 	ViewRename  = "rename"
 	ViewReplace = "replace"
-	ViewUnlink  = "unlink"
-	ViewRmdir   = "rmdir"
+	// ViewLink is a hard link the view made on one disk: Path the name it was made from, Path2 the new name, FileKey
+	// the inode both lead to (specs.md §21.2).
+	ViewLink   = "link"
+	ViewUnlink = "unlink"
+	ViewRmdir  = "rmdir"
 )
 
 // The states of an operation, of ops and of view_ops alike (specs.md §9).
@@ -33,10 +39,10 @@ type ViewOp struct {
 	Kind  string
 	Disk  string
 	Path  string
-	Path2 string // the new path of a rename or a replacement
+	Path2 string // the new path of a rename, a replacement or a hard link
 	// Folder says that it names a folder.
 	Folder bool
-	// FileKey is the inode of what a rename, a replacement or a deletion moved, in decimal.
+	// FileKey is the inode of what a rename, a replacement or a deletion moved, or a hard link gave a name, in decimal.
 	FileKey string
 	// OpID is the operation of ops that sent a copy to the trash, for a deletion or a replacement, 0 otherwise.
 	OpID  int64
@@ -50,7 +56,7 @@ const insertViewOpSQL = `
 
 func insertViewOp(ctx context.Context, tx *sql.Tx, v *ViewOp) error {
 	var path2 any
-	if v.Kind == ViewRename || v.Kind == ViewReplace {
+	if v.Kind == ViewRename || v.Kind == ViewReplace || v.Kind == ViewLink {
 		path2 = []byte(v.Path2)
 	}
 	result, err := tx.ExecContext(ctx, insertViewOpSQL, v.Kind, v.Disk, []byte(v.Path), path2, v.Folder, v.FileKey, v.OpID, v.State, v.AtNS)

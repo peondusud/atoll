@@ -18,10 +18,11 @@ import (
 // TestViewWrites: Atoll's own view that writes, served as atoll mount serves it at view.mount (specs.md §21.2), used as
 // Sonarr and a user use a library, on a pool of ext4 and of each driver: a file made, a folder made, a rename, an
 // atomic save, a file written in place, given a time and a mode, a folder renamed, a file deleted, an empty folder
-// removed; a hard link refused as across two filesystems, and on NTFS a name the disk refuses. Then the passes take it
-// all in: the deleted file's other copy goes to the trash, what is new is replicated, the file written makes its other
-// copy stale and refreshed, and every operation of the view is taken in, the view presenting the same as before from
-// the catalog alone. Then break glass: the view stopped, plain mergerfs at the same point presents the same.
+// removed; a hard link made on the disk the file is presented from, one of a folder refused, and on NTFS a name the
+// disk refuses. Then the passes take it all in: the deleted file's other copy goes to the trash, what is new is
+// replicated, the new name of the hard link as an independent copy, the file written makes its other copy stale and
+// refreshed, and every operation of the view is taken in, the view presenting the same as before from the catalog
+// alone. Then break glass: the view stopped, plain mergerfs at the same point presents the same.
 func TestViewWrites(t *testing.T) {
 	needRoot(t)
 	needMergerfs(t)
@@ -65,8 +66,17 @@ func TestViewWrites(t *testing.T) {
 			mustDo(t, os.Remove(in("Films/B.mkv")))
 			mustDo(t, os.Mkdir(in("Empty"), 0o755))
 			mustDo(t, os.Remove(in("Empty")))
-			if err := os.Link(in("Films/A.mkv"), in("Films/A-link.mkv")); !errors.Is(err, syscall.EXDEV) {
-				t.Errorf("a hard link: %v, want EXDEV", err)
+			// A hard link is made on the disk the file is presented from, its original on k; a folder is refused as on
+			// any filesystem (specs.md §21.2).
+			mustDo(t, os.Link(in("Films/A.mkv"), in("Films/A-link.mkv")))
+			if err := os.Link(in("Films"), in("Films-link")); !errors.Is(err, syscall.EPERM) {
+				t.Errorf("a hard link of a folder: %v, want EPERM", err)
+			}
+			if inodeOf(t, filepath.Join(b.keep, "media", "Films", "A-link.mkv")) != inodeOf(t, filepath.Join(b.keep, "media", "Films", "A.mkv")) {
+				t.Error("the hard link is not on the original's disk")
+			}
+			if _, err := os.Lstat(filepath.Join(b.at, "media", "Films", "A-link.mkv")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("the hard link reached the other disk at once: %v", err)
 			}
 			if tc.fs == names.NTFS {
 				if err := os.Rename(in("Films/A.mkv"), in("Films/A:b.mkv")); !errors.Is(err, syscall.EINVAL) {
@@ -106,6 +116,13 @@ func TestViewWrites(t *testing.T) {
 				if data, err := os.ReadFile(filepath.Join(top, "media", "Films", "A.mkv")); err != nil || string(data) != "a film, and more" {
 					t.Errorf("%s: the copy of the file written: %q, %v", top, data, err)
 				}
+				if data, err := os.ReadFile(filepath.Join(top, "media", "Films", "A-link.mkv")); err != nil || string(data) != "a film, and more" {
+					t.Errorf("%s: the hard link's name: %q, %v", top, data, err)
+				}
+			}
+			// Each name is a file of its own: its replica is an independent full copy, never a link (specs.md §14).
+			if inodeOf(t, filepath.Join(b.at, "media", "Films", "A-link.mkv")) == inodeOf(t, filepath.Join(b.at, "media", "Films", "A.mkv")) {
+				t.Error("the replicas of the two names are linked")
 			}
 			if got := b.text("SELECT count(*) FROM trash WHERE reason = 'deleted' AND CAST(lpath AS TEXT) = 'Films/B.mkv'"); got != "2" {
 				t.Errorf("copies of the file deleted in the trash: %s, want 2", got)
@@ -123,4 +140,14 @@ func TestViewWrites(t *testing.T) {
 			}
 		})
 	}
+}
+
+// inodeOf gives the inode of a path, 0 when nothing is there.
+func inodeOf(t *testing.T, path string) uint64 {
+	t.Helper()
+	var st syscall.Stat_t
+	if err := syscall.Lstat(path, &st); err != nil {
+		return 0
+	}
+	return st.Ino
 }

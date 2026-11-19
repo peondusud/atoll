@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -18,13 +20,39 @@ import (
 	"github.com/peondusud/atoll/internal/view"
 )
 
-// machine is the disks as folders, with the free space a test gives each.
+// machine is the disks as folders, with the free space a test gives each, mounted with the type a test gives each,
+// ext4 when it gives none.
 type machine struct {
-	free map[string]int64
-	now  int64
+	free   map[string]int64
+	fsType map[string]string
+	now    int64
+	// fail makes calls on a disk fail, by mount, as fsx.Fault does; a part's writer reads it as a test sets it.
+	mu   sync.Mutex
+	fail map[string]func(call, name string) error
 }
 
-func (m *machine) Mount(string) disks.MountSeen { return disks.MountSeen{} }
+func (m *machine) setFail(mount string, fail func(call, name string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail == nil {
+		m.fail = map[string]func(string, string) error{}
+	}
+	m.fail[mount] = fail
+}
+
+func (m *machine) failOf(mount string) func(call, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.fail[mount]
+}
+
+func (m *machine) Mount(mount string) disks.MountSeen {
+	fsType := m.fsType[mount]
+	if fsType == "" {
+		fsType = "ext4"
+	}
+	return disks.MountSeen{Path: disks.PathOK, Entry: &disks.MountEntry{MountPoint: mount, Root: "/", FSType: fsType}}
+}
 func (m *machine) Device(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
 	return disks.DeviceSeen{}
 }
@@ -34,6 +62,9 @@ func (m *machine) ReadPastCache(names.Filesystem, *disks.MountEntry) disks.Devic
 }
 func (m *machine) Checkpoint(string) {}
 func (m *machine) Now() int64 {
+	// A part's end is written apart from the program, and asks the time too.
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.now += 1_000_000_000
 	return m.now
 }
@@ -42,16 +73,26 @@ func (m *machine) OpenRoot(mount, root string) (fsx.Dir, error) {
 	return fsx.OpenDir(filepath.Join(mount, root)) //nolint:wrapcheck // a test double
 }
 func (m *machine) OpenTop(mount string) (fsx.Dir, error) {
-	return fsx.OpenDir(mount) //nolint:wrapcheck // a test double
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return fsx.Fault(top, func(call, name string) error {
+		if fail := m.failOf(mount); fail != nil {
+			return fail(call, name)
+		}
+		return nil
+	}), nil
 }
 
 type bench struct {
-	t     *testing.T
-	top   string
-	db    interface{ Close() error }
-	tree  *view.Tree
-	w     *Writer
-	mount map[string]string
+	t       *testing.T
+	top     string
+	db      interface{ Close() error }
+	tree    *view.Tree
+	w       *Writer
+	mount   map[string]string
+	machine *machine
 }
 
 func newBench(t *testing.T, t2fs string) *bench {
@@ -70,7 +111,7 @@ func newBenchEdited(t *testing.T, t2fs, placement string, free1, free2 int64, ed
 	t.Helper()
 	top := t.TempDir()
 	b := &bench{t: t, top: top, mount: map[string]string{}}
-	m := &machine{free: map[string]int64{}}
+	m := &machine{free: map[string]int64{}, fsType: map[string]string{}}
 	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = \"/srv/pool\"\n[placement]\nmin_free = [\"5%%\"]\n", filepath.Join(top, "catalog.db")) + placement
 	for i, id := range []string{"t1", "t2"} {
 		mount := filepath.Join(top, id)
@@ -148,6 +189,7 @@ func newBenchEdited(t *testing.T, t2fs, placement string, free1, free2 int64, ed
 		t.Fatal(err)
 	}
 	b.db = db
+	b.machine = m
 	return b
 }
 
@@ -315,6 +357,227 @@ func TestWriterRefusesANameADiskRefuses(t *testing.T) {
 	_ = f.Close()
 	if err := b.w.Rename(t.Context(), "Films/a.mkv", "Films/a:b.mkv", false); !errors.Is(err, ErrRefused) {
 		t.Errorf("a name NTFS refuses, once written through the view: %v", err)
+	}
+}
+
+// inode gives the inode of a path on a disk, 0 when nothing is there.
+func (b *bench) inode(disk, path string) uint64 {
+	b.t.Helper()
+	info, err := os.Lstat(filepath.Join(b.mount[disk], "media", path))
+	if err != nil {
+		return 0
+	}
+	return info.Sys().(*syscall.Stat_t).Ino
+}
+
+// A hard link through the view is made on the disk the file is presented from, its original, as a second name of the
+// same file there, after the folders that disk lacks on the way; a folder is refused, as on any filesystem, and what
+// that disk cannot hold answers as across two filesystems, with nothing journaled (specs.md §21.2). t2, the original
+// of Films/a.mkv, is NTFS, which refuses ':'.
+func TestWriterLinks(t *testing.T) {
+	b := newBench(t, "ntfs")
+	ctx := t.Context()
+	if n := b.lookup("Films/a.mkv"); n == nil || n.Disk != "t2" {
+		t.Fatalf("the original: %+v", n)
+	}
+	if _, err := b.w.Mkdir(ctx, "Series", 0o750, Owner{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := b.lookup("Series"); n == nil || n.Disk != "t1" {
+		t.Fatalf("a folder made on t1 alone: %+v", n)
+	}
+	n, err := b.w.Link(ctx, "Films/a.mkv", "Series/a.mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Disk != "t2" || n.Nlink != 2 || b.inode("t2", "Series/a.mkv") != b.inode("t2", "Films/a.mkv") {
+		t.Errorf("the link: %+v, inodes %d and %d", n, b.inode("t2", "Series/a.mkv"), b.inode("t2", "Films/a.mkv"))
+	}
+	if b.on("t1", "Series/a.mkv") != "absent" {
+		t.Errorf("a link reached another disk: %q", b.on("t1", "Series/a.mkv"))
+	}
+	if info, err := os.Stat(filepath.Join(b.mount["t2"], "media", "Series")); err != nil || info.Mode().Perm() != 0o750 {
+		t.Errorf("the folder made on t2 on the way: %v, %v", info, err)
+	}
+	if got := b.lookup("Series/a.mkv"); got == nil || got.Disk != "t2" || got.Size != int64(len("from t2")) {
+		t.Errorf("the new name presents %+v", got)
+	}
+	if got := b.lookup("Films/a.mkv"); got == nil || got.Disk != "t2" {
+		t.Errorf("the name it was made from presents %+v", got)
+	}
+	open, err := catalog.OpenViewOps(ctx, b.w.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := open[len(open)-1]
+	if last.Kind != catalog.ViewLink || last.Path != "Films/a.mkv" || last.Path2 != "Series/a.mkv" || last.State != catalog.OpDone ||
+		last.FileKey != fmt.Sprintf("%d", b.inode("t2", "Films/a.mkv")) {
+		t.Errorf("the journal: %+v", last)
+	}
+	for _, tc := range []struct {
+		name, from, to string
+		want           error
+	}{
+		{"onto a name presented", "Films/a.mkv", "Series/a.mkv", ErrExists},
+		{"a folder", "Films", "Series/Films", ErrIsFolder},
+		{"in a folder that presents nothing", "Films/a.mkv", "Nowhere/a.mkv", ErrNotFound},
+		{"of nothing", "Films/none.mkv", "Series/none.mkv", ErrNotFound},
+		{"a name its disk refuses", "Films/a.mkv", "Films/a:b.mkv", ErrCrossDisk},
+	} {
+		if _, err := b.w.Link(ctx, tc.from, tc.to); !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, err, tc.want)
+		}
+	}
+	if after, err := catalog.OpenViewOps(ctx, b.w.db); err != nil || len(after) != len(open) {
+		t.Errorf("a link refused was journaled: %+v, %v", after, err)
+	}
+	// Something at the new name on the disk that the view does not present, as a stale copy, takes it there too.
+	mustWrite(t, filepath.Join(b.mount["t2"], "media", "Films", "hidden.mkv"), "stale")
+	if _, err := b.w.Link(ctx, "Films/a.mkv", "Films/hidden.mkv"); !errors.Is(err, ErrCrossDisk) {
+		t.Errorf("onto what the disk holds and the view does not present: %v", err)
+	}
+	if b.on("t2", "Films/hidden.mkv") != "stale" {
+		t.Errorf("what the disk held there: %q", b.on("t2", "Films/hidden.mkv"))
+	}
+	// The disk of the original is mounted with the kernel's ntfs driver, whose link moves the file's modification time:
+	// a program copies instead, and the file keeps its time.
+	b.machine.fsType[b.mount["t2"]] = "ntfs"
+	if _, err := b.w.Link(ctx, "Films/a.mkv", "Series/b.mkv"); !errors.Is(err, ErrCrossDisk) {
+		t.Errorf("a disk of the type ntfs: %v", err)
+	}
+	if b.on("t2", "Series/b.mkv") != "absent" {
+		t.Error("a link made on a disk of the type ntfs")
+	}
+	b.machine.fsType[b.mount["t2"]] = "ntfs3"
+	// The disk of the original may not be written now: a program copies instead.
+	b.w.handles.Drop("t2")
+	if _, err := b.w.Link(ctx, "Films/a.mkv", "Series/b.mkv"); !errors.Is(err, ErrCrossDisk) {
+		t.Errorf("its disk not writable: %v", err)
+	}
+}
+
+// xattrsOn gives the user. extended attributes of a path on a disk, and skips a test on a filesystem that keeps none.
+func (b *bench) xattrsOn(disk, path string) map[string]string {
+	b.t.Helper()
+	full := filepath.Join(b.mount[disk], "media", path)
+	size, err := syscall.Listxattr(full, nil)
+	if errors.Is(err, syscall.ENOTSUP) {
+		b.t.Skip("this filesystem keeps no extended attribute")
+	}
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	list := make([]byte, size)
+	if size, err = syscall.Listxattr(full, list); err != nil {
+		b.t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, name := range strings.Split(string(list[:size]), "\x00") {
+		if !strings.HasPrefix(name, "user.") {
+			continue
+		}
+		value := make([]byte, 1024)
+		n, err := syscall.Getxattr(full, name, value)
+		if err != nil {
+			b.t.Fatal(err)
+		}
+		out[name] = string(value[:n])
+	}
+	return out
+}
+
+// Extended attributes through the view (specs.md §21.2): of the user. namespace alone, set and removed on the copy a
+// file is presented from, its original, alone, and on every disk that holds a folder, each journaled; read from what
+// the view presents; what the disk answers of one passes as it is; a symbolic link and the root take none.
+func TestWriterXattrs(t *testing.T) {
+	b := newBench(t, "ext4")
+	ctx := t.Context()
+	_ = b.xattrsOn("t2", "Films/a.mkv")
+	n := b.lookup("Films/a.mkv")
+	if n.Disk != "t2" {
+		t.Fatalf("the original: %+v", n)
+	}
+	if err := b.w.SetXattr(ctx, "Films/a.mkv", n, "user.DOSATTRIB", []byte("0x20"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.xattrsOn("t2", "Films/a.mkv"); got["user.DOSATTRIB"] != "0x20" || len(b.xattrsOn("t1", "Films/a.mkv")) != 0 {
+		t.Errorf("t2 %v, t1 %v: set on the original alone", got, b.xattrsOn("t1", "Films/a.mkv"))
+	}
+	attrs, err := b.tree.Xattrs("Films/a.mkv", b.lookup("Films/a.mkv"))
+	if err != nil || string(attrs["user.DOSATTRIB"]) != "0x20" || len(attrs) != 1 {
+		t.Errorf("read back: %v, %v", attrs, err)
+	}
+	open, err := catalog.OpenViewOps(ctx, b.w.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := open[len(open)-1]
+	if last.Kind != catalog.ViewXattr || last.Disk != "t2" || last.Path != "Films/a.mkv" || last.State != catalog.OpDone ||
+		last.FileKey != fmt.Sprintf("%d", b.inode("t2", "Films/a.mkv")) {
+		t.Errorf("the journal: %+v", last)
+	}
+	if err := b.w.SetXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB", []byte("0x21"), fsx.XattrCreate); !errors.Is(err, syscall.EEXIST) {
+		t.Errorf("created twice: %v, want EEXIST as the disk answers", err)
+	}
+	if err := b.w.RemoveXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB"); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.xattrsOn("t2", "Films/a.mkv"); len(got) != 0 {
+		t.Errorf("removed: %v", got)
+	}
+	if err := b.w.RemoveXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB"); !errors.Is(err, syscall.ENODATA) {
+		t.Errorf("removed twice: %v, want ENODATA", err)
+	}
+
+	// A folder the catalog holds on both disks takes it on each.
+	if err := b.w.SetXattr(ctx, "Films", b.lookup("Films"), "user.DOSATTRIB", []byte("0x10"), 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, disk := range []string{"t1", "t2"} {
+		if got := b.xattrsOn(disk, "Films"); got["user.DOSATTRIB"] != "0x10" {
+			t.Errorf("the folder on %s: %v", disk, got)
+		}
+	}
+	if _, err := b.w.Symlink(ctx, "Films/l", "a.mkv", Owner{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.w.SetXattr(ctx, "Films/l", b.lookup("Films/l"), "user.x", []byte("1"), 0); !errors.Is(err, ErrXattrOnLink) {
+		t.Errorf("a symbolic link: %v", err)
+	}
+	if err := b.w.SetXattr(ctx, "", b.tree.Root(), "user.x", []byte("1"), 0); !errors.Is(err, ErrXattrOfRoot) {
+		t.Errorf("the root: %v", err)
+	}
+	if attrs, err := b.tree.Xattrs("", b.tree.Root()); err != nil || len(attrs) != 0 {
+		t.Errorf("the root presents %v, %v", attrs, err)
+	}
+}
+
+// A hard link left planned is done when its new name leads to the file it linked, and undone otherwise (specs.md §21.2).
+func TestWriterRepriseOfALink(t *testing.T) {
+	b := newBench(t, "ext4")
+	ctx := t.Context()
+	key := fmt.Sprintf("%d", b.inode("t2", "Films/a.mkv"))
+	if err := os.Link(filepath.Join(b.mount["t2"], "media", "Films", "a.mkv"), filepath.Join(b.mount["t2"], "media", "Films", "made.mkv")); err != nil {
+		t.Fatal(err)
+	}
+	made := &catalog.ViewOp{Kind: catalog.ViewLink, Disk: "t2", Path: "Films/a.mkv", Path2: "Films/made.mkv", FileKey: key}
+	never := &catalog.ViewOp{Kind: catalog.ViewLink, Disk: "t2", Path: "Films/a.mkv", Path2: "Films/never.mkv", FileKey: key}
+	other := &catalog.ViewOp{Kind: catalog.ViewLink, Disk: "t2", Path: "Films/a.mkv", Path2: "Films/other.mkv", FileKey: key}
+	mustWrite(t, filepath.Join(b.mount["t2"], "media", "Films", "other.mkv"), "another file")
+	for _, v := range []*catalog.ViewOp{made, never, other} {
+		if err := catalog.BeginViewOp(ctx, b.w.db, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.w.Reprise(ctx); err != nil {
+		t.Fatal(err)
+	}
+	open, err := catalog.OpenViewOps(ctx, b.w.db)
+	if err != nil || len(open) != 1 || open[0].ID != made.ID || open[0].State != catalog.OpDone {
+		t.Errorf("after the reprise: %+v, %v", open, err)
+	}
+	if b.on("t2", "Films/other.mkv") != "another file" {
+		t.Errorf("what took the new name: %q", b.on("t2", "Films/other.mkv"))
 	}
 }
 

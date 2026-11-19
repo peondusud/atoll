@@ -553,6 +553,10 @@ func (p *pass) viewNames(ctx context.Context) (map[string]watch.Heard, error) {
 	ops := make([]watch.ViewOp, 0, len(p.viewOps))
 	for i := range p.viewOps {
 		v := &p.viewOps[i]
+		if v.Kind == catalog.ViewPart {
+			// A part written in parallel is in tmp/: nothing of the root to look at.
+			continue
+		}
 		op := watch.ViewOp{Kind: v.Kind, Disk: v.Disk, Path: v.Path, Path2: v.Path2, Folder: v.Folder}
 		if v.Folder || v.Kind == catalog.ViewRmdir {
 			for _, at := range []string{v.Path, v.Path2} {
@@ -602,7 +606,7 @@ func plannedOn(list []catalog.Op, disk string) []string {
 		switch op.Kind {
 		case catalog.OpRename:
 			paths = append(paths, op.Path, op.Path2)
-		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpRmdir, catalog.OpCreate, catalog.OpUtimens, catalog.OpChmod, catalog.OpChown:
+		case catalog.OpTrash, catalog.OpRestore, catalog.OpMkdir, catalog.OpRmdir, catalog.OpCreate, catalog.OpUtimens, catalog.OpChmod, catalog.OpChown, catalog.OpXattr:
 			paths = append(paths, op.Path)
 		}
 	}
