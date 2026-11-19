@@ -56,12 +56,12 @@ run=atoll-media-${sha:0:12}-$$
 names=""
 cleanup() {
 	if [ $keep = 1 ]; then
-		echo "kept: docker rm -f$names; docker volume rm $run $run-src $run-secret; docker network rm $run"
+		echo "kept: docker rm -f -v$names; docker volume rm $run $run-src $run-secret; docker network rm $run"
 		return
 	fi
-	# One name a word, split on purpose.
+	# -v takes the volumes the images declare, which no name holds. One name a word, split on purpose.
 	# shellcheck disable=SC2086
-	[ -n "$names" ] && docker rm -f $names >/dev/null 2>&1
+	[ -n "$names" ] && docker rm -f -v $names >/dev/null 2>&1
 	docker volume rm -f "$run" "$run-src" "$run-secret" >/dev/null 2>&1
 	docker network rm "$run" >/dev/null 2>&1
 }
