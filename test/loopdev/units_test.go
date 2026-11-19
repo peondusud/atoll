@@ -665,6 +665,12 @@ func TestTheRemountUnderSystemd(t *testing.T) {
 				t.Fatalf("the disk was not mounted again by the daemon within 3 minutes: %q", got)
 			}
 			waitFor(t, "the disk readable once mounted again", readable)
+			// The mount shows before the daemon has seen the unit's job end and said so: with KVM, read at once, the log
+			// had no line yet, and the stop that followed cut the daemon's wait short (GitHub's run 44579171805).
+			waitFor(t, "the daemon saying how the remount ended", func() bool {
+				said := u.said()
+				return strings.Contains(said, "remounted after a reset") || strings.Contains(said, "the remount failed")
+			})
 			said := u.said()
 			for _, line := range strings.Split(said, "\n") {
 				if strings.Contains(line, "remount") {
