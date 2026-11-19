@@ -553,6 +553,14 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `groups` | array of objects | the ripe groups, as `event_grouping.json` gives them: `disk`, `path` (`""` for the root), `folder` (`true` or left out), `kinds` and `origins` |
 | `disks` | array of objects | for each disk asked for, in any order: `disk`, and `whole` (`true` for a walk of the whole disk) or `names`, each with `path`, `folder` and `deleted` (`true` or left out), in byte order, each once |
 
+### `view_names.json` — what a pass looks at for the operations of Atoll's own view (§15.13, §21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `max_names` | integer | how many names a disk is looked at by at most, before it is walked whole: 10,000 in the daemon |
+| `ops` | array of objects | the operations of the view no pass has taken in: `kind`, as `view_ops` holds it, `disk`, `path`, `path2` (left out when it has none), `folder` (`true` or left out), and `holders`, the disks whose catalog holds a folder at either path, for a folder (left out otherwise) |
+| `disks` | array of objects | for each disk looked at, in any order: `disk`, and `whole` (`true` for a walk of the whole disk) or `names`, each with `path`, `folder` and `deleted` (`true` or left out), in byte order, each once |
+
 ### `named_verdict.json` — what a look limited to names concludes of a copy (§15.13)
 
 | Field | Type | Meaning |

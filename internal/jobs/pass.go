@@ -489,8 +489,8 @@ func (p *pass) look(ctx context.Context) error {
 // again. A copy that moved, or is uncertain, is found again at the name a look found it at, which its row does not
 // hold: its disk is walked whole, unless the scope gives names for it, those a look limited to names left to see again,
 // the names it found such copies at among them. An operation of Atoll's own left planned is found again by a walk; and an
-// operation of the view is taken in once the walks of its disks find what it did, a folder removed on every disk that
-// held it.
+// operation of the view is taken in once the looks of its disks find what it did: the names it touched, a folder's on
+// every disk that holds it, by a look limited to names, as the watcher would give them.
 func (p *pass) toWalk(ctx context.Context, planned []catalog.Op) (Scope, error) {
 	if p.scope == nil {
 		return nil, nil
@@ -523,21 +523,46 @@ func (p *pass) toWalk(ctx context.Context, planned []catalog.Op) (Scope, error) 
 	for i := range planned {
 		walk[planned[i].Disk] = Whole
 	}
-	for i := range p.viewOps {
-		v := &p.viewOps[i]
-		walk[v.Disk] = Whole
-		if v.Kind != catalog.ViewRmdir {
-			continue
-		}
-		held, err := catalog.FolderDisks(ctx, p.db, v.Path)
-		if err != nil {
-			return nil, fmt.Errorf("catalog: %w", err)
-		}
-		for _, id := range held {
+	viewed, err := p.viewNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range slices.Sorted(maps.Keys(viewed)) {
+		if h := viewed[id]; h.Whole {
 			walk[id] = Whole
+		} else {
+			walk.Add(id, h.Names)
 		}
 	}
 	return walk, nil
+}
+
+// viewNames gives, by disk, what this pass looks at for the operations of Atoll's own view no pass has taken in: the
+// names each touched, and below a folder renamed or removed what the catalog holds there, on every disk that holds it,
+// rather than the whole of each disk (specs.md §15.13, §21.2; the maintainer, 2026-11-19).
+func (p *pass) viewNames(ctx context.Context) (map[string]watch.Heard, error) {
+	if len(p.viewOps) == 0 {
+		return nil, nil
+	}
+	ops := make([]watch.ViewOp, 0, len(p.viewOps))
+	for i := range p.viewOps {
+		v := &p.viewOps[i]
+		op := watch.ViewOp{Kind: v.Kind, Disk: v.Disk, Path: v.Path, Path2: v.Path2, Folder: v.Folder}
+		if v.Folder || v.Kind == catalog.ViewRmdir {
+			for _, at := range []string{v.Path, v.Path2} {
+				if at == "" {
+					continue
+				}
+				held, err := catalog.FolderDisks(ctx, p.db, at)
+				if err != nil {
+					return nil, fmt.Errorf("catalog: %w", err)
+				}
+				op.Holders = append(op.Holders, held...)
+			}
+		}
+		ops = append(ops, op)
+	}
+	return watch.ViewNames(ops, watch.MaxNames), nil
 }
 
 // looked says that this pass knows what a disk holds: it walked it, or spared it, which reads its copies as their rows
