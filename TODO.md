@@ -79,7 +79,10 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - **confirm**: the choices made alone for G1, G4, G5 and G6 (DONE.md).
 - G5, for the maintainer to weigh: a guard on what a day changed, or not purging `overwritten` versions for room while modifications run high.
 - The threat model's low gaps G7 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask).
-- **decision**: an ntfs-3g disk the daemon remounted goes away when `atoll.service` stops or restarts, as its FUSE process belongs to the service (measured, `units_test.go`): `KillMode=process` (helpers left behind), a remount through a systemd mount unit (needs polkit for `atoll`), or the documented `mount` by hand.
+- **decision**: with udev, systemd itself unmounts an idle fstab mount as soon as its device goes (`StopPropagatedFrom=`, measured in qemu, DONE.md). The disk then reads `not-mounted`, which is no reset reason, so the remount after a USB reset happens only if a pass recorded `io-error` or `device-gone` first: an idle USB disk may never be mounted again. Should a disk `online` until then, with an fstab entry, that becomes `not-mounted` count as a reset?
+- **decision**: G22, a polkit rule limited to the pool's units: a command that prints it, or a check of the unit's `SourcePath` through `polkit.spawn`.
+- **confirm**: the choices made alone for the remount through systemd (DONE.md).
+- Measure the remount through systemd with systemd 252 (Debian 12, openmediavault 7): the polkit rule is checked there, the remount itself is not.
 - **confirm**: the choices made alone for G18 (DONE.md).
 - **confirm**: the choices made alone for G2 and G3 (DONE.md), the fallback without `/proc`, which checks root by its account alone, first.
 - The view (experimental): a file or folder it makes takes the caller's group, not a setgid folder's; a non-owner's write to a setuid file whose presented mode differs from its disk's fails until a pass. Run `TestViewAsAnotherAccount` on Linux 7.3 too.
