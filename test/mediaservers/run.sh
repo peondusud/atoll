@@ -7,10 +7,13 @@
 # With no server named, all three; REV is HEAD by default, and the test runs on the commit as git
 # holds it. Each run has a network and a volume of its own, and publishes no port on the host. The
 # servers read the library on the volume at /data, and the test writes it at /pool, as the merged
-# view holds it: path_map /pool = /data takes one to the other. Each server is set up from scratch:
-# Plex unclaimed, which takes its network's requests without a token; Jellyfin and Emby through their
-# first-run wizard, with an account and an API key made for the run and never printed. The three
-# images take about 4.4 GB. --keep leaves the servers running, and prints how to remove them.
+# view holds it: path_map /pool = /data takes one to the other. Each server is set up from scratch.
+# Plex answers 401 to other hosts until it is claimed: with PLEX_CLAIM set in the environment, a
+# claim token from https://plex.tv/claim valid for 4 minutes, the server is claimed by that account,
+# where it stays listed until removed there, and the test reads its token from a volume of its own;
+# without it, the Plex test is skipped. Jellyfin and Emby go through their first-run wizard, with an
+# account and an API key made for the run. No token, key or password is printed. The three images
+# take about 4.4 GB. --keep leaves the servers running, and prints how to remove them.
 set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
@@ -22,7 +25,7 @@ for a in "$@"; do
 	--keep) keep=1 ;;
 	plex | jellyfin | emby) servers="$servers $a" ;;
 	-h | --help)
-		sed -n '2,13p' "$0"
+		sed -n '2,16p' "$0"
 		exit 0
 		;;
 	-*)
@@ -49,20 +52,20 @@ run=atoll-media-${sha:0:12}-$$
 names=""
 cleanup() {
 	if [ $keep = 1 ]; then
-		echo "kept: docker rm -f$names; docker volume rm $run $run-src; docker network rm $run"
+		echo "kept: docker rm -f$names; docker volume rm $run $run-src $run-secret; docker network rm $run"
 		return
 	fi
 	# One name a word, split on purpose.
 	# shellcheck disable=SC2086
 	[ -n "$names" ] && docker rm -f $names >/dev/null 2>&1
-	docker volume rm -f "$run" "$run-src" >/dev/null 2>&1
+	docker volume rm -f "$run" "$run-src" "$run-secret" >/dev/null 2>&1
 	docker network rm "$run" >/dev/null 2>&1
 }
 trap cleanup EXIT
 trap 'echo "stopped" >&2; exit 130' INT TERM
 
 docker network create "$run" >/dev/null && docker volume create "$run" >/dev/null &&
-	docker volume create "$run-src" >/dev/null || exit 2
+	docker volume create "$run-src" >/dev/null && docker volume create "$run-secret" >/dev/null || exit 2
 # The commit, in a volume: a bind mount of the working tree would show what is not committed, and a
 # path of the host means something else to Docker Desktop.
 if ! git archive --format=tar "$sha" | docker run -i --rm -v "$run-src:/src" "$image" tar -x -C /src; then
@@ -75,7 +78,9 @@ for s in $servers; do
 	name=$run-$s
 	case $s in
 	plex)
-		set -- -e TZ=UTC -e ALLOWED_NETWORKS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 plexinc/pms-docker:latest
+		# -e PLEX_CLAIM with no value passes the environment's, so the claim is on no command line.
+		set -- -e TZ=UTC -e ALLOWED_NETWORKS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 \
+			${PLEX_CLAIM:+-e PLEX_CLAIM} plexinc/pms-docker:latest
 		env+=(-e "ATOLL_PLEX_URL=http://$name:32400")
 		;;
 	jellyfin)
@@ -91,6 +96,22 @@ for s in $servers; do
 	names="$names $name"
 done
 
-docker run --rm --name "$run-test" --network "$run" -v "$run:/pool" -v "$run-src:/src:ro" \
+# A claimed Plex writes its token in its preferences: it goes, through a pipe, to a volume only the
+# test reads.
+if [ -n "${PLEX_CLAIM:-}" ] && [ "${servers#*plex}" != "$servers" ]; then
+	prefs="/config/Library/Application Support/Plex Media Server/Preferences.xml"
+	for _ in $(seq 60); do
+		docker exec "$run-plex" grep -q 'PlexOnlineToken="' "$prefs" 2>/dev/null && break
+		sleep 2
+	done
+	docker exec "$run-plex" sed -nE 's/.*PlexOnlineToken="([^"]+)".*/\1/p' "$prefs" |
+		docker run -i --rm -v "$run-secret:/secret" "$image" sh -c 'umask 077 && cat > /secret/plex.token && test -s /secret/plex.token' || {
+		echo "Plex was not claimed: its claim token may have expired (4 minutes)" >&2
+		exit 1
+	}
+	env+=(-e ATOLL_PLEX_TOKEN_FILE=/secret/plex.token)
+fi
+
+docker run --rm --name "$run-test" --network "$run" -v "$run:/pool" -v "$run-src:/src:ro" -v "$run-secret:/secret:ro" \
 	-v atoll-ci-gomod:/go/pkg/mod "${env[@]}" "$image" \
 	bash -c "cp -r /src /w && cd /w && go test -count=1 -tags mediaservers -v ./test/mediaservers"

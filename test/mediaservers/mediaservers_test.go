@@ -40,18 +40,40 @@ const (
 	settle = 3 * time.Minute
 )
 
-// TestPlex tries the notifications on Plex, unclaimed, which takes the requests of its network without a token.
+// TestPlex tries the notifications on Plex, with the token of the server, which run.sh reads once PLEX_CLAIM has
+// claimed it, as notify.plex.token_file gives it (specs.md §21.5). Plex 1.43.5 unclaimed answers 401 to another host
+// of an allowed network: the test then has nothing to try.
 func TestPlex(t *testing.T) {
 	t.Parallel()
 	base := need(t, "ATOLL_PLEX_URL")
 	c := &client{base: base, header: http.Header{}}
+	tokenFile := os.Getenv("ATOLL_PLEX_TOKEN_FILE")
+	if tokenFile != "" {
+		token, err := os.ReadFile(tokenFile)
+		must(t, err)
+		c.header.Set("X-Plex-Token", strings.TrimSpace(string(token)))
+	}
+	type identityAnswer struct {
+		MediaContainer struct {
+			Version    string
+			Claimed    bool
+			StartState string
+		}
+	}
+	var identity identityAnswer
 	waitFor(t, "Plex answers", 3*time.Minute, func(ctx context.Context) (bool, error) {
-		return true, c.do(ctx, http.MethodGet, "/library/sections", nil, nil)
+		identity = identityAnswer{}
+		err := c.do(ctx, http.MethodGet, "/identity", nil, &identity)
+		return identity.MediaContainer.StartState == "", err
 	})
+	t.Logf("Plex %s, claimed: %v", identity.MediaContainer.Version, identity.MediaContainer.Claimed)
 	ctx := context.Background()
-	var identity struct{ MediaContainer struct{ Version string } }
-	must(t, c.do(ctx, http.MethodGet, "/identity", nil, &identity))
-	t.Logf("Plex %s", identity.MediaContainer.Version)
+	if err := c.do(ctx, http.MethodGet, "/library/sections", nil, nil); err != nil {
+		if tokenFile == "" && strings.Contains(err.Error(), "401") {
+			t.Skipf("Plex takes no request from this host without a token: run with PLEX_CLAIM set (%v)", err)
+		}
+		t.Fatal(err)
+	}
 	// Plex must not scan on its own, or the test could not tell what a notification does.
 	must(t, c.do(ctx, http.MethodPut, "/:/prefs?FSEventLibraryUpdatesEnabled=0&FSEventLibraryPartialScanEnabled=0&ScheduledLibraryUpdatesEnabled=0", nil, nil))
 	plant(t, "plex")
@@ -101,7 +123,16 @@ func TestPlex(t *testing.T) {
 		}
 		return files, nil
 	}
-	scenario(t, "plex", &notify.Plex{URL: base, ViewMount: viewMount, PathMap: pathMap}, list)
+	scenario(t, "plex", &notify.Plex{URL: base, TokenFile: tokenFile, ViewMount: viewMount, PathMap: pathMap}, list)
+	if tokenFile != "" {
+		// Without token_file, Plex must take this host's requests without a token, as its allowedNetworks says,
+		// which run.sh sets to the private ranges.
+		t.Run("allowed-network", func(t *testing.T) {
+			if err := (&notify.Plex{URL: base}).Check(ctx); err != nil {
+				t.Errorf("atoll notify test without a token, from an allowed network: %v", err)
+			}
+		})
+	}
 }
 
 // TestJellyfin tries the notifications on Jellyfin, set up through its first-run wizard with an API key of its own.
