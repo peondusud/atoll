@@ -68,6 +68,8 @@ func commandHelps() []commandHelp {
 			"run for good, or do all the work that is due once and stop"},
 		{"mergerfs-config", []string{"atoll mergerfs-config [--omv] [--json]"},
 			"print the mergerfs line that presents the pool, or with --omv the fields of the openmediavault mergerfs plugin's form"},
+		{"polkit-rule", []string{"atoll polkit-rule [--json]"},
+			"print polkit's rule that lets the account atoll start the mount units of the pool's disks, and no other mount unit"},
 		{"mount", []string{"atoll mount [<point>]"},
 			"serve Atoll's own view until stopped: at view.mount, where it writes, and read only at view.readonly_mount or a point"},
 		{"notify", []string{"atoll notify test [--json]"},

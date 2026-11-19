@@ -1,0 +1,58 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "The command reads the configuration alone: it opens no catalog, creating none where the configuration puts it, and looks at no disk, writing nothing there.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": []
+    }
+  ],
+  "config": "pool_id = \"home-media\"\ncatalog = \"${SANDBOX}/disks/t2/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--json"
+      ],
+      "stdout_json": {
+        "account": "atoll",
+        "units": [
+          {
+            "disk": "t1",
+            "unit": "${ANY}"
+          }
+        ],
+        "left_out": [],
+        "rule": "${ANY}"
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": []
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": []
+    }
+  ]
+}
