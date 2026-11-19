@@ -39,7 +39,7 @@ All of it is done but the maintainer's own step, moving Plex's libraries to the 
 
 - **Order:** repair and quarantine of corrupt copies, then the duplicate report (R-14, R-15); the `immediate` and `scheduled` modes; Gotify and SMTP alerts, and SMART; notifications to Plex, Emby and Jellyfin; `atoll conflicts resolve`; failure domains and tags as hard constraints, with `atoll balance` and `atoll capacity`; the link guard last.
 - **Plex** reads each disk's folders today. So its libraries move to the merged view, as §21.4 says, before the first replica, and a scan notification names a folder as that view shows it.
-- **Hard links:** none in the maintainer's library for now, but the link guard must handle them, for users whose Sonarr or Radarr link a torrent client's file into `media/`.
+- **Hard links:** none in the maintainer's library for now, but the link guard must handle them, for users whose Sonarr or Radarr link a torrent client's file into `media/`. Through Atoll's own view too, made on the original's disk (DONE.md, 2026-11-19); mirroring them on replicas is not done (what it would cost, in that entry).
 - **Alerts:** Gotify and SMTP, both, beside ntfy.
 - **The link guard:** files that Sonarr or Radarr already hard-linked to a torrent client's folder get the guard's link too, and Atoll never counts its own link in `nlink`. Turned off after use, the guard's links are removed, journaled, and a link whose file has no other name goes to the trash first.
 - **Automatic balancing:** with `balance.schedule = "immediate"`, the trigger is checked at most once an hour, as a check plans the whole pool; with a time window, once a stretch of it; the moves stop at `balance.budget`.
@@ -69,6 +69,18 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - The first release, `v0.1.0-beta.1`, after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
 - GoReleaser v2.20.2 or later once two weeks old.
 - **confirm**: the choices made alone, first the sample configuration outside `/etc`.
+
+## Atoll's own view, after 2026-11-19 (DONE.md)
+
+- Run in qemu `TestViewWrites`, `TestViewXattrs`, `TestViewWritesInParallel`, and again the replicate, cache, link guard and break-glass tests, as the copy pipeline changed (a resume compares, `restore` gives the attributes).
+- Serve `user.` attributes from the catalog, so that Samba with `store dos attributes = yes` browses without waking disks: a table, and a list of attributes for each file in the walks.
+- Give an attribute change to a copy whose disk was away once it is back: today it keeps its old set.
+- Let a part written in parallel follow a rename made after its close (qBittorrent's `.!qB`), rather than drop it.
+- Skip the read of a whole file that a link or an attribute through the view only touched in its change time.
+- The two names of a hard link have their own `st_ino` through the view.
+- `make test-integration` runs nothing: `test/integration` holds only `doc.go`.
+- The table of crash points in `conformance/scenarios/README.md` does not list `xattrs-set`.
+- **confirm**: the choices made alone for hard links, attributes and copies written in parallel (DONE.md).
 
 ## The review's decisions, made by the maintainer on 2026-11-13, to do
 
