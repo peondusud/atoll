@@ -296,7 +296,11 @@
     {"note": "view_ops: a replacement sends the copy it replaces to the trash", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('replace', 'd1', x'66', x'67', 0, NULL, 'planned', 5)"], "error": true},
     {"note": "view_ops: only a deletion or a replacement has an operation of ops", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('mkdir', 'd1', x'66', NULL, 1, 8, 'planned', 5)"], "error": true},
     {"note": "view_ops: a path as text is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('create', 'd1', 'f', NULL, 0, NULL, 'planned', 5)"], "error": true},
-    {"note": "view_ops: an unknown kind is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('link', 'd1', x'66', NULL, 0, NULL, 'planned', 5)"], "error": true},
+    {"note": "view_ops: an unknown kind is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('mknod', 'd1', x'66', NULL, 0, NULL, 'planned', 5)"], "error": true},
+    {"note": "view_ops: a hard link has its new name and the inode it links", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('link', 'd1', x'66', x'67', 0, '12', NULL, 'planned', 5)"], "query": "SELECT kind, CAST(lpath2 AS TEXT), file_key FROM view_ops", "rows": [["link", "g", "12"]]},
+    {"note": "view_ops: a hard link without its new name is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('link', 'd1', x'66', NULL, 0, '12', NULL, 'planned', 5)"], "error": true},
+    {"note": "view_ops: a hard link without the inode it links is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('link', 'd1', x'66', x'67', 0, NULL, NULL, 'planned', 5)"], "error": true},
+    {"note": "view_ops: a hard link of a folder is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('link', 'd1', x'66', x'67', 1, '12', NULL, 'planned', 5)"], "error": true},
     {"note": "view_ops: an unknown state is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('create', 'd1', x'66', NULL, 0, NULL, 'taken', 5)"], "error": true}
   ]
 }

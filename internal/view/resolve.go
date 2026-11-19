@@ -13,8 +13,10 @@ const (
 	OpWrite   = "write"
 	OpRename  = "rename"
 	OpReplace = "replace"
-	OpUnlink  = "unlink"
-	OpRmdir   = "rmdir"
+	// OpLink is a hard link: Path the name it was made from, Path2 the new name, on one disk (specs.md §21.2).
+	OpLink   = "link"
+	OpUnlink = "unlink"
+	OpRmdir  = "rmdir"
 )
 
 // Op is an operation of the view that no pass has taken in, as Resolve reads it (specs.md §21.2).
@@ -22,7 +24,7 @@ type Op struct {
 	Kind string
 	Disk string
 	Path string
-	// Path2 is the new path of a rename or a replacement.
+	// Path2 is the new path of a rename, a replacement or a hard link.
 	Path2  string
 	Folder bool
 }
@@ -54,10 +56,10 @@ func at(path, p string) bool {
 }
 
 // Resolve says what a path resolves to, the view's own operations given oldest first, the newest deciding: a path
-// made, written or renamed to presents what its disk holds there; one deleted, removed, replaced or renamed from, or
-// below a folder removed or renamed from, presents nothing; any other, the catalog's rows, below a folder renamed at
-// its old name (specs.md §21.2). A folder is renamed on every disk that holds it, so a disk always holds a path at the
-// path the view presents it at.
+// made, written, renamed or hard-linked to presents what its disk holds there, the name a hard link was made from
+// staying as it was; one deleted, removed, replaced or renamed from, or below a folder removed or renamed from,
+// presents nothing; any other, the catalog's rows, below a folder renamed at its old name (specs.md §21.2). A folder is
+// renamed on every disk that holds it, so a disk always holds a path at the path the view presents it at.
 func Resolve(ops []Op, path string) Source {
 	q := path
 	var later []string
@@ -87,6 +89,10 @@ func Resolve(ops []Op, path string) Source {
 				return Source{Kind: FromDisk, Disk: o.Disk}
 			case !o.Folder && q == o.Path:
 				return Source{Kind: Absent}
+			}
+		case OpLink:
+			if q == o.Path2 {
+				return Source{Kind: FromDisk, Disk: o.Disk}
 			}
 		}
 	}
@@ -121,7 +127,7 @@ func ListOf(ops []Op, dir string) Listing {
 		switch o := &ops[k]; o.Kind {
 		case OpCreate, OpMkdir, OpSymlink, OpWrite:
 			target = o.Path
-		case OpRename, OpReplace:
+		case OpRename, OpReplace, OpLink:
 			target = o.Path2
 		default:
 			continue

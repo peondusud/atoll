@@ -523,6 +523,68 @@ func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.
 	return view.NodeOfStat(targets[0], first, target), nil
 }
 
+// Link gives the file a path presents a second name, on the disk it is presented from, as a hard link on that disk
+// (specs.md §21.2): the folders above the new name that the disk lacks are made as for what is new. ErrIsFolder for a
+// folder, as on any filesystem; ErrCrossDisk when it cannot be made there, as across two filesystems, so that a
+// program copies instead: a symbolic link, a disk the view may not write to now, a name that disk refuses, collides
+// with one it holds, or puts past its branch's limit, or a driver that makes no such name. Each name is then a file of
+// its own, which the passes replicate as any other, never as a link (specs.md §14, §15.1).
+func (w *Writer) Link(ctx context.Context, from, to string) (*view.Node, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.tree.Lookup(ctx, from)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("%w", err)
+	case n == nil:
+		return nil, ErrNotFound
+	case n.Kind == view.NodeDir:
+		return nil, ErrIsFolder
+	case n.Kind != view.NodeFile:
+		return nil, ErrCrossDisk
+	}
+	if err := w.free(ctx, to); err != nil {
+		return nil, err
+	}
+	d := w.disk(n.Disk)
+	if d == nil || !w.handles.Has(n.Disk) {
+		return nil, ErrCrossDisk
+	}
+	refused, err := w.refusedOn(ctx, d, to, "")
+	if err != nil {
+		return nil, err
+	}
+	if refused {
+		return nil, ErrCrossDisk
+	}
+	var made fsx.Stat
+	err = w.handles.Use(n.Disk, func(h *ops.Disk) error {
+		st, found, err := h.StatRoot(from)
+		switch {
+		case err != nil:
+			return err //nolint:wrapcheck // ops says what failed
+		case !found:
+			return ErrNotFound
+		case st.Kind != fsx.KindFile:
+			return ErrCrossDisk
+		}
+		v := &catalog.ViewOp{Kind: catalog.ViewLink, Disk: n.Disk, Path: from, Path2: to, FileKey: fmt.Sprintf("%d", st.Ino)}
+		if err := w.journal(ctx, v); err != nil {
+			return err
+		}
+		made, err = h.LinkUser(from, to, v.FileKey, w.like(ctx))
+		return w.finish(ctx, v, err)
+	})
+	switch {
+	case errors.Is(err, ops.ErrNameRefused), errors.Is(err, ops.ErrNoLink), errors.Is(err, ErrNoHandle), errors.Is(err, ops.ErrPathTaken):
+		// What the disk holds at the new name, as a stale copy the view does not present, takes it there too.
+		return nil, fmt.Errorf("%w: %w", ErrCrossDisk, err)
+	case err != nil:
+		return nil, err
+	}
+	return view.NodeOfStat(n.Disk, &made, ""), nil
+}
+
 // Unlink deletes what a path presents, but a folder: a file goes to the trash from the disk it is presented from,
 // `deleted`, and the pass sends its other copies (specs.md §15.5, §21.2); a symbolic link is removed.
 func (w *Writer) Unlink(ctx context.Context, path string) error {

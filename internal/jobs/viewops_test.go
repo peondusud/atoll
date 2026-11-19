@@ -33,7 +33,11 @@ func (b *bench) viewOf() *writer.Writer {
 		}
 		handles.Set(d.ID, h)
 	}
-	tree := view.NewTree(b.db, roots, view.Owner{}, b.now)
+	settings, err := b.config.Cache()
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	tree := view.NewTree(b.db, roots, view.Owner{}, b.now).WithCache(settings.InView)
 	w, err := writer.New(b.db, b.config, b, tree, handles, slog.New(slog.DiscardHandler))
 	if err != nil {
 		b.t.Fatal(err)

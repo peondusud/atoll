@@ -51,7 +51,7 @@ func errnoOf(what, p string, err error) syscall.Errno {
 		return syscall.ENOTEMPTY
 	case errors.Is(err, writer.ErrRefused), errors.Is(err, ops.ErrNameRefused), errors.Is(err, writer.ErrInvalid):
 		return syscall.EINVAL
-	case errors.Is(err, writer.ErrCrossDisk):
+	case errors.Is(err, writer.ErrCrossDisk), errors.Is(err, ops.ErrNoLink):
 		return syscall.EXDEV
 	case errors.Is(err, writer.ErrNoSpace):
 		return syscall.ENOSPC
@@ -149,9 +149,32 @@ func (n *node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedd
 	return errnoOf("the view cannot rename", from, n.w.Rename(whole(ctx), from, join(to.logical(), newName), flags&renameNoReplace != 0))
 }
 
-// Link is refused as across two filesystems, so that a program copies instead (specs.md §21.2).
-func (n *node) Link(context.Context, fs.InodeEmbedder, string, *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	return nil, syscall.EXDEV
+// Link gives a file a second name on the disk it is presented from (specs.md §21.2). A folder answers EPERM, as on any
+// filesystem; what cannot be made there answers EXDEV, as across two filesystems, so that a program copies instead.
+func (n *node) Link(ctx context.Context, target fs.InodeEmbedder, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	if n.w == nil {
+		return nil, syscall.EROFS
+	}
+	source, ok := target.(*node)
+	if !ok {
+		return nil, syscall.EXDEV
+	}
+	from, to := source.logical(), join(n.logical(), name)
+	if from == "" {
+		return nil, syscall.EPERM
+	}
+	v, err := n.w.Link(whole(ctx), from, to)
+	switch {
+	case errors.Is(err, writer.ErrIsFolder):
+		return nil, syscall.EPERM
+	case errors.Is(err, writer.ErrCrossDisk):
+		// Whatever the disk answered of it: what wraps it would read as another error.
+		return nil, syscall.EXDEV
+	case err != nil:
+		return nil, errnoOf("the view cannot make a hard link", to, err)
+	}
+	fill(&out.Attr, v)
+	return n.child(ctx, to, v), 0
 }
 
 // Setxattr and Removexattr are refused: the view keeps no extended attribute (specs.md §21.2).
