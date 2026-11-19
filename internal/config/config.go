@@ -166,6 +166,47 @@ func (c *Config) Cache() (Cache, error) {
 	return out, nil
 }
 
+// The formats a process may write its log in (specs.md §23.2).
+const (
+	LogJSON = "json"
+	LogText = "text"
+)
+
+// Telemetry is what [telemetry] says (specs.md §23.2): how each process writes its log, and what goes to an OTLP/HTTP
+// collector.
+type Telemetry struct {
+	// LogFormat is LogJSON or LogText.
+	LogFormat string
+	// Endpoint is otlp_endpoint, empty for none; Metrics and Logs say which signals go there.
+	Endpoint      string
+	Metrics, Logs bool
+	// Interval is how often the metrics go, and Timeout what a request may take.
+	Interval, Timeout time.Duration
+	// HeadersFile holds the headers each request carries, empty for none.
+	HeadersFile string
+}
+
+// Telemetry returns [telemetry] (specs.md §23.2).
+func (c *Config) Telemetry() (Telemetry, error) {
+	e := c.effective
+	t := Telemetry{}
+	t.LogFormat, _ = e["telemetry.log_format"].(string)
+	t.Endpoint, _ = e["telemetry.otlp_endpoint"].(string)
+	t.Metrics, _ = e["telemetry.otlp_metrics"].(bool)
+	t.Logs, _ = e["telemetry.otlp_logs"].(bool)
+	t.HeadersFile, _ = e["telemetry.otlp_headers_file"].(string)
+	var err error
+	interval, _ := e["telemetry.otlp_interval"].(string)
+	if t.Interval, err = value.ParseDuration(interval); err != nil {
+		return Telemetry{}, fmt.Errorf("telemetry.otlp_interval: %w", err)
+	}
+	timeout, _ := e["telemetry.otlp_timeout"].(string)
+	if t.Timeout, err = value.ParseDuration(timeout); err != nil {
+		return Telemetry{}, fmt.Errorf("telemetry.otlp_timeout: %w", err)
+	}
+	return t, nil
+}
+
 // Schedule returns replication.window, maintenance.window when it is left out, and the time zone both are read in,
 // timezone, local when left out (specs.md §12.3): where the copies of a file in scheduled mode run, and when files
 // leave the SSD cache (§19).

@@ -59,7 +59,21 @@ func checkRelations(tree, user map[string]any, c *Config, found *problems) {
 		found.add("ups.nut", "ups.enabled needs a NUT address")
 	}
 	checkAPI(tree, found)
+	checkTelemetry(tree, found)
 	checkRules(tree, user, c, found)
+}
+
+// checkTelemetry refuses a signal to export with nowhere to send it, and headers sent in clear (specs.md §23.2): they
+// hold a secret, as an API key.
+func checkTelemetry(tree map[string]any, found *problems) {
+	t := table(tree, "telemetry")
+	endpoint := text(t, "otlp_endpoint")
+	if endpoint == "" && (t["otlp_metrics"] == true || t["otlp_logs"] == true) {
+		found.add("telemetry.otlp_endpoint", "otlp_metrics and otlp_logs need an endpoint to send to")
+	}
+	if text(t, "otlp_headers_file") != "" && strings.HasPrefix(endpoint, "http://") {
+		found.add("telemetry.otlp_headers_file", "headers hold a secret, which plain HTTP would send in clear: the endpoint needs https://")
+	}
 }
 
 func checkDisks(tree map[string]any, c *Config, found *problems) {
@@ -446,7 +460,8 @@ func poolKeys() map[string]string {
 }
 
 // noEffect warns about what the file or the preset set and what else it set makes of no effect (specs.md §24.4):
-// read.classes with read.policy = "oldest", which reads the original alone (§7).
+// read.classes with read.policy = "oldest", which reads the original alone (§7), and an OTLP endpoint with no signal to
+// send there (§23.2), among others.
 func noEffect(tree map[string]any, set map[string]any) []Problem {
 	var out []Problem
 	if _, classes := set["read.classes"]; classes && text(table(tree, "read"), "policy") == "oldest" {
@@ -467,6 +482,10 @@ func noEffect(tree map[string]any, set map[string]any) []Problem {
 				out = append(out, Problem{Key: key, Message: needsOwnView})
 			}
 		}
+	}
+	// An endpoint with neither signal sends nothing (specs.md §23.2).
+	if t := table(tree, "telemetry"); text(t, "otlp_endpoint") != "" && t["otlp_metrics"] != true && t["otlp_logs"] != true {
+		out = append(out, Problem{Key: "telemetry.otlp_endpoint", Message: "no effect with neither otlp_metrics nor otlp_logs: nothing is sent"})
 	}
 	return out
 }
