@@ -1,4 +1,4 @@
-# A release (specs.md §26), on a tag v* that the maintainer alone pushes, as v0.1.0-beta.1: GoReleaser builds, packs and
+# A release (specs.md §26), on a tag v* that the maintainer alone pushes, as v0.1.0: GoReleaser builds, packs and
 # drafts it (.goreleaser.yaml), then GitHub attests the provenance of each archive and package. The draft waits for the
 # maintainer, who publishes it once this run has passed.
 name: Release

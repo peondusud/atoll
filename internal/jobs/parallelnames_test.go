@@ -26,7 +26,7 @@ func TestCopiesAtOnceTakeTheirNamesOneAtATime(t *testing.T) {
 	t.Parallel()
 	t.Run("a folder made once", func(t *testing.T) {
 		t.Parallel()
-		p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
+		p := newParallel(t, ssdAtOnce, map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 		paths := p.fill("t1", 2)
 		var mu sync.Mutex
 		looks := map[uint64]int{}
@@ -67,7 +67,7 @@ func TestCopiesAtOnceTakeTheirNamesOneAtATime(t *testing.T) {
 	})
 	t.Run("a folder's time put back once", func(t *testing.T) {
 		t.Parallel()
-		p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
+		p := newParallel(t, ssdAtOnce, map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 		paths := p.fill("t1", 2)
 		folder := filepath.Join(p.dirs["t2"], "media", "F")
 		if err := os.MkdirAll(folder, 0o755); err != nil {

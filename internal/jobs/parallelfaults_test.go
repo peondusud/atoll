@@ -41,7 +41,7 @@ func TestADiskLostStopsTheCopiesBesideIt(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
+			p := newParallel(t, ssdAtOnce, map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 			paths := p.fill("t1", 2)
 			p.slow = 0
 			// The first file's copy fails on the disk lost; the second's write waits until the first is over and said.
@@ -183,10 +183,12 @@ func TestACrashWithCopiesAtOnce(t *testing.T) {
 		t.Run(point, func(t *testing.T) {
 			t.Parallel()
 			kinds := map[string]string{"t1": "ssd", "t2": "ssd"}
-			p := newParallel(t, "", kinds, "t1", "t2")
+			// Copies at once are not the default (§28): this pool allows four on its flash disks.
+			more := "[replication]\nmax_parallel_per_ssd = 4\n"
+			p := newParallel(t, more, kinds, "t1", "t2")
 			paths := p.fillLarge("t1", 6)
 			p.now += 11 * 60_000_000_000
-			p.crash(crashSpec{IDs: []string{"t1", "t2"}, Kinds: kinds, Point: point, Count: 3})
+			p.crash(crashSpec{IDs: []string{"t1", "t2"}, Kinds: kinds, More: more, Point: point, Count: 3})
 			// Several copies were under way when it stopped: each left its operation, and a part for most.
 			planned := p.count("SELECT count(*) FROM ops WHERE kind = 'create' AND state = 'planned'")
 			if planned < 2 {

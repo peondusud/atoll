@@ -60,6 +60,9 @@ nfpms:
     ids: [atoll]
     package_name: atoll
     file_name_template: "{{ .ConventionalFileName }}"
+    # The Debian revision, as Debian's policy gives a package that is not native: 0.1.0-1, and 0.1.0-2 for a package
+    # made again with no change of code or tag (the maintainer, 2026-11-19).
+    release: "1"
     vendor: Atoll
     homepage: https://github.com/peondusud/atoll
     maintainer: peondusud <peondusud@users.noreply.github.com>
@@ -134,7 +137,8 @@ release:
   # A draft: the maintainer publishes it once the workflow, its attestations included, has passed.
   draft: true
   replace_existing_draft: true
-  # v0.1.0-beta.1, -alpha.N and -rc.N are prereleases.
+  # The series is v0.Y.Z while the core is proven, then v1.0.0 (the maintainer, 2026-11-19); a tag with a suffix,
+  # -alpha.N, -beta.N or -rc.N, would be a prerelease.
   prerelease: auto
   name_template: "Atoll {{ .Tag }}"
   header: |

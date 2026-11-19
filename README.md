@@ -6,6 +6,17 @@ Atoll adds file-level redundancy to heterogeneous disks (SATA, USB DAS) that hol
 
 **Under development and not ready for real data.** The alpha, phase 1a, is in progress: see [ROADMAP.md](ROADMAP.md).
 
+**The core first.** The first release is the core, used through mergerfs, made very reliable and very secure before any feature is added. What came after it is **experimental**, off by default, and not part of what that release promises (specs.md §28):
+
+- Atoll's own view that writes (`view.engine = "atoll"`, §21.2), and with it its hard links, its extended attributes and its copies written in parallel in `immediate` mode; the view read only beside mergerfs (`view.readonly_mount`) too
+- the SSD cache (§19)
+- the UPS through NUT (§20)
+- the link guard (`trash.link_guard`, §17)
+- copies at once past one a disk (`replication.max_parallel_per_ssd`, `max_parallel_per_hdd` or `max_parallel_per_disk` above 1, §14)
+- the export over OTLP (`telemetry.otlp_*`, §23.2)
+- `balance.equalize = "percent"` (§12.4)
+- disks mounted with the kernel's type `ntfs` of Linux 7.1 and later (§22)
+
 ## How it works
 
 - **Copies.** Each file under a disk's `media/` folder can have 0 to 2 full copies on other disks, at the same relative path and under the same name. Every disk stays a normal folder tree, readable on its own.
@@ -38,7 +49,7 @@ Each [release](https://github.com/peondusud/atoll/releases) holds, for amd64 and
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-gh attestation verify atoll_0.1.0~beta.1_amd64.deb --repo peondusud/atoll
+gh attestation verify atoll_0.1.0-1_amd64.deb --repo peondusud/atoll
 ```
 
 Installing either changes nothing on its own: no unit is enabled or started, and no configuration is written.
@@ -65,7 +76,7 @@ GitHub Actions runs the same checks on each push to `beta` and `main` and each p
 
 ## Releasing
 
-The maintainer alone pushes a tag `vX.Y.Z`, or `vX.Y.Z-beta.N` for a prerelease, on a commit the CI passed: `git tag -a v0.1.0-beta.1 -m v0.1.0-beta.1 && git push origin v0.1.0-beta.1`. `.github/workflows/release.yml` builds it with GoReleaser (`.goreleaser.yaml`), drafts the release, marked a prerelease for `-alpha`, `-beta` and `-rc`, and attests each archive and package. Once that run has passed, publish the draft. `make release-snapshot` tries the same on this machine, from a clone; on Windows, from PowerShell at the root of one:
+The maintainer alone pushes a tag `vX.Y.Z` on a commit the CI passed, `v0.Y.Z` while the core is proven and `v1.0.0` once it is declared solid: `git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0`. A tag is Semantic Versioning, as Go reads it; the `.deb` takes the same version with a Debian revision, `0.1.0-1`. `.github/workflows/release.yml` builds it with GoReleaser (`.goreleaser.yaml`), drafts the release, marked a prerelease for `-alpha`, `-beta` and `-rc`, and attests each archive and package. Once that run has passed, publish the draft. `make release-snapshot` tries the same on this machine, from a clone; on Windows, from PowerShell at the root of one:
 
 ```powershell
 docker run --rm -v "${PWD}:/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src goreleaser/goreleaser:v2.20.0 release --snapshot --clean

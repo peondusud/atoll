@@ -317,7 +317,8 @@ func TestCopiesAtOnceByKind(t *testing.T) {
 		files    int
 		min, max int // copies at once on the target, and on the source at most
 	}{
-		{"from one SSD to another, four at once", "", map[string]string{"t1": "ssd", "t2": "ssd"}, 8, 2, 4},
+		{"from one SSD to another, one at a time by default", "", map[string]string{"t1": "ssd", "t2": "ssd"}, 4, 1, 1},
+		{"from one SSD to another, four at once", "[replication]\nmax_parallel_per_ssd = 4\n", map[string]string{"t1": "ssd", "t2": "ssd"}, 8, 2, 4},
 		{"from one HDD to another, one at a time", "", map[string]string{"t1": "hdd", "t2": "hdd"}, 4, 1, 1},
 		{"from an SSD to an HDD, one at a time", "", map[string]string{"t1": "ssd", "t2": "hdd"}, 4, 1, 1},
 		{"from an HDD to an SSD, one at a time", "", map[string]string{"t1": "hdd", "t2": "ssd"}, 4, 1, 1},
@@ -354,11 +355,16 @@ func TestCopiesAtOnceByKind(t *testing.T) {
 	}
 }
 
+// ssdAtOnce lets copies run four at once on a flash disk, as the tests of copies at once need: one at a time is the
+// default (specs.md §28).
+const ssdAtOnce = "[replication]\nmax_parallel_per_ssd = 4\n"
+
 // A file with two copies to make gets one at a time, the per-path lock every copy of a file shares (specs.md §14), while
-// the copies of other files run on other disks at once: an SSD read by two copies, each to an HDD.
+// the copies of other files run on other disks at once: an SSD read by two copies, each to an HDD, with copies at once
+// allowed on the SSD, as they are not by default (§28).
 func TestCopiesToSeveralDisksAtOnce(t *testing.T) {
 	t.Parallel()
-	p := newParallel(t, "[defaults]\nreplicas = 2\n", map[string]string{"t1": "ssd", "t2": "hdd", "t3": "hdd"}, "t1", "t2", "t3")
+	p := newParallel(t, "[defaults]\nreplicas = 2\n[replication]\nmax_parallel_per_ssd = 4\n", map[string]string{"t1": "ssd", "t2": "hdd", "t3": "hdd"}, "t1", "t2", "t3")
 	paths := p.fill("t1", 6)
 	items, err := p.replicateAll()
 	if err != nil {
@@ -388,7 +394,7 @@ func TestCopiesToSeveralDisksAtOnce(t *testing.T) {
 // first copy here ends last.
 func TestCopiesAtOnceListInTheOrderOfTheQueue(t *testing.T) {
 	t.Parallel()
-	p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
+	p := newParallel(t, ssdAtOnce, map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 	paths := p.fill("t1", 6)
 	p.fault("t1", func(call, name string) error {
 		if call == "read" && name == "f00" {
@@ -475,7 +481,7 @@ func TestFaultsWithCopiesAtOnce(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
+			p := newParallel(t, ssdAtOnce, map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 			paths := p.fill("t1", 6)
 			ctx, cancel := context.WithCancel(t.Context())
 			p.cancel = cancel

@@ -402,7 +402,7 @@ func TestEffectiveTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Effective()["replication.max_parallel_per_ssd"]; got != int64(4) {
+	if got := c.Effective()["replication.max_parallel_per_ssd"]; got != int64(1) {
 		t.Errorf("max_parallel_per_ssd from the file: %T %v", got, got)
 	}
 	minimal, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n"))
@@ -445,14 +445,14 @@ func TestViewEngineAtoll(t *testing.T) {
 }
 
 // The copies at once a disk takes (specs.md §14, the maintainer, 2026-11-19): max_parallel_per_disk, set, for every disk
-// alike, as in format version 1; left out, the per-kind keys, one copy at a time on a disk with a spindle and four on
-// one with none by default.
+// alike, as in format version 1; left out, the per-kind keys, one copy at a time on every disk by default, as copies at once are
+// experimental (specs.md §28).
 func TestCopyLimits(t *testing.T) {
 	for text, want := range map[string]CopyLimits{
-		"": {PerDisk: 0, HDD: 1, SSD: 4},
-		"[replication]\nmax_parallel_per_disk = 1\n":                {PerDisk: 1, HDD: 1, SSD: 4},
-		"[replication]\nmax_parallel_per_disk = 3\n":                {PerDisk: 3, HDD: 1, SSD: 4},
-		"[replication]\nmax_parallel_per_hdd = 2\n":                 {PerDisk: 0, HDD: 2, SSD: 4},
+		"": {PerDisk: 0, HDD: 1, SSD: 1},
+		"[replication]\nmax_parallel_per_disk = 1\n":                {PerDisk: 1, HDD: 1, SSD: 1},
+		"[replication]\nmax_parallel_per_disk = 3\n":                {PerDisk: 3, HDD: 1, SSD: 1},
+		"[replication]\nmax_parallel_per_hdd = 2\n":                 {PerDisk: 0, HDD: 2, SSD: 1},
 		"[replication]\nmax_parallel_per_ssd = 16\n":                {PerDisk: 0, HDD: 1, SSD: 16},
 		"[replication]\nmax_parallel_per_ssd = 1\nenabled = true\n": {PerDisk: 0, HDD: 1, SSD: 1},
 	} {

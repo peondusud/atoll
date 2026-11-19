@@ -61,7 +61,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 ## GitHub Actions and releases (DONE.md, 2026-11-19)
 
-- The first release, `v0.1.0-beta.1`, after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
+- The first release, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven and after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
 - GoReleaser v2.20.2 or later once two weeks old.
 - **confirm**: the choices made alone, first the sample configuration outside `/etc`.
 

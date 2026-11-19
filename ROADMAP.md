@@ -2,6 +2,10 @@
 
 Where Atoll stands and what remains before each milestone. The scope of each phase is fixed by [specs.md](specs.md) §28, which this file follows. [TODO.md](TODO.md) details each open item, and [DONE.md](DONE.md) the finished work.
 
+## The core first
+
+The maintainer's rule since 2026-11-19 (specs.md §28): the first release is the core used through mergerfs, made bulletproof, very reliable and very secure, before any feature is added. Until then the work is hardening: the flaws the TLA+ model finds and its next models, the gates of mutation tests and coverage, soaks, the maintainer's real hardware, the threat model's gaps. The features that came after the core stay **experimental**, off by default, listed in §28.
+
 ## Milestones
 
 A milestone is reached when its phase and every phase before it are done.
@@ -43,7 +47,7 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **Contracts and conformance.** 67 vector files and 617 black-box scenarios shared with the Rust version (§29).
 - **Formal verification.** A TLA+ model of copies, propagation and the trash, checked by TLC in the CI (2026-11-19, DONE.md); two flaws of specs.md it found wait for the maintainer's remedy.
 - **CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3, on the maintainer's machine (`test/ci/run.sh`) and on GitHub Actions on each push to `beta` and `main` and each pull request, with govulncheck and the unit tests on arm64 (`.github/workflows/ci.yml`).
-- **Releases.** GoReleaser on a tag the maintainer pushes, drafted for him to publish: a `.tar.gz` and a `.deb` for amd64 and arm64, `SHA256SUMS`, an SBOM per archive and provenance attestations (DONE.md, 2026-11-19). The first, `v0.1.0-beta.1`, after the soak of 24 hours.
+- **Releases.** GoReleaser on a tag the maintainer pushes, drafted for him to publish: a `.tar.gz` and a `.deb` for amd64 and arm64, `SHA256SUMS`, an SBOM per archive and provenance attestations (DONE.md, 2026-11-19). The first, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven: the series is `v0.Y.Z`, then `v1.0.0`.
 
 ### Remaining
 

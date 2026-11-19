@@ -549,7 +549,7 @@ Rules:
 - A replica takes the modification time of its source, the copy the job reads, which may not be the original. So where in-sync copies already hold different dates (§18, or a clamp above), a new replica holds its source's. This is deliberate: the content is the same and no new date appears. Reading the original's date would need its disk, which may be asleep or missing, and §9 rules out the catalog's value. It would change nothing for the copies that differ, which keep their dates.
 - **Copies at once, by the kind of each disk** (the maintainer, 2026-11-19: one at a time on a spindle, several on flash). A copy counts against both the disk it reads and the disk it writes, so that a disk with a spindle is never read or written by two copies at once, as its head would seek between them:
   - `replication.max_parallel_per_hdd` copies at once, 1 by default, on a disk any of whose whole disks has a spindle, behind a USB bridge or not, as the kernel says it (`/sys/block/<name>/queue/rotational`, which wakes no disk), and on one whose kind cannot be told: a whole disk that gives no answer, a filesystem whose whole disks cannot be found, a machine that cannot tell. That is the safest: two copies at once on a spindle only slow both;
-  - `replication.max_parallel_per_ssd`, 4 by default, on a disk with no spindle under any of its whole disks, a SATA SSD or an NVMe drive: each copy reads and writes in order, so a few at once keep a flash disk busy, and hide the syncs of small files, while four match the cores of the machines of §26;
+  - `replication.max_parallel_per_ssd`, 1 by default, on a disk with no spindle under any of its whole disks, a SATA SSD or an NVMe drive: each copy reads and writes in order, so a few at once keep a flash disk busy, and hide the syncs of small files, four matching the cores of the machines of §26. One by default, as the maintainer chose on 2026-11-19, the core first (§28): copies at once stay experimental until the model of §27 covers them and a soak on a real SSD has run them;
   - `replication.max_parallel_per_disk`, when set, on every disk alike, whatever its kind, as format version 1 meant it;
   - at most 8 copies in all, as each holds a chunk of 4 MiB and a hasher (§26).
 
@@ -1576,7 +1576,7 @@ long_paths = "skip"                     # skip: no path past the 4095 bytes of a
 enabled               = true
 window                = "02:00-06:00"   # may wrap past midnight, e.g. "23:00-05:00"
 max_parallel_per_hdd  = 1               # copies at once on a disk with a spindle, or of unknown kind
-max_parallel_per_ssd  = 4               # on a SATA SSD or an NVMe drive
+max_parallel_per_ssd  = 1               # on a SATA SSD or an NVMe drive; more is experimental (§28)
 # max_parallel_per_disk = 1             # every disk alike, whatever its kind
 
 [deletes]
@@ -1888,7 +1888,7 @@ The daemon that runs for good (§15.13) answers questions about the pool over HT
 - Robustness: a hard kill (kill -9) or a power cut at any moment loses no file and leaves a consistent catalog after restart.
 - Security: local API over a socket with restricted permissions; HTTP limited to localhost or the Tailscale network, with a token (§25.1). Its one write, an answer to a guard, asks for its confirmation in the request, and over TCP for a token that other accounts of the machine cannot read. The catalog and its backups, which hold what the API answers with, sit in a folder closed to other accounts (`StateDirectoryMode=0750` in `deploy/atoll.service`). The threats to each entry point, what holds them and what is left are in `docs/threat-model.md`, which is no contract.
 - Distribution: a single binary. Go version: Linux amd64 and arm64. Rust version: the same, then Windows amd64 (phase 4).
-  - **Releases.** A tag `vX.Y.Z`, or `vX.Y.Z-beta.N` and the like for a prerelease, pushed by the maintainer alone, starts `.github/workflows/release.yml`. GoReleaser (`.goreleaser.yaml`) builds the binary static (`CGO_ENABLED=0`, `-trimpath`), its version read from the tag by `go build` and nothing of the time of the build in it, and drafts a GitHub release, which the maintainer publishes. For each of amd64 and arm64: a `.tar.gz` holding the binary, `deploy/`'s units, sample configuration and README, `LICENSE` and `README.md`, with its SBOM (SPDX, by syft); and a `.deb`. `SHA256SUMS` lists them all, and each archive and package has a build provenance attestation of GitHub's (Sigstore), which `gh attestation verify` checks. No signing key.
+  - **Releases.** A tag `vX.Y.Z`, Semantic Versioning as Go reads it, `v0.Y.Z` while the core is proven and `v1.0.0` once it is declared solid (the maintainer, 2026-11-19), pushed by the maintainer alone, starts `.github/workflows/release.yml`. GoReleaser (`.goreleaser.yaml`) builds the binary static (`CGO_ENABLED=0`, `-trimpath`), its version read from the tag by `go build` and nothing of the time of the build in it, and drafts a GitHub release, which the maintainer publishes. For each of amd64 and arm64: a `.tar.gz` holding the binary, `deploy/`'s units, sample configuration and README, `LICENSE` and `README.md`, with its SBOM (SPDX, by syft); and a `.deb`. `SHA256SUMS` lists them all, and each archive and package has a build provenance attestation of GitHub's (Sigstore), which `gh attestation verify` checks. No signing key.
   - **The `.deb`** installs the binary at `/usr/bin/atoll`, the units in `/usr/lib/systemd/system/`, which start it from there, and the sample configuration in `/usr/share/doc/atoll/examples/`, and creates the account `atoll` the units run as, once. It enables and starts nothing and writes no configuration: installing changes nothing until `atoll init`, and a unit started. Removing or purging it leaves the account, `/etc/atoll`, `/var/lib/atoll` and a unit that runs as they are. It recommends mergerfs and smartmontools and suggests fuse3 and ntfs-3g, without which Atoll runs (§10, §21, §23).
 
 ## 27. Test plan
@@ -1944,6 +1944,17 @@ The daemon that runs for good (§15.13) answers questions about the pool over HT
 | 5 | — | Rust | web interface, openmediavault plugin, duplicates by metadata, header cache, parity study | — |
 
 A milestone is reached when its phase and every phase before it are done: the alpha is the safe core, the beta the complete Linux MVP, and v0.1, the first stable version, adds Atoll's own view, with the contracts frozen at format version 1. The phases after 2a have no milestone yet. Where the work stands, and what remains before each milestone, is in `ROADMAP.md`.
+
+**The core first** (the maintainer, 2026-11-19: "un truc bullet proof, très fiable et très secure, avec peu de features dans un premier temps; on ajoutera les features une fois le noyau rock solid"). The first release is the core, used through mergerfs: disks known and confirmed, copies made and verified one at a time, renames, deletions and modifications propagated under the guards, the trash, the scrub and the repair, the catalog's backup, verification and rebuild, the alerts, and the local API. Until the core is proven, by the model of §27, by soaks, and on real hardware, no feature is added, and these are **experimental**: each off by default, to turn on knowingly, and none part of what the first release promises:
+
+- Atoll's own view that writes (`view.engine = "atoll"`, §21.2), and with it its hard links, its extended attributes and its copies written in parallel in `immediate` mode; the view read only beside mergerfs (`view.readonly_mount`) too;
+- the SSD cache (§19);
+- the UPS through NUT (§20);
+- the link guard (`trash.link_guard`, §17);
+- copies at once past one a disk (`replication.max_parallel_per_ssd`, `max_parallel_per_hdd` or `max_parallel_per_disk` above 1, §14);
+- the export over OTLP (`telemetry.otlp_*`, §23.2);
+- `balance.equalize = "percent"` (§12.4);
+- disks mounted with the kernel's type `ntfs` of Linux 7.1 and later (§22).
 
 ## 29. Implementation and Rust rewrite
 
