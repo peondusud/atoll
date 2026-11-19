@@ -1,6 +1,6 @@
 # Disk and copy states
 
-Drawn from `states.json` by `go test ./conformance/models -run TestStatesDrawing -update`; edit that file, not this one. The states of a disk and of a copy, and what moves one to another, as specs.md says. states_test.go keeps them equal to the closed lists of schema/migrations and of specs.md §4, each transition to a state, and each bug to an entry of DONE.md that fixed it, or to a flaw of README.md still open.
+Drawn from `states.json` by `go test ./conformance/models -run TestStatesDrawing -update`; edit that file, not this one. The states of a disk and of a copy, and what moves one to another, as specs.md says. states_test.go keeps them equal to the closed lists of schema/migrations and of specs.md §4, each transition to a state, and each bug to an entry of DONE.md that fixed it, or to a flaw of README.md, open or fixed.
 
 ## Disk states
 
@@ -98,5 +98,5 @@ No transition enters:
 |---|---|---|---|
 | [1] | `pending` → (none) | a pending copy kept past min_free was written into the reserve | DONE.md, The review's sixteen decisions, made by the maintainer on 2026-11-13 |
 | [2] | `ok` → `stale` | a copy no user changed went over the others | DONE.md, Two more decisions of the maintainer, made on 2026-11-14 |
-| [3] | `pending` → `ok` | open, flaw 1: a write before the commit recorded as verified | README.md, Flaw 1, open |
+| [3] | `pending` → `ok` | flaw 1, fixed: a write before the commit recorded as verified | README.md, Flaw 1, fixed |
 | [4] | `pending` → (none) | open, flaw 2: a job running canceled with its pending copy | README.md, Flaw 2, open |

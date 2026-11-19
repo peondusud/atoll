@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §14.2, §17.2, §15.4; conformance/models/README.md, flaw 1",
-  "description": "A replica written into once its name is in the library and before its row is written, here across a crash at source-synced: the edit is a modification, propagated to the other copy, the version before going to the trash. Fails while flaw 1 stands: the reprise records the edited copy as a verified copy of the version it was made from, every later look finds it as its row says, and the edit stays on t2 alone.",
+  "description": "A replica written into once its name is in the library and before its row is written, here across a crash at source-synced: the reprise records what the part was when verified, so that the edit is a modification, propagated to the other copy, the version before going to the trash. Before the remedy of flaw 1, the reprise recorded the edited copy as a verified copy of the version it was made from, every later look found it as its row said, and the edit stayed on t2 alone.",
   "clock": "2030-01-01T00:00:00Z",
   "disks": [
     {

@@ -21,7 +21,7 @@ The first line of each `.cfg` says what TLC must find there: `\* expect: pass`, 
 | `Replication.tla` | The model: variables, the actions of Atoll and of the world, the invariants. Each action names the section and step of `specs.md` it formalizes. |
 | `MC.tla` | What the instances name and a `.cfg` file cannot hold: the physical disks and the copies at the start. |
 | `*.cfg` | The instances TLC checks, each with what it expects. |
-| `flaws/` | A black-box scenario for each flaw, in the format of `../scenarios/README.md`, which fails until the flaw is fixed and then moves to `../scenarios/`. |
+| `flaws/` | A black-box scenario for each flaw still open, in the format of `../scenarios/README.md`, which fails until the flaw is fixed and then moves to `../scenarios/`; the folder is gone while no flaw is open. |
 | `fingerprints.json`, `fingerprints_test.go` | The SHA-256 of each section of `specs.md` the model formalizes, and the test that compares them (below). |
 | `states.json`, `states.md`, `states_test.go` | The statecharts of a disk's states and a copy's, each transition with the section of `specs.md` that says it and the past bugs it caused, by their entry of `DONE.md`; `states.md` is drawn from `states.json`, and the test keeps both equal to the closed lists of `schema/migrations/` and `specs.md` §4. They show that no transition enters the copy state `unavailable`. |
 
@@ -60,17 +60,19 @@ Measured with `make model-check` on the maintainer's machine, 2 workers, on 2026
 | `Link` | pass | `Propagate` on disks without `RENAME_NOREPLACE` | 2,369,405 | 55 s |
 | `TwoFiles` | pass | a file to replicate and one at its level, in the same passes | 1,097,319 | 36 s |
 | `Live` | pass | liveness: one user action, one kill, one disk lost and mounted again in time | 394,080 | 29 s |
-| `FlawReplicaEdited` | `ReplicaInSync` | flaw 1, `specs.md` as it is | a few hundred | 1 s |
+| `FlawReplicaEdited` | pass | flaw 1, fixed: its trace, with the remedy | 3,657 | 3 s |
 | `FlawJobDroppedGone` | `Inv11_OwnOpsNotUsers` | flaw 2, through a deletion | about 5,000 | 1 s |
 | `FlawJobDroppedPlan` | `ReplicaInSync` | flaw 2, through the plan | about 35,000 | 3 s |
 
-The instances that expect `pass` take the remedies of both flaws (`Fixes`), so that TLC looks past them; the `Flaw…` instances take `specs.md` as it is, but for the remedy of flaw 1 in those of flaw 2.
+The instances that expect `pass` take the remedy proposed for flaw 2 (`Fixes`), so that TLC looks past it; the `Flaw…` instances take `specs.md` as it is. Flaw 1's remedy is `specs.md`'s now, and its instance expects `pass`.
 
 ## Flaws found in specs.md
 
-Both are real: each trace was replayed on the conformance build, and each has a black-box scenario in `flaws/` that fails today (`make model-flaws`). Their remedy is the maintainer's to decide; the model's `Fixes` holds the one proposed.
+Both are real: each trace was replayed on the conformance build, and each had a black-box scenario in `flaws/` that failed (`make model-flaws`) until its remedy, the maintainer's to decide; the model's `Fixes` holds the one proposed for a flaw still open. Once a remedy is in `specs.md`, the model takes it whatever `Fixes` says, the flaw's name leaves `Fixes`, its instance expects `pass`, and its scenario moves to `../scenarios/`.
 
 ### Flaw 1: a write into a new replica before its row is written is recorded as verified
+
+Fixed on 2026-11-19, with the remedy the maintainer approved (below): `specs.md` §14.2, `conformance/vectors/create_row.json`, `FlawReplicaEdited.cfg` expecting `pass`, and `../scenarios/replica-edited-before-commit.json`.
 
 `specs.md` §14.2 commits a copy "with what a look at its new name finds", and its reprise, for a target `same` and a part `absent`, "finishes as above, with the hashes the job recorded". The look comes after the rename has put the copy in the library: whatever a user writes into it between the rename and the look is recorded as the copy's own state, `verified_ns` set against the hash of the version it was made from.
 
@@ -80,9 +82,9 @@ Both are real: each trace was replayed on the conformance build, and each has a 
 4. The commit records the copy `ok`, verified, with the size and times of version 2, while the file's hash is version 1's (`ReplicaInSync` broken).
 5. Every later look finds the copy as its row says: the edit is never propagated. A scrub then reads a mismatch with unchanged size and times, `corrupt`, and repairs the user's edit away from disk 1, the chunks it held in the trash (against G4); or a later change on disk 1 makes it stale and sends it to the trash.
 
-A crash at `source-synced` makes the window as long as Atoll is down: the reprise records what is there when it runs. In the code: `internal/ops/create.go` (`PlacePart`, whose `movedFrom` looks after the syncs) and `internal/ops/recover.go` (`recoverCreate`, "what is there now is what gets recorded"), then `catalog.FinishCreate`. Reproduced by `FlawReplicaEdited.cfg` and `flaws/replica-edited-before-commit.json`.
+A crash at `source-synced` makes the window as long as Atoll is down: the reprise records what is there when it runs. In the code: `internal/ops/create.go` (`PlacePart`, whose `movedFrom` looks after the syncs) and `internal/ops/recover.go` (`recoverCreate`, "what is there now is what gets recorded"), then `catalog.FinishCreate`. Reproduced by `FlawReplicaEdited.cfg` and `replica-edited-before-commit.json`, which failed until the remedy.
 
-Proposed remedy (`create-look`): the row takes what the part was when it was verified, before the rename (inode, size, modification time), so that a write since reads as `edited` at the next look; the reprise likewise records the part's size and modification time from the job, never what it finds.
+The remedy (`create-look`, approved by the maintainer on 2026-11-19): the row takes what the part was when it was verified, before the rename (inode, size, modification time), so that a write since reads as `edited` at the next look; the reprise likewise records the part's size and modification time from the job, never what it finds. As it landed: the job records with its whole-file hash what the part was then, its size, times, mode, owner and links (`part_look`), and the row takes it all, but for the change time, which the rename moved: that one comes from a look right after the rename, or in a reprise from its look, and only when the look found nothing else moved; otherwise the part's, which the next look finds moved, later than the row says, a modification and never a `conflict` (§15.4). In the model, whose gen stands for size, times and change time at once, and whose rename and the look after it are one step, the row takes gen 0. What it leaves: a write that keeps the size, the times, the mode and the owner moves only the change time, which a reprise cannot tell from the rename's, and takes; the model, where every edit moves the size, cannot see it either (What it leaves out, below).
 
 ### Flaw 2: a job running is dropped while its operation is still planned
 

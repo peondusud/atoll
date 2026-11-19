@@ -135,8 +135,9 @@ func TestJobChunksStopAtAGap(t *testing.T) {
 	}
 }
 
-// A copy made: its pending copy becomes ok with what was found at its name, the file takes the hash it had
-// not, the source is verified, and the job goes with its chunks (specs.md §14.2).
+// A copy made: its pending copy becomes ok with what its part was when verified, the file takes the hash it had
+// not, the source is verified, and the job goes with its chunks (specs.md §14.2). What the part was is recorded with
+// the hash, for a reprise to read back.
 func TestFinishCreate(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -159,8 +160,15 @@ func TestFinishCreate(t *testing.T) {
 			if err := RecordChunks(t.Context(), b.sql(), job.ID, 0, bytes.Repeat([]byte{5}, 32)); err != nil {
 				t.Fatal(err)
 			}
-			if err := RecordVerified(t.Context(), b.sql(), job, bytes.Repeat([]byte{9}, 32)); err != nil {
+			birth := int64(3)
+			look := &PartLook{Size: 1, MtimeNS: 1, CtimeNS: 77, BtimeNS: &birth, Mode: 0o640, UID: 5, GID: 6, Nlink: 1}
+			if err := RecordVerified(t.Context(), b.sql(), job, bytes.Repeat([]byte{9}, 32), look); err != nil {
 				t.Fatal(err)
+			}
+			// What a reprise reads back: the hash, and what the part was then.
+			if back, err := JobOfPart(t.Context(), b.sql(), "u2", job.Part); err != nil || back == nil || back.Look == nil || *back.Look.BtimeNS != 3 ||
+				back.Look.CtimeNS != 77 || back.Look.UID != 5 || !bytes.Equal(back.Hash, job.Hash) {
+				t.Fatalf("%+v, %v", back, err)
 			}
 			if tc.gone {
 				b.exec("DELETE FROM copies WHERE disk_id = 'u2'")

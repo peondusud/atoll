@@ -1,6 +1,10 @@
 package ops
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/peondusud/atoll/internal/catalog"
+)
 
 // Seen says what a name holds, compared with what an operation moved or made.
 type Seen string
@@ -105,4 +109,25 @@ func knownSeen(list ...Seen) error {
 		}
 	}
 	return nil
+}
+
+// CreatedRow says what the row of a copy made records, once a look at its name found it there, right after its
+// rename or in a reprise (specs.md §14.2): what its part was when it was verified, so that a write into it once its name
+// is in the library reads as an edit at the next look. Only the change time is the look's, as the rename moved it, and
+// only when the look found nothing else moved; otherwise it is the part's, which the next look finds moved, and later
+// than the row says, as a modification and not a conflict (§15.4).
+func CreatedRow(verified, found *catalog.PartLook) catalog.PartLook {
+	row := *verified
+	if onlyCtimeMoved(verified, found) {
+		row.CtimeNS = found.CtimeNS
+	}
+	return row
+}
+
+// onlyCtimeMoved says whether two looks at one inode differ in nothing but their change time. A creation time on one
+// alone is a difference.
+func onlyCtimeMoved(a, b *catalog.PartLook) bool {
+	sameBirth := (a.BtimeNS == nil) == (b.BtimeNS == nil) && (a.BtimeNS == nil || *a.BtimeNS == *b.BtimeNS)
+	return sameBirth && a.Size == b.Size && a.MtimeNS == b.MtimeNS && a.Mode == b.Mode && a.UID == b.UID && a.GID == b.GID &&
+		a.Nlink == b.Nlink
 }

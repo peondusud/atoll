@@ -370,6 +370,16 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `warn` | boolean | whether it gets an `op-undone` event |
 | `error` | boolean | `true` on an unknown word or kind, or a name that kind does not have or lacks |
 
+### `create_row.json` — what the row of a copy made records (§14.2, §17.2)
+
+A look is an object of `size`, `mtime_ns`, `ctime_ns`, `btime_ns`, left out where the filesystem gives no creation time, `mode`, the permission bits with setuid, setgid and sticky, `uid`, `gid` and `nlink`, as a job's `payload` holds it in `part_look` (§9).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verified` | object | what the part was when it was verified, before the rename |
+| `found` | object | what a look at its name found once the copy was there: right after the rename, or in a reprise, however long after a crash or a disk lost |
+| `row` | object | what the copy's row records: `verified`, with the change time `found` gives when the two differ in nothing else, a creation time present on one alone being a difference |
+
 ### `copy_verdict.json` — what a look found of one copy (§15.1, §15.12)
 
 A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a creation time. An empty `inode` matches no inode, in a row as in a candidate.

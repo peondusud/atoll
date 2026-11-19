@@ -26,6 +26,10 @@ type ReplicateJob struct {
 	NotBefore sql.NullInt64
 	Part      string // the name in <workdir>/tmp/ it copies into, empty before its first operation
 	Hash      []byte // the whole-file hash its verification gave, nil until then
+	// Look is what the part was when it was verified, recorded with Hash: what the copy's row takes, so that a write
+	// into it once its name is in the library reads as an edit at the next look (specs.md §14.2). Nil until then, and
+	// for a job an earlier version verified.
+	Look *PartLook
 	// Replaces is the disk whose user copy this copy stands in for, as atoll balance --move-originals makes it: the
 	// copy becomes a user copy, and that one an Atoll copy, when it is recorded (specs.md §13.3).
 	Replaces string
@@ -34,18 +38,34 @@ type ReplicateJob struct {
 	Refresh bool
 }
 
+// PartLook is what a look at a copy gives of what its row records: its size, times, mode with setuid, setgid and
+// sticky, owner and links. BtimeNS is nil where the filesystem gives no creation time. A job records the look at its
+// part once verified, in its payload as part_look (specs.md §9, §14.2).
+type PartLook struct {
+	Size    int64  `json:"size"`
+	MtimeNS int64  `json:"mtime_ns"`
+	CtimeNS int64  `json:"ctime_ns"`
+	BtimeNS *int64 `json:"btime_ns,omitempty"`
+	Mode    int64  `json:"mode"`
+	UID     uint32 `json:"uid"`
+	GID     uint32 `json:"gid"`
+	Nlink   int64  `json:"nlink"`
+}
+
 // jobPayload is what a replicate job holds beyond its columns (specs.md §9).
 type jobPayload struct {
-	Part     string `json:"part,omitempty"`
-	Blake3   string `json:"blake3,omitempty"`
-	Replaces string `json:"replaces,omitempty"`
-	Refresh  bool   `json:"refresh,omitempty"`
+	Part     string    `json:"part,omitempty"`
+	Blake3   string    `json:"blake3,omitempty"`
+	PartLook *PartLook `json:"part_look,omitempty"`
+	Replaces string    `json:"replaces,omitempty"`
+	Refresh  bool      `json:"refresh,omitempty"`
 }
 
 func (j *ReplicateJob) payload() (string, error) {
 	data := jobPayload{Part: j.Part, Replaces: j.Replaces, Refresh: j.Refresh}
 	if j.Hash != nil {
 		data.Blake3 = hex.EncodeToString(j.Hash)
+		data.PartLook = j.Look
 	}
 	text, err := json.Marshal(data)
 	if err != nil {
@@ -68,9 +88,14 @@ func (j *ReplicateJob) readPayload(text sql.NullString) error {
 		if err != nil || len(hash) != 32 {
 			return fmt.Errorf("job %d: payload: hash %q", j.ID, data.Blake3)
 		}
-		j.Hash = hash
+		j.Hash, j.Look = hash, data.PartLook
 	}
 	return nil
+}
+
+// dropPart forgets a job's part, with what its verification recorded: the next operation makes one of its own.
+func (j *ReplicateJob) dropPart() {
+	j.Part, j.Hash, j.Look = "", nil, nil
 }
 
 // Queue is one copy the plan wants made.
@@ -355,7 +380,8 @@ func BeginCreate(ctx context.Context, db *sql.DB, job *ReplicateJob, nowNS int64
 			return fmt.Errorf("journal: %w", err)
 		}
 		if job.Part == "" {
-			job.Part, job.Hash = layout.PartName(op.ID), nil
+			job.dropPart()
+			job.Part = layout.PartName(op.ID)
 			if _, err := tx.ExecContext(ctx, "DELETE FROM job_chunks WHERE job_id = ?", job.ID); err != nil {
 				return fmt.Errorf("job: %w", err)
 			}
@@ -448,10 +474,10 @@ func JobChunks(ctx context.Context, db *sql.DB, jobID int64) ([]byte, error) {
 	return out, nil
 }
 
-// RecordVerified records the whole-file hash a verification gave, before anything is renamed, so that a
-// reprise that finds the copy at its name can finish it (specs.md §14.2).
-func RecordVerified(ctx context.Context, db *sql.DB, job *ReplicateJob, hash []byte) error {
-	job.Hash = hash
+// RecordVerified records the whole-file hash a verification gave, and what the part was then, before anything is
+// renamed, so that a reprise that finds the copy at its name can finish it, its row what was verified (specs.md §14.2).
+func RecordVerified(ctx context.Context, db *sql.DB, job *ReplicateJob, hash []byte, look *PartLook) error {
+	job.Hash, job.Look = hash, look
 	payload, err := job.payload()
 	if err != nil {
 		return err
@@ -462,9 +488,9 @@ func RecordVerified(ctx context.Context, db *sql.DB, job *ReplicateJob, hash []b
 	return nil
 }
 
-// FinishCreate says that a copy is made: the operation done, the pending copy ok with what a look at its
-// name found, the file's hash where it had none, the source verified, and the job gone with its chunks
-// (specs.md §14.2). A job gone meanwhile leaves the copy unverified, as nothing says what was checked.
+// FinishCreate says that a copy is made: the operation done, the pending copy ok with made, what its part was when
+// verified, the file's hash where it had none, the source verified, and the job gone with its chunks (specs.md §14.2).
+// A job gone meanwhile leaves the copy unverified, as nothing says what was checked.
 func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, made *NewCopy, nowNS int64) error {
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
 		if err := markOp(ctx, tx, op.ID, "done"); err != nil {
@@ -575,7 +601,7 @@ func takeHash(ctx context.Context, tx *sql.Tx, fileID, jobID int64, hash []byte)
 // part goes with its hashes when the copy in it was dropped (specs.md §14.1, §14.2).
 func RetryJob(ctx context.Context, db *sql.DB, job *ReplicateJob, notBefore sql.NullInt64, keepPart bool) error {
 	if !keepPart {
-		job.Part, job.Hash = "", nil
+		job.dropPart()
 	}
 	payload, err := job.payload()
 	if err != nil {
@@ -605,7 +631,7 @@ func RetryJob(ctx context.Context, db *sql.DB, job *ReplicateJob, notBefore sql.
 // keeps its part when that is still there, for the next operation to resume (specs.md §14.2).
 func Requeue(ctx context.Context, db *sql.DB, job *ReplicateJob, keepPart bool) error {
 	if !keepPart {
-		job.Part, job.Hash = "", nil
+		job.dropPart()
 	}
 	payload, err := job.payload()
 	if err != nil {

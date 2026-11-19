@@ -585,6 +585,9 @@ type Moved struct {
 	Stat fsx.Stat
 	// PriorNS is the change time the file had just before the move.
 	PriorNS sql.NullInt64
+	// Placed is, for a copy's part placed at its name, the look right after the rename, before anything was synced
+	// (PlacePart).
+	Placed fsx.Stat
 }
 
 // Links says what the other names of the file must record, when it has any.

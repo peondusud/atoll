@@ -2,8 +2,10 @@ package ops
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
@@ -74,6 +76,26 @@ func TestRecoveryVectors(t *testing.T) {
 		if got.Finish != (*v.Action == "finish") || got.RemoveSource != *v.RemoveSource || got.RemoveTarget != *v.RemoveTarget ||
 			got.MoveBack != *v.MoveBack || got.Warn != *v.Warn {
 			t.Errorf("vector %d (%s): %+v", i, v.Note, got)
+		}
+	}
+}
+
+type createRowVector struct {
+	Verified *catalog.PartLook `json:"verified"`
+	Found    *catalog.PartLook `json:"found"`
+	Row      *catalog.PartLook `json:"row"`
+	Note     string            `json:"note"`
+}
+
+// What the row of a copy made records: what its part was when verified, with the change time a look found when nothing
+// else moved (specs.md §14.2).
+func TestCreatedRowVectors(t *testing.T) {
+	for i, v := range vectors.Load[createRowVector](t, "create_row.json") {
+		if v.Verified == nil || v.Found == nil || v.Row == nil {
+			t.Fatalf("vector %d: want verified, found and row", i)
+		}
+		if row := CreatedRow(v.Verified, v.Found); !reflect.DeepEqual(row, *v.Row) {
+			t.Errorf("vector %d (%s): %+v", i, v.Note, row)
 		}
 	}
 }

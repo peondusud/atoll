@@ -9,6 +9,7 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // The parts of a create: a copy in progress in <workdir>/tmp/, and what a job does with it (specs.md §14.2).
@@ -213,9 +214,13 @@ func (d *Disk) PlacePart(op *Op, logical string) (*Moved, error) {
 	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, byKey(op.FileKey)); err != nil {
 		return nil, err
 	}
-	if _, err := holds(target.Dir, newName, byKey(op.FileKey)); err != nil {
+	// The look right after the rename, which moved the change time: what the copy's row may take of it, as anything a
+	// user writes into the copy from now on must read as an edit at the next look (specs.md §14.2).
+	placed, err := holds(target.Dir, newName, byKey(op.FileKey))
+	if err != nil {
 		return nil, err
 	}
+	d.withoutOwn(&placed)
 	d.machine.Checkpoint("moved")
 	if err := syncEntry(target.Dir, newName); err != nil {
 		return nil, err
@@ -231,7 +236,30 @@ func (d *Disk) PlacePart(op *Op, logical string) (*Moved, error) {
 		return nil, lost(err)
 	}
 	d.machine.Checkpoint("source-synced")
-	return d.movedFrom(target.Dir, newName, &seen)
+	moved, err := d.movedFrom(target.Dir, newName, &seen)
+	if err != nil {
+		return nil, err
+	}
+	moved.Placed = placed
+	return moved, nil
+}
+
+// LookOf gives what a look at a copy says of what its row records (specs.md §14.2).
+func LookOf(st *fsx.Stat) (catalog.PartLook, error) {
+	found, err := watch.FileFrom("", st)
+	if err != nil {
+		return catalog.PartLook{}, fmt.Errorf("look: %w", err)
+	}
+	return catalog.PartLook{Size: found.Size, MtimeNS: found.MtimeNS, CtimeNS: found.CtimeNS, BtimeNS: found.BtimeNS, Mode: found.Mode,
+		UID: found.UID, GID: found.GID, Nlink: found.Nlink}, nil
+}
+
+// NewCopyFrom says what the catalog records of a copy made at a path, its inode fileKey: the row CreatedRow gives.
+func NewCopyFrom(path, fileKey string, row *catalog.PartLook) *catalog.NewCopy {
+	return &catalog.NewCopy{
+		Path: path, Size: row.Size, MtimeNS: row.MtimeNS, CtimeNS: row.CtimeNS, BtimeNS: row.BtimeNS, FileKey: fileKey, Nlink: row.Nlink,
+		Mode: row.Mode, UID: row.UID, GID: row.GID,
+	}
 }
 
 // What stands at a copy's target (specs.md §14.1).

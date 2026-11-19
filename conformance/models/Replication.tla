@@ -30,7 +30,7 @@ CONSTANTS
     MaxOps,     \* how many operations Atoll may journal: ids never come back (specs.md §9)
     Waits,      \* TRUE: a decision may wait, as for a debounce or settle (specs.md §15.12, Due); FALSE for liveness
     Grace,      \* TRUE: a plan may find a missing disk past health.missing_grace (specs.md §13.4, §18)
-    Fixes,      \* the remedies this model takes for the flaws it found, by name (README.md); {} is specs.md as it is
+    Fixes,      \* the remedies proposed for the flaws it found and still open, by name (README.md); {} is specs.md as it is
     UserActs    \* what a user may do: some of "modify", "replace", "delete", "create"
 
 Disks == 1..NDisks
@@ -44,7 +44,7 @@ ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3
        /\ Phys \in [Disks -> Nat] /\ Start \in [Files -> SUBSET Disks]
        /\ LinkDisks \subseteq Disks
        /\ \A f \in Files : \A a, b \in Start[f] : a # b => Phys[a] # Phys[b]
-       /\ Fixes \subseteq {"create-look", "running-job"}
+       /\ Fixes \subseteq {"running-job"}
        /\ UserActs \subseteq {"modify", "replace", "delete", "create"}
 
 (* Names on a disk: a file's logical path below <root>/, a part <op-id>.part in <workdir>/tmp/,
@@ -334,21 +334,23 @@ TrashFinish(d, p) ==
        /\ rjob' = IF last THEN [rjob1 EXCEPT ![f] = [e \in Disks |-> NoRJob]] ELSE rjob1
        /\ tjob' = IF last THEN [tjob EXCEPT ![f] = [e \in Disks |-> NoTJob]] ELSE [tjob EXCEPT ![f][d] = NoTJob]
 
-(* §14.2: in one transaction, the operation done, the pending copy ok with what a look at its name finds, the
-   file's hash when it had none, the source verified, the job gone. A reprise that finds no job left for the part
-   records the copy as internal/catalog FinishCreate does: ok, created_by atoll, never verified, when the file
-   still has a row; and nothing when it has none.
-   Fix "create-look" (flaw 1 of README.md): the row takes what the part was when it was verified, its gen before
-   the rename, so that a write into the copy since its name appeared reads as an edit at the next look. *)
+(* §14.2: in one transaction, the operation done, the pending copy ok with what the part was when it was verified,
+   the file's hash when it had none, the source verified, the job gone. The part's gen is 0: the row says the copy is
+   untouched since it was verified, so that a write into it once its name is in the library, before the commit or
+   while Atoll is down, reads as an edit at the next look (flaw 1 of README.md, fixed); its reprise takes it from what
+   the job recorded, never from what it finds. The model's gen stands for size, times and change time at once, and the
+   rename and the look right after it are one step, so the change time the code takes from that look, or from a reprise's
+   when nothing else moved, is the part's here. A reprise that finds no job left for the part records the copy as
+   internal/catalog FinishCreate does: ok, created_by atoll, never verified, when the file still has a row, with what it
+   finds; and nothing when it has none. *)
 CreateFinish(d, p) ==
     LET f == ops[p].f
         key == ops[p].key
         job == rjob[f][d]
         owned == job.on /\ job.part = ops[p].part
         verified == owned /\ job.whash # 0 /\ (cfile[f].ver = 0 \/ cfile[f].ver = job.whash)
-        seenGen == IF "create-look" \in Fixes THEN 0 ELSE objs[key].gen
-        newRow == [st |-> "ok", obj |-> key, gen |-> seenGen, gver |-> objs[key].ver, verified |-> verified,
-                   by |-> "atoll", gone |-> "no", seen |-> tick + 1]
+        newRow == [st |-> "ok", obj |-> key, gen |-> IF owned THEN 0 ELSE objs[key].gen, gver |-> objs[key].ver,
+                   verified |-> verified, by |-> "atoll", gone |-> "no", seen |-> tick + 1]
     IN /\ ops' = [ops EXCEPT ![p].st = "done"]
        /\ crow' = IF ~cfile[f].on THEN crow
                   ELSE [crow EXCEPT ![f] = [e \in Disks |->
