@@ -50,8 +50,7 @@ All of it is done but the maintainer's own step, moving Plex's libraries to the 
 Still open, though the solver, the scanner and `atoll names check` are built:
 
 - Measure on the maintainer's Windows machine, with their go-ahead, what a report says is not established: which reserved names Windows 11 still refuses, and what Windows does with `Film.mkv` beside `film.mkv` on an NTFS volume (a VHD).
-- **decision**: hibernated NTFS volumes on every driver (point 3 of `docs/research/ntfs-driver.md`): ntfs3, and the type `ntfs` with `errors=continue`, mount them read-write; a mount check reading `hiberfil.sys` at the top would make such a disk `readonly` (a new reason, §10, §29.3).
-- **confirm**: the six choices made alone for the type `ntfs` (DONE.md, 2026-11-19), the link guard making no link there first.
+- Hibernated NTFS volumes on every driver (point 3 of `docs/research/ntfs-driver.md`), as the maintainer decided on 2026-11-20 ("Oui, readonly"): ntfs3, and the type `ntfs` with `errors=continue`, mount them read-write. The mount check, once the mount is confirmed, makes such a disk `readonly` when a `hiberfil.sys` at its top is under 4 KiB or its first 4 KiB are not all zeros (the rule of `ntfs`'s source), with a new reason (§10, an addition to the closed list of §29.3 and the `reason` enums): vectors in `disk_check.json` first, then the loop-device tests on ntfs3 and `ntfs`.
 - The type `ntfs` without `windows_names` (§22): `windows_names` is recommended since 2026-11-19, as the maintainer chose; whether Atoll leaves a name holding `" * < > ?` alone on a disk mounted without it, as a name refused, is still to decide, and its own trash move on such a name is still to measure there.
 - Run `test/loopdev` on the type `ntfs` in qemu (mainline 7.3), and consider booting Debian sid's 7.3.3, the kernel with no ntfs3 (point 7 of the report).. Measured in `docs/research/ntfs-driver.md`, whose last section lists the decisions it needs. Until then a disk mounted with it is `readonly`.
 
@@ -63,11 +62,10 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 - The first release, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven and after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
 - GoReleaser v2.20.2 or later once two weeks old.
-- **confirm**: the choices made alone, first the sample configuration outside `/etc`.
 
 ## After the two flaws TLC found, fixed on 2026-11-19 (DONE.md)
 
-- **decision**: the limit of flaw 1's fix, a write that keeps size, times, mode and owner and moves only the change time: (a) a reprise that finds another change time than the verified one records the copy unverified (it stops `balance --move-originals` there), or (b) the job records the change time right after the rename, one more commit a copy.
+- The limit of flaw 1's fix, a write that keeps size, times, mode and owner and moves only the change time, as the maintainer decided on 2026-11-20 ("Les deux"): (b) the job records the change time right after the rename, in a commit of its own, which a reprise compares; (a) a reprise that finds no such record, a crash having come between the rename and that commit, and another change time than the verified one, records the copy unverified (it stops `balance --move-originals` there). A scenario first, and a flaw instance of the TLA+ model if it can show it.
 - A file renamed while a job runs reappears at its old name on that disk once the reprise finishes the copy: the reprise could take `first_seen_ns` from the operation's `started_ns`.
 - `atoll scan` and `conflicts resolve` still touch a running job; `restore --to` records the look after its syncs.
 - Run in qemu the loop-device tests these two fixes touch: replicate, a device failing during a copy, copies at once, precision, mode, owner, break glass, the failed mount; ntfs-3g first.
@@ -76,25 +74,19 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 ## The threat model after 2026-11-19 (DONE.md)
 
-- **confirm**: the choices made alone for G1, G4, G5 and G6 (DONE.md).
-- G5, for the maintainer to weigh: a guard on what a day changed, or not purging `overwritten` versions for room while modifications run high.
+- G5, as the maintainer decided on 2026-11-20 ("Garde sur 24 h"): a second window, a day long, for the mass-modification guard (§15.6); past its threshold, propagation pauses and the other copies keep the version before. A new configuration key, an addition at format 1: vectors first.
 - The threat model's low gaps G7 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask).
-- **confirm**: the choices made alone for an idle disk whose device left (DONE.md), `diskseq` first.
 - An empty mount point under another mount reads `not-mounted` with "the mount is at /tmp: write that path, not one through a symlink" (seen in qemu): the parent's entry, which the message takes for a symlink. Say "nothing is mounted at that path" when the entry's mount point is a parent of the disk's.
-- **decision**: G22, a polkit rule limited to the pool's units: a command that prints it, or a check of the unit's `SourcePath` through `polkit.spawn`.
-- **confirm**: the choices made alone for the remount through systemd (DONE.md).
+- G22, as the maintainer decided on 2026-11-20 ("Commande qui l'imprime"): a command that prints a polkit rule naming the mount units of the configuration's disks, which root installs in `/etc/polkit-1/rules.d/` and prints again after `disk add`, as `atoll mergerfs-config` prints mergerfs's line. A new command, an addition to the CLI at format 1; a unit it leaves out is refused, and the daemon mounts that disk itself.
 - Measure the remount through systemd with systemd 252 (Debian 12, openmediavault 7): the polkit rule is checked there, the remount itself is not.
-- **confirm**: the choices made alone for G18 (DONE.md).
-- **confirm**: the choices made alone for G2 and G3 (DONE.md), the fallback without `/proc`, which checks root by its account alone, first.
+- A folder §15.12 makes with no model on any disk (step 3) takes 0755 whatever the umask, as the maintainer decided on 2026-11-20 ("Forcer 0755"): the units' `UMask=0027` makes it 0750 and `atoll`'s, which a media server under another account cannot read. Its `mkdir` operation records 0755, set again by `fchmod` once made.
 - The view (experimental): a file or folder it makes takes the caller's group, not a setgid folder's; a non-owner's write to a setuid file whose presented mode differs from its disk's fails until a pass. Run `TestViewAsAnotherAccount` on Linux 7.3 too.
 
 ## The tests after the gaps of 2026-11-19 (DONE.md)
 
 - Read the first nights of mutation tests on `names`, `rules`, `config`, `integrity` and `solver`, sort the mutants that lived, then set the gate (95 % efficacy, 85 % mutant coverage a pure package); then `jobs`, `ops`, `trash` and `watch`.
 - Read the first `cover` table, and count the scenarios too: the conformance build with `-cover` and `GOCOVERDIR`, merged by `go tool covdata`.
-- **decision**, each: the threat model's medium gaps G1 to G6 and G18 (`docs/threat-model.md`); G4's warning on `http://` and G8's new reason touch contracts.
 - Update the CI's image from Go 1.27.2, whose standard library has GO-2026-6859 and GO-2026-6809 (fixed in 1.27.3 and 1.27.4, which GitHub's govulncheck and the releases use already).
-- **confirm**: the choices made alone for the four gaps (DONE.md).
 
 ## Atoll's own view, after 2026-11-19 (DONE.md)
 
@@ -106,7 +98,6 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - The two names of a hard link have their own `st_ino` through the view.
 - `make test-integration` runs nothing: `test/integration` holds only `doc.go`.
 - The table of crash points in `conformance/scenarios/README.md` does not list `xattrs-set`.
-- **confirm**: the choices made alone for hard links, attributes and copies written in parallel (DONE.md).
 
 ## The review's decisions, made by the maintainer on 2026-11-13, to do
 
@@ -133,10 +124,6 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 - **The watcher gathers the events of a burst before it sends any** (`drain`, `internal/watch/watcher.go`): what the kernel's queue holds, 16,384 events and a few MiB at most, unless events come as fast as they are read. And each slice of the hashes starts again from the first file with no hash (`internal/watch/scan.go`), which a look at its name now settles when it is no longer what its row says. **Recommended: leave.**
 - **`cannotLeave` asks about every replaced copy once for each folder that waits** (`internal/jobs/pass.go`); `guard list` and `/v1/guards` hold every held path three times, some 60 MB for 200,000 paths of a guard that tripped; `GonePaths` reads every `copy-gone` event the catalog ever recorded (`internal/catalog/linkguard.go`), by its plan, each time a link's file has no row left, a tenth of a second for 100,000 events. **Recommended: leave** the first and the last; `guard list` is to write as it reads, when the local API serves large pools.
 
-### To confirm
-
-- A copy found nowhere on a disk that holds a name past the limit of its mergerfs branch is `uncertain`, so a deletion made straight on that disk is undone while the long name is there (§15.8, DONE.md, 2026-11-19), with the other choices made alone for the bound.
-
 ## Phase 1a, the alpha: what is left, and its known limits (specs.md §28)
 
 - Memory of the daemon on 200,000 files (§26): `atoll scan` and every pass of `daemon --until-idle` measured stay under the limit, the highest at about 187 MiB, a scan after a rename of a folder holding everything. The daemon that runs for good, with its watcher and its grouping, held four hours of a change every second on 4,000 files, its heap in use between 2.8 and 6.8 MiB with no growth (§26). On 200,000 files, 12 hours are measured (2026-11-14, `f438a3a`, DONE.md): 293 passes, its heap in use 3.6 to 3.9 MiB, 8 goroutines and 14 open files at every tenth, with no growth, and at most 220.4 MiB resident. Again on 2026-11-18 (`2d016b3`, DONE.md), once passes looked at names: 911 passes, 3.3 to 3.6 MiB of heap in use, 9 goroutines and 14 open files at every tenth, with no growth, and at most 180.7 MiB resident at each tenth. Over days, it is still to measure: `SOAK=24h SOAK_FILES=200000`.
@@ -147,10 +134,10 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 - What modifications leave as limits (§15.4, §15.12): a swap of two names whose other copies are on NTFS, whose drivers cannot exchange two names, and a copy replaced by anything but a regular file, which are only reported. Two folders that swap their names stay a limit too: no walk reads them as renamed (DONE.md).
 - What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), were confirmed on 2026-11-12.
 - The rest of the trash (§17): a folder Atoll makes takes the mode and owner of the one it stands for, not its modification time.
-- The openmediavault plugin's form (`atoll mergerfs-config --omv`, §21.1, DONE.md, 2026-11-19): still to try in the form itself, in a browser, on real disks, and on openmediavault 7, whose plugin differs (`docs/research/omv-mergerfs.md`, "Not measured"); and to confirm the choices made alone.
+- The openmediavault plugin's form (`atoll mergerfs-config --omv`, §21.1, DONE.md, 2026-11-19): still to try in the form itself, in a browser, on real disks, and on openmediavault 7, whose plugin differs (`docs/research/omv-mergerfs.md`, "Not measured").
 - The link guard (§17): a command that sends a copy to the trash leaves its link to the next pass.
 - `balance` (§12.4, §13.3): `atoll status` plans the whole pool to give `bytes_placed` whenever a strict setting exists: at 200,000 files a disk that doubles its time, 1 min 9 s for 31 s in qemu without KVM, under the 200 MB (§26). The local API's `/v1/status` does the same in the daemon's own process, beside its passes.
-- The media-server notifications (§21.5), tried on real servers in containers on 2026-11-19 (`make test-mediaservers`, DONE.md): Jellyfin 12.4.0 and Emby 4.10.2 list a movie written, renamed and deleted, each told as the daemon tells it, through `path_map`, in two runs in a row. Plex 1.43.5 takes `refresh?path=` (tried by hand), but its test needs a server claimed with `PLEX_CLAIM`, as one unclaimed answers 401 to every other host: the maintainer's to run, with his own claim token. Plex ignores a partial scan in a library none of whose scans found a file yet, until a scan of the whole library finds one, and Jellyfin did the same in one run (§21.5): **decision**, whether Atoll asks such a library for a scan of the whole library. The real Plex is still to try once its libraries read the merged view. `atoll scan`, a command, tells no server of the new files it records.
+- The media-server notifications (§21.5), tried on real servers in containers on 2026-11-19 (`make test-mediaservers`, DONE.md): Jellyfin 12.4.0 and Emby 4.10.2 list a movie written, renamed and deleted, each told as the daemon tells it, through `path_map`, in two runs in a row. Plex 1.43.5 takes `refresh?path=` (tried by hand), but its test needs a server claimed with `PLEX_CLAIM`, as one unclaimed answers 401 to every other host: the maintainer's to run, with his own claim token. Plex ignores a partial scan in a library none of whose scans found a file yet, until a scan of the whole library finds one, and Jellyfin did the same in one run (§21.5): Atoll asks for none, as the maintainer decided on 2026-11-20, and a library is scanned once from the server itself (§21.5, `deploy/README.md`). The real Plex is still to try once its libraries read the merged view. `atoll scan`, a command, tells no server of the new files it records.
 - What the alerts leave (§23): nothing of phase 1b; SMART, Gotify, SMTP and a volume marked dirty are done. Without udev, as in a container, no `/dev/disk/by-uuid/` names the device, and a dirty volume is not seen. No reading of SMART sets the state `standby` (§4), and none is to, as the maintainer decided on 2026-11-14: one an hour old says nothing of now, and `smartctl -n standby` would have to be asked before each pass. The counts of the alerts and of `/metrics` read the catalog after each pass, with no index on the states. Passes of about 7 s on 200,000 files a disk include them (2026-11-18); measure them alone before an index on the states.
 - The operation journal (`ops`, and `view_ops` for Atoll's own view) covers copies, renames, the trash, restores, repairs, folders made and removed, times, modes and owners, and the link guard's links (§14.2, §17.1, §17.2). Each new kind of operation needs its own reprise, with kill -9 at each step and fault injection.
 - The break-glass test runs in `test/loopdev` (`TestBreakGlass`, `TestBreakGlassWithADiskAway`), so in the CI's qemu job, on two disks and every driver: a pool of more disks is left. Atoll's own view is compared with plain mergerfs after reads (`TestViewMatchesMergerfs`) and after writes (`TestViewWrites`, `TestTheCacheOnRealDisks`). The read-only view, `atoll mount`, is to try on the maintainer's Plex with the rest of §21.5, its libraries at `view.readonly_mount`.

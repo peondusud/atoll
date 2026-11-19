@@ -148,7 +148,7 @@ With `view.engine = "atoll"`, `atoll mount` serves the view that writes at `view
 
 - Set `view.readonly_mount`, such as `/srv/pool-ro`, and make that folder: Atoll makes none outside its disks.
 - The unit gives `atoll` `CAP_SYS_ADMIN`, for `mount(2)`, and `CAP_DAC_READ_SEARCH`, to open each copy whatever its mode; for the view that writes, `CAP_DAC_OVERRIDE`, `CAP_CHOWN`, `CAP_FOWNER` and `CAP_FSETID`, as the daemon has, to write on a user's behalf where the library's owners allow `atoll` nothing, give what it makes that user's owner, and keep the setgid bit a user gives. `/dev/fuse` must be open to it: udev gives it mode 0666 on every system that has udev, Debian and openmediavault included; `atoll mount` says so when it is not. It has no setting that gives it a mount namespace of its own, or no other process would see the view; the test that holds `atoll.service` to that holds this unit too.
-- Point the media server's libraries at the view, and tell its scans of folders as it sees them: `path_map = { "/srv/pool" = "/srv/pool-ro" }` in its table of `[notify]` (`specs.md` §21.5). Let it start after the view, with a drop-in of its own unit (`systemctl edit plexmediaserver`):
+- Point the media server's libraries at the view, and tell its scans of folders as it sees them: `path_map = { "/srv/pool" = "/srv/pool-ro" }` in its table of `[notify]` (`specs.md` §21.5). Scan each library once from the server itself once it points there: Plex, and Jellyfin once, ignore a partial scan in a library none of whose scans found a file yet. Let it start after the view, with a drop-in of its own unit (`systemctl edit plexmediaserver`):
 
   ```ini
   [Unit]
