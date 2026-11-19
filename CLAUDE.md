@@ -27,6 +27,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 - `integrity`: BLAKE3 whole-file and 4 MiB chunk hashes, scrub, repair, quarantine, duplicates.
 - `view`: mergerfs configuration and runtime branch changes (phase 1), FUSE view through go-fuse (phase 2a).
 - `trash` (with the optional link guard), `notify` (Plex, Emby, Jellyfin), `alerts`, `cache` (phase 2b).
+- `metrics` (Prometheus `/metrics`) and `telemetry`: the log of every process in OpenTelemetry's log data model, and the optional export of the metrics and the log over OTLP/HTTP (specs.md §23).
 - `cmd/atoll`: CLI and `daemon`, in one binary.
 
 ## Stack and commands
@@ -34,6 +35,8 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 - SQLite: `modernc.org/sqlite` (no cgo). TOML: `github.com/pelletier/go-toml/v2`, read as a generic tree, never decoded straight into a struct (specs.md §24.3). Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
 - BLAKE3: `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`).
 - FUSE view: `github.com/hanwen/go-fuse/v2`, which speaks the kernel's protocol itself: no cgo and no libfuse (`docs/research/fuse-library.md`).
+- Log: `log/slog`, through `internal/telemetry`'s handler alone: JSON lines of OpenTelemetry's log data model by default (specs.md §23.2).
+- OTLP export: the official OpenTelemetry SDK, `go.opentelemetry.io/otel` v1.47.0 (`otel/sdk`, `otel/sdk/metric`, `otel/sdk/log`, `otel/log` at the same version), and its OTLP/HTTP exporters with protobuf, `otlpmetrichttp` v1.47.0 and `otlploghttp` v0.23.0, only through `internal/telemetry`: metrics and log, no traces. They bring gRPC and protobuf into the binary (specs.md §26).
 
 ```bash
 make build              # go build -o bin/atoll ./cmd/atoll
@@ -69,7 +72,8 @@ internal/integrity/    hashing (pure), scrub, repair, quarantine, duplicates
 internal/view/         mergerfs configuration and runtime branches, FUSE view
 internal/fsx/          disk I/O abstraction (real, and with fault injection)
 internal/vectors/      loads conformance/vectors/ for unit tests
-internal/metrics/      Prometheus metrics: the text of a snapshot (pure), and the daemon's recorder
+internal/metrics/      Prometheus metrics: the text of a snapshot (pure), their OpenTelemetry names, and the daemon's recorder
+internal/telemetry/    the log's handler (OpenTelemetry's data model as JSON, or text), the OTLP export of metrics and log
 internal/trash/  internal/notify/  internal/alerts/  internal/cache/  internal/ups/
 api/                   openapi.yaml, schemas/ for --json outputs, metrics.json for /metrics
 schema/                migrations/NNNN_name.sql, config.schema.json

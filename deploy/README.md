@@ -41,6 +41,26 @@ scrape_configs:
     static_configs: [{ targets: ["127.0.0.1:9341"] }]
 ```
 
+The log goes to the journal, one record a line, in OpenTelemetry's log data model as JSON (`specs.md` §23.2): `journalctl -u atoll -o cat | jq` reads it, and `log_format = "text"` in `[telemetry]` brings back slog's text for a terminal. Vector reads both signals without OTLP, the log from the journal and the metrics from `metrics.listen`:
+
+```toml
+# vector.toml
+[sources.atoll_log]
+type          = "journald"
+include_units = ["atoll.service", "atoll-mount.service"]
+
+[transforms.atoll_records]
+type   = "remap"
+inputs = ["atoll_log"]
+source = '. = merge(., object!(parse_json!(.message)))'
+
+[sources.atoll_metrics]
+type      = "prometheus_scrape"
+endpoints = ["http://127.0.0.1:9341/metrics"]
+```
+
+Or over OTLP: with `otlp_endpoint`, `otlp_metrics` and `otlp_logs` in `[telemetry]`, the daemon sends both to a collector, Vector's `opentelemetry` source (`[sources.otlp] type = "opentelemetry"`, `http.address = "127.0.0.1:4318"`), Elastic Agent or the OpenTelemetry Collector, the metrics under their OpenTelemetry names, which a collector's Prometheus exporter writes back as `/metrics` names them. A token goes in `otlp_headers_file`, as `Authorization: ApiKey …` for Elastic, readable by `atoll` alone (`chmod 600`), over `https://` only.
+
 The catalog's folder is closed to other accounts (`StateDirectoryMode=0750`). The catalog and its backups list every path of the library, its trash and its history, which the local API gives only through its socket, of mode 0660, or with its token (§25.1): a folder anyone could read would give them to every account of the machine. A member of the group `atoll` reads them, and may ask the socket.
 
 ## Atoll's own view in place of mergerfs
