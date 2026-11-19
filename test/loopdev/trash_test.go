@@ -37,6 +37,12 @@ type trashBench struct {
 
 func newTrashBench(t *testing.T, v *volume, at string) *trashBench {
 	t.Helper()
+	return newTrashBenchWith(t, v, at, "")
+}
+
+// newTrashBenchWith is newTrashBench with more of the configuration: tables that come after [view].
+func newTrashBenchWith(t *testing.T, v *volume, at, extra string) *trashBench {
+	t.Helper()
 	kept := newVolume(t, names.Ext4)
 	keep := mountPoint(t)
 	mountVolume(t, kept, "", keep)
@@ -45,7 +51,7 @@ func newTrashBench(t *testing.T, v *volume, at string) *trashBench {
 	}
 	dir := t.TempDir()
 	file := filepath.Join(dir, "catalog.db")
-	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", file, filepath.Join(dir, "pool")) +
+	text := fmt.Sprintf("pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", file, filepath.Join(dir, "pool")) + extra +
 		fmt.Sprintf("[[disk]]\nid = \"k\"\nuuid = %q\nmount = %q\nfs = %q\n", kept.uuid, keep, kept.fs) +
 		fmt.Sprintf("[[disk]]\nid = \"v\"\nuuid = %q\nmount = %q\nfs = %q\n", v.uuid, at, v.fs) +
 		"[[rule]]\nlabel = \"once\"\npath = \"**\"\nreplicas = 0\n"
@@ -279,6 +285,7 @@ func TestPruneOnEachDriver(t *testing.T) {
 }
 
 // TestPruneByHandlesPastEveryLimit: 5,025 bytes of path, as §15.8 says the trash needs no check.
+// Past the 4095 bytes of a mergerfs branch, a walk goes only with walk.long_paths = "walk" (§15.8, 2026-11-19).
 func TestPruneByHandlesPastEveryLimit(t *testing.T) {
 	needRoot(t)
 	for _, tc := range trashDrivers {
@@ -287,7 +294,7 @@ func TestPruneByHandlesPastEveryLimit(t *testing.T) {
 			v := newVolume(t, tc.fs)
 			at := mountPoint(t)
 			mountVolume(t, v, tc.driver, at, options...)
-			b := newTrashBench(t, v, at)
+			b := newTrashBenchWith(t, v, at, "[walk]\nlong_paths = \"walk\"\n")
 			name := strings.Repeat("n", 200)
 			parts := make([]string, 25)
 			for i := range parts {

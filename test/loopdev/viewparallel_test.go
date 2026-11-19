@@ -46,7 +46,7 @@ func TestViewWritesInParallel(t *testing.T) {
 			// The view hands the part over once the kernel released the file, which it does after close returns.
 			var disk, part string
 			for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-				disk = b.text("SELECT COALESCE((SELECT disk_id || ' ' || CAST(o.path2 AS TEXT) FROM view_ops v JOIN ops o ON o.id = v.op_id WHERE v.kind = 'part' AND v.state = 'done'), '')")
+				disk = b.text("SELECT COALESCE((SELECT v.disk_id || ' ' || CAST(o.path2 AS TEXT) FROM view_ops v JOIN ops o ON o.id = v.op_id WHERE v.kind = 'part' AND v.state = 'done'), '')")
 				if disk != "" {
 					break
 				}

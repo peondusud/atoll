@@ -3,8 +3,10 @@
 package loopdev
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -73,5 +75,35 @@ func TestTheLinkGuardOnTheTypeNTFS(t *testing.T) {
 	}
 	if got := b.text("SELECT count(*) FROM ops WHERE kind = 'link'"); got != "1" {
 		t.Errorf("%s links journaled", got)
+	}
+}
+
+// TestAForbiddenNameOnTheTypeNTFS pins what the type ntfs does with a name holding one of " * < > ?, which Atoll never
+// writes to NTFS (specs.md §15.8) but another program may, through mergerfs or on the disk itself: without windows_names
+// it answers ERANGE, and under errors=remount-ro, which Atoll asks of the type (§10), it then sets the whole volume
+// read-only, which a mount check reads as read-only-mount; with windows_names it answers EINVAL, and the volume stays
+// as it was (measured in the CI's qemu on Linux 7.3, 2026-11-19).
+func TestAForbiddenNameOnTheTypeNTFS(t *testing.T) {
+	needRoot(t)
+	for _, tc := range []struct {
+		name     string
+		opts     string
+		refused  syscall.Errno
+		readOnly bool
+	}{
+		{"default", "", syscall.ERANGE, true},
+		{"windows_names", ",windows_names", syscall.EINVAL, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := mountImage(t, 64, mkntfs, ntfsKernel(tc.opts))
+			_, err := os.Create(filepath.Join(dir, "a\"b"))
+			if !errors.Is(err, tc.refused) {
+				t.Errorf("creating a\"b: %v, want %v", err, tc.refused)
+			}
+			err = os.Mkdir(filepath.Join(dir, "after"), 0o755)
+			if got := errors.Is(err, syscall.EROFS); got != tc.readOnly {
+				t.Errorf("a folder made after it: %v, read-only %v", err, tc.readOnly)
+			}
+		})
 	}
 }

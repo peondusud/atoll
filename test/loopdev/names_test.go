@@ -57,8 +57,8 @@ func TestNameCorpus(t *testing.T) {
 		{"btrfs", 128, []string{"mkfs.btrfs", "-q", "-f"}, loop, func(c corpusName) []string { return c.Btrfs }, true},
 		{"ntfs3", 64, mkntfs, ntfs3(""), ntfsVerdict, false},
 		{"ntfs3-windows_names", 64, mkntfs, ntfs3(",windows_names"), ntfsVerdict, false},
-		{"ntfs", 64, mkntfs, ntfsKernel(""), ntfsVerdict, false},
-		{"ntfs-windows_names", 64, mkntfs, ntfsKernel(",windows_names"), ntfsVerdict, false},
+		{"ntfs", 64, mkntfs, ntfsKernelNames(""), ntfsVerdict, false},
+		{"ntfs-windows_names", 64, mkntfs, ntfsKernelNames(",windows_names"), ntfsVerdict, false},
 		{"ntfs-3g", 64, mkntfs, fuse("ntfs-3g", ""), ntfsVerdict, false},
 		{"ntfs-3g-windows_names", 64, mkntfs, fuse("ntfs-3g", "windows_names"), ntfsVerdict, false},
 		{"lowntfs-3g", 64, mkntfs, fuse("lowntfs-3g", ""), ntfsVerdict, false},
@@ -112,6 +112,15 @@ func ntfs3(opts string) mounter {
 func ntfsKernel(opts string) mounter {
 	return func(img, dir string) error {
 		return try("mount", "-i", "-t", "ntfs", "-o", "loop,iocharset=utf8,errors=remount-ro"+opts, img, dir)
+	}
+}
+
+// ntfsKernelNames mounts with the type ntfs as the corpus measures names on it, with errors=continue: under
+// errors=remount-ro, a name holding one of " * < > ? gives ERANGE and sets the whole volume read-only, which the next
+// names would read as refusals of their own (TestAForbiddenNameOnTheTypeNTFS pins it).
+func ntfsKernelNames(opts string) mounter {
+	return func(img, dir string) error {
+		return try("mount", "-i", "-t", "ntfs", "-o", "loop,iocharset=utf8,errors=continue"+opts, img, dir)
 	}
 }
 

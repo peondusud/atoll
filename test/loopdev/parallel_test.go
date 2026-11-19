@@ -32,13 +32,14 @@ func (b *passBench) count(query string, args ...any) int64 {
 	return n
 }
 
-// someFiles writes n files of two chunks and a little more below F/, each its own, and gives their bytes by path.
+// someFiles writes n files of one chunk and a little more, so two chunks, below F/, each its own, and gives their bytes
+// by path: eight of them fit the source volume of a bench.
 func someFiles(t *testing.T, top string, n int, when time.Time) map[string][]byte {
 	t.Helper()
 	out := map[string][]byte{}
 	for i := range n {
 		path := fmt.Sprintf("F/f%02d", i)
-		data := bytes.Repeat([]byte(fmt.Sprintf("file %d ", i)), (2*4<<20+5000)/7)
+		data := bytes.Repeat([]byte(fmt.Sprintf("file %d ", i)), (4<<20+5000)/7)
 		writeBytes(t, top, path, data, when)
 		out[path] = data
 	}
