@@ -74,7 +74,9 @@ catalog_on_disks = false                # a catalog backup in each disk's Atoll/
 [replication]
 enabled               = true
 window                = "02:00-06:00"   # may wrap past midnight, e.g. "23:00-05:00"
-max_parallel_per_disk = 1
+max_parallel_per_hdd  = 1               # copies at once on a disk with a spindle, or of unknown kind
+max_parallel_per_ssd  = 4               # on a SATA SSD or an NVMe drive
+# max_parallel_per_disk = 1             # every disk alike, whatever its kind
 
 [deletes]
 direct     = "propagate"                # propagate | restore

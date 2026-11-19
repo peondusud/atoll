@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
@@ -52,8 +53,9 @@ type Disk struct {
 	// precision is how finely the disk holds a time (specs.md §9), 0 when unknown, which compares exactly.
 	precision int64
 	// own holds, by inode, the files whose link of the guard leads to it, nil until the links folder is read
-	// (specs.md §17).
-	own map[uint64][]int64
+	// (specs.md §17). Copies at once share a handle, so ownMu guards it (§14).
+	own   map[uint64][]int64
+	ownMu sync.Mutex
 }
 
 // Open opens the top of a disk, which holds a time to precisionNS. The caller confirms it afterwards, then calls

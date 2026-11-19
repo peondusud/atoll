@@ -184,6 +184,21 @@ func (c *Config) Schedule() (value.Window, *time.Location, error) {
 	return w, location, nil
 }
 
+// CopyLimits is how many copies may read or write a disk at once (specs.md §14): PerDisk, replication.max_parallel_per_disk,
+// for every disk alike, 0 when it is left out; otherwise HDD for a disk with a spindle or whose kind is unknown, and SSD
+// for one with none, replication.max_parallel_per_hdd and max_parallel_per_ssd.
+type CopyLimits struct {
+	PerDisk, HDD, SSD int
+}
+
+// CopyLimits returns the keys of [replication] that bound the copies at once (specs.md §14).
+func (c *Config) CopyLimits() CopyLimits {
+	perDisk, _ := c.effective["replication.max_parallel_per_disk"].(int64)
+	hdd, _ := c.effective["replication.max_parallel_per_hdd"].(int64)
+	ssd, _ := c.effective["replication.max_parallel_per_ssd"].(int64)
+	return CopyLimits{PerDisk: int(perDisk), HDD: int(max(hdd, 1)), SSD: int(max(ssd, 1))}
+}
+
 // Policy returns the effective policy of a file (specs.md §11.3). A nil size means it
 // is not known yet.
 func (c *Config) Policy(path string, size *int64) rules.Policy {

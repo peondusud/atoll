@@ -15,7 +15,8 @@ import (
 )
 
 // copies queues the copies the plan wants of every file whose settle has passed since it was first seen, then
-// runs every copy that is due, one at a time (specs.md §14.1). A dry run says what it would copy.
+// runs every copy that is due, several at once as their disks allow (specs.md §14, §14.1). A dry run says what it would
+// copy.
 func (p *pass) copies(ctx context.Context) error {
 	if enabled, _ := p.config.Effective()["replication.enabled"].(bool); !enabled {
 		return nil
@@ -54,37 +55,25 @@ func (p *pass) copies(ctx context.Context) error {
 		return err
 	}
 	reader := catalog.NewDueReader(p.db, p.now)
-	for {
-		page, err := reader.Next(ctx)
-		if err != nil {
-			return fmt.Errorf("catalog: %w", err)
+	skip := func(job *catalog.ReplicateJob) bool {
+		if p.batteryHolds() || p.waitsForWindow(job, schedule) {
+			return true
 		}
-		if len(page) == 0 {
-			break
+		// What a copy does, the files must be worked out again for.
+		p.settled = false
+		return false
+	}
+	// Several at once, as their disks allow, each listed in the order of the queue (specs.md §14, §15.12).
+	err = r.runAll(ctx, reader.Next, skip, func(job *catalog.ReplicateJob, outcome string) error {
+		if outcome == OutcomeReplicated {
+			p.out.Copied += job.Size
 		}
-		for i := range page {
-			if err := ctx.Err(); err != nil {
-				return fmt.Errorf("replicate: %w", err)
-			}
-			job := &page[i]
-			if p.batteryHolds() || p.waitsForWindow(job, schedule) {
-				continue
-			}
-			// What a copy does, the files must be worked out again for.
-			p.settled = false
-			outcome, err := r.run(ctx, job)
-			if err != nil {
-				return err
-			}
-			if outcome == OutcomeReplicated {
-				p.out.Copied += job.Size
-			}
-			p.ranFile(job.FileID)
-			p.record(Operation{Disk: job.Dst, Kind: KindReplicate, Path: job.Path, Source: job.Src, Outcome: outcome})
-			if p.sinkErr != nil {
-				return p.sinkErr
-			}
-		}
+		p.ranFile(job.FileID)
+		p.record(Operation{Disk: job.Dst, Kind: KindReplicate, Path: job.Path, Source: job.Src, Outcome: outcome})
+		return p.sinkErr
+	})
+	if err != nil {
+		return err
 	}
 	count, next, err := catalog.CopiesLater(ctx, p.db, p.now)
 	if err != nil {
