@@ -32,6 +32,8 @@ var frenchMessages = map[string]string{
 	"%s: reject up to %s\n":                            "%s : rejeté jusqu'au %s\n",
 	"%s: nothing to confirm\n":                         "%s : rien à confirmer\n",
 	"%s: nothing to reject\n":                          "%s : rien à rejeter\n",
+	"%s: a confirm would go up to %s\n":                "%s : une confirmation irait jusqu'au %s\n",
+	"%s: a reject would go up to %s\n":                 "%s : un rejet irait jusqu'au %s\n",
 	"warning: disk %s: its trash is not listed again, as it is missing (%s): run atoll catalog rebuild again once it is back":  "attention : disque %s : sa corbeille n'est pas relue, car il est absent (%s) : relancez atoll catalog rebuild une fois qu'il est revenu",
 	"warning: disk %s: %s in its trash is no entry (%s), and stays as it is":                                                   "attention : disque %s : %s dans sa corbeille n'est pas une entrée (%s), et reste tel quel",
 	"warning: disk %s: its trash could not be listed again (%v)":                                                               "attention : disque %s : sa corbeille n'a pas pu être relue (%v)",

@@ -375,7 +375,9 @@ func TestTheOpenAPIDocument(t *testing.T) {
 	}
 	_, c := apiPool(t, "")
 	// /metrics is no command's: it is what the daemon recorded (specs.md §23.1).
-	served := slices.Sorted(maps.Keys(newTestAPI(t, c).answers()))
+	a := newTestAPI(t, c)
+	served := slices.Sorted(maps.Keys(a.answers()))
+	served = append(served, slices.Collect(maps.Keys(a.writes()))...)
 	served = append(served, "/metrics")
 	slices.Sort(served)
 	slices.Sort(listed)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -33,7 +34,8 @@ const (
 )
 
 // apiServer answers the local API of the daemon that runs for good, with the configuration it runs with (specs.md
-// §25.1). It only answers: nothing it does writes.
+// §25.1). It answers questions, and takes one write: an answer to a guard, which atoll guard confirm or reject would
+// give.
 type apiServer struct {
 	current atomic.Pointer[config.Config]
 	machine disks.Machine
@@ -43,6 +45,13 @@ type apiServer struct {
 	// reading lets one answer at a time read the catalog: each is made in the daemon's own process, beside its passes,
 	// and one may plan the whole pool.
 	reading chan struct{}
+	// onCatalog runs an answer to a guard on the catalog, under its lock: in the daemon, its loop does, between two
+	// steps (answerThrough). Nil takes no answer.
+	onCatalog func(ctx context.Context, do func(ctx context.Context, db *sql.DB) error) error
+	// apply is false for a daemon in --dry-run, which records no answer.
+	apply bool
+	// told tells the daemon of an answer recorded, as SIGHUP would, so that its pass takes it at once.
+	told func()
 }
 
 func newAPIServer(c *config.Config, m disks.Machine, log *slog.Logger, rec *metrics.Recorder) *apiServer {
@@ -123,11 +132,20 @@ func (a *apiServer) metricsAnswer(_ *http.Request, _ *config.Config, w io.Writer
 	return http.StatusOK, err
 }
 
-// routes serves each answer and /metrics, and 404 for any other path.
+// writes gives what each path that writes takes, as api/openapi.yaml lists them: an answer to a guard alone (specs.md
+// §25.1).
+func (a *apiServer) writes() map[string]http.HandlerFunc {
+	return map[string]http.HandlerFunc{"/v1/guards/{id}": a.answerGuard}
+}
+
+// routes serves each answer, each write and /metrics, and 404 for any other path.
 func (a *apiServer) routes() http.Handler {
 	mux := a.metricsRoutes()
 	for path, answer := range a.answers() {
 		mux.HandleFunc(path, a.get(answer, jsonType))
+	}
+	for path, write := range a.writes() {
+		mux.HandleFunc(path, write)
 	}
 	return mux
 }
@@ -186,11 +204,12 @@ func send(w http.ResponseWriter, status int, v any) {
 }
 
 // withToken asks every request for the token api.token_file holds, read again each time, so that a new one takes
-// effect at once (specs.md §25.1). Without it, or with another, the answer is 401 with nothing more.
+// effect at once (specs.md §25.1). Without it, or with another, the answer is 401 with nothing more. A request let
+// through knows whether other accounts may read that file (looseToken).
 func (a *apiServer) withToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		file, _ := a.current.Load().Effective()["api.token_file"].(string)
-		want, err := readToken(file)
+		want, loose, err := readToken(file)
 		got, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if err != nil || want == "" || !bearer || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 			if err != nil {
@@ -200,20 +219,30 @@ func (a *apiServer) withToken(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), looseTokenKey{}, loose)))
 	})
 }
 
-// readToken reads a token file, its last line break left out.
-func readToken(file string) (string, error) {
+// looseTokenKey marks a request that came with a token from a file other accounts may read.
+type looseTokenKey struct{}
+
+// looseToken says that a request came over TCP with a token from a file other accounts may read: any account of the
+// machine may then send it, and it answers questions only (specs.md §25.1).
+func looseToken(ctx context.Context) bool {
+	loose, _ := ctx.Value(looseTokenKey{}).(bool)
+	return loose
+}
+
+// readToken reads a token file, its last line break left out, and says whether other accounts may read it.
+func readToken(file string) (token string, othersMayRead bool, err error) {
 	if file == "" {
-		return "", errors.New("no token file")
+		return "", false, errors.New("no token file")
 	}
-	data, err := fsx.ReadSmallFile(file, apiMaxToken)
+	data, othersMayRead, err := fsx.ReadSecretFile(file, apiMaxToken)
 	if err != nil {
-		return "", fmt.Errorf("token: %w", err)
+		return "", false, fmt.Errorf("token: %w", err)
 	}
-	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), nil
+	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), othersMayRead, nil
 }
 
 // httpServer is a server with the limits of specs.md §25.1.

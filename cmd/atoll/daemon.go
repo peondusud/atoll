@@ -158,9 +158,12 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 	}()
 	log := slog.New(slog.NewTextHandler(stderr, nil))
 	// The local API answers with the configuration the daemon runs with, the one a reload takes too (specs.md §25.1).
-	// What the loop records, /metrics gives (specs.md §23.1).
+	// What the loop records, /metrics gives (specs.md §23.1). Its answers to a guard go through the loop, which runs
+	// each under the catalog's lock, and reload it as SIGHUP does.
 	rec := metrics.NewRecorder(atollVersion())
 	api := newAPIServer(c, machine, log, rec)
+	work := make(chan *daemon.CatalogWork)
+	api.answerThrough(work, reload, apply)
 	stopAPI := api.start(ctx, c)
 	defer stopAPI()
 	load := func() (*config.Config, error) {
@@ -170,7 +173,7 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 		}
 		return next, err
 	}
-	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: load, Metrics: rec}
+	opts := daemon.Options{Config: c, Machine: machine, Apply: apply, Log: log, Reload: reload, Load: load, Metrics: rec, Catalog: work}
 	if err := daemon.Run(ctx, opts); err != nil {
 		return failure(stderr, err)
 	}
@@ -420,13 +423,31 @@ type guardItem struct {
 	Paths   []pathItem `json:"paths"`
 }
 
-// guardAnswer is the output of api/schemas/guard-answer.schema.json.
+// guardAnswer is the output of api/schemas/guard-answer.schema.json. DryRun and Paths are there with --dry-run alone, so
+// that an answer's output stays as it was.
 type guardAnswer struct {
-	Disk string  `json:"disk"`
-	Kind string  `json:"kind"`
-	Done bool    `json:"done"`
-	UpTo *string `json:"up_to"`
+	Disk   string      `json:"disk"`
+	Kind   string      `json:"kind"`
+	Done   bool        `json:"done"`
+	UpTo   *string     `json:"up_to"`
+	DryRun bool        `json:"dry_run,omitempty"`
+	Paths  *[]pathItem `json:"paths,omitempty"`
 }
+
+// guardRequest is an answer to a guard: what atoll guard confirm and reject are given, and what the local API's
+// POST /v1/guards/{id} is given (specs.md §15.6, §25.1).
+type guardRequest struct {
+	what   string // "confirm" or "reject"
+	kind   string // jobs.GuardDeletions or jobs.GuardModifications
+	disk   string
+	dryRun bool
+	// upTo, which the local API alone gives, is the time of the guard event the answer is for: a guard that stands
+	// since another time is not answered (errGuardMoved).
+	upTo sql.NullInt64
+}
+
+// errGuardMoved says that the guard an answer is for is not the one that stands: nothing was answered.
+var errGuardMoved = errors.New("the guard that stands is not the one the answer is for: nothing was answered")
 
 func runGuard(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -499,11 +520,11 @@ func readGuards(ctx context.Context, c *config.Config) (items []guardItem, err e
 	}
 	items = []guardItem{}
 	for i := range c.Disks {
-		item, err := readGuard(ctx, db, &c.Disks[i], settings, machineNow)
+		item, _, err := readGuard(ctx, db, &c.Disks[i], settings, machineNow)
 		if err != nil {
 			return nil, err
 		}
-		modified, err := readModifyGuard(ctx, db, c.Disks[i].ID, settings, machineNow)
+		modified, _, err := readModifyGuard(ctx, db, c.Disks[i].ID, settings, machineNow)
 		if err != nil {
 			return nil, err
 		}
@@ -513,19 +534,21 @@ func readGuards(ctx context.Context, c *config.Config) (items []guardItem, err e
 }
 
 // readModifyGuard says what the mass-modification guard of a disk holds, from events: tripped while a modify-guard
-// event stands, with the files it counted, as which files wait only a look can tell (specs.md §15.6).
-func readModifyGuard(ctx context.Context, db *sql.DB, disk string, s *guardSettings, now int64) (*guardItem, error) {
+// event stands, with the files it counted, as which files wait only a look can tell (specs.md §15.6). It gives the
+// time of the event that stands, which an answer would go up to, invalid with none.
+func readModifyGuard(ctx context.Context, db *sql.DB, disk string, s *guardSettings, now int64) (*guardItem, sql.NullInt64, error) {
 	read, err := catalog.ReadModifyGuard(ctx, db, disk, now, s.modWindow)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
+		return nil, sql.NullInt64{}, fmt.Errorf("catalog: %w", err)
 	}
 	paths := []string{}
 	if read.Stands {
 		if paths, err = catalog.ModifiedPaths(ctx, db, disk, now, s.modWindow, read.AnswerID); err != nil {
-			return nil, fmt.Errorf("catalog: %w", err)
+			return nil, sql.NullInt64{}, fmt.Errorf("catalog: %w", err)
 		}
 	}
-	return &guardItem{Disk: disk, Kind: jobs.GuardModifications, Tripped: read.Stands, Count: read.Count, Paths: pathItems(paths)}, nil
+	stands := sql.NullInt64{Int64: read.GuardNS, Valid: read.Stands}
+	return &guardItem{Disk: disk, Kind: jobs.GuardModifications, Tripped: read.Stands, Count: read.Count, Paths: pathItems(paths)}, stands, nil
 }
 
 // nowOf reads the clock as a command that looks at no disk does: in a conformance build, that is the
@@ -566,44 +589,51 @@ func guardSettingsOf(c *config.Config) (*guardSettings, error) {
 	return &guardSettings{files: files, percent: percent, window: window.Nanoseconds(), modWindow: modWindow.Nanoseconds()}, nil
 }
 
-func readGuard(ctx context.Context, db *sql.DB, d *config.Disk, s *guardSettings, now int64) (*guardItem, error) {
+// readGuard says what the mass-deletion guard of a disk holds, from rows and events (specs.md §15.6). It gives the time
+// of the guard event that stands, which an answer would go up to, invalid with none.
+func readGuard(ctx context.Context, db *sql.DB, d *config.Disk, s *guardSettings, now int64) (*guardItem, sql.NullInt64, error) {
 	read, err := catalog.ReadGuard(ctx, db, d.ID, now, s.window)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
+		return nil, sql.NullInt64{}, fmt.Errorf("catalog: %w", err)
 	}
 	refused, err := jobs.RefusedCopies(ctx, db, d)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, sql.NullInt64{}, fmt.Errorf("%w", err)
 	}
 	wishes := int64(len(refused))
 	count := read.Gone + read.Events + wishes
 	rows, err := catalog.CopyCount(ctx, db, d.ID)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
+		return nil, sql.NullInt64{}, fmt.Errorf("catalog: %w", err)
 	}
 	// A hold that stands stands until a pass finds it over or someone answers: confirm and reject go by that too.
 	tripped := read.HasGuard || solver.GuardTrips(&solver.GuardInput{Count: count, CountPercent: read.GoneLeft + read.EventsLeft + wishes, Rows: rows + read.Events, Files: s.files, Percent: s.percent})
 	paths := []string{}
 	if tripped {
 		if paths, err = catalog.GuardPaths(ctx, db, d.ID, read.UpTo); err != nil {
-			return nil, fmt.Errorf("catalog: %w", err)
+			return nil, sql.NullInt64{}, fmt.Errorf("catalog: %w", err)
 		}
 		for i := range refused {
 			paths = append(paths, refused[i].Place)
 		}
 		slices.Sort(paths)
 	}
-	return &guardItem{Disk: d.ID, Kind: jobs.GuardDeletions, Tripped: tripped, Count: count, Paths: pathItems(paths)}, nil
+	stands := sql.NullInt64{Int64: read.GuardNS, Valid: read.HasGuard}
+	return &guardItem{Disk: d.ID, Kind: jobs.GuardDeletions, Tripped: tripped, Count: count, Paths: pathItems(paths)}, stands, nil
 }
 
 func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) int {
-	asJSON := false
+	asJSON, dryRun := false, false
 	disk, kind := "", ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--json":
 			if err := setFlag(&asJSON, a); err != nil {
+				return usage(stderr, "guard: "+err.Error())
+			}
+		case a == "--dry-run":
+			if err := setFlag(&dryRun, a); err != nil {
 				return usage(stderr, "guard: "+err.Error())
 			}
 		case a == "--disk" && i+1 < len(args) && disk == "" && args[i+1] != "":
@@ -637,37 +667,53 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 	if !hasDisk(c, disk) {
 		return failure(stderr, fmt.Errorf(T("guard: no disk %q in the configuration"), disk))
 	}
-	upTo, err := actOnGuard(c, what, kind, disk, stderr)
+	req := &guardRequest{what: what, kind: kind, disk: disk, dryRun: dryRun}
+	answer, err := actOnGuard(c, req, stderr)
 	if err != nil {
 		return failure(stderr, err)
 	}
-	if upTo.Valid {
+	if answer.Done {
 		tellOfAnswer(c, kind, stderr)
-	}
-	answer := guardAnswer{Disk: disk, Kind: kind, Done: upTo.Valid}
-	if upTo.Valid {
-		at := timeText(upTo.Int64)
-		answer.UpTo = &at
 	}
 	if asJSON {
 		err = writeJSON(stdout, answer)
-	} else if upTo.Valid {
-		format := "%s: confirm up to %s\n"
-		if what == "reject" {
-			format = "%s: reject up to %s\n"
-		}
-		err = writeText(stdout, fmt.Sprintf(T(format), disk, *answer.UpTo))
 	} else {
-		format := "%s: nothing to confirm\n"
-		if what == "reject" {
-			format = "%s: nothing to reject\n"
-		}
-		err = writeText(stdout, fmt.Sprintf(T(format), disk))
+		err = writeText(stdout, guardText(req, answer))
 	}
 	if err != nil {
 		return failure(stderr, err)
 	}
 	return exitOK
+}
+
+// guardText is the human output of an answer to a guard, or of its dry run.
+func guardText(req *guardRequest, answer *guardAnswer) string {
+	var text strings.Builder
+	if req.dryRun {
+		text.WriteString(T("a dry run: nothing was written\n"))
+	}
+	switch {
+	case req.dryRun && answer.UpTo != nil && req.what == "reject":
+		fmt.Fprintf(&text, T("%s: a reject would go up to %s\n"), req.disk, *answer.UpTo)
+	case req.dryRun && answer.UpTo != nil:
+		fmt.Fprintf(&text, T("%s: a confirm would go up to %s\n"), req.disk, *answer.UpTo)
+	case answer.UpTo != nil:
+		format := "%s: confirm up to %s\n"
+		if req.what == "reject" {
+			format = "%s: reject up to %s\n"
+		}
+		fmt.Fprintf(&text, T(format), req.disk, *answer.UpTo)
+	default:
+		format := "%s: nothing to confirm\n"
+		if req.what == "reject" {
+			format = "%s: nothing to reject\n"
+		}
+		fmt.Fprintf(&text, T(format), req.disk)
+	}
+	if answer.Paths != nil {
+		printPaths(&text, "  held", *answer.Paths)
+	}
+	return text.String()
 }
 
 // tellOfAnswer tells the daemon that runs for good of an answer to a guard, as systemctl reload atoll would, so that
@@ -693,11 +739,13 @@ func tellOfAnswer(c *config.Config, kind string, stderr io.Writer) {
 	}
 }
 
-func actOnGuard(c *config.Config, what, kind, id string, stderr io.Writer) (upTo sql.NullInt64, err error) {
+// actOnGuard answers a guard as atoll guard confirm and reject do: on the catalog, under its lock, which it waits for
+// as every command does.
+func actOnGuard(c *config.Config, req *guardRequest, stderr io.Writer) (answer *guardAnswer, err error) {
 	ctx := context.Background()
 	now, err := nowOf()
 	if err != nil {
-		return upTo, err
+		return nil, err
 	}
 	var release func()
 	defer func() {
@@ -707,42 +755,100 @@ func actOnGuard(c *config.Config, what, kind, id string, stderr io.Writer) (upTo
 	}()
 	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
-		return upTo, fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
 	if release, err = lockCatalog(ctx, c, stderr); err != nil {
-		return upTo, fmt.Errorf("%w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
-	if kind == jobs.GuardModifications {
+	return answerGuardOn(ctx, db, c, req, now)
+}
+
+// answerGuardOn answers a guard of a disk on the catalog, whose lock the caller holds; or, with a dry run, it says what
+// the answer would be about, the time it would go up to and what the guard holds, as atoll guard list says it, and
+// writes nothing. It is what atoll guard confirm and reject do, and what the local API's answer does, by this same code
+// (specs.md §15.6, §25.1). An answer writes its event before anything it lets go happens, in the transaction that
+// records it.
+func answerGuardOn(ctx context.Context, db *sql.DB, c *config.Config, req *guardRequest, now int64) (*guardAnswer, error) {
+	answer := &guardAnswer{Disk: req.disk, Kind: req.kind}
+	if req.dryRun || req.upTo.Valid {
+		item, stands, err := readOneGuard(ctx, db, c, req, now)
+		if err != nil {
+			return nil, err
+		}
+		if req.upTo.Valid && stands.Valid && stands.Int64 != req.upTo.Int64 {
+			return nil, fmt.Errorf("%w: it stands since %s, not %s", errGuardMoved, timeText(stands.Int64), timeText(req.upTo.Int64))
+		}
+		if req.dryRun {
+			held := []pathItem{}
+			if stands.Valid {
+				at := timeText(stands.Int64)
+				answer.UpTo, held = &at, item.Paths
+			}
+			answer.DryRun, answer.Paths = true, &held
+			return answer, nil
+		}
+	}
+	upTo, err := recordGuardAnswer(ctx, db, c, req, now)
+	if err != nil {
+		return nil, err
+	}
+	if upTo.Valid {
+		at := timeText(upTo.Int64)
+		answer.Done, answer.UpTo = true, &at
+	}
+	return answer, nil
+}
+
+// readOneGuard reads one guard of a disk as atoll guard list does, with the time of the event that stands.
+func readOneGuard(ctx context.Context, db *sql.DB, c *config.Config, req *guardRequest, now int64) (*guardItem, sql.NullInt64, error) {
+	settings, err := guardSettingsOf(c)
+	if err != nil {
+		return nil, sql.NullInt64{}, err
+	}
+	if req.kind == jobs.GuardModifications {
+		return readModifyGuard(ctx, db, req.disk, settings, now)
+	}
+	return readGuard(ctx, db, configDisk(c, req.disk), settings, now)
+}
+
+// recordGuardAnswer records a confirm or a reject, with the time of the guard event it goes up to, invalid when no
+// guard stood and nothing was answered (specs.md §15.6).
+func recordGuardAnswer(ctx context.Context, db *sql.DB, c *config.Config, req *guardRequest, now int64) (upTo sql.NullInt64, err error) {
+	if req.kind == jobs.GuardModifications {
 		event := catalog.EventModifyGuardConfirm
-		if what == "reject" {
+		if req.what == "reject" {
 			event = catalog.EventModifyGuardReject
 		}
-		if upTo, err = catalog.AnswerModifyGuard(ctx, db, id, event, now); err != nil {
+		if upTo, err = catalog.AnswerModifyGuard(ctx, db, req.disk, event, now); err != nil {
 			return upTo, fmt.Errorf("catalog: %w", err)
 		}
 		return upTo, nil
 	}
-	var disk *config.Disk
-	for i := range c.Disks {
-		if c.Disks[i].ID == id {
-			disk = &c.Disks[i]
-		}
-	}
-	refused, err := jobs.RefusedCopies(ctx, db, disk)
+	refused, err := jobs.RefusedCopies(ctx, db, configDisk(c, req.disk))
 	if err != nil {
 		return upTo, fmt.Errorf("%w", err)
 	}
-	if what == "confirm" {
-		upTo, err = catalog.ConfirmGuard(ctx, db, id, now, refused)
+	if req.what == "confirm" {
+		upTo, err = catalog.ConfirmGuard(ctx, db, req.disk, now, refused)
 		if err != nil {
 			return upTo, fmt.Errorf("catalog: %w", err)
 		}
 		return upTo, nil
 	}
-	upTo, err = catalog.RejectGuard(ctx, db, id, now, refused)
+	upTo, err = catalog.RejectGuard(ctx, db, req.disk, now, refused)
 	if err != nil {
 		return upTo, fmt.Errorf("catalog: %w", err)
 	}
 	return upTo, nil
+}
+
+// configDisk gives the disk of the configuration with that id, nil when it lists none.
+func configDisk(c *config.Config, id string) *config.Disk {
+	for i := range c.Disks {
+		if c.Disks[i].ID == id {
+			return &c.Disks[i]
+		}
+	}
+	return nil
 }
