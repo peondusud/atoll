@@ -1044,10 +1044,11 @@ func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, 
 // which names where each copy Atoll moved went, and looks at those names alone: every operation is journaled before it
 // runs (invariant 12). tmp/, which holds only what is in progress, is listed whole. The trash is walked whole, as it
 // always was, only when the journal cannot answer for it: it holds something that is no operation of this disk's in
-// the journal, as after a catalog rebuild, or on a disk that came with its work folder.
-func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool) (map[string][]solver.FileLook, error) {
+// the journal, as after a catalog rebuild, or on a disk that came with its work folder. Both walks go as far as
+// limits say, those of a walk of the disk's own folders (specs.md §15.8).
+func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool, limits watch.Limits) (map[string][]solver.FileLook, error) {
 	out := map[string][]solver.FileLook{}
-	if err := d.walkOwn(ctx, layout.TmpFolder, inodes, out, nil); err != nil {
+	if err := d.walkOwn(ctx, layout.TmpFolder, inodes, out, nil, limits); err != nil {
 		return nil, err
 	}
 	asked := false
@@ -1098,7 +1099,7 @@ func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool)
 		}
 		return is, nil
 	}
-	if err := d.walkOwn(ctx, layout.TrashFolder, left, out, viewTrash); err != nil {
+	if err := d.walkOwn(ctx, layout.TrashFolder, left, out, viewTrash, limits); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -1114,9 +1115,11 @@ func trashOpOf(place string) (int64, bool) {
 	return id, ok && !chunks
 }
 
-// walkOwn walks one of the work folder's folders whole, and adds what it holds of those inodes, but for what skip, when
-// given, leaves out.
-func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]bool, out map[string][]solver.FileLook, skip func(string) (bool, error)) error {
+// walkOwn walks one of the work folder's folders whole, as far as limits say, and adds what it holds of those inodes, but
+// for what skip, when given, leaves out.
+func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]bool, out map[string][]solver.FileLook, skip func(string) (bool, error),
+	limits watch.Limits,
+) error {
 	dir, err := d.open(components(d.config.Workdir, folder))
 	switch {
 	case fsx.IsAbsent(err):
@@ -1125,7 +1128,7 @@ func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]boo
 		// That disk's trouble, as a walk of it that fails is: nothing can be said of what is absent.
 		return lost(err)
 	}
-	walked, err := watch.Walk(ctx, dir.Dir)
+	walked, err := watch.Walk(ctx, dir.Dir, limits)
 	dir.close()
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrDiskLost, err)

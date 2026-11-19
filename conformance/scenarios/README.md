@@ -59,7 +59,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `expect_tree` | `disk`, `tree` | compares the whole disk with `tree`: below |
 | `expect_catalog` | `query`, `rows` | runs `query` on `${SANDBOX}/catalog.db`, read-only, and compares what it returns with `rows`: below |
 
-A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the top of the disk. A step that fails stops the scenario, which fails. `specs.md` §29.4 also names operations through mergerfs, I/O errors and crashes: those steps arrive with what they test, and a step the runner does not know fails the scenario.
+A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the top of the disk. It may be longer than `PATH_MAX`, which the kernel takes from no path given whole: the runner then makes, changes and reads it one name at a time below the top, as a command that works in a folder below would, and a scenario can hold what is past the limit of a mergerfs branch (`specs.md` §15.8). A step that fails stops the scenario, which fails. `specs.md` §29.4 also names operations through mergerfs, I/O errors and crashes: those steps arrive with what they test, and a step the runner does not know fails the scenario.
 
 ## Comparing
 

@@ -122,6 +122,25 @@
         }
       }
     },
+    "walk": {
+      "description": "How deep a walk of a disk goes (specs.md §15.8, §15.10).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "long_paths": {
+          "description": "skip: a walk neither records nor goes below a name whose path through its disk's mount is past 4095 bytes, the limit of a mergerfs branch, and reports it. walk: every path, with at most max_open folders open at once.",
+          "enum": ["skip", "walk"],
+          "default": "skip"
+        },
+        "max_open": {
+          "description": "With long_paths = \"walk\": the most folders a walk holds open at once, its root included: at least the root, the folder it reads and one it opens below it. Past it, a walk opens a folder again from one it holds when it comes back to it.",
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 4096,
+          "default": 64
+        }
+      }
+    },
     "replication": {
       "type": "object",
       "additionalProperties": false,

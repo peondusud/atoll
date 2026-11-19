@@ -575,6 +575,7 @@ func (b *sandbox) fileStep(s *step) error {
 		return err
 	}
 	full := filepath.Join(root, rel)
+	at := diskAt{top: root}
 	switch s.Do {
 	case "write":
 		b.note(s.Disk, rel)
@@ -586,13 +587,16 @@ func (b *sandbox) fileStep(s *step) error {
 		return writeEntry(root, rel, &entry{Text: text, Size: s.Size, MtimeNS: s.MtimeNS})
 	case "mkdir":
 		b.note(s.Disk, rel)
-		return os.MkdirAll(full, 0o755)
+		return at.mkdirAll(rel)
 	case "rename":
 		to, err := pathOf(s.To, s.ToB64)
 		if err != nil {
 			return fmt.Errorf("to: %w", err)
 		}
 		b.note(s.Disk, to)
+		if at.long(rel) || at.long(to) {
+			return at.inRoot(func(r *os.Root) error { return r.Rename(rel, to) })
+		}
 		return os.Rename(full, filepath.Join(root, to))
 	case "link":
 		to, err := pathOf(s.To, s.ToB64)
@@ -600,8 +604,14 @@ func (b *sandbox) fileStep(s *step) error {
 			return fmt.Errorf("to: %w", err)
 		}
 		b.note(s.Disk, to)
+		if at.long(rel) || at.long(to) {
+			return at.inRoot(func(r *os.Root) error { return r.Link(rel, to) })
+		}
 		return os.Link(full, filepath.Join(root, to))
 	case "delete":
+		if at.long(rel) {
+			return at.inRoot(func(r *os.Root) error { return r.Remove(rel) })
+		}
 		return os.Remove(full)
 	case "symlink":
 		b.note(s.Disk, rel)
@@ -611,13 +621,77 @@ func (b *sandbox) fileStep(s *step) error {
 		if err != nil {
 			return err
 		}
-		return os.Chmod(full, mode)
+		return at.chmod(rel, mode)
 	case "chown":
-		return os.Lchown(full, int(*s.UID), int(*s.GID))
+		return at.lchown(rel, int(*s.UID), int(*s.GID))
 	default: // touch
-		when := time.Unix(0, *s.MtimeNS)
-		return os.Chtimes(full, when, when)
+		return at.chtimes(rel, time.Unix(0, *s.MtimeNS))
 	}
+}
+
+// pathMax is PATH_MAX, with its NUL: the kernel takes no path that long whole.
+const pathMax = 4096
+
+// diskAt does to a disk what a user's command would, by a path from its top, as such a command gives one. A path past
+// PATH_MAX, which a command cannot give whole, goes one name at a time through a root on the top: that is how a tree
+// deeper than PATH_MAX is made, as one is, by commands that work in a folder below.
+type diskAt struct {
+	top string
+}
+
+func (d diskAt) long(rel string) bool {
+	return len(filepath.Join(d.top, rel)) >= pathMax
+}
+
+func (d diskAt) inRoot(fn func(r *os.Root) error) error {
+	r, err := os.OpenRoot(d.top)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	return fn(r)
+}
+
+func (d diskAt) mkdirAll(rel string) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.MkdirAll(rel, 0o755) })
+	}
+	return os.MkdirAll(filepath.Join(d.top, rel), 0o755)
+}
+
+func (d diskAt) symlink(target, rel string) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.Symlink(target, rel) })
+	}
+	return os.Symlink(target, filepath.Join(d.top, rel))
+}
+
+func (d diskAt) writeFile(rel string, data []byte) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.WriteFile(rel, data, 0o644) })
+	}
+	return os.WriteFile(filepath.Join(d.top, rel), data, 0o644)
+}
+
+func (d diskAt) chmod(rel string, mode os.FileMode) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.Chmod(rel, mode) })
+	}
+	return os.Chmod(filepath.Join(d.top, rel), mode)
+}
+
+func (d diskAt) lchown(rel string, uid, gid int) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.Lchown(rel, uid, gid) })
+	}
+	return os.Lchown(filepath.Join(d.top, rel), uid, gid)
+}
+
+func (d diskAt) chtimes(rel string, when time.Time) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.Chtimes(rel, when, when) })
+	}
+	return os.Chtimes(filepath.Join(d.top, rel), when, when)
 }
 
 // checkOwner checks an owner: both ids, from 0 to 2^32-2, as (uid_t)-1 owns nothing, or with whole false neither.
@@ -980,17 +1054,17 @@ func contentOf(e *entry) []byte {
 
 // writeEntry creates what an entry of a tree describes.
 func writeEntry(root, rel string, e *entry) error {
-	full := filepath.Join(root, rel)
+	at := diskAt{top: root}
 	if e.Kind == "dir" {
-		return os.MkdirAll(full, 0o755)
+		return at.mkdirAll(rel)
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	if err := at.mkdirAll(filepath.Dir(rel)); err != nil {
 		return err
 	}
 	if e.Kind == "symlink" {
-		return os.Symlink(e.Target, full)
+		return at.symlink(e.Target, rel)
 	}
-	if err := os.WriteFile(full, contentOf(e), 0o644); err != nil {
+	if err := at.writeFile(rel, contentOf(e)); err != nil {
 		return err
 	}
 	if e.Mode != nil {
@@ -998,20 +1072,19 @@ func writeEntry(root, rel string, e *entry) error {
 		if err != nil {
 			return err
 		}
-		if err := os.Chmod(full, mode); err != nil {
+		if err := at.chmod(rel, mode); err != nil {
 			return err
 		}
 	}
 	if e.UID != nil {
-		if err := os.Lchown(full, int(*e.UID), int(*e.GID)); err != nil {
+		if err := at.lchown(rel, int(*e.UID), int(*e.GID)); err != nil {
 			return err
 		}
 	}
 	if e.MtimeNS == nil {
 		return nil
 	}
-	when := time.Unix(0, *e.MtimeNS)
-	return os.Chtimes(full, when, when)
+	return at.chtimes(rel, time.Unix(0, *e.MtimeNS))
 }
 
 // found is what is on a disk at a path.
@@ -1026,39 +1099,60 @@ type found struct {
 	empty   bool // for a folder
 }
 
-// listTree reads a whole disk, by path relative to its top.
+// listTree reads a whole disk, by path relative to its top, one name at a time through a root on it, following no
+// symbolic link: a tree deeper than PATH_MAX is read as any other.
 func listTree(root string) (map[string]*found, error) {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("read the disk: %w", err)
+	}
+	defer func() { _ = r.Close() }()
 	out := map[string]*found{}
-	err := filepath.WalkDir(root, func(full string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if full == root {
-			return nil
-		}
-		rel, err := filepath.Rel(root, full)
-		if err != nil {
-			return err
-		}
-		info, err := d.Info()
+	if err := listBelow(r, ".", out); err != nil {
+		return nil, fmt.Errorf("read the disk: %w", err)
+	}
+	return out, nil
+}
+
+// names lists a folder of a root.
+func names(r *os.Root, dir string) ([]string, error) {
+	f, err := r.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return f.Readdirnames(-1)
+}
+
+func listBelow(r *os.Root, dir string, out map[string]*found) error {
+	list, err := names(r, dir)
+	if err != nil {
+		return err
+	}
+	for _, name := range list {
+		rel := path.Join(dir, name)
+		info, err := r.Lstat(rel)
 		if err != nil {
 			return err
 		}
 		switch {
-		case d.IsDir():
-			children, err := os.ReadDir(full)
+		case info.IsDir():
+			children, err := names(r, rel)
 			if err != nil {
 				return err
 			}
 			out[rel] = &found{kind: "dir", empty: len(children) == 0}
+			if err := listBelow(r, rel, out); err != nil {
+				return err
+			}
 		case info.Mode()&os.ModeSymlink != 0:
-			target, err := os.Readlink(full)
+			target, err := r.Readlink(rel)
 			if err != nil {
 				return err
 			}
 			out[rel] = &found{kind: "symlink", target: target}
 		case info.Mode().IsRegular():
-			content, err := os.ReadFile(full)
+			content, err := r.ReadFile(rel)
 			if err != nil {
 				return err
 			}
@@ -1070,12 +1164,8 @@ func listTree(root string) (map[string]*found, error) {
 		default:
 			return fmt.Errorf("%q: neither a file, a folder nor a symlink", rel)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("read the disk: %w", err)
 	}
-	return out, nil
+	return nil
 }
 
 // matches reports whether a listed path, where a component * matches any one name, names a path.

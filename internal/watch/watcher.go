@@ -117,10 +117,10 @@ func (w *Watcher) Events() <-chan Event {
 
 // Watch starts watching a disk that passed its check, below <mount>/<root>, and says how. Watching a disk
 // again stops the earlier watch first.
-func (w *Watcher) Watch(ctx context.Context, d *config.Disk) (string, error) {
+func (w *Watcher) Watch(ctx context.Context, d *config.Disk, limits Limits) (string, error) {
 	w.Stop(d.ID)
 	root := path.Join(d.Mount, d.Root)
-	src, how, err := openSource(ctx, root, w.opt.Inotify, w.opt.Opened)
+	src, how, err := openSource(ctx, root, w.opt.Inotify, w.opt.Opened, limits)
 	if err != nil {
 		return "", fmt.Errorf("watch %s: %w", d.ID, err)
 	}
@@ -423,19 +423,19 @@ func servesView(pid int, mount string) bool {
 }
 
 // openSource watches a disk's root the first way that works: a filesystem mark, a mark per folder, inotify.
-func openSource(ctx context.Context, root string, inotifyOnly bool, opened func(string)) (source, string, error) {
+func openSource(ctx context.Context, root string, inotifyOnly bool, opened func(string), limits Limits) (source, string, error) {
 	if !inotifyOnly {
 		src, err := openFilesystem(root)
 		if err == nil {
 			return src, HowFilesystem, nil
 		}
-		folders, err := openFolders(ctx, root)
+		folders, err := openFolders(ctx, root, limits)
 		if err == nil {
 			folders.opened = opened
 			return folders, HowFolders, nil
 		}
 	}
-	src, err := openInotify(ctx, root)
+	src, err := openInotify(ctx, root, limits)
 	if err != nil {
 		return nil, "", err
 	}
@@ -548,9 +548,11 @@ type foldersSource struct {
 	tree             *folderTree[string]
 	// opened is WatcherOptions.Opened.
 	opened func(path string)
+	// marker marks the folders below one, as far as the disk's walks go (specs.md §15.8).
+	marker *treeMarker[string]
 }
 
-func openFolders(ctx context.Context, root string) (*foldersSource, error) {
+func openFolders(ctx context.Context, root string, limits Limits) (*foldersSource, error) {
 	group, err := unix.FanotifyInit(fanCloexec|fanNonblock|fanUnlimitedMarks|fanReportDFIDName|fanReportFID, unix.O_RDONLY|unix.O_LARGEFILE|unix.O_CLOEXEC)
 	if err != nil {
 		return nil, fmt.Errorf("fanotify: %w", err)
@@ -574,7 +576,8 @@ func openFolders(ctx context.Context, root string) (*foldersSource, error) {
 		return nil, err
 	}
 	s.tree = newFolderTree(key)
-	if err := s.markBelow(ctx, dir, s.tree.root, "", nil); err != nil {
+	s.marker = &treeMarker[string]{root: s.root, mountID: s.mountID, limits: limits, tree: s.tree, mark: s.mark}
+	if err := s.marker.all(ctx, dir, s.tree.root, "", nil); err != nil {
 		_ = unix.Close(group)
 		return nil, err
 	}
@@ -597,22 +600,80 @@ func (s *foldersSource) mark(dir fsx.Dir) (string, error) {
 	return handleKey(h.Type(), h.Bytes()), nil
 }
 
-// markBelow marks every folder below one, but those of another mount. With found, it also lists what it
-// finds there, at paths below prefix.
-func (s *foldersSource) markBelow(ctx context.Context, dir fsx.Dir, node *folderNode[string], prefix string, found *[]change) error {
-	return eachEntry(ctx, dir, s.mountID, prefix, found, func(sub fsx.Dir, name, path string) error {
-		key, err := s.mark(sub)
+// treeMarker marks, or watches, every folder below one, but those of another mount, for a watch folder by folder, and
+// with found also lists what it finds there, at paths below prefix. It goes no further than the disk's walks: a folder
+// whose path is past limits is not marked, as no walk reads it (specs.md §15.8). It holds two descriptors for each
+// level it is below; with limits.MaxOpen, it holds them for half that many levels at most, and marks what is deeper
+// once those above are let go, opening each such folder again from the root, one name at a time.
+type treeMarker[K comparable] struct {
+	root    string
+	mountID uint64
+	limits  Limits
+	tree    *folderTree[K]
+	// mark puts the mark or the watch on a folder, and gives the key the kernel names it with.
+	mark  func(fsx.Dir) (K, error)
+	later []laterFolder[K]
+}
+
+// laterFolder is a folder a treeMarker marks once those above it are let go.
+type laterFolder[K comparable] struct {
+	parent     *folderNode[K]
+	name, path string
+}
+
+// all marks every folder below one, and then those it left for later.
+func (m *treeMarker[K]) all(ctx context.Context, dir fsx.Dir, node *folderNode[K], prefix string, found *[]change) error {
+	if err := m.below(ctx, dir, node, prefix, found, 0); err != nil {
+		m.later = nil
+		return err
+	}
+	for len(m.later) > 0 {
+		l := m.later[len(m.later)-1]
+		m.later = m.later[:len(m.later)-1]
+		sub, err := openBelow(m.root, l.path, m.mountID)
+		if err != nil {
+			// Gone, or no longer a folder of the root's mount: nothing to mark there.
+			continue
+		}
+		key, err := m.mark(sub)
+		if err == nil {
+			err = m.below(ctx, sub, m.tree.add(l.parent, l.name, key), l.path, found, 0)
+		}
+		_ = sub.Close()
+		if err != nil {
+			m.later = nil
+			return err
+		}
+	}
+	return nil
+}
+
+// below marks the folders below one it holds open, depth levels below the last folder it opened from the root.
+func (m *treeMarker[K]) below(ctx context.Context, dir fsx.Dir, node *folderNode[K], prefix string, found *[]change, depth int) error {
+	return eachEntry(ctx, dir, m.mountID, prefix, found, m.limits, func(listing fsx.Dir, name, path string) error {
+		if m.limits.MaxOpen > 0 && 2*(depth+1) >= m.limits.MaxOpen {
+			m.later = append(m.later, laterFolder[K]{parent: node, name: name, path: path})
+			return nil
+		}
+		sub, err := listing.OpenDir(name)
+		if err != nil {
+			return nil //nolint:nilerr // gone in the meantime, as a name that cannot be looked at is
+		}
+		defer func() { _ = sub.Close() }()
+		key, err := m.mark(sub)
 		if err != nil {
 			return err
 		}
-		return s.markBelow(ctx, sub, s.tree.add(node, name, key), path, found)
+		return m.below(ctx, sub, m.tree.add(node, name, key), path, found, depth+1)
 	})
 }
 
-// eachEntry calls fn on each folder of a folder its caller marked, open, but those of another mount, and, with found,
-// lists every name there as created: what a folder held before its mark came is known only so (specs.md §15.1). A
-// name that went in the meantime is skipped.
-func eachEntry(ctx context.Context, marked fsx.Dir, mountID uint64, prefix string, found *[]change, fn func(sub fsx.Dir, name, path string) error) error {
+// eachEntry calls fn on each folder of a folder its caller marked, with the descriptor it lists it through, but those
+// of another mount and those past limits, and, with found, lists every name there as created: what a folder held
+// before its mark came is known only so (specs.md §15.1). A name that went in the meantime is skipped.
+func eachEntry(ctx context.Context, marked fsx.Dir, mountID uint64, prefix string, found *[]change, limits Limits,
+	fn func(listing fsx.Dir, name, path string) error,
+) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("watch: %w", err)
 	}
@@ -637,16 +698,10 @@ func eachEntry(ctx context.Context, marked fsx.Dir, mountID uint64, prefix strin
 		if found != nil {
 			*found = append(*found, change{path: path, folder: st.Kind == fsx.KindDir, kind: KindCreated})
 		}
-		if st.Kind != fsx.KindDir || st.MountID != mountID {
+		if st.Kind != fsx.KindDir || st.MountID != mountID || !limits.Fits(path) {
 			continue
 		}
-		sub, err := dir.OpenDir(name)
-		if err != nil {
-			continue
-		}
-		err = fn(sub, name, path)
-		_ = sub.Close()
-		if err != nil {
+		if err := fn(dir, name, path); err != nil {
 			return err
 		}
 	}
@@ -735,6 +790,10 @@ func (s *foldersSource) arrive(parent *folderNode[string], name string) []change
 		return nil
 	}
 	at := join(dirPath, name)
+	if !s.marker.limits.Fits(at) {
+		// Past what the disk's walks read: nothing to mark there (specs.md §15.8).
+		return nil
+	}
 	sub, err := openBelow(s.root, at, s.mountID)
 	if err != nil {
 		return nil
@@ -760,6 +819,6 @@ func (s *foldersSource) arrive(parent *folderNode[string], name string) []change
 		return nil
 	}
 	var found []change
-	_ = s.markBelow(context.Background(), sub, s.tree.add(parent, name, key), at, &found)
+	_ = s.marker.all(context.Background(), sub, s.tree.add(parent, name, key), at, &found)
 	return found
 }

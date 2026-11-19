@@ -24,7 +24,7 @@ func TestWatcherByInotify(t *testing.T) {
 	w := NewWatcher(WatcherOptions{Now: func() int64 { return time.Now().UnixNano() }, Inotify: true})
 	defer w.Close()
 	d := &config.Disk{ID: "t1", Mount: top, Root: "media"}
-	how, err := w.Watch(t.Context(), d)
+	how, err := w.Watch(t.Context(), d, Unbounded)
 	if err != nil || how != HowInotify {
 		t.Fatalf("%s, %v", how, err)
 	}
@@ -75,7 +75,7 @@ func TestWatcherByInotify(t *testing.T) {
 		t.Errorf("after Stop: %+v", e)
 	case <-time.After(300 * time.Millisecond):
 	}
-	if _, err := w.Watch(t.Context(), d); err != nil {
+	if _, err := w.Watch(t.Context(), d, Unbounded); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(top, "media", "g"), nil, 0o644); err != nil {
@@ -83,7 +83,7 @@ func TestWatcherByInotify(t *testing.T) {
 	}
 	next("g", KindWritten)
 	w.Close()
-	if _, err := w.Watch(t.Context(), d); err == nil {
+	if _, err := w.Watch(t.Context(), d, Unbounded); err == nil {
 		t.Error("a closed watcher watches")
 	}
 }
@@ -92,7 +92,7 @@ func TestWatcherByInotify(t *testing.T) {
 func TestWatcherWithoutRoot(t *testing.T) {
 	w := NewWatcher(WatcherOptions{Now: func() int64 { return 0 }, Inotify: true})
 	defer w.Close()
-	if _, err := w.Watch(t.Context(), &config.Disk{ID: "t1", Mount: t.TempDir(), Root: "media"}); err == nil {
+	if _, err := w.Watch(t.Context(), &config.Disk{ID: "t1", Mount: t.TempDir(), Root: "media"}, Unbounded); err == nil {
 		t.Error("watched a root that is not there")
 	}
 }
@@ -183,7 +183,7 @@ func TestAnInotifyWatchEndsWithItsRoot(t *testing.T) {
 	w := NewWatcher(WatcherOptions{Now: func() int64 { return time.Now().UnixNano() }, Inotify: true})
 	defer w.Close()
 	d := &config.Disk{ID: "t1", Mount: top, Root: "media"}
-	if _, err := w.Watch(t.Context(), d); err != nil {
+	if _, err := w.Watch(t.Context(), d, Unbounded); err != nil {
 		t.Fatal(err)
 	}
 	if !w.Alive("t1") {
@@ -223,7 +223,7 @@ func TestAnInotifyWatchEndsWithItsRoot(t *testing.T) {
 	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Watch(t.Context(), d); err != nil {
+	if _, err := w.Watch(t.Context(), d, Unbounded); err != nil {
 		t.Fatal(err)
 	}
 	if !w.Alive("t1") {
@@ -272,7 +272,7 @@ func TestAnArrivingFolderIsOpenedBelowTheRoot(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outside, "new", "secret"), []byte("s"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := openInotify(t.Context(), root)
+	s, err := openInotify(t.Context(), root, Unbounded)
 	if err != nil {
 		t.Fatal(err)
 	}

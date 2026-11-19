@@ -137,6 +137,23 @@ func (c *Config) Read() (preferSpinning bool, classes []string) {
 	return policy == "prefer-spinning", classes
 }
 
+// The values of walk.long_paths (specs.md §15.8, §24).
+const (
+	// WalkSkip: a walk neither records nor goes below a name whose path through its disk's mount is past the limit
+	// of a mergerfs branch.
+	WalkSkip = "skip"
+	// WalkAll: a walk goes below every name, holding at most walk.max_open folders open at once.
+	WalkAll = "walk"
+)
+
+// Walk returns [walk]: whether a walk goes past the limit of a mergerfs branch, walk.long_paths = "walk", and how
+// many folders it then holds open at most, walk.max_open (specs.md §15.8).
+func (c *Config) Walk() (all bool, maxOpen int) {
+	long, _ := c.effective["walk.long_paths"].(string)
+	open, _ := c.effective["walk.max_open"].(int64)
+	return long == WalkAll, int(open)
+}
+
 // Cache is what the SSD cache's settings say (specs.md §19).
 type Cache struct {
 	// InView says that view.engine is "atoll", whose view presents the cache disks and lands new files there: with

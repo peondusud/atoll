@@ -119,6 +119,8 @@ type scanDisk struct {
 	PathTaken   []pathItem  `json:"path_taken"`
 	Unreadable  []pathItem  `json:"unreadable"`
 	OtherMounts []pathItem  `json:"other_mounts"`
+	// TooLong is left out when the walk left no name past the limit of the disk's mergerfs branch (specs.md §15.8).
+	TooLong []pathItem `json:"branch_path_too_long,omitempty"`
 }
 
 // scanOutput is the output of api/schemas/scan.schema.json.
@@ -205,6 +207,9 @@ func scanOutputFrom(o *watch.Outcome) scanOutput {
 			Changed: pathItems(r.Changed), Moved: movedItems(r.Moved), Absent: pathItems(r.Absent), PathTaken: pathItems(r.PathTaken),
 			Unreadable: pathItems(r.Unreadable), OtherMounts: pathItems(r.OtherMounts),
 		}
+		if len(r.TooLong) > 0 {
+			d.TooLong = pathItems(r.TooLong)
+		}
 		if r.Verdict.State != disks.Online {
 			reason, message := string(r.Verdict.Reason), r.Verdict.Message
 			d.Reason, d.Message = &reason, &message
@@ -236,6 +241,7 @@ func printScan(w io.Writer, out scanOutput) error {
 		printPaths(&text, "  path taken", d.PathTaken)
 		printPaths(&text, "  unreadable", d.Unreadable)
 		printPaths(&text, "  on another mount", d.OtherMounts)
+		printPaths(&text, "  past the limit of its mergerfs branch", d.TooLong)
 	}
 	printPaths(&text, "conflict", out.Conflicts)
 	return writeText(w, text.String())

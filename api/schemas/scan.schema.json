@@ -70,7 +70,11 @@
           "$ref": "#/$defs/paths"
         },
         "unreadable": { "$ref": "#/$defs/paths" },
-        "other_mounts": { "$ref": "#/$defs/paths" }
+        "other_mounts": { "$ref": "#/$defs/paths" },
+        "branch_path_too_long": {
+          "description": "Names the walk neither recorded nor went below, as their path through the disk's mount is past 4095 bytes, the limit of its mergerfs branch, while their folder's is not (specs.md §15.8, walk.long_paths = \"skip\"). Left out when there is none.",
+          "$ref": "#/$defs/paths"
+        }
       },
       "allOf": [
         {
@@ -101,7 +105,8 @@
             "properties": {
               "files": { "const": 0 }, "bytes": { "const": 0 }, "folders": { "const": 0 }, "symlinks": { "const": 0 }, "ignored": { "const": 0 },
               "new": { "const": 0 }, "known": { "const": 0 }, "hashed": { "const": 0 },
-              "changed": { "maxItems": 0 }, "moved": { "maxItems": 0 }, "absent": { "maxItems": 0 }, "path_taken": { "maxItems": 0 }, "unreadable": { "maxItems": 0 }, "other_mounts": { "maxItems": 0 }
+              "changed": { "maxItems": 0 }, "moved": { "maxItems": 0 }, "absent": { "maxItems": 0 }, "path_taken": { "maxItems": 0 }, "unreadable": { "maxItems": 0 }, "other_mounts": { "maxItems": 0 },
+              "branch_path_too_long": { "maxItems": 0 }
             }
           }
         }

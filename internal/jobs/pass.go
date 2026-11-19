@@ -73,6 +73,11 @@ type DiskLine struct {
 	// pass's output.
 	Refused      int64
 	RefusedFirst []string
+	// TooLong counts the names its walk neither recorded nor went below, as their path is past the limit of the disk's
+	// mergerfs branch, and TooLongFirst holds the first RefusedShown of them in byte order: what an alert says
+	// (specs.md §15.8, §23). They are no part of the pass's output either.
+	TooLong      int64
+	TooLongFirst []string
 	// NewFolders holds the folders where its walk found copies new to the catalog, by path in byte order: what the
 	// daemon tells the media servers of (specs.md §21.5). No part of the pass's output either.
 	NewFolders []string
@@ -473,6 +478,7 @@ func (p *pass) look(ctx context.Context) error {
 		line := DiskLine{ID: d.ID, Verdict: report.Verdict, Walked: report.Walked, Partial: report.Walked && p.partial[d.ID]}
 		if report.Walked {
 			line.Refused, line.RefusedFirst = firstRefused(report.Refused)
+			line.TooLong, line.TooLongFirst = firstRefused(report.TooLong)
 			line.NewFolders = slices.Sorted(slices.Values(report.NewFolders))
 		}
 		p.out.Disks = append(p.out.Disks, line)
@@ -546,7 +552,8 @@ func (p *pass) looked(id string) bool {
 	return p.walked[id] || p.spared[id]
 }
 
-// firstRefused counts the names that refused a walk, and gives the first RefusedShown of them in byte order.
+// firstRefused counts the names that refused a walk, or that it left past the limit of the disk's mergerfs branch, and
+// gives the first RefusedShown of them in byte order.
 func firstRefused(names []string) (int64, []string) {
 	if len(names) == 0 {
 		return 0, nil
@@ -657,7 +664,7 @@ func (p *pass) ownFiles(d *config.Disk, inodes map[string]bool) (map[string][]so
 	if handle == nil {
 		return nil, nil //nolint:nilnil // the confirmation that follows says what became of the disk
 	}
-	own, err := handle.OwnFiles(ctx, p.db, inodes)
+	own, err := handle.OwnFiles(ctx, p.db, inodes, watch.LimitsOf(p.config, d).Own())
 	if errors.Is(err, ops.ErrDiskLost) {
 		if err := p.session.Lose(ctx, d.ID, err); err != nil {
 			return nil, fmt.Errorf("%w", err)

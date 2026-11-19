@@ -687,7 +687,7 @@ func (l *loop) watch(ctx context.Context, id string) {
 	if st == nil || d == nil || st.watched || d.State == config.DiskFailed {
 		return
 	}
-	how, err := l.watcher.Watch(ctx, d)
+	how, err := l.watcher.Watch(ctx, d, watch.LimitsOf(l.opt.Config, d))
 	if err != nil {
 		l.log.Warn("cannot watch a disk: only passes will see it", "disk", id, "error", err)
 		return
@@ -865,7 +865,8 @@ func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
 			spared = true
 			continue
 		}
-		l.lines[line.ID] = jobs.DiskLine{ID: line.ID, Verdict: line.Verdict, Walked: line.Walked, Refused: line.Refused, RefusedFirst: line.RefusedFirst}
+		l.lines[line.ID] = jobs.DiskLine{ID: line.ID, Verdict: line.Verdict, Walked: line.Walked, Refused: line.Refused, RefusedFirst: line.RefusedFirst,
+			TooLong: line.TooLong, TooLongFirst: line.TooLongFirst}
 	}
 	if !spared {
 		return outcome

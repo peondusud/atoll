@@ -257,6 +257,31 @@ func TestComparingATree(t *testing.T) {
 	})
 }
 
+// A tree deeper than PATH_MAX, which no path given whole reaches, is made, changed and compared as any other: a
+// scenario can hold what is past the limit of a mergerfs branch (specs.md §15.8).
+func TestATreePastPathMax(t *testing.T) {
+	deep := "media/" + strings.TrimSuffix(strings.Repeat(strings.Repeat("d", 200)+"/", 21), "/")
+	file, moved := deep+"/f", deep+"/g"
+	onDisk := func(list string) string {
+		return `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": [{"path": "` + file + `", "text": "x", "mtime_ns": 1000000000}]}], "steps": [` + list + `]}`
+	}
+	expect := func(tree string) string { return `{"do": "expect_tree", "disk": "d", "tree": [` + tree + `]}` }
+	checkVerdicts(t, []verdictCase{
+		{"it is made and read", "exit 0", onDisk(expect(`{"path": "` + file + `", "text": "x", "mtime_ns": 1000000000}`)), ""},
+		{"it is compared", "exit 0", onDisk(expect(`{"path": "` + file + `", "text": "y"}`)), "other content"},
+		{"renamed, touched, its mode set", "exit 0", onDisk(`{"do": "rename", "disk": "d", "path": "` + file + `", "to": "` + moved + `"}, ` +
+			`{"do": "touch", "disk": "d", "path": "` + moved + `", "mtime_ns": 2000000000}, {"do": "chmod", "disk": "d", "path": "` + moved + `", "mode": "0600"}, ` +
+			expect(`{"path": "`+moved+`", "text": "x", "mtime_ns": 2000000000, "mode": "0600"}`)), ""},
+		{"linked, written, deleted", "exit 0", onDisk(`{"do": "link", "disk": "d", "path": "` + file + `", "to": "media/near"}, ` +
+			`{"do": "write", "disk": "d", "path": "` + moved + `", "text": "w"}, {"do": "delete", "disk": "d", "path": "` + file + `"}, ` +
+			expect(`{"path": "media/near", "text": "x"}, {"path": "`+moved+`", "text": "w"}`)), ""},
+		{"an empty folder there", "exit 0", onDisk(`{"do": "mkdir", "disk": "d", "path": "` + deep + `/e"}, ` +
+			expect(`{"path": "`+file+`", "text": "x"}, {"path": "`+deep+`/e", "kind": "dir"}`)), ""},
+		{"a symlink there", "exit 0", onDisk(`{"do": "symlink", "disk": "d", "path": "` + deep + `/l", "target": "f"}, ` +
+			expect(`{"path": "`+file+`", "text": "x"}, {"path": "`+deep+`/l", "kind": "symlink", "target": "f"}`)), ""},
+	})
+}
+
 func TestAlwaysChecked(t *testing.T) {
 	two := func(list string) string {
 		return `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": [{"path": "media/a", "text": "x"}]}, {"id": "e", "uuid": "v", "fs": "ext4", "capacity": 10, "tree": []}], "steps": [` + list + `]}`

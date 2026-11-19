@@ -54,7 +54,7 @@ func TestWatcherOnEachDriver(t *testing.T) {
 				}
 				w := watch.NewWatcher(watch.WatcherOptions{ViewMount: pool, Now: func() int64 { return time.Now().UnixNano() }, Inotify: inotify, Opened: opened})
 				defer w.Close()
-				how, err := w.Watch(t.Context(), diskOf(v, at))
+				how, err := w.Watch(t.Context(), diskOf(v, at), watch.Unbounded)
 				if err != nil {
 					t.Fatal(err)
 				}

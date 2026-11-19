@@ -72,6 +72,10 @@ window           = "02:00-06:00"        # rescans, catalog backups; default of t
 rescan_every     = "7d"
 catalog_on_disks = false                # a catalog backup in each disk's Atoll/catalog/
 
+[walk]                                  # how deep a walk of a disk goes (§15.8)
+long_paths = "skip"                     # skip: no path past the 4095 bytes of a mergerfs branch | walk
+# max_open = 64                         # with walk: the folders a walk holds open at once
+
 [replication]
 enabled               = true
 window                = "02:00-06:00"   # may wrap past midnight, e.g. "23:00-05:00"

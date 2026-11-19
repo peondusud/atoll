@@ -702,14 +702,13 @@ func statx(fd int, name string, flags int) (Stat, error) {
 }
 
 // OpenFileAt opens a regular file given by its path below a folder, one component at a time, so
-// that no symlink is followed on the way.
+// that no symlink is followed on the way. It holds one folder at a time, however deep the path.
 func OpenFileAt(root Dir, path string) (File, error) {
 	folders, name := splitPath(path)
 	dir := root
-	var opened []Dir
 	defer func() {
-		for _, d := range opened {
-			_ = d.Close()
+		if dir != root {
+			_ = dir.Close()
 		}
 	}()
 	for _, folder := range folders {
@@ -717,7 +716,9 @@ func OpenFileAt(root Dir, path string) (File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open %q: %w", path, err)
 		}
-		opened = append(opened, next)
+		if dir != root {
+			_ = dir.Close()
+		}
 		dir = next
 	}
 	f, err := dir.OpenFile(name)

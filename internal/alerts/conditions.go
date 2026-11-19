@@ -39,6 +39,7 @@ const (
 	KeyNoAccess     = "no-access:"
 	KeyWorkdirOwner = "workdir-owner:"
 	KeyUPS          = "ups-unreachable"
+	KeyTooLong      = "branch-path-too-long:"
 )
 
 // FirstN is how many paths an alert names, at most.
@@ -249,6 +250,9 @@ func Holdings(f *Facts) []Holding {
 		if n := d.Refused + int64(len(f.Unopened[d.ID])); d.Walked && n > 0 {
 			counts[KeyNoAccess+d.ID] = n
 		}
+		if d.Walked && d.TooLong > 0 {
+			counts[KeyTooLong+d.ID] = d.TooLong
+		}
 	}
 	for i := range f.Foreign {
 		counts[KeyWorkdirOwner+f.Foreign[i].ID] = 1
@@ -418,6 +422,21 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 			"the account Atoll runs as, as the mount of another user does, a rule of the system's, a folder when Atoll lacks its "+
 			"rights, or a file whose key is not loaded. Nothing is concluded of them or of what is below them, and nothing there is "+
 			"copied or verified until they can be read.", id), first, h.Count)
+	case strings.HasPrefix(h.Key, KeyTooLong):
+		id := strings.TrimPrefix(h.Key, KeyTooLong)
+		var first []string
+		for _, d := range f.Disks {
+			if d.ID == id {
+				first = d.TooLongFirst
+			}
+		}
+		m.Title = fmt.Sprintf("Atoll: %d %s of disk %s %s past the limit of its mergerfs branch", h.Count, plural(h.Count, "name", "names"), id,
+			plural(h.Count, "is", "are"))
+		m.Body = list(fmt.Sprintf("The path of each of these names on the disk %s is past 4095 bytes, which mergerfs cannot present: "+
+			"a walk of the disk neither records them nor goes below them. Nothing is concluded of them or of what is below them, and "+
+			"while one is there no copy of that disk is taken for deleted, as it may have gone there: its file is kept, and its "+
+			"copies made again. Give them a shorter path, or "+
+			"set walk.long_paths = \"walk\".", id), first, h.Count)
 	case strings.HasPrefix(h.Key, KeyWorkdirOwner):
 		id := strings.TrimPrefix(h.Key, KeyWorkdirOwner)
 		var w ForeignWorkdir
