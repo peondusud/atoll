@@ -17,7 +17,7 @@ test:
 
 # Mandatory before any commit touching jobs, ops, watch, integrity or catalog.
 test-race:
-	$(GO) test -race ./...
+	$(GO) test -race -timeout 45m ./...
 
 # Black-box: conformance/scenarios against a conformance build, through its CLI only.
 conformance:

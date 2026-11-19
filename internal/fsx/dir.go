@@ -214,7 +214,7 @@ func (d *realDir) Names() ([]string, error) {
 }
 
 func (d *realDir) Info() (Stat, error) {
-	return statx(d.fd(), "", unix.AT_EMPTY_PATH)
+	return statxBirth(d.fd(), d.file.Name())
 }
 
 func (d *realDir) Stat(name string) (Stat, error) {
@@ -248,6 +248,30 @@ func (d *realDir) readCreationXattr(name string, st *Stat) error {
 	}
 	st.Birth, st.HasBirth = FileTime(binary.LittleEndian.Uint64(raw[:])), true
 	return nil
+}
+
+// statxBirth looks at what a handle leads to, as a look by its name does: where statx gives no creation time, as on
+// ntfs-3g and lowntfs-3g, the attribute that holds it (specs.md §7). A handle and a name must give one creation time,
+// or a copy's row taken from its part's handle would differ from every later look at its name (found on ntfs-3g by the
+// CI's qemu job, 2026-11-19). It goes through /proc, following the descriptor's link to the file, as a handle opened
+// with O_PATH takes no call on its attributes.
+func statxBirth(fd int, name string) (Stat, error) {
+	st, err := statx(fd, "", unix.AT_EMPTY_PATH)
+	if err != nil || st.HasBirth || st.Kind == KindSymlink {
+		return st, err
+	}
+	var raw [8]byte
+	n, err := unix.Getxattr("/proc/self/fd/"+strconv.Itoa(fd), "system.ntfs_crtime", raw[:])
+	switch {
+	case errors.Is(err, unix.ENODATA), errors.Is(err, unix.ENOTSUP):
+		return st, nil
+	case err != nil:
+		return Stat{}, fmt.Errorf("creation time of %q: %w", name, err)
+	case n != len(raw):
+		return st, nil
+	}
+	st.Birth, st.HasBirth = FileTime(binary.LittleEndian.Uint64(raw[:])), true
+	return st, nil
 }
 
 // FileTime turns an NTFS FILETIME, 100 ns units since 1601-01-01 UTC, into a time since the Unix
@@ -550,7 +574,7 @@ func (f *realFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *realFile) Info() (Stat, error) {
-	return statx(int(f.file.Fd()), "", unix.AT_EMPTY_PATH)
+	return statxBirth(int(f.file.Fd()), f.file.Name())
 }
 
 // SetTimes goes through /proc, as a writable file's does: the file is open for reading only.
@@ -620,7 +644,7 @@ func (f *realWritable) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *realWritable) Info() (Stat, error) {
-	return statx(f.fd(), "", unix.AT_EMPTY_PATH)
+	return statxBirth(f.fd(), f.file.Name())
 }
 
 func (f *realWritable) Truncate(size int64) error {
