@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The soak after the merges, cut short by Docker after 3 h 30, 2026-11-19 (specs.md §26)
+
+`TestDaemonSoak` on `af340fd`, every feature of the day merged, in qemu without KVM on Linux 6.12, `SOAK=72h SOAK_FILES=200000`, from 07:03. Docker Desktop's VM stopped at 10:32, a minute before Windows installed an update of the Claude application, and the soak with it; the maintainer, back, had asked it stopped then. Its log is `bin/soak4/soak.log`.
+
+- **No fault**: 271 passes, none held nor partial, no error, and the one expected warning, no `smartctl` in the guest.
+- **The first pass** peaked at 182.1 MiB, the Go runtime holding at most 158.5 MiB and the heap 135.1 MiB live, for 180.5 MiB on `ab9e21f`: under the 200 MB (190.7 MiB), the day's features and the OpenTelemetry SDK's larger binary costing some 1.6 MiB there. No tenth of the 72 hours was reached, so no reading of memory over time.
+- **The passes**: 6.9 s at the median, 7.2 on average, as before the merges, and 0.54 hours busy of 3.33.
+
 ## The CI green on GitHub, main protected, BLAKE3 measured on real hardware, 2026-11-19 (specs.md §27, §29.7)
 
 The first runs of GitHub Actions on `beta`, after the merges of the day. Two faults of the CI itself, fixed in `7ff4ae0`: git refused the checkout in the container jobs, which stopped `go build` from stamping the version (`GIT_CONFIG_*` set `safe.directory`); govulncheck found GO-2026-6610 to 6617 in `golang.org/x/net` v0.59.0, which the OpenTelemetry exporters bring, taken to v0.60.0 at once. Then the loop-device tests, in qemu with KVM (25 minutes for both kernels, where it took hours without), which no one had run on the day's features:
