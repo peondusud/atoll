@@ -7,11 +7,15 @@
 # It reads /qemu, which `make qemu-build` fills: loopdev.test, and repo/ with go.mod and conformance/,
 # which the tests look for above their folder. Its exit code is the worst of the guests': 0 when every
 # test passed, 1 when one failed, 2 when a guest did not say.
+#
+# CACHE, a folder that outlives the container, as a CI keeps one from a run to the next, holds what the
+# run downloads: Debian's packages, and the mainline kernel's. What is there is not downloaded again.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 built=${BUILT:-/qemu}
 kernels=${KERNELS:-debian mainline}
 mainline=${MAINLINE:-v7.3.1}
+cache=${CACHE:-}
 
 if [ ! -x "$built/loopdev.test" ] || [ ! -f "$built/repo/go.mod" ]; then
 	echo "no $built/loopdev.test or $built/repo/go.mod: run make qemu-build first" >&2
@@ -25,11 +29,19 @@ if [ -n "$newer" ]; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
+apt=(apt-get -qq)
+if [ -n "$cache" ]; then
+	# Below /var/cache, which the initramfs leaves out; out of reach of the image's docker-clean, which empties
+	# /var/cache/apt/archives after each install.
+	mkdir -p "$cache/apt/partial" || exit 2
+	apt+=(-o "Dir::Cache::Archives=$cache/apt/")
+	echo "cache: $cache, $(find "$cache" -type f -name '*.deb' | wc -l) packages in it"
+fi
 echo "installing the guest's tools and Debian's kernel"
-apt-get update -qq >/dev/null || exit 2
+"${apt[@]}" update >/dev/null || exit 2
 # What the tests call, and what makes the initramfs. The kernel's package brings its modules. mergerfs brings
 # mount.mergerfs, which the break-glass test mounts through, as a boot would; iproute2 the loopback the init brings up.
-apt-get install -y -qq --no-install-recommends linux-image-amd64 ntfs-3g e2fsprogs xfsprogs btrfs-progs \
+"${apt[@]}" install -y --no-install-recommends linux-image-amd64 ntfs-3g e2fsprogs xfsprogs btrfs-progs \
 	util-linux dmsetup procps kmod cpio curl ca-certificates zstd mergerfs iproute2 >/dev/null || exit 2
 versions=(/usr/lib/modules/*)
 debian_version=${versions[0]##*/}
@@ -37,13 +49,30 @@ echo "debian kernel: $debian_version"
 
 if [[ " $kernels " == *" mainline "* ]]; then
 	base=https://kernel.ubuntu.com/mainline/$mainline/amd64
-	mkdir -p /dl/x && cd /dl || exit 2
-	list=$(curl -sSf "$base/") || { echo "cannot list $base" >&2; exit 2; }
-	image=$(grep -o 'linux-image-unsigned-[^"]*-generic_[^"]*_amd64\.deb' <<<"$list" | sort -u | head -1)
-	modules=$(grep -o 'linux-modules-[^"]*-generic_[^"]*_amd64\.deb' <<<"$list" | sort -u | head -1)
-	if ! curl -sSfO "$base/$image" || ! curl -sSfO "$base/$modules"; then
-		echo "cannot download the $mainline kernel" >&2
-		exit 2
+	debs=/dl
+	[ -n "$cache" ] && debs=$cache/mainline/$mainline
+	mkdir -p "$debs" /dl/x || exit 2
+	image=$(find "$debs" -maxdepth 1 -name 'linux-image-unsigned-*-generic_*_amd64.deb' | sort | head -1)
+	modules=$(find "$debs" -maxdepth 1 -name 'linux-modules-*-generic_*_amd64.deb' | sort | head -1)
+	if [ -n "$image" ] && [ -n "$modules" ]; then
+		echo "the $mainline kernel, from the cache"
+	else
+		echo "downloading the $mainline kernel"
+		list=$(curl -sSf "$base/") || { echo "cannot list $base" >&2; exit 2; }
+		image=$(grep -o 'linux-image-unsigned-[^"]*-generic_[^"]*_amd64\.deb' <<<"$list" | sort -u | head -1)
+		modules=$(grep -o 'linux-modules-[^"]*-generic_[^"]*_amd64\.deb' <<<"$list" | sort -u | head -1)
+		if [ -z "$image" ] || [ -z "$modules" ]; then
+			echo "no kernel image or modules listed at $base" >&2
+			exit 2
+		fi
+		image=$debs/$image modules=$debs/$modules
+		# Through another name first, so that a download cut short is never taken for a whole one.
+		for deb in "$image" "$modules"; do
+			if ! curl -sSf -o "$deb.part" "$base/${deb##*/}" || ! mv "$deb.part" "$deb"; then
+				echo "cannot download the $mainline kernel" >&2
+				exit 2
+			fi
+		done
 	fi
 	# Into a folder of its own: extracted over /, tar could replace the /lib symlink.
 	dpkg-deb -x "$image" /dl/x && dpkg-deb -x "$modules" /dl/x || exit 2
@@ -92,12 +121,16 @@ if [ -n "${mainline_version:-}" ]; then
 fi
 
 # Installed last, so that qemu stays out of the initramfs.
-apt-get install -y -qq --no-install-recommends qemu-system-x86 >/dev/null || exit 2
+"${apt[@]}" install -y --no-install-recommends qemu-system-x86 >/dev/null || exit 2
+# What can no longer be downloaded, an older version of a package, leaves the cache.
+[ -n "$cache" ] && "${apt[@]}" autoclean >/dev/null
 if [ -w /dev/kvm ]; then
 	accel=(-accel kvm -cpu host)
+	echo "accelerator: KVM"
 else
 	# shellcheck disable=SC2054 # one option, whose commas are its own
 	accel=(-accel tcg,thread=multi -cpu max)
+	echo "accelerator: none, no /dev/kvm: qemu emulates the processor"
 fi
 cpus=$(nproc)
 [ "$cpus" -gt 8 ] && cpus=8

@@ -44,9 +44,11 @@ qemu-build:
 	cp -r conformance bin/qemu/repo/
 
 # test-loopdev as root in qemu, on Debian's kernel and a mainline one, with neither root nor ntfs3 on
-# the host: only Docker (test/qemu/README.md).
+# the host: only Docker (test/qemu/README.md). QEMU_CACHE, a folder of the host, keeps the packages and
+# the kernel it downloads from one run to the next, as the CI's qemu job does.
 test-qemu: qemu-build
 	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e COUNT -e VERBOSE \
+		$(if $(QEMU_CACHE),-v "$(abspath $(QEMU_CACHE)):/var/cache/atoll-qemu" -e CACHE=/var/cache/atoll-qemu) \
 		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
 
 # The notifications on real Plex, Jellyfin and Emby, each in a container, on the last commit: only git

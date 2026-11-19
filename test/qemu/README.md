@@ -40,6 +40,9 @@ Environment variables of the second command, passed with `-e NAME=value` (`make 
 | `SOAK` | none | runs `TestDaemonSoak` for that long, such as `4h`: the daemon that runs for good under a writer, its memory logged every tenth of the run. Raise `TIMEOUT` and `QEMU_TIMEOUT` past it, by 20 minutes for the first pass |
 | `SOAK_FILES` | `2000` | the files each disk of the soak starts with; past 2,000, its volumes are sized for them, and its first pass has 10 ms a file more |
 | `SCALE` | none | runs `TestScale` with that many files a disk, such as `200000`: the first scan, `atoll status` with a strict rule, and the passes of the link guard, each timed with its memory. Raise `TIMEOUT` and `QEMU_TIMEOUT` as for a soak |
+| `CACHE` | none | a folder of the container that outlives it, such as `-v <folder>:/var/cache/atoll-qemu -e CACHE=/var/cache/atoll-qemu`: Debian's packages and the mainline kernel are kept there, and what it holds is not downloaded again. `make test-qemu QEMU_CACHE=<folder>` mounts a folder of the host there; the CI's qemu job keeps one from a run to the next |
+
+The run says whether qemu has KVM (`accelerator: KVM`) or emulates the processor.
 
 For example, the tests of a device that fails during an operation, twice, on Debian's kernel only:
 
