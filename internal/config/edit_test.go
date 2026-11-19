@@ -7,29 +7,31 @@ import (
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
+// editVector is a case of conformance/vectors/config_edit.json.
+type editVector struct {
+	Note string `json:"note"`
+	TOML string `json:"toml"`
+	Op   string `json:"op"`
+	Disk *struct {
+		ID      string   `json:"id"`
+		UUID    string   `json:"uuid"`
+		Mount   string   `json:"mount"`
+		FS      string   `json:"fs"`
+		Role    string   `json:"role"`
+		Domain  string   `json:"domain"`
+		Tags    []string `json:"tags"`
+		Root    string   `json:"root"`
+		Workdir string   `json:"workdir"`
+		State   string   `json:"state"`
+	} `json:"disk"`
+	ID     string  `json:"id"`
+	State  *string `json:"state"`
+	Result *string `json:"result"`
+	Error  bool    `json:"error"`
+}
+
 func TestEditVectors(t *testing.T) {
-	type vector struct {
-		Note string `json:"note"`
-		TOML string `json:"toml"`
-		Op   string `json:"op"`
-		Disk *struct {
-			ID      string   `json:"id"`
-			UUID    string   `json:"uuid"`
-			Mount   string   `json:"mount"`
-			FS      string   `json:"fs"`
-			Role    string   `json:"role"`
-			Domain  string   `json:"domain"`
-			Tags    []string `json:"tags"`
-			Root    string   `json:"root"`
-			Workdir string   `json:"workdir"`
-			State   string   `json:"state"`
-		} `json:"disk"`
-		ID     string  `json:"id"`
-		State  *string `json:"state"`
-		Result *string `json:"result"`
-		Error  bool    `json:"error"`
-	}
-	for i, v := range vectors.Load[vector](t, "config_edit.json") {
+	for i, v := range vectors.Load[editVector](t, "config_edit.json") {
 		var got []byte
 		var err error
 		switch v.Op {

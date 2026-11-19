@@ -6,16 +6,18 @@ import (
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
+// minFreeVector is a case of conformance/vectors/min_free.json.
+type minFreeVector struct {
+	MinFree  *[]string `json:"min_free"`
+	Capacity *int64    `json:"capacity"`
+	Reserved *int64    `json:"reserved"`
+	Usable   *int64    `json:"usable"`
+	Error    bool      `json:"error"`
+	Note     string    `json:"note"`
+}
+
 func TestMinFreeVectors(t *testing.T) {
-	type vector struct {
-		MinFree  *[]string `json:"min_free"`
-		Capacity *int64    `json:"capacity"`
-		Reserved *int64    `json:"reserved"`
-		Usable   *int64    `json:"usable"`
-		Error    bool      `json:"error"`
-		Note     string    `json:"note"`
-	}
-	for i, v := range vectors.Load[vector](t, "min_free.json") {
+	for i, v := range vectors.Load[minFreeVector](t, "min_free.json") {
 		if v.MinFree == nil {
 			t.Errorf("vector %d (%s): want min_free", i, v.Note)
 			continue

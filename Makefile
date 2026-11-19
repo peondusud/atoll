@@ -56,6 +56,28 @@ test-qemu: qemu-build
 test-mediaservers:
 	bash test/mediaservers/run.sh
 
+# The coverage of the unit tests: one profile of the whole module into bin/cover/, each package's tests counting toward
+# every package they reach, then the share of statements run by package and in all (test/ci/cover.sh), and the profile
+# as HTML. A measure, never a gate; the CI's cover job runs it.
+.PHONY: cover
+cover:
+	mkdir -p bin/cover
+	$(GO) test -coverpkg=./... -coverprofile=bin/cover/cover.out ./...
+	bash test/ci/cover.sh bin/cover/cover.out
+
+# Mutation testing with gremlins (test/ci/mutation.sh) of one package, PKG=./internal/glob, or of the whole pure core
+# without PKG, as .github/workflows/mutation.yml runs it each night. The log and gremlins' JSON go to bin/mutation/;
+# WORKERS mutants at once, the CPUs by default.
+.PHONY: mutation
+mutation:
+	bash test/ci/mutation.sh $(PKG)
+
+# The fuzz targets (test/ci/fuzz.sh), each for FUZZTIME, 1m by default, one after the other, or the one PKG and TARGET
+# name, as .github/workflows/fuzz.yml runs each for longer every night. A failing input goes to bin/fuzz/ too.
+.PHONY: fuzz
+fuzz:
+	bash test/ci/fuzz.sh $(if $(TARGET),$(PKG) $(TARGET))
+
 # The conformance build holds code the delivered binary does not, so it gets a run of its own.
 lint:
 	$(GOLANGCI_LINT) run ./...

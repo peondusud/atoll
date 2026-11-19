@@ -38,6 +38,8 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 - Log: `log/slog`, through `internal/telemetry`'s handler alone: JSON lines of OpenTelemetry's log data model by default (specs.md §23.2).
 - OTLP export: the official OpenTelemetry SDK, `go.opentelemetry.io/otel` v1.47.0 (`otel/sdk`, `otel/sdk/metric`, `otel/sdk/log`, `otel/log` at the same version), and its OTLP/HTTP exporters with protobuf, `otlpmetrichttp` v1.47.0 and `otlploghttp` v0.23.0, only through `internal/telemetry`: metrics and log, no traces. They bring gRPC and protobuf into the binary (specs.md §26).
 - GitHub Actions: `.github/workflows/ci.yml` calls the `make` targets `test/ci/run.sh` calls, in its image, on each push to `beta` and `main` and each pull request; `mediaservers.yml` weekly; `release.yml` on a tag `v*`, which the maintainer alone pushes: GoReleaser (`.goreleaser.yaml`) drafts the release, he publishes it (specs.md §26, §27). Every third-party action pinned by commit SHA, `permissions` minimal, no secret but `GITHUB_TOKEN`.
+- Testing tools, run in CI and never dependencies of the module: gremlins v0.6.0 for mutation testing (`test/ci/mutation.sh`), through `go install` at that version.
+- Property-based tests: `pgregory.net/rapid` v1.3.0 (MPL-2.0), in tests only, through `checkRapid` (`internal/solver/rapid_test.go`): fixed seeds and checks in `go test`, a new seed each night (`fuzz.yml`); a failure prints the `-rapid.seed` that reproduces it. Fuzzing: Go's own, `func FuzzX(f *testing.F)`, seeded from `conformance/vectors/`.
 
 ```bash
 make build              # go build -o bin/atoll ./cmd/atoll
@@ -48,6 +50,9 @@ make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
 make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
 make test-mediaservers  # the notifications on real Plex, Jellyfin and Emby, each in a container, with only Docker (test/mediaservers/run.sh)
+make cover              # the unit tests' coverage by package and in all, from one profile of the module (bin/cover/); the CI's cover job
+make fuzz FUZZTIME=10s  # every fuzz target in turn, or PKG=./internal/value TARGET=FuzzSize; each night for 5 minutes in fuzz.yml
+make mutation PKG=./internal/glob  # mutation testing (gremlins) of one package, of the pure core without PKG; each night in mutation.yml
 test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint and qemu on a commit, all at once; --report posts each to its pull request
 make release-snapshot   # a release as a tag makes one (.goreleaser.yaml), into dist/, with only Docker: nothing uploaded; from a clone, not a worktree
 golangci-lint run ./...
