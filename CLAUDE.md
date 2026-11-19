@@ -43,6 +43,7 @@ make conformance        # black-box runner: conformance/scenarios against a conf
 make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
 make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
+make test-mediaservers  # the notifications on real Plex, Jellyfin and Emby, each in a container, with only Docker (test/mediaservers/run.sh)
 test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint and qemu on a commit, all at once; --report posts each to its pull request
 golangci-lint run ./...
 ./bin/atoll --config <atoll.toml> daemon --foreground   # a test pool's configuration; deploy/atoll.toml is the sample

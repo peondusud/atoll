@@ -105,8 +105,8 @@ go_job() {
 job_race() { go_job race 'make test-race'; }
 job_integration() { go_job integration 'make test-integration'; }
 job_conformance() { go_job conformance 'make conformance'; }
-# make lint covers the delivered build and the conformance build; the loopdev tests are a third.
-job_lint() { go_job lint 'make lint && golangci-lint run --build-tags loopdev ./test/loopdev/...'; }
+# make lint covers the delivered build and the conformance build; the loopdev and mediaservers tests come after.
+job_lint() { go_job lint 'make lint && golangci-lint run --build-tags loopdev ./test/loopdev/... && golangci-lint run --build-tags mediaservers ./test/mediaservers/...'; }
 job_qemu() {
 	go_job qemu-build 'make qemu-build && cp -r bin/qemu/. /qemu/' -v "$built:/qemu" || return 2
 	local kvm=()

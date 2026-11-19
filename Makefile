@@ -4,7 +4,7 @@ GO            ?= go
 GOLANGCI_LINT ?= golangci-lint
 BIN           := bin/atoll
 
-.PHONY: all build test test-race conformance test-integration test-loopdev qemu-build test-qemu lint clean
+.PHONY: all build test test-race conformance test-integration test-loopdev qemu-build test-qemu test-mediaservers lint clean
 
 all: build
 
@@ -48,6 +48,11 @@ qemu-build:
 test-qemu: qemu-build
 	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e COUNT -e VERBOSE \
 		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
+
+# The notifications on real Plex, Jellyfin and Emby, each in a container, on the last commit: only git
+# and Docker (test/mediaservers/run.sh).
+test-mediaservers:
+	bash test/mediaservers/run.sh
 
 # The conformance build holds code the delivered binary does not, so it gets a run of its own.
 lint:
