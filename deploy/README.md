@@ -69,6 +69,18 @@ Or over OTLP: with `otlp_endpoint`, `otlp_metrics` and `otlp_logs` in `[telemetr
 
 The catalog's folder is closed to other accounts (`StateDirectoryMode=0750`). The catalog and its backups list every path of the library, its trash and its history, which the local API gives only through its socket, of mode 0660, or with its token (§25.1): a folder anyone could read would give them to every account of the machine. A member of the group `atoll` reads them, and may ask the socket.
 
+## The local API's token
+
+Questions over `api.listen` take any token file the daemon can read. An answer to a guard over TCP takes one only when no other account could have set it (specs.md §25.1): owned by root or `atoll`, with no `g+w`, `o+r` or `o+w`, in a folder owned by root or `atoll` that others cannot write. For example:
+
+```bash
+sudo install -d -m 0750 -o root -g atoll /etc/atoll/secrets
+sudo install -m 0640 -o root -g atoll /dev/null /etc/atoll/secrets/api.token
+openssl rand -hex 32 | sudo tee /etc/atoll/secrets/api.token > /dev/null
+```
+
+`alerts.smtp_require_tls = true` sends a mail only over TLS, smtps or STARTTLS, and otherwise not at all, which the log says.
+
 ## openmediavault
 
 On openmediavault, make the pool in the mergerfs plugin's form (Storage, mergerfs), not in `/etc/fstab`: `atoll mergerfs-config --omv` prints each field, as the form names it (`specs.md` §21.1). The plugin mounts the pool at `/srv/mergerfs/<name>`, so set `view.mount` to that path first; the command warns when it is not. The plugin keeps one minimum free space for the pool: by default the largest of the disks' own, or with `view.omv_min_free = "same"` none until every disk has the same. With `--json` too, its `omv.rpc` is what `omv-rpc -u admin MergerFS set` takes, with a `uuid` added: `fa4b1c66-ef79-11e5-87a0-0002b3a176b4` for a new pool. The plugin needs mergerfs 2.42 or later, which omv-extras installs with it.

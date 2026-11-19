@@ -73,6 +73,12 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - The copy state `unavailable`: say what sets it, or say in §4 that nothing does.
 - Next TLA+ models, by risk: the view's journal and its parts written in parallel, renames and folders, the SSD cache's transfer, the link guard, copies at once. tla2tools 1.8.0 once released.
 
+## The threat model after 2026-11-19 (DONE.md)
+
+- **confirm**: the choices made alone for G1, G4, G5 and G6 (DONE.md).
+- G5, for the maintainer to weigh: a guard on what a day changed, or not purging `overwritten` versions for room while modifications run high.
+- The threat model's low gaps G7 to G17 and G19 to G21, and G2, G3 and G18 once merged.
+
 ## The tests after the gaps of 2026-11-19 (DONE.md)
 
 - Read the first nights of mutation tests on `names`, `rules`, `config`, `integrity` and `solver`, sort the mutants that lived, then set the gate (95 % efficacy, 85 % mutant coverage a pure package); then `jobs`, `ops`, `trash` and `watch`.
