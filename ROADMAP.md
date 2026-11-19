@@ -40,25 +40,25 @@ Progress counts everything needed to reach the milestone, weighted by an estimat
 - **The scrub.** `atoll scrub`, and the daemon inside `integrity.window`, check each chunk of the copies due, quarantine a corrupt copy when a healthy one exists, and resume at the chunk the budget reached (§16).
 - **The disk commands.** `atoll disk add`, `show`, `remove` with `--evacuate`, `fail` and `replace`, which edit the configuration keeping every other byte, check the topology and the mount point, and drain a disk through the daemon's passes (§10, §18).
 - **Tests.** The break-glass test, and the failed-mount test (§27).
-- **Contracts and conformance.** 45 vector files and 543 black-box scenarios shared with the Rust version (§29).
+- **Contracts and conformance.** 67 vector files and 617 black-box scenarios shared with the Rust version (§29).
 - **Local CI.** Race detector, integration, conformance, lint, and `test/loopdev` in qemu on Linux 6.12 and 7.3 (`test/ci/run.sh`).
 
 ### Remaining
 
 The maintainer settled the open questions of the alpha on 2026-11-12 (TODO.md, "Decisions for the alpha").
 
-1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 12 hours are, on the code of the review's decisions: 293 passes, its heap in use 3.6 to 3.9 MiB, with no growth. Again on the passes that look at names (2026-11-18): 911 passes, its heap in use 3.3 to 3.6 MiB, with no growth. Days remain: a soak of 24 hours. The most it holds went past the 200 MB of §26 at that size, up to 220.4 MiB in the soak and 229.6 MiB in the link guard's passes, by transparent huge pages the kernel kept resident: with them off and a soft limit of 155 MiB, done on 2026-11-15, every step measured peaks at 181.6 MiB at most; the soak of 2026-11-18 confirms it at each tenth, 180.7 MiB at most. Its first pass, at 195.2 MiB, is back under it, at 181.7 MiB, since the plan holds apart what few files need.
+1. **The memory of a daemon that runs for days**, measured. Four hours are: its heap in use stays between 2.8 and 6.8 MiB, with no growth (§26). On 200,000 files a disk, 12 hours are, on the code of the review's decisions: 293 passes, its heap in use 3.6 to 3.9 MiB, with no growth. Again on the passes that look at names (2026-11-18): 911 passes, its heap in use 3.3 to 3.6 MiB, with no growth. Days remain: a soak of 24 hours. The most it holds went past the 200 MB of §26 at that size, up to 220.4 MiB in the soak and 229.6 MiB in the link guard's passes, by transparent huge pages the kernel kept resident: with them off and a soft limit of 155 MiB, done on 2026-11-15, every step of `TestScale` peaks at 183.8 MiB at most on that commit; the soak of 2026-11-18 confirms it at each tenth, 180.7 MiB at most. Its first pass, at 195.2 MiB, is back under it, at 181.7 MiB, since the plan holds apart what few files need.
 
 ## Beta: phase 1b, the complete Linux MVP
 
 - **Modes.** Done: the `immediate` and `scheduled` replication modes (§12.3).
 - **Repair and duplicates.** Done: the repair of corrupt copies, by chunk or whole (§16.1), and the report of duplicates, `atoll dupes` (§16).
-- **Placement.** Failure domains and tags as hard constraints, and `atoll balance` and `capacity`. The constraints are done: a rule's tags and domains, `tags_mode` and `spread_mode` in strict mode, and `overflow = "deny"` reach the plan, as does the capacity formula. `atoll capacity` is done, and so is `atoll balance`, by hand and by the daemon inside `balance.schedule` once `balance.trigger` holds, which moves the copies Atoll made that a change of rule leaves misplaced, and with `--move-originals` the user's copies too. `atoll status` gives the bytes correctly placed.
+- **Placement.** Done: failure domains and tags as hard constraints, and `atoll balance` and `capacity`. The constraints are done: a rule's tags and domains, `tags_mode` and `spread_mode` in strict mode, and `overflow = "deny"` reach the plan, as does the capacity formula. `atoll capacity` is done, and so is `atoll balance`, by hand and by the daemon inside `balance.schedule` once `balance.trigger` holds, which moves the copies Atoll made that a change of rule leaves misplaced, and with `--move-originals` the user's copies too. `atoll status` gives the bytes correctly placed.
 - **Monitoring and notifications.** Done: SMART, Gotify and SMTP alerts, the alert on an NTFS volume marked dirty, and notifications to Plex, Emby and Jellyfin.
 - **Conflicts.** Done: `atoll conflicts list` and `atoll conflicts resolve` (§15.7).
 - **Link guard.** Done: the optional link guard against deletions and replacements through mergerfs (§17).
 
-Every item of phase 1b is done. What the beta still needs is the alpha's: the memory of a daemon that runs for days, at 200,000 files. The link guard and `bytes_placed` are measured there (§26): with transparent huge pages off and a soft limit of 155 MiB, every step measured, the guard's passes and a strict `atoll status` included, peaks under the 200 MB, at 181.6 MiB at most (TODO.md).
+Every item of phase 1b is done. What the beta still needs is the alpha's: the memory of a daemon that runs for days, at 200,000 files. The link guard and `bytes_placed` are measured there (§26): with transparent huge pages off and a soft limit of 155 MiB, every step measured, the guard's passes and a strict `atoll status` included, peaks under the 200 MB, at 183.8 MiB at most (TODO.md).
 
 ## v0.1: phase 2a, Atoll's own view
 
