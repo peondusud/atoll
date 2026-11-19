@@ -2,6 +2,10 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## ntfs-3g's creation time read through a handle, a regression of flaw 1's fix, 2026-11-19 (specs.md §7, §14.2)
+
+GitHub's qemu job, on the merged tree, failed on ntfs-3g and lowntfs-3g: a pass found metadata on copies nothing had changed (`TestAFailedMountIsAMissingDisk`), and a conflict where a copy was to be refreshed (`TestAPassRefreshesOnEachDriver`), a modification of the user's read as both sides changed. Flaw 1's fix records a new copy's row from what its part's handle gave when verified; a handle's `Info` read no creation time where `statx` gives none, while a look by name reads it from `system.ntfs_crtime`, so the row and every later look differed, the change time the rename moved was not taken, and the copy read as edited. Measured in qemu with both looks printed: the part's had no birth, the name's had one. File, writable file and folder handles now read the attribute through `/proc`, as a look by name does (`fsx.statxBirth`); both tests pass on both FUSE drivers. Commit `405ea26`, which also gives `make test-race` 45 minutes, as `internal/jobs` passed the 10 of `go test` on GitHub's runners. GitHub's run `44556740018` on it: every job green, the qemu job's second run under systemd included.
+
 ## The threat model's G18: the systemd units hardened, 2026-11-19 (specs.md §10, §15.13, §26)
 
 The maintainer's answer: harden the units, the group `disk` included, each setting measured in qemu. Commits `3bad015`, `c8e4b2c`, `689d52b` and `5d529ba`, merged by `5d5cb40`.
