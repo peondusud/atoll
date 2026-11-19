@@ -4,7 +4,7 @@ GO            ?= go
 GOLANGCI_LINT ?= golangci-lint
 BIN           := bin/atoll
 
-.PHONY: all build test test-race conformance test-integration test-loopdev qemu-build test-qemu test-mediaservers lint release-snapshot clean
+.PHONY: all build test test-race conformance model-check model-flaws test-integration test-loopdev qemu-build test-qemu test-mediaservers lint release-snapshot clean
 
 all: build
 
@@ -23,6 +23,17 @@ test-race:
 conformance:
 	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
 	$(GO) run ./conformance/runner --bin $(BIN)-conformance --scenarios conformance/scenarios
+
+# The TLA+ model of conformance/models/, each instance against what it expects, by TLC in a container with 2 workers:
+# only Docker, and Java never outside the container (test/tla/run.sh).
+model-check:
+	bash test/tla/run.sh
+
+# The black-box scenarios of the flaws the model found in specs.md (conformance/models/flaws/): they fail until the
+# maintainer decides a remedy, and then move to conformance/scenarios/.
+model-flaws:
+	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
+	$(GO) run ./conformance/runner --bin $(BIN)-conformance --scenarios conformance/models/flaws
 
 # The next two depend on the machine, not only on the code, so they never reuse
 # a cached result (-count=1).

@@ -35,6 +35,7 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 - SQLite: `modernc.org/sqlite` (no cgo). TOML: `github.com/pelletier/go-toml/v2`, read as a generic tree, never decoded straight into a struct (specs.md §24.3). Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
 - BLAKE3: `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`).
 - FUSE view: `github.com/hanwen/go-fuse/v2`, which speaks the kernel's protocol itself: no cgo and no libfuse (`docs/research/fuse-library.md`).
+- Model checking: TLC of `tla2tools.jar` 1.7.4 (MIT), a build tool that runs only in the container `eclipse-temurin:21.0.12_8-jre-noble`, never on the host, its SHA-256 checked by `test/tla/run.sh`; never committed, never shipped.
 - Log: `log/slog`, through `internal/telemetry`'s handler alone: JSON lines of OpenTelemetry's log data model by default (specs.md §23.2).
 - OTLP export: the official OpenTelemetry SDK, `go.opentelemetry.io/otel` v1.47.0 (`otel/sdk`, `otel/sdk/metric`, `otel/sdk/log`, `otel/log` at the same version), and its OTLP/HTTP exporters with protobuf, `otlpmetrichttp` v1.47.0 and `otlploghttp` v0.23.0, only through `internal/telemetry`: metrics and log, no traces. They bring gRPC and protobuf into the binary (specs.md §26).
 - GitHub Actions: `.github/workflows/ci.yml` calls the `make` targets `test/ci/run.sh` calls, in its image, on each push to `beta` and `main` and each pull request; `mediaservers.yml` weekly; `release.yml` on a tag `v*`, which the maintainer alone pushes: GoReleaser (`.goreleaser.yaml`) drafts the release, he publishes it (specs.md §26, §27). Every third-party action pinned by commit SHA, `permissions` minimal, no secret but `GITHUB_TOKEN`.
@@ -44,11 +45,12 @@ make build              # go build -o bin/atoll ./cmd/atoll
 go test ./...           # unit and property tests, including conformance/vectors; no root
 go test -race ./...     # mandatory before any commit touching jobs, ops, watch, integrity or catalog
 make conformance        # black-box runner: conformance/scenarios against a conformance build
+make model-check        # the TLA+ model of conformance/models/ by TLC, 2 workers, with only Docker (test/tla/run.sh)
 make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
 make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
 make test-mediaservers  # the notifications on real Plex, Jellyfin and Emby, each in a container, with only Docker (test/mediaservers/run.sh)
-test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint and qemu on a commit, all at once; --report posts each to its pull request
+test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint, qemu and tla on a commit, all at once; --report posts each to its pull request
 make release-snapshot   # a release as a tag makes one (.goreleaser.yaml), into dist/, with only Docker: nothing uploaded; from a clone, not a worktree
 golangci-lint run ./...
 ./bin/atoll --config <atoll.toml> daemon --foreground   # a test pool's configuration; deploy/atoll.toml is the sample
@@ -79,7 +81,7 @@ internal/telemetry/    the log's handler (OpenTelemetry's data model as JSON, or
 internal/trash/  internal/notify/  internal/alerts/  internal/cache/  internal/ups/
 api/                   openapi.yaml, schemas/ for --json outputs, metrics.json for /metrics
 schema/                migrations/NNNN_name.sql, config.schema.json
-conformance/           vectors/, scenarios/, corpus/names/, runner/ (language-neutral)
+conformance/           vectors/, scenarios/, corpus/names/, runner/, models/ (TLA+) (language-neutral)
 test/                  integration, faults, break glass, loopdev, qemu to run loopdev anywhere, and ci to run every check of a commit
 deploy/                systemd units, sample configuration, the .deb's scripts in deb/
 .github/               workflows (CI, release, media servers), dependabot

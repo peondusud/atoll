@@ -1,7 +1,7 @@
 # The checks of every change (specs.md §27), on GitHub's hosted runners. They call the make targets test/ci/run.sh
 # calls on the maintainer's machine, in the same image, so that both stay in step: race, integration, conformance and
-# lint as there, govulncheck, test/loopdev in qemu on both kernels, and on arm64 the unit tests. The throughput of the
-# hashing goes to the run's summary, on arm64 and amd64.
+# lint as there, govulncheck, test/loopdev in qemu on both kernels, the TLA+ model by TLC, and on arm64 the unit
+# tests. The throughput of the hashing goes to the run's summary, on arm64 and amd64.
 name: CI
 
 on:
@@ -101,6 +101,23 @@ jobs:
       - run: make lint
       - run: golangci-lint run --build-tags loopdev ./test/loopdev/...
       - run: golangci-lint run --build-tags mediaservers ./test/mediaservers/...
+
+  # The TLA+ model of conformance/models/, each instance against what it expects (specs.md §27), by TLC in the image of
+  # test/tla/run.sh, which runs it there with --inside: 2 workers, the jar's SHA-256 checked, the jar kept in the cache.
+  tla:
+    runs-on: ubuntu-latest
+    container: eclipse-temurin:21.0.12_8-jre-noble
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: bin/tla/tla2tools-*.jar
+          key: tla2tools-${{ hashFiles('test/tla/run.sh') }}
+          restore-keys: tla2tools-
+      - run: bash test/tla/run.sh --inside
 
   govulncheck:
     runs-on: ubuntu-latest
