@@ -1,6 +1,6 @@
 # The openmediavault mergerfs plugin
 
-This report tries the openmediavault mergerfs plugin with what `atoll mergerfs-config` prints (`specs.md` §21.1), for the settings of the plugin that §21.1 leaves for later. It is research, not a contract: what is decided goes to `specs.md` §21.1.
+This report tries the openmediavault mergerfs plugin with what `atoll mergerfs-config` prints (`specs.md` §21.1), for the settings of the plugin that §21.1 left for later, until the maintainer chose (below). It is research, not a contract: what is decided goes to `specs.md` §21.1.
 
 ## Why it matters
 
@@ -27,6 +27,11 @@ This report tries the openmediavault mergerfs plugin with what `atoll mergerfs-c
 - **Atoll's options pass**, but `category.create`: the RPC removes it from `options` and the form's `createpolicy` sets it, from the same values (`mfs`, `ff`, `pfrd`). It also removes `nonempty`, `use_ino` and `allow_other`; `findmnt` shows `allow_other` all the same, as mergerfs run as root sets it.
 - **Paths are narrower than mergerfs's**: besides `:` and `,`, which §21.1 already refuses, a path may not hold `"`, `'`, `` ` ``, `$`, `\`, `;`, `|`, `&`, `<`, `>` or a line break.
 - **Atoll's changes at runtime still work**: they go through the mount's `.mergerfs`, whoever mounted it. A deployment of the plugin restarts the unit only when the pool is not mounted.
+- **Read after the try, in the plugin's source at 8.0.5** (its repository's `main`, whose changelog tops at 8.0.5), for the output the maintainer then chose:
+  - the form's minimum free space, and the RPC's `minfreespace`, take a whole number from 0 to 99999 (`workbench/component.d/omv-storage-mergerfs-form-page.yaml`, `datamodels/rpc.mergerfs.json`), so 4 TB cannot be written in K;
+  - the form takes a name that matches `^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$`, and shows its unit as `Kilobytes`, `Megabytes` and `Gigabytes`; its default options are `defaults,cache.files=off`;
+  - the RPC also needs the pool's `uuid`: the try sent `fa4b1c66-ef79-11e5-87a0-0002b3a176b4`, openmediavault's for a new object;
+  - the plugin's French translation leaves its fields' labels empty, and openmediavault's own translates `Name` and `Unit` (`Nom`, `Unité`).
 
 ## Decisions for the maintainer
 
@@ -41,6 +46,8 @@ This report tries the openmediavault mergerfs plugin with what `atoll mergerfs-c
 3. **`view.mount`.** Warn when it is not `/srv/mergerfs/<name>`, or leave it to the documentation.
 
 The author's suggestion, for what it is worth: A, with a, and a warning on `view.mount`: an output of its own changes no existing output, and the largest value never lets mergerfs fill a disk past its `min_free`.
+
+**Decided by the maintainer on 2026-11-19**: A and B both, `atoll mergerfs-config --omv` and, with `--json` too, an `omv` object; for 2, a choice of the configuration, `view.omv_min_free`, `largest` (a) by default, or `same` (c), which refuses with exit 4; and the warning on `view.mount` (3). `specs.md` §21.1 says what Atoll does, the details the decision left open included: the value comes from the branches that take new files, as mergerfs reads it only to place one, and a size no whole count up to 99999 holds exactly is rounded up.
 
 ## Not measured
 

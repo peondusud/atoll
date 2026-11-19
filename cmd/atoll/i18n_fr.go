@@ -228,7 +228,7 @@ var frenchMessages = map[string]string{
 	"show the mass-deletion and mass-modification guards, or answer one that tripped":                                         "montrer les gardes contre les suppressions et les modifications en masse, ou répondre à une garde déclenchée",
 	"move surplus copies to the trash":                                                                                        "mettre les copies en surplus à la corbeille",
 	"run for good, or do all the work that is due once and stop":                                                              "tourner en continu, ou faire une fois tout le travail dû puis s'arrêter",
-	"print the mergerfs line that presents the pool":                                                                          "afficher la ligne mergerfs qui présente le pool",
+	"print the mergerfs line that presents the pool, or with --omv the fields of the openmediavault mergerfs plugin's form":   "afficher la ligne mergerfs qui présente le pool, ou avec --omv les champs du formulaire du plugin mergerfs d'openmediavault",
 	"send a test alert through each channel that is set":                                                                      "envoyer une alerte de test par chaque canal configuré",
 	"back the catalog up, check it against itself and the disks, or make it again from the disks":                             "sauvegarder le catalogue, le vérifier contre lui-même et les disques, ou le refaire à partir des disques",
 	"repair the corrupt copies of the files at or below a path from healthy ones":                                             "réparer les copies corrompues des fichiers à un chemin ou en dessous, à partir de copies saines",
@@ -274,4 +274,23 @@ var frenchMessages = map[string]string{
 	"balance: replication.enabled is false: nothing was copied or moved\n":                                                                         "balance : replication.enabled vaut false : rien n'a été copié ni déplacé\n",
 	"%d bytes moved, or to move, and %d copies staying\n":                                                                                          "%d octets déplacés, ou à déplacer, et %d copies qui restent\n",
 	"move the copies Atoll made that break a strict setting of their file to where it wants them, and with --move-originals the user's copies too": "déplace les copies faites par Atoll qui enfreignent un réglage strict de leur fichier là où il les veut, et avec --move-originals celles de l'utilisateur aussi",
+
+	// The fields of the openmediavault mergerfs plugin's form (atoll mergerfs-config --omv), as its French form shows
+	// them: openmediavault 8 translates Name and Unit, and the plugin 8.0.5 none of its own, so they stay in English.
+	"Name: %s\n":               "Nom : %s\n",
+	"Paths:\n":                 "Paths :\n",
+	"Create policy: %s\n":      "Create policy : %s\n",
+	"Minimum free space: %d\n": "Minimum free space : %d\n",
+	"Unit: %s\n":               "Unité : %s\n",
+	"Options: %s\n":            "Options : %s\n",
+	"Mount point: %s\n":        "Point de montage : %s\n",
+	"disk %q: its branch %s holds %q, which the openmediavault mergerfs plugin refuses":                                                                                   "disque %q : sa branche %s contient %q, que le plugin mergerfs d'openmediavault refuse",
+	"the pool's minimum free space, %d bytes, is more than the openmediavault mergerfs plugin's form holds, 99999 G":                                                      "l'espace libre minimum du pool, %d octets, dépasse ce que le formulaire du plugin mergerfs d'openmediavault peut contenir, 99999 G",
+	"disk %q: no minfreespace of its own, so the pool's minimum free space stands for it: no scan has recorded the disk's capacity, and placement.min_free holds no size": "disque %q : pas de minfreespace propre, donc l'espace libre minimum du pool vaut pour lui : aucun scan n'a enregistré la capacité du disque, et placement.min_free ne contient aucune taille",
+	"%q (%d bytes)": "%q (%d octets)",
+	"view.omv_min_free = \"same\", and the disks that take new files keep different minfreespace: %s. The plugin has one for the pool: set one placement.min_free for every disk, or view.omv_min_free = \"largest\"": "view.omv_min_free = \"same\", et les disques qui prennent les nouveaux fichiers gardent des minfreespace différents : %s. Le plugin n'en a qu'un pour le pool : donnez un même placement.min_free à chaque disque, ou view.omv_min_free = \"largest\"",
+	"the pool has no minimum free space to give, as no disk has a minfreespace of its own: the plugin's form keeps the one it holds":                                                                                  "le pool n'a pas d'espace libre minimum à donner, car aucun disque n'a de minfreespace propre : le formulaire du plugin garde celui qu'il contient",
+	"warning: the pool's minimum free space, %d bytes, is rounded up to %d%s, as no count of K, M or G up to 99999 holds it exactly":                                                                                  "attention : l'espace libre minimum du pool, %d octets, est arrondi au-dessus à %d%s, car aucun nombre de K, M ou G jusqu'à 99999 ne le contient exactement",
+	"warning: the pool's minimum free space of %d%s is not larger than the largest file, of %d bytes":                                                                                                                 "attention : l'espace libre minimum du pool, %d%s, n'est pas plus grand que le plus gros fichier, de %d octets",
+	"warning: view.mount is %s, but the openmediavault mergerfs plugin mounts the pool at %s: set view.mount to that path, so that Atoll and the media servers find the pool there":                                   "attention : view.mount est %s, mais le plugin mergerfs d'openmediavault monte le pool sur %s : donnez ce chemin à view.mount, pour qu'Atoll et les serveurs multimédias y trouvent le pool",
 }

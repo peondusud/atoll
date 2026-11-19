@@ -91,7 +91,12 @@
       "properties": {
         "engine": { "enum": ["mergerfs", "atoll"], "default": "mergerfs" },
         "mount": { "$ref": "#/$defs/absolute_path" },
-        "readonly_mount": { "$ref": "#/$defs/absolute_path" }
+        "readonly_mount": { "$ref": "#/$defs/absolute_path" },
+        "omv_min_free": {
+          "description": "The one minimum free space of the openmediavault mergerfs plugin's pool, which atoll mergerfs-config --omv gives (specs.md §21.1): largest, the largest of the branches' own among those that take new files; same, none when they differ, with exit code 4. It changes nothing else.",
+          "enum": ["largest", "same"],
+          "default": "largest"
+        }
       }
     },
     "read": {

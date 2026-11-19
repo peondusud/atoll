@@ -43,6 +43,10 @@ scrape_configs:
 
 The catalog's folder is closed to other accounts (`StateDirectoryMode=0750`). The catalog and its backups list every path of the library, its trash and its history, which the local API gives only through its socket, of mode 0660, or with its token (§25.1): a folder anyone could read would give them to every account of the machine. A member of the group `atoll` reads them, and may ask the socket.
 
+## openmediavault
+
+On openmediavault, make the pool in the mergerfs plugin's form (Storage, mergerfs), not in `/etc/fstab`: `atoll mergerfs-config --omv` prints each field, as the form names it (`specs.md` §21.1). The plugin mounts the pool at `/srv/mergerfs/<name>`, so set `view.mount` to that path first; the command warns when it is not. The plugin keeps one minimum free space for the pool: by default the largest of the disks' own, or with `view.omv_min_free = "same"` none until every disk has the same. With `--json` too, its `omv.rpc` is what `omv-rpc -u admin MergerFS set` takes, with a `uuid` added: `fa4b1c66-ef79-11e5-87a0-0002b3a176b4` for a new pool. The plugin needs mergerfs 2.42 or later, which omv-extras installs with it.
+
 ## Atoll's own view in place of mergerfs
 
 With `view.engine = "atoll"`, `atoll mount` serves the view that writes at `view.mount`, and the daemon runs no mergerfs (`specs.md` §21.2): unmount mergerfs there, and take its line out of `/etc/fstab`, before the unit starts. Each write reaches one disk: what is new the most free one, a file written its original; the daemon's passes take it to the other copies. A file deleted goes to the trash, `atoll trash restore` brings it back. Keep `atoll mergerfs-config`'s line at hand: plain mergerfs at `view.mount` still gives the same view once `atoll mount` is stopped.
