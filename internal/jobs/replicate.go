@@ -377,14 +377,21 @@ func sourceRow(f *catalog.FileRow, disk string) (*catalog.KnownCopy, bool) {
 	return nil, false
 }
 
-// commit records a copy at its name (specs.md §14.2).
+// commit records a copy at its name (specs.md §14.2): what its part was when verified, with the change time the look
+// right after the rename found when nothing else moved, so that a write into the copy since its name appeared reads as
+// an edit at the next look.
 func (r *replicator) commit(ctx context.Context, job *catalog.ReplicateJob, op *catalog.Op, moved *ops.Moved) (string, error) {
-	found, err := watch.FileFrom(job.Path, &moved.Stat)
+	placed, err := ops.LookOf(&moved.Placed)
 	if err != nil {
 		return "", fmt.Errorf("replicate: %w", err)
 	}
+	if job.Look == nil {
+		return "", fmt.Errorf("replicate: %q: nothing recorded of the part verified", job.Path)
+	}
+	row := ops.CreatedRow(job.Look, &placed)
+	made := ops.NewCopyFrom(job.Path, strconv.FormatUint(moved.Placed.Ino, 10), &row)
 	// The time it is now, not when the run began: a run can last hours, and the copy is seen and verified as it ends.
-	if err := catalog.FinishCreate(ctx, r.db, op, job, ops.NewCopyOf(&found), r.machine.Now()); err != nil {
+	if err := catalog.FinishCreate(ctx, r.db, op, job, made, r.machine.Now()); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	r.on.MarkChanged()
@@ -741,11 +748,18 @@ func (c *copier) verify(ctx context.Context, part *ops.Part, size int64) ([]byte
 		_, _ = h.Write(buf[:n])
 		off += int64(n)
 	}
-	if st, err := part.Info(); err != nil || st.Size != size {
+	st, err := part.Info()
+	if err != nil || st.Size != size {
+		return nil, c.drop(ctx, trash.OutcomeIOError, true)
+	}
+	// What the part is now is what was verified: the copy's row takes it, never what a look finds at its name once
+	// it is in the library, where a user may write into it before its row is written (specs.md §14.2).
+	look, err := ops.LookOf(&st)
+	if err != nil {
 		return nil, c.drop(ctx, trash.OutcomeIOError, true)
 	}
 	whole, _ := h.Sum()
-	if err := catalog.RecordVerified(ctx, c.r.db, c.job, whole[:]); err != nil {
+	if err := catalog.RecordVerified(ctx, c.r.db, c.job, whole[:], &look); err != nil {
 		return nil, fmt.Errorf("%w: %w", errCatalog, err)
 	}
 	return whole[:], nil

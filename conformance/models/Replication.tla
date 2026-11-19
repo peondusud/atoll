@@ -30,7 +30,7 @@ CONSTANTS
     MaxOps,     \* how many operations Atoll may journal: ids never come back (specs.md §9)
     Waits,      \* TRUE: a decision may wait, as for a debounce or settle (specs.md §15.12, Due); FALSE for liveness
     Grace,      \* TRUE: a plan may find a missing disk past health.missing_grace (specs.md §13.4, §18)
-    Fixes,      \* the remedies this model takes for the flaws it found, by name (README.md); {} is specs.md as it is
+    Fixes,      \* the remedies proposed for the flaws it found and still open, by name (README.md); {} is specs.md as it is
     UserActs    \* what a user may do: some of "modify", "replace", "delete", "create"
 
 Disks == 1..NDisks
@@ -44,7 +44,7 @@ ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3
        /\ Phys \in [Disks -> Nat] /\ Start \in [Files -> SUBSET Disks]
        /\ LinkDisks \subseteq Disks
        /\ \A f \in Files : \A a, b \in Start[f] : a # b => Phys[a] # Phys[b]
-       /\ Fixes \subseteq {"create-look", "running-job"}
+       /\ Fixes = {}    \* no flaw open: each remedy is specs.md's, and the model's whatever Fixes says
        /\ UserActs \subseteq {"modify", "replace", "delete", "create"}
 
 (* Names on a disk: a file's logical path below <root>/, a part <op-id>.part in <workdir>/tmp/,
@@ -315,9 +315,16 @@ RepriseOp ==
        IN IF ops[p].k = "trash" THEN RepTrash(d, p) ELSE RepCreate(d, p)
     /\ UNCHANGED <<dstat, mgen, cat, sess, look, cnt, nver, ghost>>
 
+(* A file whose last copy went: its pending copies and jobs go with it (catalog.dropFileIfEmpty), but for a pending copy
+   whose job is running, which stays with that job, and the file with them (§14.1, §9). *)
+Emptied(f, crow1, rjob1) ==
+    LET keep == \E e \in Disks : rjob1[f][e].running IN
+    /\ crow' = [crow1 EXCEPT ![f] = [e \in Disks |-> IF rjob1[f][e].running THEN crow1[f][e] ELSE NoRow]]
+    /\ rjob' = [rjob1 EXCEPT ![f] = [e \in Disks |-> IF rjob1[f][e].running THEN rjob1[f][e] ELSE NoRJob]]
+    /\ cfile' = IF keep THEN cfile ELSE [cfile EXCEPT ![f].on = FALSE]
+
 (* §17.1 step 6, §15.12 Trash jobs, Finishing: the operation done, the copy's row gone, or for an overwritten copy
-   kept as a pending copy with its replicate job (§15.4), the job gone, and the file gone if that was its last copy:
-   its pending copies and jobs go with it (catalog.dropFileIfEmpty). *)
+   kept as a pending copy with its replicate job (§15.4), the job gone, and the file gone if that was its last copy. *)
 TrashFinish(d, p) ==
     LET f == ops[p].f
         key == ops[p].key
@@ -329,26 +336,27 @@ TrashFinish(d, p) ==
         rjob1 == IF toPending THEN [rjob EXCEPT ![f][d] = [NoRJob EXCEPT !.on = TRUE, !.src = tjob[f][d].src]] ELSE rjob
         last == ~\E e \in Disks : crow1[f][e].st \in {"ok", "stale"}
     IN /\ ops' = [ops EXCEPT ![p].st = "done"]
-       /\ crow' = IF last THEN [crow1 EXCEPT ![f] = [e \in Disks |-> NoRow]] ELSE crow1
-       /\ cfile' = IF last THEN [cfile EXCEPT ![f].on = FALSE] ELSE cfile
-       /\ rjob' = IF last THEN [rjob1 EXCEPT ![f] = [e \in Disks |-> NoRJob]] ELSE rjob1
+       /\ IF last THEN Emptied(f, crow1, rjob1)
+          ELSE /\ crow' = crow1 /\ rjob' = rjob1 /\ UNCHANGED cfile
        /\ tjob' = IF last THEN [tjob EXCEPT ![f] = [e \in Disks |-> NoTJob]] ELSE [tjob EXCEPT ![f][d] = NoTJob]
 
-(* §14.2: in one transaction, the operation done, the pending copy ok with what a look at its name finds, the
-   file's hash when it had none, the source verified, the job gone. A reprise that finds no job left for the part
-   records the copy as internal/catalog FinishCreate does: ok, created_by atoll, never verified, when the file
-   still has a row; and nothing when it has none.
-   Fix "create-look" (flaw 1 of README.md): the row takes what the part was when it was verified, its gen before
-   the rename, so that a write into the copy since its name appeared reads as an edit at the next look. *)
+(* §14.2: in one transaction, the operation done, the pending copy ok with what the part was when it was verified,
+   the file's hash when it had none, the source verified, the job gone. The part's gen is 0: the row says the copy is
+   untouched since it was verified, so that a write into it once its name is in the library, before the commit or
+   while Atoll is down, reads as an edit at the next look (flaw 1 of README.md, fixed); its reprise takes it from what
+   the job recorded, never from what it finds. The model's gen stands for size, times and change time at once, and the
+   rename and the look right after it are one step, so the change time the code takes from that look, or from a reprise's
+   when nothing else moved, is the part's here. A reprise that finds no job left for the part records the copy as
+   internal/catalog FinishCreate does: ok, created_by atoll, never verified, when the file still has a row, with what it
+   finds; and nothing when it has none. *)
 CreateFinish(d, p) ==
     LET f == ops[p].f
         key == ops[p].key
         job == rjob[f][d]
         owned == job.on /\ job.part = ops[p].part
         verified == owned /\ job.whash # 0 /\ (cfile[f].ver = 0 \/ cfile[f].ver = job.whash)
-        seenGen == IF "create-look" \in Fixes THEN 0 ELSE objs[key].gen
-        newRow == [st |-> "ok", obj |-> key, gen |-> seenGen, gver |-> objs[key].ver, verified |-> verified,
-                   by |-> "atoll", gone |-> "no", seen |-> tick + 1]
+        newRow == [st |-> "ok", obj |-> key, gen |-> IF owned THEN 0 ELSE objs[key].gen, gver |-> objs[key].ver,
+                   verified |-> verified, by |-> "atoll", gone |-> "no", seen |-> tick + 1]
     IN /\ ops' = [ops EXCEPT ![p].st = "done"]
        /\ crow' = IF ~cfile[f].on THEN crow
                   ELSE [crow EXCEPT ![f] = [e \in Disks |->
@@ -506,10 +514,11 @@ DecideFile ==
            minSeen == Min({crow[f][g].seen : g \in G \cup O})
            dropHash == (\A e \in L : crow[f][e].seen > minSeen) \/ (\A e \in L : ~crow[f][e].verified)
        IN /\ cfile[f].on /\ G \cup O # {}
-          \* Fix "running-job" (flaw 2 of README.md): a file waits while a job of it is running, as §15.4 has it wait.
-          /\ ~("running-job" \in Fixes /\ \E d \in Disks : rjob[f][d].running)
+          \* §14.1, §15.12: a file waits while a job of it is running, as §15.4 has its modifications wait (flaw 2 of
+          \* README.md, fixed).
+          /\ ~\E d \in Disks : rjob[f][d].running
           /\ IF L = {}
-             THEN \* Gone: the rows go, and the file goes with its jobs, running ones included (cascade).
+             THEN \* Gone: the rows go, and the file goes with its jobs (cascade), none running.
                   /\ crow' = [crow EXCEPT ![f] = [d \in Disks |-> NoRow]]
                   /\ cfile' = [cfile EXCEPT ![f].on = FALSE]
                   /\ rjob' = [rjob EXCEPT ![f] = [d \in Disks |-> NoRJob]]
@@ -536,7 +545,7 @@ DecideSkip ==
     /\ pc.ph = "decide" /\ pc.f <= NFiles
     /\ LET f == pc.f IN
        \/ ~cfile[f].on \/ \A d \in Copies(f) : crow[f][d].gone = "no"
-       \/ "running-job" \in Fixes /\ \E d \in Disks : rjob[f][d].running
+       \/ \E d \in Disks : rjob[f][d].running
        \/ Waits
     /\ pc' = [ph |-> "decide", f |-> pc.f + 1]
     /\ UNCHANGED <<phys, cat, sess, look, cnt, nver, ghost>>
@@ -749,8 +758,9 @@ TrashLost ==
 -----------------------------------------------------------------------------
 (* §13.4 The placement plan, §14.1: pending copies kept or canceled, then a replicate job and its pending copy for
    each file below its level, with a source, not leaving and not in conflict. A pending copy counts only on a disk the
-   plan can write to: one on a missing disk is canceled, its row with its job, as internal/solver/plan.go does,
-   a job running included (flaw 2 of README.md). *)
+   plan can write to: one on a missing disk is canceled, its row with its job, but for one whose job is running, which
+   counts as an ok copy there would and is never canceled. The plan canceled those too until the remedy of flaw 2 of
+   README.md. *)
 
 Leaving(f) == \E d \in Disks : tjob[f][d].on /\ tjob[f][d].reason = "deleted"
 
@@ -761,9 +771,10 @@ PlanStep ==
          /\ LET counts(f, d) ==
                     \/ crow[f][d].st = "ok" /\ (cdisk[d] = "online" \/ d \notin past)
                     \/ crow[f][d].st = "pending" /\ cdisk[d] = "online" /\ ~Leaving(f)
-                    \* Fix "running-job": a pending copy whose operation only a reprise can conclude is kept, and counts.
-                    \/ crow[f][d].st = "pending" /\ rjob[f][d].running /\ "running-job" \in Fixes
-                cancel(f, d) == crow[f][d].st = "pending" /\ ~counts(f, d)
+                    \* A pending copy whose operation only a reprise can conclude counts as an ok copy there would.
+                    \/ crow[f][d].st = "pending" /\ rjob[f][d].running /\ (cdisk[d] = "online" \/ d \notin past)
+                \* ... and is never canceled (flaw 2 of README.md, fixed).
+                cancel(f, d) == crow[f][d].st = "pending" /\ ~counts(f, d) /\ ~rjob[f][d].running
                 count(f) == Cardinality({d \in Disks : counts(f, d)})
                 sources(f) == {d \in Disks : crow[f][d].st = "ok" /\ crow[f][d].gone = "no" /\ cdisk[d] = "online"}
                 held(f) == {Phys[e] : e \in {x \in Disks : crow[f][x].st # "none"}}
@@ -790,10 +801,10 @@ PlanStep ==
 (* A job that ends with no copy made: its pending copy goes with it, and the file if nothing is left of it. *)
 EndJob(f, d) ==
     LET crow1 == [crow EXCEPT ![f][d] = IF crow[f][d].st = "pending" THEN NoRow ELSE @]
+        rjob1 == [rjob EXCEPT ![f][d] = NoRJob]
         empty == ~\E e \in Disks : crow1[f][e].st \in {"ok", "stale"}
-    IN /\ crow' = IF empty THEN [crow1 EXCEPT ![f] = [e \in Disks |-> NoRow]] ELSE crow1
-       /\ rjob' = IF empty THEN [rjob EXCEPT ![f] = [e \in Disks |-> NoRJob]] ELSE [rjob EXCEPT ![f][d] = NoRJob]
-       /\ cfile' = IF empty THEN [cfile EXCEPT ![f].on = FALSE] ELSE cfile
+    IN IF empty THEN Emptied(f, crow1, rjob1)
+       ELSE /\ crow' = crow1 /\ rjob' = rjob1 /\ UNCHANGED cfile
 
 CopyPick ==
     /\ pc.ph = "copy"

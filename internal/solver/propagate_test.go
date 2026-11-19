@@ -75,6 +75,7 @@ type propVector struct {
 		State        *State  `json:"state"`
 		ConflictHeld bool    `json:"conflict_held"`
 		Follow       string  `json:"follow"`
+		Running      bool    `json:"running"`
 		Copies       []struct {
 			Disk      *string      `json:"disk"`
 			Position  *int         `json:"position"`
@@ -119,7 +120,7 @@ func propInputOf(t *testing.T, i int, v *propVector) *PropInput {
 		if f.Path == nil || f.State == nil || f.Copies == nil {
 			t.Fatalf("vector %d: a file needs path, state and copies", i)
 		}
-		file := PropFile{Path: *f.Path, State: *f.State, ConflictHeld: f.ConflictHeld, Follow: f.Follow}
+		file := PropFile{Path: *f.Path, State: *f.State, ConflictHeld: f.ConflictHeld, Follow: f.Follow, Running: f.Running}
 		for k := range f.Copies {
 			c := &f.Copies[k]
 			if c.Disk == nil || c.Position == nil || c.Verdict == nil || c.Due == nil || c.CreatedBy == nil || c.FirstSeen == nil || c.Verified == nil {

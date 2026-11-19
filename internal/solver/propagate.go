@@ -135,7 +135,10 @@ type PropFile struct {
 	// clears a conflict.
 	ConflictHeld bool
 	Follow       string
-	Copies       []PropCopy
+	// Running says that a job of the file is running: its operation is left planned, and only a reprise can say what
+	// is at its target. Nothing is decided of the file until then, as of its modifications (specs.md §14.1, §15.12).
+	Running bool
+	Copies  []PropCopy
 }
 
 // PropInput is what the decisions need. Taken lists the paths held by file rows that are not among the
@@ -226,8 +229,12 @@ func goneLike(v CopyVerdict) bool {
 	return v == VerdictGone || v == VerdictUncertain || v == VerdictOwn
 }
 
-// isRenameCandidate says whether a file is about to take a new name, once its target is free.
+// isRenameCandidate says whether a file is about to take a new name, once its target is free. A file with a job running
+// holds its path: what that job makes may be at its target, under that name.
 func isRenameCandidate(f *PropFile) bool {
+	if f.Running {
+		return false
+	}
 	moved := false
 	for i := range f.Copies {
 		c := &f.Copies[i]
@@ -481,6 +488,9 @@ func decideRest(f *PropFile, direct string) PropDecision {
 func isThroughView(c *PropCopy) bool { return c.ThroughView }
 
 func mustWait(f *PropFile) bool {
+	if f.Running && slices.ContainsFunc(f.Copies, func(c PropCopy) bool { return goneLike(c.Verdict) || c.Verdict == VerdictMoved }) {
+		return true
+	}
 	return slices.ContainsFunc(f.Copies, func(c PropCopy) bool { return (goneLike(c.Verdict) || c.Verdict == VerdictMoved) && !c.Due })
 }
 

@@ -325,7 +325,7 @@ func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if err := d.finishNames(part, dst, inTmp == SeenSame, op.FileKey); err != nil {
 		return err
 	}
-	// Looked at again: what is there now is what gets recorded.
+	// Looked at again, once its names are durable.
 	atTarget, st, err := d.seen(dst, op)
 	if err != nil {
 		return err
@@ -348,13 +348,33 @@ func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if restore {
 		err = catalog.FinishRestoreTo(ctx, db, op, nowNS, NewCopyOf(&found), linksOf(&st))
 	} else {
-		err = catalog.FinishCreate(ctx, db, op, job, NewCopyOf(&found), nowNS)
+		made, rowErr := createdByReprise(job, target, &st, &found)
+		if rowErr != nil {
+			return rowErr
+		}
+		err = catalog.FinishCreate(ctx, db, op, job, made, nowNS)
 	}
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
 	out.Finished = true
 	return nil
+}
+
+// createdByReprise says what the row of a copy a reprise finds at its name records, as the commit would have: what its
+// part was when verified, as its job recorded it, never what is there now, but for the change time when nothing else
+// moved, however long Atoll was down (specs.md §14.2). With no job, or a job that recorded no look, as one an earlier
+// version verified, it is what is found.
+func createdByReprise(job *catalog.ReplicateJob, target string, st *fsx.Stat, found *watch.FoundFile) (*catalog.NewCopy, error) {
+	if job == nil || job.Look == nil {
+		return NewCopyOf(found), nil
+	}
+	now, err := LookOf(st)
+	if err != nil {
+		return nil, fmt.Errorf("reprise: %w", err)
+	}
+	row := CreatedRow(job.Look, &now)
+	return NewCopyFrom(target, found.FileKey, &row), nil
 }
 
 // recoverRename resolves a rename left planned, as §17.2 does a restore: the target is a logical path,

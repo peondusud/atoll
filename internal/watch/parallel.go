@@ -92,7 +92,10 @@ func ParallelTargets(ctx context.Context, db *sql.DB, c *config.Config, now int6
 
 // groupFiles gives the plan the files below a folder, with their copies, which colocate weighs, none past groupLimit.
 func groupFiles(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, folder string) ([]solver.File, error) {
-	k := newPlanKit(c, diskList, nil)
+	k, err := newPlanKit(ctx, db, c, diskList, nil)
+	if err != nil {
+		return nil, err
+	}
 	reader := catalog.NewFileReader(db)
 	var out []solver.File
 	for {

@@ -747,7 +747,7 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate
 		defer func() { _ = mark.Close() }()
 		for _, m := range marks {
 			if m.State == MarkCanceled {
-				if err := cancelPending(ctx, tx, m.FileID, m.Disk); err != nil {
+				if err := cancelPlanned(ctx, tx, m.FileID, m.Disk); err != nil {
 					return err
 				}
 				continue

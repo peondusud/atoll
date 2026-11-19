@@ -10,7 +10,7 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "8731b6e73436f52602d9e28423262d5cbc0864ed974244c0d2582e8e48f16fda"
+      "sha256": "63b5b04773da1a719777dc77af24f22517f55b938fe76aec3ea932554603d621"
     },
     {
       "section": "10",
@@ -20,22 +20,22 @@
     {
       "section": "13.4",
       "title": "### 13.4 The placement plan",
-      "sha256": "d169bc158c2c4201244f0d0084d1e8dce0cedc9c4d6cbbc913fe16dbe4fc3678"
+      "sha256": "791657cbf3dcd9ef6c64f2fed6217d064d6b163010aea77f4d08c0ab8493d299"
     },
     {
       "section": "14",
       "title": "## 14. Replication",
-      "sha256": "78c4dd05e9d68f570cdc6e59c54838c9642f1123ac30020a361ccf6f0d7a6a18"
+      "sha256": "4a0430024d64948acf2fa7a00ceb810f6256449ceee7d09d34329799f9ca26f2"
     },
     {
       "section": "14.1",
       "title": "### 14.1 Jobs and pending copies",
-      "sha256": "76c07716f99c87e7e247819069a5393aa5e792da4ba62e466fd5e3130674646d"
+      "sha256": "240ddc5b490ab6f5f418d49433661334b159b3ae03c096ed68841df0b874001a"
     },
     {
       "section": "14.2",
       "title": "### 14.2 The operation `create`",
-      "sha256": "f8e336cef4f921eaff8dcc74089a79f7e0404114d6a181473cd1bcbfcc9a67bc"
+      "sha256": "730ccf30a522cd8bc2e35e0e183c0d28fe9c7053fffe788d1e94770b51c0e236"
     },
     {
       "section": "15.4",
@@ -55,7 +55,7 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "168aae854b0c340ae48ab2078a05f28622aea4afe6f743f5c1baafd3edb04b29"
+      "sha256": "0e4ccff6ee0a4d17cc4186514ca86d1fc88627d083d40ea9b3c9caf83c5d5128"
     },
     {
       "section": "17.1",
@@ -65,7 +65,7 @@
     {
       "section": "17.2",
       "title": "### 17.2 Reprise after a crash",
-      "sha256": "b041e8f33bd8f0cd63cb1b5c0373f6bd33ba084778a0ebc91b1e0956b6e6ca02"
+      "sha256": "8834140fb8d241c6f849abf2138795af13a851fef7b068978b14a7683e4c300b"
     },
     {
       "section": "20",

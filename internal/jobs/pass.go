@@ -229,6 +229,9 @@ type pass struct {
 	pulled          map[int64]bool // the files decided on an earlier page, with what wanted their name
 	stayed          map[int64]bool // what was decided and did not leave its path
 	undecided       map[int64]bool // of a dry run: what it saw and has not decided yet
+	// the files with a job running, its operation left planned once the reprises are over: each waits for its
+	// decisions, as for its modifications (specs.md §14.1, §15.12)
+	running map[int64]bool
 	// the folders a look found at neither name, by disk, whose rows stay for the copies below them
 	unfound map[string][]string
 	// where a decision of this pass found a copy back at its file's path, by disk
@@ -924,6 +927,9 @@ func (p *pass) decide(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if p.running, err = catalog.RunningFiles(ctx, p.db); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
 	if !p.apply {
 		return p.decideUnwritten(ctx, positions)
 	}
@@ -1019,6 +1025,9 @@ func (p *pass) decidePage(ctx context.Context, page []catalog.FileRow, positions
 	rows := make(map[string]*catalog.FileRow, len(queue))
 	for _, f := range queue {
 		file := p.propFile(f, "", positions)
+		// A file with a job running waits for its decisions: what that job makes may be at its target, and only the
+		// reprise of its operation can say (specs.md §14.1, §15.12).
+		file.Running = p.running[f.ID]
 		p.holdLanding(&file)
 		in.Files = append(in.Files, file)
 		rows[f.Path] = f

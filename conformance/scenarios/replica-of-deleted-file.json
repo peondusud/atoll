@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md §13.4, §14.1, §14.2, §15.4, §17.2; conformance/models/README.md, flaw 2",
-  "description": "A copy left at its name by a crash, on a disk then lost, while the user writes a new version into the file's other copy: once the disk is back, its copy, of the version before, is found stale, goes to the trash and is made again from the new version. Fails while flaw 2 stands: the plan cancels the pending copy of the disk lost, its running job with it, the modification is decided at once, and the reprise records Atoll's copy of the version before as ok, at the file's level.",
+  "spec": "specs.md §14.2, §15.12, §17.2; conformance/models/README.md, flaw 2",
+  "description": "A copy left at its name by a crash, on a disk then lost, while the user deletes the file's only other copy: the file waits for its decisions while the copy's job is running, and once the disk is back and the reprise has finished the copy, the deletion reaches it too, which goes to the trash, and the file is gone. Before the remedy of flaw 2, the decision Gone dropped the file with the copy's running job, the reprise finished the copy with no job and no file and recorded nothing, and the next walk took Atoll's copy for a user's new file.",
   "clock": "2030-01-01T00:00:00Z",
   "disks": [
     {
@@ -73,6 +73,11 @@
       "disk": "t2"
     },
     {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
       "do": "atoll",
       "args": [
         "daemon",
@@ -81,10 +86,8 @@
       "exit": 4
     },
     {
-      "do": "write",
-      "disk": "t1",
-      "path": "media/a",
-      "text": "yy"
+      "do": "advance",
+      "by": "1m"
     },
     {
       "do": "atoll",
@@ -110,8 +113,8 @@
       "disk": "t2",
       "tree": [
         {
-          "path": "media/a",
-          "text": "yy"
+          "path": "media",
+          "kind": "dir"
         },
         {
           "path": "Atoll/trash/2030-01-01/*/a",
@@ -125,19 +128,10 @@
     },
     {
       "do": "expect_catalog",
-      "query": "SELECT disk_id, created_by, state, verified_ns IS NOT NULL FROM copies ORDER BY disk_id",
+      "query": "SELECT count(*) FROM files",
       "rows": [
         [
-          "t1",
-          "user",
-          "ok",
-          1
-        ],
-        [
-          "t2",
-          "atoll",
-          "ok",
-          1
+          0
         ]
       ]
     }

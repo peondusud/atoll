@@ -106,6 +106,10 @@ func drawInput(t *rapid.T) Input {
 				CreatedBy:   rapid.SampledFrom([]string{CreatedByUser, CreatedByAtoll}).Draw(t, "created by"),
 				FirstSeenNS: rapid.Int64Range(0, 3).Draw(t, "first seen"), Unverified: oneIn(t, 6, "unverified"),
 			})
+			// A pending copy whose job is running, its operation left planned (specs.md §14.1).
+			if c := &f.Copies[len(f.Copies)-1]; c.State == CopyPending {
+				c.Running = oneIn(t, 3, "running")
+			}
 		}
 		// A file with a copy on a cache disk may be on the SSD cache, resident or leaving it (specs.md §19).
 		if slices.ContainsFunc(f.Copies, func(c Copy) bool { return roleOf(in.Disks, c.Disk) == RoleCache }) {

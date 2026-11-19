@@ -45,7 +45,22 @@ type bug struct {
 	To    string `json:"to"`
 	Label string `json:"label"`
 	Entry string `json:"entry"` // the heading of DONE.md that fixed it, up to its date
-	Flaw  string `json:"flaw"`  // or the flaw of README.md still open
+	Flaw  string `json:"flaw"`  // or the flaw of README.md that it is
+	// Fixed says that the flaw's remedy is in specs.md, as its section of README.md says ("Fixed on").
+	Fixed bool `json:"fixed"`
+}
+
+// flawSection gives the section of README.md about a flaw, empty when it has none.
+func flawSection(readme, flaw string) string {
+	at := strings.Index(readme, "### "+flaw+":")
+	if at < 0 {
+		return ""
+	}
+	rest := readme[at+1:]
+	if end := strings.Index(rest, "\n#"); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
 }
 
 func readMachines(t *testing.T) machines {
@@ -145,8 +160,12 @@ func TestStatesKeepTheClosedLists(t *testing.T) {
 				t.Errorf("%s: the bug %q names neither an entry of DONE.md nor a flaw, or both", m.Name, b.Label)
 			case b.Entry != "" && !regexp.MustCompile(`(?m)^## `+regexp.QuoteMeta(b.Entry)+`( |$)`).MatchString(done):
 				t.Errorf("%s: DONE.md has no entry %q", m.Name, b.Entry)
-			case b.Flaw != "" && !strings.Contains(readme, "### "+b.Flaw+":"):
+			case b.Flaw != "" && flawSection(readme, b.Flaw) == "":
 				t.Errorf("%s: README.md has no %s", m.Name, b.Flaw)
+			case b.Flaw == "" && b.Fixed:
+				t.Errorf("%s: the bug %q is said fixed, and names no flaw", m.Name, b.Label)
+			case b.Flaw != "" && b.Fixed != strings.Contains(flawSection(readme, b.Flaw), "\nFixed on "):
+				t.Errorf("%s: the bug %q says fixed %v, and README.md says otherwise of %s", m.Name, b.Label, b.Fixed, b.Flaw)
 			}
 		}
 	}
@@ -196,7 +215,10 @@ func draw(all machines) string {
 			b.WriteString("\n| Bug | Transition | What went wrong | Where |\n|---|---|---|---|\n")
 			for i, bg := range m.Bugs {
 				where := "DONE.md, " + bg.Entry
-				if bg.Flaw != "" {
+				switch {
+				case bg.Flaw != "" && bg.Fixed:
+					where = "README.md, " + bg.Flaw + ", fixed"
+				case bg.Flaw != "":
 					where = "README.md, " + bg.Flaw + ", open"
 				}
 				fmt.Fprintf(&b, "| [%d] | %s → %s | %s | %s |\n", i+1, cell(bg.From), cell(bg.To), bg.Label, where)

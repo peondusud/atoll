@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md §14.2, §15.12, §17.2; conformance/models/README.md, flaw 2",
-  "description": "A copy left at its name by a crash, on a disk then lost, while the user deletes the file's only other copy: once the disk is back, the deletion reaches that copy too, which goes to the trash, and the file is gone. Fails while flaw 2 stands: the decision Gone drops the file with the copy's running job, the reprise finishes the copy with no job and no file and records nothing, and the next walk takes Atoll's copy for a user's new file.",
+  "spec": "specs.md §14.2, §17.2, §15.4; conformance/models/README.md, flaw 1",
+  "description": "A replica written into once its name is in the library and before its row is written, here across a crash at source-synced: the reprise records what the part was when verified, so that the edit is a modification, propagated to the other copy, the version before going to the trash. Before the remedy of flaw 1, the reprise recorded the edited copy as a verified copy of the version it was made from, every later look found it as its row said, and the edit stayed on t2 alone.",
   "clock": "2030-01-01T00:00:00Z",
   "disks": [
     {
@@ -69,37 +69,10 @@
       ]
     },
     {
-      "do": "unmount",
-      "disk": "t2"
-    },
-    {
-      "do": "delete",
-      "disk": "t1",
-      "path": "media/a"
-    },
-    {
-      "do": "atoll",
-      "args": [
-        "daemon",
-        "--until-idle"
-      ],
-      "exit": 4
-    },
-    {
-      "do": "advance",
-      "by": "1m"
-    },
-    {
-      "do": "atoll",
-      "args": [
-        "daemon",
-        "--until-idle"
-      ],
-      "exit": 4
-    },
-    {
-      "do": "mount",
-      "disk": "t2"
+      "do": "write",
+      "disk": "t2",
+      "path": "media/a",
+      "text": "yy"
     },
     {
       "do": "atoll",
@@ -110,11 +83,11 @@
     },
     {
       "do": "expect_tree",
-      "disk": "t2",
+      "disk": "t1",
       "tree": [
         {
-          "path": "media",
-          "kind": "dir"
+          "path": "media/a",
+          "text": "yy"
         },
         {
           "path": "Atoll/trash/2030-01-01/*/a",
@@ -127,11 +100,34 @@
       ]
     },
     {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "yy"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
       "do": "expect_catalog",
-      "query": "SELECT count(*) FROM files",
+      "query": "SELECT disk_id, created_by, state, verified_ns IS NOT NULL FROM copies ORDER BY disk_id",
       "rows": [
         [
-          0
+          "t1",
+          "atoll",
+          "ok",
+          1
+        ],
+        [
+          "t2",
+          "user",
+          "ok",
+          1
         ]
       ]
     }

@@ -211,7 +211,10 @@ func CacheTransfers(ctx context.Context, db *sql.DB, c *config.Config, now int64
 	if err != nil {
 		return nil, err
 	}
-	k := newPlanKit(c, diskList, nil)
+	k, err := newPlanKit(ctx, db, c, diskList, nil)
+	if err != nil {
+		return nil, err
+	}
 	in := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), CacheMirror: settings.Mirror, CacheEarly: settings.Early}
 	ids := map[string]int64{}
 	for id, r := range residency {

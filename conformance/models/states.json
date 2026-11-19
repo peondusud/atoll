@@ -1,5 +1,5 @@
 {
-  "about": "The states of a disk and of a copy, and what moves one to another, as specs.md says. states_test.go keeps them equal to the closed lists of schema/migrations and of specs.md §4, each transition to a state, and each bug to an entry of DONE.md that fixed it, or to a flaw of README.md still open.",
+  "about": "The states of a disk and of a copy, and what moves one to another, as specs.md says. states_test.go keeps them equal to the closed lists of schema/migrations and of specs.md §4, each transition to a state, and each bug to an entry of DONE.md that fixed it, or to a flaw of README.md, open or fixed.",
   "machines": [
     {
       "name": "disk",
@@ -43,7 +43,7 @@
         {"from": "[*]", "to": "ok", "label": "found", "when": "a walk finds a copy new to the catalog: a user's, never verified", "spec": "§15.10"},
         {"from": "[*]", "to": "pending", "label": "queued", "when": "the plan queues a replicate job and its pending copy", "spec": "§13.4, §14.1"},
         {"from": "pending", "to": "ok", "label": "create done", "when": "the operation create committed, or finished by a reprise", "spec": "§14.2, §17.2"},
-        {"from": "pending", "to": "[*]", "label": "canceled", "when": "no longer kept or counted by the plan, or its job ended", "spec": "§13.4, §14.1"},
+        {"from": "pending", "to": "[*]", "label": "canceled", "when": "no longer kept or counted by the plan, or its job ended; never while its job is running", "spec": "§13.4, §14.1"},
         {"from": "ok", "to": "surplus", "label": "beyond the level", "when": "more copies count than the level, and this one is not kept", "spec": "§13.4"},
         {"from": "surplus", "to": "ok", "label": "kept again", "when": "kept toward the level again", "spec": "§13.4"},
         {"from": "ok", "to": "stale", "label": "another modified", "when": "a modification of another copy, or a change of metadata it could not be given", "spec": "§15.4"},
@@ -62,8 +62,8 @@
       "bugs": [
         {"from": "pending", "to": "[*]", "label": "a pending copy kept past min_free was written into the reserve", "entry": "The review's sixteen decisions, made by the maintainer on 2026-11-13"},
         {"from": "ok", "to": "stale", "label": "a copy no user changed went over the others", "entry": "Two more decisions of the maintainer, made on 2026-11-14"},
-        {"from": "pending", "to": "ok", "label": "open, flaw 1: a write before the commit recorded as verified", "flaw": "Flaw 1"},
-        {"from": "pending", "to": "[*]", "label": "open, flaw 2: a job running canceled with its pending copy", "flaw": "Flaw 2"}
+        {"from": "pending", "to": "ok", "label": "flaw 1, fixed: a write before the commit recorded as verified", "flaw": "Flaw 1", "fixed": true},
+        {"from": "pending", "to": "[*]", "label": "flaw 2, fixed: a job running canceled with its pending copy", "flaw": "Flaw 2", "fixed": true}
       ]
     }
   ]
