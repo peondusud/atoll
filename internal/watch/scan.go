@@ -57,6 +57,10 @@ type Report struct {
 	// (specs.md §15.10). An alert says so (§23); the output of a scan lists them with the others. The files that could
 	// not be opened for their hash, for a reason that says nothing of their disk, come after them.
 	Refused []string
+	// TooLong holds the names the walk neither recorded nor went below, as their path through the disk's mount is past
+	// the limit of its mergerfs branch while their folder's is not (specs.md §15.8). Nothing is concluded of them, of
+	// what is below them, or, while there is one, of a copy the walk did not find: it may be there.
+	TooLong []string
 	// Seen holds the verdict about each copy that is not as its row says, by file id, and FolderMoves
 	// the folders renamed: what a pass decides on (specs.md §15.12).
 	Seen        []CopySeen
@@ -155,7 +159,7 @@ func CheckDisks(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 }
 
 func sortPaths(r *Report) {
-	for _, list := range [][]string{r.Changed, r.Absent, r.PathTaken, r.Unreadable, r.OtherMounts} {
+	for _, list := range [][]string{r.Changed, r.Absent, r.PathTaken, r.Unreadable, r.OtherMounts, r.TooLong} {
 		slices.Sort(list)
 	}
 	slices.SortFunc(r.Moved, func(a, b MovedCopy) int { return cmp.Compare(a.Path, b.Path) })
@@ -260,7 +264,7 @@ func LookAtDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 		found, err = lookNamed(ctx, db, c, m, d, r, look, now)
 	} else {
 		var walked *Walked
-		if walked, err = walkRoot(ctx, m, d); err == nil {
+		if walked, err = walkRoot(ctx, m, d, LimitsOf(c, d)); err == nil {
 			found, err = compareWalk(ctx, db, c, d, walked, r, look, now, nil)
 		}
 	}
@@ -306,7 +310,7 @@ func needsConfirming(r *Report) bool {
 	})
 }
 
-func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, error) {
+func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk, limits Limits) (*Walked, error) {
 	root, err := m.OpenRoot(d.Mount, d.Root)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
@@ -316,7 +320,7 @@ func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, er
 		_ = root.Close()
 		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
 	}
-	walked, err := Walk(ctx, root)
+	walked, err := Walk(ctx, root, limits)
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = root.Close()
 	if err != nil {
@@ -402,14 +406,14 @@ func withoutOwnLinks(m disks.Machine, d *config.Disk, w *Walked) error {
 // only what NamedVerdict says (specs.md §15.13); named is nil for a walk of the whole disk.
 func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Disk, w *Walked, r *Report, look *Look, now int64, named *namedLook) (*catalog.Walk, error) {
 	r.Unreadable, r.Refused = w.Unreadable, w.Refused
-	r.OtherMounts = w.OtherMounts
+	r.OtherMounts, r.TooLong = w.OtherMounts, w.TooLong
 	slices.SortFunc(w.Files, func(a, b FoundFile) int { return cmp.Compare(a.Path, b.Path) })
 	found := func(f *FoundFile) {
 		r.Files++
 		r.Bytes += f.Size
 	}
-	cmpr := compared{notReached: pathSet(w.Unreadable, w.OtherMounts, look.Planned), planned: pathSet(look.Planned), r: r, found: found, quiet: look.Own != nil,
-		named: named}
+	cmpr := compared{notReached: pathSet(w.Unreadable, w.OtherMounts, w.TooLong, look.Planned), planned: pathSet(look.Planned), r: r, found: found,
+		quiet: look.Own != nil, named: named, tooLong: len(w.TooLong) > 0}
 	next := 0
 	each := func(fn func(*catalog.KnownCopy)) error { return catalog.EachKnownCopy(ctx, db, d.ID, fn) }
 	if named != nil {
@@ -443,7 +447,7 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 	out := &catalog.Walk{}
 	// A name the walk could not read may be a folder renamed since it was listed, which only says so by its
 	// row: this look may find the new name, and the next look otherwise.
-	tops, err := moveFolders(ctx, db, d.ID, w, r, out, pathSet(w.OtherMounts, look.Planned), named)
+	tops, err := moveFolders(ctx, db, d.ID, w, r, out, pathSet(w.OtherMounts, w.TooLong, look.Planned), named)
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +456,7 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 	}
 	out.Clocks, out.Modes = cmpr.clocks, cmpr.modes
 	planned := pathSet(look.Planned)
-	if err := keepPlanned(ctx, db, d.ID, pathSet(look.Planned, w.Unreadable), out); err != nil {
+	if err := keepPlanned(ctx, db, d.ID, pathSet(look.Planned, w.Unreadable, w.TooLong), out); err != nil {
 		return nil, err
 	}
 	for _, f := range cmpr.rowless {
@@ -1246,7 +1250,8 @@ func hashWalked(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 		if !report.Walked {
 			continue
 		}
-		reader := &diskReader{report: report, skip: pathSet(report.Changed, report.Absent, movedFrom(report)), notReached: pathSet(report.Unreadable, report.OtherMounts)}
+		reader := &diskReader{report: report, skip: pathSet(report.Changed, report.Absent, movedFrom(report)),
+			notReached: pathSet(report.Unreadable, report.OtherMounts, report.TooLong)}
 		if d := diskOf(c, report.ID); d != nil {
 			reader.root, err = m.OpenRoot(d.Mount, d.Root)
 			if err != nil {

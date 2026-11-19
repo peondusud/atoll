@@ -181,11 +181,12 @@ func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, s
 }
 
 // differs says whether a disk was not walked, or does not hold what the catalog says: a file it does not know, a
-// copy changed, moved, absent or whose path another file took, or a name that could not be read.
+// copy changed, moved, absent or whose path another file took, a name that could not be read, or one past the limit
+// of its mergerfs branch, which the walk did not read (specs.md §15.8).
 func differs(list []scanDisk) bool {
 	for i := range list {
 		d := &list[i]
-		if !d.Walked || d.New > 0 || len(d.Changed)+len(d.Moved)+len(d.Absent)+len(d.PathTaken)+len(d.Unreadable) > 0 {
+		if !d.Walked || d.New > 0 || len(d.Changed)+len(d.Moved)+len(d.Absent)+len(d.PathTaken)+len(d.Unreadable)+len(d.TooLong) > 0 {
 			return true
 		}
 	}
@@ -343,7 +344,7 @@ func listTrashAgain(ctx context.Context, c *config.Config, m disks.Machine, db *
 		}
 		found, err := foundTrash(m, d, func(place, why string) {
 			report(stderr, fmt.Sprintf(T("warning: disk %s: %s in its trash is no entry (%s), and stays as it is"), d.ID, place, why))
-		})
+		}, watch.LimitsOf(c, d).Own())
 		if err != nil {
 			report(stderr, fmt.Sprintf(T("warning: disk %s: its trash could not be listed again (%v)"), d.ID, err))
 			continue
@@ -363,14 +364,14 @@ func listTrashAgain(ctx context.Context, c *config.Config, m disks.Machine, db *
 	return listed, nil
 }
 
-// foundTrash lists a disk's trash through a handle on its top.
-func foundTrash(m disks.Machine, d *config.Disk, left func(place, why string)) ([]ops.FoundEntry, error) {
+// foundTrash lists a disk's trash through a handle on its top, as far as limits let a walk of its own folders go.
+func foundTrash(m disks.Machine, d *config.Disk, left func(place, why string), limits watch.Limits) ([]ops.FoundEntry, error) {
 	handle, err := ops.Open(m, d, 0)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	defer handle.Close()
-	found, err := handle.FoundTrash(left)
+	found, err := handle.FoundTrash(left, limits)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

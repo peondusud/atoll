@@ -737,12 +737,16 @@ func parents(path string, fn func(parent string) bool) {
 	}
 }
 
-// addParents records the folders that something at path needs on its disk.
+// addParents records the folders that something at path needs on its disk, the longest first: a folder recorded has
+// its own parents recorded, so the first one found ends it. Hashing each of them for each path cost the cube of the
+// depth for a chain of nested folders, where this costs its square (specs.md §15.8).
 func addParents(d *planDisk, path string) {
-	parents(path, func(parent string) bool {
-		d.folders[parent] = true
-		return true
-	})
+	for at := strings.LastIndexByte(path, '/'); at > 0; at = strings.LastIndexByte(path[:at], '/') {
+		if d.folders[path[:at]] {
+			return
+		}
+		d.folders[path[:at]] = true
+	}
 }
 
 type countedCopy struct {
@@ -886,6 +890,8 @@ func (p *planner) addEntries() error {
 		if _, err := names.CheckPath(e.Path, names.Ext4); err != nil {
 			return fmt.Errorf("plan: %w", err)
 		}
+		// Its parents first: a folder recorded has its own (addParents).
+		addParents(d, e.Path)
 		switch e.Kind {
 		case EntryDir:
 			d.folders[e.Path] = true
@@ -894,7 +900,6 @@ func (p *planner) addEntries() error {
 		default:
 			return fmt.Errorf("plan: %q: unknown kind of entry %q", e.Path, e.Kind)
 		}
-		addParents(d, e.Path)
 	}
 	return nil
 }

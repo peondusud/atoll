@@ -89,17 +89,17 @@ func Check(paths []string, disks []CheckedDisk, under string) (Report, error) {
 	return report, nil
 }
 
-// allNames returns every path and parent folder once, in byte order.
+// allNames returns every path and parent folder once, in byte order. A name in the set has its parents in it, so the
+// parents of a path are added the longest first, until one is there: each of them hashed for each path cost the cube
+// of the depth for a chain of nested folders.
 func allNames(paths []string) ([]string, error) {
 	set := map[string]bool{}
 	for _, p := range paths {
 		if err := checkLogicalPath(p); err != nil {
 			return nil, err
 		}
-		for end := 0; end < len(p); end++ {
-			if p[end] == '/' {
-				set[p[:end]] = true
-			}
+		for end := strings.LastIndexByte(p, '/'); end > 0 && !set[p[:end]]; end = strings.LastIndexByte(p[:end], '/') {
+			set[p[:end]] = true
 		}
 		set[p] = true
 	}

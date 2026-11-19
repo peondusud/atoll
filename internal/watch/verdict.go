@@ -68,6 +68,9 @@ type compared struct {
 	modes []catalog.CopyMode
 	// named is a look limited to names, nil for a walk of the whole disk (specs.md §15.13).
 	named *namedLook
+	// tooLong says that the walk left a name past the limit of the disk's mergerfs branch: a copy it did not find may
+	// have gone below it, so none is gone, but uncertain (specs.md §15.8).
+	tooLong bool
 }
 
 // openRow is a row whose copy is not where it says, until resolve says what became of it. A rename of a whole disk
@@ -77,6 +80,8 @@ type openRow struct {
 	at      *FoundFile
 	verdict solver.CopyVerdict
 	target  *FoundFile
+	// overwritten says that its name holds the file another row's copy moved to, its own file nowhere.
+	overwritten bool
 }
 
 // knownRow is a catalog.KnownCopy without the room each nullable field takes: 120 bytes instead of 168.
@@ -309,7 +314,7 @@ func (c *compared) resolve(ctx context.Context, db *sql.DB, d *config.Disk, w *W
 	// file that moved takes the name once it is free (specs.md §15.12). Any other file at its name replaced it.
 	for _, o := range c.open {
 		if o.verdict == solver.VerdictReplaced && o.at != nil && o.at.claims > 0 {
-			o.verdict = solver.VerdictGone
+			o.verdict, o.overwritten = solver.VerdictGone, true
 			gone[o.k.fileKey] = true
 		}
 	}
@@ -377,6 +382,10 @@ func (c *compared) finish(o *openRow, own map[string][]solver.FileLook) {
 		v = solver.VerdictOwn
 	case v == solver.VerdictGone && k.GoneKind.String == string(solver.VerdictUncertain):
 		// Its names got rows of their own, and they say no more than the first look did (specs.md §15.12).
+		v = solver.VerdictUncertain
+	case v == solver.VerdictGone && c.tooLong && !o.overwritten:
+		// The walk left a name past the limit of the disk's branch, which it did not read: the copy may have gone there,
+		// by a folder above it renamed or moved, or by itself (specs.md §15.8). Its file is kept, never deleted.
 		v = solver.VerdictUncertain
 	}
 	if c.named != nil {

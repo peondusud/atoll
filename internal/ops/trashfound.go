@@ -8,6 +8,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // FoundEntry is an entry of a disk's trash as a catalog rebuild finds it again (specs.md §9, §17): an operation's
@@ -26,9 +27,10 @@ type FoundEntry struct {
 
 // FoundTrash lists the entries of the disk's trash, by date, then by operation. What is no operation's folder below a
 // date, or an operation's folder that holds anything but one regular file below its folders, or chunks that are not
-// those of one file, is no entry: left tells of it, by its place in the trash, and it stays as it is. A disk with no
-// trash has none.
-func (d *Disk) FoundTrash(left func(place, why string)) ([]FoundEntry, error) {
+// those of one file, is no entry: left tells of it, by its place in the trash, and it stays as it is. So is one that
+// holds a place past what limits, those of a walk of the disk's own folders, let a walk go below (specs.md §15.8). A
+// disk with no trash has none.
+func (d *Disk) FoundTrash(left func(place, why string), limits watch.Limits) ([]FoundEntry, error) {
 	trash, err := d.open(components(d.config.Workdir, layout.TrashFolder))
 	switch {
 	case fsx.IsAbsent(err):
@@ -57,7 +59,7 @@ func (d *Disk) FoundTrash(left func(place, why string)) ([]FoundEntry, error) {
 		case err != nil:
 			return nil, classify(fmt.Errorf("list the trash: %w", err))
 		}
-		found, err := foundOn(below, day, when, left)
+		found, err := foundOn(below, day, when, left, limits)
 		_ = below.Close()
 		if err != nil {
 			return nil, err
@@ -68,7 +70,7 @@ func (d *Disk) FoundTrash(left func(place, why string)) ([]FoundEntry, error) {
 }
 
 // foundOn lists the entries below one date of the trash.
-func foundOn(dir fsx.Dir, day string, when time.Time, left func(place, why string)) ([]FoundEntry, error) {
+func foundOn(dir fsx.Dir, day string, when time.Time, left func(place, why string), limits watch.Limits) ([]FoundEntry, error) {
 	names, err := dir.Names()
 	if err != nil {
 		return nil, classify(fmt.Errorf("list the trash: %w", err))
@@ -99,15 +101,18 @@ func foundOn(dir fsx.Dir, day string, when time.Time, left func(place, why strin
 		case err != nil:
 			return nil, classify(fmt.Errorf("list the trash: %w", err))
 		}
-		var files []foundFile
-		other, err := filesBelow(folder, "", &files)
+		below := &belowOp{place: place, limits: limits}
+		other, err := below.files(folder, "")
 		_ = folder.Close()
 		if err != nil {
 			return nil, err
 		}
+		files := below.found
 		e := FoundEntry{Day: when, OpID: o.id, Chunks: o.chunks}
 		why := ""
 		switch {
+		case below.tooLong:
+			why = "holds a place past the limit of a mergerfs branch"
 		case other:
 			why = "holds what is no file or folder"
 		case !o.chunks && len(files) != 1:
@@ -132,9 +137,18 @@ type foundFile struct {
 	st   fsx.Stat
 }
 
-// filesBelow gathers the regular files below a folder, by their path from it, and says whether it holds anything
-// else: a link, a device, what cannot be read.
-func filesBelow(dir fsx.Dir, prefix string, files *[]foundFile) (other bool, err error) {
+// belowOp gathers the regular files below an operation's folder of the trash, at place, by their path from it, as far
+// as limits let a walk go. tooLong says that it left a name past them.
+type belowOp struct {
+	place   string
+	limits  watch.Limits
+	found   []foundFile
+	tooLong bool
+}
+
+// files gathers the regular files below a folder, and says whether it holds anything else: a link, a device, what
+// cannot be read.
+func (b *belowOp) files(dir fsx.Dir, prefix string) (other bool, err error) {
 	names, err := dir.Names()
 	if err != nil {
 		return false, classify(fmt.Errorf("list the trash: %w", err))
@@ -144,6 +158,10 @@ func filesBelow(dir fsx.Dir, prefix string, files *[]foundFile) (other bool, err
 		path := name
 		if prefix != "" {
 			path = prefix + "/" + name
+		}
+		if !b.limits.Fits(b.place + "/" + path) {
+			b.tooLong = true
+			continue
 		}
 		st, err := dir.Stat(name)
 		switch {
@@ -155,7 +173,7 @@ func filesBelow(dir fsx.Dir, prefix string, files *[]foundFile) (other bool, err
 		}
 		switch st.Kind {
 		case fsx.KindFile:
-			*files = append(*files, foundFile{path, st})
+			b.found = append(b.found, foundFile{path, st})
 		case fsx.KindDir:
 			below, err := dir.OpenDir(name)
 			if fsx.IsUnreadableName(err) {
@@ -165,7 +183,7 @@ func filesBelow(dir fsx.Dir, prefix string, files *[]foundFile) (other bool, err
 			if err != nil {
 				return false, classify(err)
 			}
-			more, err := filesBelow(below, path, files)
+			more, err := b.files(below, path)
 			_ = below.Close()
 			if err != nil {
 				return false, err

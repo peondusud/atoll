@@ -77,7 +77,7 @@ func lookNamed(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 	}
 	slices.SortFunc(list, func(a, b Named) int { return strings.Compare(a.Path, b.Path) })
 	w := &Walked{}
-	read := &nameReader{root: root, top: &opened, w: w, entries: map[string]bool{}}
+	read := &nameReader{root: root, top: &opened, w: w, entries: map[string]bool{}, limits: LimitsOf(c, d)}
 	err = read.names(ctx, list)
 	if err == nil {
 		var pulled []Named
@@ -173,6 +173,8 @@ type nameReader struct {
 	// of these was read with it.
 	entries map[string]bool
 	walked  map[string]bool
+	// limits are the disk's walks' (specs.md §15.8).
+	limits Limits
 }
 
 // names looks at each name: a file alone, a folder whole below it, and the folder that holds it, whose entry Atoll's
@@ -196,13 +198,16 @@ func (n *nameReader) names(ctx context.Context, list []Named) error {
 	return nil
 }
 
+// name looks at one name, from the root one folder at a time, holding only the folder it is in: the one above it can
+// go once it is open. A name past the limit of the disk's mergerfs branch is reported as such, and not read further,
+// as a walk would leave it (specs.md §15.8).
 func (n *nameReader) name(ctx context.Context, path string) error {
 	parts := strings.Split(path, "/")
 	dir, prefix := n.root, ""
-	var opened []fsx.Dir
 	defer func() {
-		for _, d := range opened {
-			_ = d.Close()
+		if dir != n.root {
+			// A folder only read, whose close failing changes nothing that was read from it.
+			_ = dir.Close()
 		}
 	}()
 	for i, part := range parts {
@@ -216,6 +221,11 @@ func (n *nameReader) name(ctx context.Context, path string) error {
 			return nil
 		case err != nil:
 			return fmt.Errorf("%w: %q: %w", ErrInterrupted, at, err)
+		case !n.limits.Fits(at):
+			if !slices.Contains(n.w.TooLong, at) {
+				n.w.TooLong = append(n.w.TooLong, at)
+			}
+			return nil
 		}
 		last := i == len(parts)-1
 		if !last {
@@ -242,11 +252,13 @@ func (n *nameReader) name(ctx context.Context, path string) error {
 			case err != nil:
 				return fmt.Errorf("%w: %q: %w", ErrInterrupted, at, err)
 			}
-			opened = append(opened, below)
+			if dir != n.root {
+				_ = dir.Close()
+			}
 			dir, prefix = below, at+"/"
 			continue
 		}
-		return n.leaf(ctx, dir, part, at, &st)
+		return n.leaf(ctx, dir, prefix, part, at, &st)
 	}
 	return nil
 }
@@ -269,8 +281,8 @@ func (n *nameReader) entry(path string, st *fsx.Stat) error {
 	return nil
 }
 
-// leaf looks at the name itself, as a walk would at that name.
-func (n *nameReader) leaf(ctx context.Context, dir fsx.Dir, name, path string, st *fsx.Stat) error {
+// leaf looks at the name itself, as a walk would at that name, in the folder dir at prefix.
+func (n *nameReader) leaf(ctx context.Context, dir fsx.Dir, prefix, name, path string, st *fsx.Stat) error {
 	mtime, err := solver.TimeNS(st.Mtime.Sec, st.Mtime.Nsec)
 	if err != nil {
 		return fmt.Errorf("%w: %q: %w", ErrInterrupted, path, err)
@@ -298,7 +310,8 @@ func (n *nameReader) leaf(ctx context.Context, dir fsx.Dir, name, path string, s
 			n.w.OtherMounts = append(n.w.OtherMounts, path)
 			return nil
 		}
-		return walkBelow(ctx, dir, name, path, n.top, n.w)
+		k := newWalker(ctx, dir, strings.TrimSuffix(prefix, "/"), n.top, n.w, n.limits)
+		return k.walkBelow(k.stack[0], name, path, st)
 	case fsx.KindSymlink:
 		target, err := dir.ReadLink(name)
 		switch {

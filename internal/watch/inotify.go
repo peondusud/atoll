@@ -36,9 +36,11 @@ type inotifySource struct {
 	wait func(d time.Duration) bool
 	// opened is WatcherOptions.Opened.
 	opened func(path string)
+	// marker watches the folders below one, as far as the disk's walks go (specs.md §15.8).
+	marker *treeMarker[int32]
 }
 
-func openInotify(ctx context.Context, root string) (*inotifySource, error) {
+func openInotify(ctx context.Context, root string, limits Limits) (*inotifySource, error) {
 	ino, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if err != nil {
 		return nil, fmt.Errorf("inotify: %w", err)
@@ -64,7 +66,8 @@ func openInotify(ctx context.Context, root string) (*inotifySource, error) {
 		return nil, err
 	}
 	s.tree = newFolderTree(wd)
-	if err := s.watchBelow(ctx, dir, s.tree.root, "", nil); err != nil {
+	s.marker = &treeMarker[int32]{root: s.root, mountID: s.mountID, limits: limits, tree: s.tree, mark: s.watch}
+	if err := s.marker.all(ctx, dir, s.tree.root, "", nil); err != nil {
 		_ = unix.Close(ino)
 		return nil, err
 	}
@@ -82,17 +85,6 @@ func (s *inotifySource) watch(dir fsx.Dir) (int32, error) {
 		return 0, fmt.Errorf("inotify watch: %w", err)
 	}
 	return int32(wd), nil
-}
-
-// watchBelow watches every folder below one, but those of another mount, and with found lists what it finds.
-func (s *inotifySource) watchBelow(ctx context.Context, dir fsx.Dir, node *folderNode[int32], prefix string, found *[]change) error {
-	return eachEntry(ctx, dir, s.mountID, prefix, found, func(sub fsx.Dir, name, path string) error {
-		wd, err := s.watch(sub)
-		if err != nil {
-			return err
-		}
-		return s.watchBelow(ctx, sub, s.tree.add(node, name, wd), path, found)
-	})
 }
 
 func (s *inotifySource) fd() int { return s.ino }
@@ -214,6 +206,10 @@ func (s *inotifySource) arrive(parent *folderNode[int32], name string) []change 
 		return nil
 	}
 	at := join(dirPath, name)
+	if !s.marker.limits.Fits(at) {
+		// Past what the disk's walks read: nothing to watch there (specs.md §15.8).
+		return nil
+	}
 	sub, err := openBelow(s.root, at, s.mountID)
 	if err != nil {
 		return nil
@@ -227,7 +223,7 @@ func (s *inotifySource) arrive(parent *folderNode[int32], name string) []change 
 		return nil
 	}
 	var found []change
-	_ = s.watchBelow(context.Background(), sub, s.tree.add(parent, name, wd), at, &found)
+	_ = s.marker.all(context.Background(), sub, s.tree.add(parent, name, wd), at, &found)
 	return found
 }
 

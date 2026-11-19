@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // What a catalog rebuild finds in a disk's trash: an operation's folder that holds one file, below folders of its
@@ -54,7 +55,7 @@ func TestFoundTrash(t *testing.T) {
 	}
 	defer d.Close()
 	var left []string
-	found, err := d.FoundTrash(func(place, why string) { left = append(left, place+": "+why) })
+	found, err := d.FoundTrash(func(place, why string) { left = append(left, place+": "+why) }, watch.Unbounded)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestFoundTrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer empty.Close()
-	if none, err := empty.FoundTrash(func(string, string) { t.Error("told of something") }); err != nil || none != nil {
+	if none, err := empty.FoundTrash(func(string, string) { t.Error("told of something") }, watch.Unbounded); err != nil || none != nil {
 		t.Errorf("%v, %v", none, err)
 	}
 }
