@@ -194,6 +194,10 @@ type diskState struct {
 	unheard bool
 	// reset says that it went missing for a reason a USB reset gives, so each check tries the remount.
 	reset bool
+	// source is the device the last check that found it mounted says it was mounted from, and device what that name
+	// led to then, for what tells whether the device left once it is no longer mounted (specs.md §15.13).
+	source string
+	device fsx.DeviceNode
 	// probed says that the NTFS volume of a missing disk was read once since it went missing, and dirty that it was
 	// marked dirty then (specs.md §22).
 	probed, dirty bool
@@ -608,7 +612,7 @@ func (l *loop) check(ctx context.Context) {
 			// Nothing reads or writes it: going and coming back calls for no pass.
 		case st.state != disks.Missing && v.State == disks.Missing:
 			l.gone = true
-			st.walked, st.reset = false, slices.Contains(l.set.resetReasons, v.Reason)
+			st.walked, st.reset = false, l.resetFor(d.ID, st, v.Reason)
 			l.unwatch(d.ID)
 			l.log.Warn("a disk went missing", "disk", d.ID, "reason", v.Reason, "message", v.Message)
 		case st.state == disks.Missing && v.State != disks.Missing:
@@ -619,6 +623,9 @@ func (l *loop) check(ctx context.Context) {
 			l.log.Info("a disk changed state", "disk", d.ID, "from", st.state, "to", v.State, "reason", v.Reason)
 		}
 		st.state = v.State
+		if v.State != disks.Missing {
+			l.noteDevice(st, v.Source)
+		}
 		l.spin(d, st)
 		l.probeDirty(d, st)
 		if remountWanted(d, st) {
@@ -641,6 +648,44 @@ func (l *loop) rearm(ctx context.Context, id string) {
 	l.unwatch(id)
 	l.watch(ctx, id)
 	l.add(watch.Event{Disk: id, Kind: watch.KindOverflow, Origin: watch.OriginUnknown, AtNS: l.opt.Machine.Now()})
+}
+
+// resetFor says whether a disk that went missing for reason was taken by a USB reset, so that each check tries the
+// remount (specs.md §15.13): a reason a USB reset gives, or not-mounted when the device it was mounted from left, as
+// when systemd itself unmounts an idle /etc/fstab mount whose device went. An administrator's umount leaves the
+// device where it was, and nothing tells of a disk the daemon never found mounted.
+func (l *loop) resetFor(id string, st *diskState, reason disks.Reason) bool {
+	if slices.Contains(l.set.resetReasons, reason) {
+		return true
+	}
+	ident, ok := l.opt.Machine.(disks.DeviceIdentifier)
+	if reason != disks.NotMounted || st.source == "" || !ok {
+		return false
+	}
+	now, err := ident.DeviceNode(st.source)
+	switch {
+	case err != nil:
+		l.log.Warn("a disk is no longer mounted, and whether its device left cannot be told: it is not mounted again",
+			"disk", id, "device", st.source, "error", err)
+		return false
+	case !disks.DeviceLeft(st.device, now):
+		return false
+	}
+	l.log.Warn("a disk is no longer mounted and its device left, as after a USB reset", "disk", id, "device", st.source)
+	return true
+}
+
+// noteDevice keeps what the device a disk is mounted from leads to, for what tells, once the disk is no longer
+// mounted, whether that device left (specs.md §15.13). It reads a name under /dev and a file of /sys: no disk wakes.
+func (l *loop) noteDevice(st *diskState, source string) {
+	st.source, st.device = "", fsx.DeviceNode{}
+	ident, ok := l.opt.Machine.(disks.DeviceIdentifier)
+	if !ok || !strings.HasPrefix(source, "/") {
+		return
+	}
+	if node, err := ident.DeviceNode(source); err == nil {
+		st.source, st.device = source, node
+	}
 }
 
 // remountWanted says whether to try the remount of a disk: missing for a reason a USB reset gives, not failed, and
@@ -838,7 +883,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 			case line.Verdict.State == disks.Missing && st.state != disks.Missing:
 				// A device that fails still answers the mount check from the cache: only the pass's confirmation
 				// finds it, and the pass has recorded it already.
-				st.state, st.walked, st.reset = disks.Missing, false, slices.Contains(l.set.resetReasons, line.Verdict.Reason)
+				st.state, st.walked, st.reset = disks.Missing, false, l.resetFor(line.ID, st, line.Verdict.Reason)
 				l.unwatch(line.ID)
 				l.log.Warn("a disk went missing", "disk", line.ID, "reason", line.Verdict.Reason, "message", line.Verdict.Message)
 			}

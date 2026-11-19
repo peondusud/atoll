@@ -99,6 +99,11 @@ func (machine) ReadDevice(path string, off int64, n int) ([]byte, error) {
 	return fsx.ReadAt(path, off, n) //nolint:wrapcheck // fsx says what it read
 }
 
+// DeviceNode says what a device's name leads to (specs.md §15.13).
+func (machine) DeviceNode(path string) (fsx.DeviceNode, error) {
+	return fsx.DeviceNodeOf(path) //nolint:wrapcheck // fsx says what it looked at
+}
+
 // Smartctl runs smartctl from the PATH (specs.md §23). Its exit status is in its output too, so only a failure to
 // run it is an error: exec.ErrNotFound when it is not installed.
 func (machine) Smartctl(ctx context.Context, args ...string) ([]byte, error) {

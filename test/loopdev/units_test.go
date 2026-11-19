@@ -742,6 +742,117 @@ func TestTheRemountUnderSystemd(t *testing.T) {
 	}
 }
 
+// TestAnIdleDiskUnpluggedUnderSystemd: a disk systemd mounted from /etc/fstab, as at boot, and that nothing holds,
+// loses its device as an unplugged USB disk does. systemd itself unmounts it, as the stop of its device unit goes to
+// the mount unit, and the daemon may find it only not-mounted, which alone is no reason a USB reset gives: as the
+// device it was mounted from left, it is one (specs.md §15.13, the maintainer's decision of 2026-11-19). The daemon
+// waits while the device is away, and has systemd mount the disk again once it is back. On ext4 and ntfs-3g. udev's
+// rules run for the device, unlike newMapped's: without them systemd has no device unit to stop (measured).
+func TestAnIdleDiskUnpluggedUnderSystemd(t *testing.T) {
+	needSystemd(t)
+	theAccount(t)
+	original, err := os.ReadFile("/etc/fstab")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.WriteFile("/etc/fstab", original, 0o644) })
+	for _, tc := range []struct {
+		name, fstype string
+		fs           names.Filesystem
+	}{
+		{"ext4", "ext4", names.Ext4},
+		{"ntfs-3g", "ntfs-3g", names.NTFS},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			machineServices(t, true)
+			v := newVolume(t, tc.fs)
+			sectors := must(t, "blockdev", "--getsz", v.device)
+			name := "atoll-idle-" + tc.name
+			gone := name + "-gone"
+			must(t, "dmsetup", "create", name, "--table", "0 "+sectors+" linear "+v.device+" 0")
+			must(t, "udevadm", "settle")
+			t.Cleanup(func() {
+				for _, n := range []string{name, gone} {
+					_ = exec.CommandContext(context.Background(), "dmsetup", "remove", "-f", "--noudevsync", n).Run()
+				}
+			})
+			at := mountPoint(t)
+			mustDo(t, os.MkdirAll(at, 0o755))
+			openAbove(t, at)
+			mustDo(t, os.WriteFile("/etc/fstab", append(slices.Clone(original), []byte("/dev/mapper/"+name+" "+at+" "+tc.fstype+" defaults,nofail 0 0\n")...), 0o644))
+			must(t, "systemctl", "daemon-reload")
+			unit := must(t, "systemd-escape", "--path", "--suffix=mount", at)
+			must(t, "systemctl", "start", unit)
+			t.Cleanup(func() {
+				_ = exec.CommandContext(context.Background(), "umount", "-l", at).Run()
+				time.Sleep(200 * time.Millisecond)
+			})
+			write(t, at, "film.mkv", "a film")
+			film := filepath.Join(at, "media", "film.mkv")
+			readable := func() bool { data, err := os.ReadFile(film); return err == nil && string(data) == "a film" }
+			source := func() string {
+				out, _ := exec.CommandContext(t.Context(), "findmnt", "-n", "-o", "SOURCE", at).Output()
+				return strings.TrimSpace(string(out))
+			}
+			kept := newVolume(t, names.Ext4)
+			keep := mountPoint(t)
+			mountVolume(t, kept, "", keep)
+			mustDo(t, os.MkdirAll(filepath.Join(keep, "media"), 0o755))
+			poolConfig(t, kept, keep, v, at, "[defaults]\nsettle = \"0s\"\n[view]\nmount = "+
+				strconv.Quote(filepath.Join(t.TempDir(), "pool"))+"\n")
+			u := installUnit(t, "atoll.service")
+			u.start()
+			u.checkRunsAsShipped()
+			// Once its first pass is over, nothing of the daemon's reads the disk when its device goes: the check finds
+			// it, every 30 s.
+			waitFor(t, "the daemon's first pass", func() bool { return strings.Contains(u.said(), "a pass ended") })
+
+			must(t, "dmsetup", "rename", name, gone)
+			must(t, "udevadm", "settle")
+			waitFor(t, "systemd unmounting the idle disk", func() bool { return source() == "" })
+			waitFor(t, "the daemon waiting for the device to come back", func() bool {
+				return strings.Contains(u.said(), "the remount waits: its device is not there")
+			})
+			must(t, "dmsetup", "rename", gone, name)
+			must(t, "udevadm", "settle")
+			for deadline := time.Now().Add(3 * time.Minute); source() != "/dev/mapper/"+name && time.Now().Before(deadline); {
+				time.Sleep(time.Second)
+			}
+			if got := source(); got != "/dev/mapper/"+name {
+				t.Fatalf("the disk was not mounted again by the daemon within 3 minutes: %q", got)
+			}
+			waitFor(t, "the disk readable once mounted again", readable)
+			waitFor(t, "the daemon saying how the remount ended", func() bool {
+				said := u.said()
+				return strings.Contains(said, "remounted after a reset") || strings.Contains(said, "the remount failed")
+			})
+			said := u.said()
+			var wentMissing string
+			for _, line := range strings.Split(said, "\n") {
+				if strings.Contains(line, "missing") || strings.Contains(line, "remount") || strings.Contains(line, "device left") {
+					t.Logf("%s", line)
+				}
+				if wentMissing == "" && strings.Contains(line, "a disk went missing") {
+					wentMissing = line
+				}
+			}
+			// The check finds it not-mounted, unless a pass's confirmation came first, which finds its device gone: either
+			// way, a reset. Found not-mounted, the daemon says its device left.
+			if strings.Contains(wentMissing, `"reason":"not-mounted"`) && !strings.Contains(said, "no longer mounted and its device left") {
+				t.Error("found not-mounted, the disk was not said to have lost its device")
+			}
+			if !strings.Contains(said, "remounted after a reset") || !strings.Contains(said, strings.ReplaceAll(unit, `\`, `\\`)) {
+				t.Errorf("not remounted through %s", unit)
+			}
+			if got := must(t, "systemctl", "show", "-p", "ActiveState", "--value", unit); got != "active" {
+				t.Errorf("%s is %s", unit, got)
+			}
+			u.stop()
+			u.checkNothingRefused()
+		})
+	}
+}
+
 // Atoll's names of mount units are systemd's: each name of conformance/vectors/mount_unit.json is what this machine's
 // systemd-escape --path --suffix=mount writes (specs.md §15.13).
 func TestMountUnitNamesAreSystemds(t *testing.T) {

@@ -832,6 +832,14 @@ The text of `/proc/self/mountinfo`, one line per mount: `id parent major:minor r
 | `unit` | string | the name of the mount unit systemd gives that path, which the remount after a USB reset starts: what `systemd-escape --path --suffix=mount` writes, and `systemd-fstab-generator` names the unit of an `/etc/fstab` entry (measured with systemd 257) |
 | `error` | boolean | `true` for a path that is not absolute, holds a `..` component, or whose unit would be longer than 255 bytes, which systemd names by a hash Atoll does not compute: the daemon then mounts the disk itself |
 
+### `device_left.json` — whether a disk's device left (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `before` | object | the device the mount table named at the last check that found the disk online: `there` (the name leads somewhere, through its symbolic links), `block` (to a block device), `major` and `minor` (its numbers), `seq` (the kernel's sequence number of its disk, `diskseq`, its disk's for a partition; `0` when the kernel gives none) |
+| `now` | object | what that same name leads to when the disk is found `not-mounted`, the same fields |
+| `left` | boolean | `true` when the device left, as after a USB reset whose mount systemd took away itself: the name leads nowhere, to no block device, to other numbers, or to the same numbers with another `seq`, both known. Then `not-mounted` counts as a reason a USB reset gives, and the remount follows |
+
 ### `time_precision.json` — how finely a filesystem holds a time (§9, §10)
 
 | Field | Type | Meaning |
