@@ -34,8 +34,9 @@ NoNewPrivileges=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service @mount fanotify_init fanotify_mark open_by_handle_at
 SystemCallErrorNumber=EPERM
-# The API's socket and sd_notify; the alerts, the media servers, NUT and OTLP over IPv4 and IPv6; netlink, through
-# which Go reads the machine's addresses.
+# The API's socket, sd_notify, and the system bus, through which systemctl has systemd mount a disk again after a USB
+# reset (deploy/50-atoll.rules); the alerts, the media servers, NUT and OTLP over IPv4 and IPv6; netlink, through which
+# Go reads the machine's addresses.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 RestrictNamespaces=yes
 LockPersonality=yes
