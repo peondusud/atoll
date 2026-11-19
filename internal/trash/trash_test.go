@@ -49,6 +49,8 @@ type bench struct {
 	elapsed int64
 	// capacity is what each disk says it holds, 1 GiB when left at 0.
 	capacity int64
+	// driver is the type of each NTFS disk's mount, by mount: every other disk is an ext4.
+	driver map[string]string
 }
 
 func (b *bench) Mount(mount string) disks.MountSeen {
@@ -59,8 +61,12 @@ func (b *bench) Mount(mount string) disks.MountSeen {
 	if b.ro[mount] {
 		options = []string{"ro"}
 	}
+	fstype, super := "ext4", options
+	if driver := b.driver[mount]; driver != "" {
+		fstype, super = driver, append(slices.Clone(options), "iocharset=utf8", "errors=remount-ro")
+	}
 	return disks.MountSeen{Path: disks.PathOK, Entry: &disks.MountEntry{
-		MountPoint: mount, Root: "/", FSType: "ext4", MountOptions: options, SuperOptions: options,
+		MountPoint: mount, Root: "/", FSType: fstype, MountOptions: options, SuperOptions: super,
 	}}
 }
 
@@ -153,17 +159,28 @@ func (o *otherMountDir) Info() (fsx.Stat, error) {
 
 func newBench(t *testing.T) *bench {
 	t.Helper()
+	return newBenchOf(t, "")
+}
+
+// newBenchOf is newBench with t3 an NTFS disk, mounted with that driver's type, when one is given.
+func newBenchOf(t *testing.T, t3Driver string) *bench {
+	t.Helper()
 	top := t.TempDir()
 	var text strings.Builder
 	fmt.Fprintf(&text, "pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(top, "catalog.db"), filepath.Join(top, "pool"))
 	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, unread: map[string]bool{}, ro: map[string]bool{}, confirm: map[string]int{},
-		at: map[string]func(){}, beforeRead: map[string]func(){}, otherMount: map[string]string{}}
+		at: map[string]func(){}, beforeRead: map[string]func(){}, otherMount: map[string]string{}, driver: map[string]string{}}
 	for i, id := range []string{"t1", "t2", "t3"} {
 		dir := filepath.Join(top, id)
 		if err := os.MkdirAll(filepath.Join(dir, "media"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		b.dirs[id] = dir
+		if id == "t3" && t3Driver != "" {
+			b.driver[dir] = t3Driver
+			fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = \"01D9F3A2B4C5E6F7\"\nmount = %q\nfs = \"ntfs\"\n", id, dir)
+			continue
+		}
 		fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3%d\"\nmount = %q\nfs = \"ext4\"\n", id, i, dir)
 	}
 	c, err := config.Parse([]byte(text.String()))
@@ -990,6 +1007,49 @@ func TestAnEditDuringTheSyncsOfAReprise(t *testing.T) {
 	}
 	if _, err := os.Lstat(b.inTrash(1, "a")); !os.IsNotExist(err) {
 		t.Errorf("the name in the trash: %v", err)
+	}
+}
+
+// On the type ntfs, EINVAL from the rename is a name the driver refuses, and link is not tried: with windows_names that
+// driver links a name it refuses, then refuses to unlink the copy's own, which would leave both (specs.md §17.1). The
+// copy stays where it is, and nothing is in the trash. On ntfs3, link tells, and takes it there.
+func TestAPruneOfANameTheTypeNTFSRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		driver, outcome, state string
+		linked, there          bool
+	}{
+		{"ntfs", OutcomeNameRefused, "undone", false, true},
+		{"ntfs3", OutcomeTrashed, "done", true, false},
+	} {
+		t.Run(tc.driver, func(t *testing.T) {
+			b := newBenchOf(t, tc.driver)
+			linked := false
+			b.fail[b.dirs["t3"]] = func(call, _ string) error {
+				switch call {
+				case "rename":
+					return syscall.EINVAL
+				case "link":
+					linked = true
+				}
+				return nil
+			}
+			items, summary := b.prune()
+			if len(items) != 1 || items[0].Disk != "t3" || items[0].Outcome != tc.outcome || summary.DiskLost {
+				t.Fatalf("%+v, %+v", items, summary)
+			}
+			if linked != tc.linked {
+				t.Errorf("link tried: %v", linked)
+			}
+			if got := b.text("SELECT state FROM ops"); got != tc.state {
+				t.Errorf("the operation is %q", got)
+			}
+			if b.sourceThere() != tc.there {
+				t.Errorf("the copy there: %v", !tc.there)
+			}
+			if got := b.count("SELECT count(*) FROM trash") == 1; got == tc.there {
+				t.Errorf("%d entries", b.count("SELECT count(*) FROM trash"))
+			}
+		})
 	}
 }
 

@@ -54,10 +54,15 @@ type Disk struct {
 	// own holds, by inode, the files whose link of the guard leads to it, nil until the links folder is read
 	// (specs.md §17).
 	own map[uint64][]int64
+	// driver is the type the mount table gives an NTFS disk's mount when it was opened, "" for another disk or when
+	// the table has no entry: it says what EINVAL from a rename means (specs.md §17.1), and whether a link moves its
+	// file's modification time (§17, §22).
+	driver string
 }
 
 // Open opens the top of a disk, which holds a time to precisionNS. The caller confirms it afterwards, then calls
-// Verify, so that what was confirmed is what the handle leads to (specs.md §10).
+// Verify, so that what was confirmed is what the handle leads to (specs.md §10). An NTFS disk also has its mount's type
+// read, as two of its drivers answer a rename and a link otherwise (§17.1).
 func Open(m disks.Machine, d *config.Disk, precisionNS int64) (*Disk, error) {
 	top, err := m.OpenTop(d.Mount)
 	if err != nil {
@@ -67,7 +72,26 @@ func Open(m disks.Machine, d *config.Disk, precisionNS int64) (*Disk, error) {
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("disk %q: %w", d.ID, err), top.Close())
 	}
-	return &Disk{ID: d.ID, config: d, machine: m, top: top, mountID: info.MountID, dev: info.Dev, ino: info.Ino, precision: precisionNS}, nil
+	driver := ""
+	if d.FS == names.NTFS {
+		if seen := m.Mount(d.Mount); seen.Entry != nil {
+			driver = seen.Entry.FSType
+		}
+	}
+	return &Disk{ID: d.ID, config: d, machine: m, top: top, mountID: info.MountID, dev: info.Dev, ino: info.Ino, precision: precisionNS,
+		driver: driver}, nil
+}
+
+// LinkMovesTimes says whether a link made on the disk sets every time of its file to now, its modification time
+// included, as the type ntfs does, measured (specs.md §22): ntfs3 and the others move the change time alone.
+func (d *Disk) LinkMovesTimes() bool {
+	return disks.LinkMovesTimes(d.driver)
+}
+
+// renameTells says whether EINVAL from renameat2 with RENAME_NOREPLACE is a name the driver refuses, so that neither
+// link nor a plain rename is tried (specs.md §17.1).
+func (d *Disk) renameTells(err error) bool {
+	return disks.RenameTellsNames(d.driver) && fsx.IsNameRefused(err)
 }
 
 // Close lets go of the disk.
@@ -493,10 +517,11 @@ func (d *Disk) TrashFolderInfo(trashPath string) (*fsx.Stat, error) {
 }
 
 // moveNoReplace is renameat2 with RENAME_NOREPLACE, or link then unlink where that gives EINVAL or
-// ENOSYS. Whether EINVAL was about the flag or the name, only link can tell (measured). Unlike a
-// rename, those are two calls, so the link is made durable before the source's name goes: a device
-// that fails between them must not leave the file with no name at all. is says what the source's name
-// must still hold once the link is durable, which that fsync can make long.
+// ENOSYS. Whether EINVAL was about the flag or the name, only link can tell (measured), but on the type
+// ntfs, where it is the name's (specs.md §17.1). Unlike a rename, those are two calls, so the link is made
+// durable before the source's name goes: a device that fails between them must not leave the file with no
+// name at all. is says what the source's name must still hold once the link is durable, which that fsync
+// can make long.
 func (d *Disk) moveNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string, is func(*fsx.Stat) bool) error {
 	err := source.Rename(name, target, newName)
 	switch {
@@ -506,6 +531,8 @@ func (d *Disk) moveNoReplace(source fsx.Dir, name string, target fsx.Dir, newNam
 		return fmt.Errorf("%w: %w", ErrGone, err)
 	case fsx.IsExisting(err):
 		return fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case d.renameTells(err):
+		return fmt.Errorf("%w: %w", ErrNameRefused, err)
 	case !fsx.IsFlagRefused(err):
 		return classify(err)
 	}
@@ -975,6 +1002,8 @@ func holdsFolder(dir fsx.Dir, name, fileKey string) (fsx.Stat, error) {
 	return st, nil
 }
 
+// moveFolderNoReplace is renameat2 with RENAME_NOREPLACE, or a look and a plain rename where that gives EINVAL or ENOSYS,
+// as a folder has no link; on the type ntfs, EINVAL is the name's (specs.md §15.12, §17.1).
 func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string) error {
 	err := source.Rename(name, target, newName)
 	switch {
@@ -984,6 +1013,8 @@ func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, 
 		return fmt.Errorf("%w: %w", ErrGone, err)
 	case fsx.IsExisting(err):
 		return fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case d.renameTells(err):
+		return fmt.Errorf("%w: %w", ErrNameRefused, err)
 	case !fsx.IsFlagRefused(err):
 		return classify(err)
 	}

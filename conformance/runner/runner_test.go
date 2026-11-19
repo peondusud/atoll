@@ -185,6 +185,10 @@ func TestRefusingAScenario(t *testing.T) {
 		{"full: a disk it does not have", "exit 0", steps(`{"do": "atoll", "full": ["x"]}`), "full"},
 		{"full: a disk twice", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": []}], "steps": [{"do": "atoll", "full": ["d", "d"]}]}`, "twice"},
 		{"full on the wrong step", "exit 0", steps(`{"do": "advance", "by": "1m", "full": ["d"]}`), "does not apply"},
+		{"a driver it does not know", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "capacity": 10, "tree": [], "driver": "ntfs-3g"}], "steps": [{"do": "atoll"}]}`, "ntfs3 or ntfs"},
+		{"a driver of NTFS on ext4", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": [], "driver": "ntfs"}], "steps": [{"do": "atoll"}]}`, "only on ntfs"},
+		{"driver ntfs without RENAME_NOREPLACE", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "capacity": 10, "tree": [], "driver": "ntfs", "renameat2": false}], "steps": [{"do": "atoll"}]}`, "renameat2"},
+		{"driver ntfs3", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "capacity": 10, "tree": [], "driver": "ntfs3", "renameat2": false}], "steps": [{"do": "atoll"}]}`, ""},
 	})
 }
 
@@ -287,7 +291,8 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 	bin := fakeBinary(t, `cat "$ATOLL_CONFORMANCE" >>`+file)
 	err := runFile(bin, scenarioFile(t, `{"format_version": 1, "spec": "x", "description": "x",
 		"disks": [{"id": "t1", "uuid": "u", "fs": "ext4", "capacity": 1, "tree": [], "renameat2": false, "refuses": ["a"]},
-		          {"id": "t2", "uuid": "v", "fs": "ext4", "capacity": 1, "tree": []}],
+		          {"id": "t2", "uuid": "v", "fs": "ext4", "capacity": 1, "tree": []},
+		          {"id": "t3", "uuid": "w", "fs": "ntfs", "capacity": 1, "tree": [], "driver": "ntfs"}],
 		"steps": [{"do": "atoll", "crash_at": "moved", "full": ["t2"]}, {"do": "atoll"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -324,6 +329,12 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 		t.Errorf("second disk: %v", second)
 	}
 	if _, there := second["refuses"]; there {
+		t.Errorf("second disk: %v", second)
+	}
+	if third, _ := disks[2].(map[string]any); third["driver"] != "ntfs" {
+		t.Errorf("third disk: %v", third)
+	}
+	if _, there := second["driver"]; there {
 		t.Errorf("second disk: %v", second)
 	}
 	if _, there := first["full"]; there || second["full"] != true {

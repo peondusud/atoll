@@ -24,6 +24,8 @@ type fakeDisk struct {
 	variant disks.Variant
 	// noJournal says that the ext4 keeps no journal.
 	noJournal bool
+	// id is the identifier its head holds, a UUID when left empty.
+	id string
 }
 
 func (f *fakeDisk) Mount(mount string) disks.MountSeen {
@@ -35,7 +37,11 @@ func (f *fakeDisk) Mount(mount string) disks.MountSeen {
 }
 
 func (f *fakeDisk) Device(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
-	return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d", Variant: f.variant, NoJournal: f.noJournal, TimePrecisionNS: 1}}
+	id := f.id
+	if id == "" {
+		id = "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"
+	}
+	return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: id, Variant: f.variant, NoJournal: f.noJournal, TimePrecisionNS: 1}}
 }
 
 func (f *fakeDisk) Root(string, string) disks.RootSeen { return disks.RootSeen{Folder: disks.FolderOK} }
@@ -78,6 +84,11 @@ func TestDiskAddRefusesNameRules(t *testing.T) {
 	}{
 		{"ntfs3 nocase", &fakeDisk{mount: mount, fsType: "ntfs3", options: []string{"rw", "iocharset=utf8", "nocase"}}, "nocase", ""},
 		{"ntfs3 ads", &fakeDisk{mount: mount, fsType: "ntfs3", options: []string{"rw", "iocharset=utf8", "ads"}}, "ads", ""},
+		{"ntfs nocase", &fakeDisk{mount: mount, fsType: "ntfs", options: []string{"rw", "iocharset=utf8", "nocase", "errors=remount-ro"}, id: "01D9F3A2B4C5E6F7"}, "nocase", ""},
+		// The type ntfs is taken as ntfs3 is (specs.md §10, §22); without errors=remount-ro it would write to a volume
+		// Windows left hibernated, so it is taken read-only, as a disk mounted so is, until it is mounted with it.
+		{"ntfs", &fakeDisk{mount: mount, fsType: "ntfs", options: []string{"rw", "iocharset=utf8", "errors=remount-ro"}, id: "01D9F3A2B4C5E6F7"}, "", "online"},
+		{"ntfs errors=continue", &fakeDisk{mount: mount, fsType: "ntfs", options: []string{"rw", "iocharset=utf8", "errors=continue"}, id: "01D9F3A2B4C5E6F7"}, "", "readonly"},
 		{"ext4 casefold", &fakeDisk{mount: mount, fsType: "ext4", options: []string{"rw"}, variant: disks.VariantCasefold}, "casefold", ""},
 		{"xfs ascii-ci", &fakeDisk{mount: mount, fsType: "xfs", options: []string{"rw"}, variant: disks.VariantASCIICI}, "ascii-ci", ""},
 		// A name made there is not durable once its folder is synced, which every operation of Atoll's rests on.

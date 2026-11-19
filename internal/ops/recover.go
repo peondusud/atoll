@@ -451,7 +451,8 @@ func (d *Disk) moveBack(from, to []string) error {
 	defer target.close()
 	name := to[len(to)-1]
 	if err := source.Rename(from[len(from)-1], target.Dir, name); err != nil {
-		if !fsx.IsFlagRefused(err) {
+		// On the type ntfs, EINVAL is the name's, and a link would leave the file both names (specs.md §17.1).
+		if !fsx.IsFlagRefused(err) || d.renameTells(err) {
 			return classify(err)
 		}
 		if err := source.Link(from[len(from)-1], target.Dir, name); err != nil {
