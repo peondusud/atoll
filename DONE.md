@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The core first, 2026-11-19 (specs.md §14, §28)
+
+The maintainer: "je veux un truc bullet proof (très fiable et très secure) avec peu de features dans un premier temps; on ajoutera les features une fois le noyau rock solid". Commit `1bc014f`.
+
+- **One copy at a time by default**, on every disk: `replication.max_parallel_per_ssd` takes 1, where it took 4 that morning. Copies at once stay as they were built, to turn on knowingly, until the TLA+ model covers them and a soak on a real SSD has run them. The tests of copies at once ask for four (`ssdAtOnce`), so that they still test concurrency; the configuration's vectors and `TestCopyLimits` say 1. The model runs one copy at a time, so it is unchanged; §14's fingerprint follows its new text.
+- **Experimental, off by default and no promise of the first release** (§28, README.md, ROADMAP.md): Atoll's own view, writing and read only, with its hard links, extended attributes and copies written in parallel; the SSD cache; the UPS through NUT; the link guard; copies at once; the export over OTLP; `balance.equalize = "percent"`; the kernel's type `ntfs`.
+- **Versions**: tags plain Semantic Versioning, `v0.1.0`, `v0.1.1`… while the core is proven, `v1.0.0` once it is declared solid, no suffix `-beta`; the `.deb` with a Debian revision, `0.1.0-1` (`release: "1"` in `.goreleaser.yaml`'s nfpms), as Debian's policy gives a package that is not native. The first release, `v0.1.0`, once the core is proven.
+
 ## The soak after the merges, cut short by Docker after 3 h 30, 2026-11-19 (specs.md §26)
 
 `TestDaemonSoak` on `af340fd`, every feature of the day merged, in qemu without KVM on Linux 6.12, `SOAK=72h SOAK_FILES=200000`, from 07:03. Docker Desktop's VM stopped at 10:32, a minute before Windows installed an update of the Claude application, and the soak with it; the maintainer, back, had asked it stopped then. Its log is `bin/soak4/soak.log`.
