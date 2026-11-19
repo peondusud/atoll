@@ -11,6 +11,9 @@
 # Build output (make build)
 /bin/
 
+# Release output (make release-snapshot, GoReleaser)
+/dist/
+
 # Test binary, built with `go test -c`
 *.test
 

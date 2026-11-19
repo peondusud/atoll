@@ -116,6 +116,7 @@ func writeHelp(name, sub string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(&text, "  %-16s %s\n", h.name, T(h.does))
 		}
 		text.WriteString("\n" + T("atoll help <command>, or atoll <command> --help, says more of one.") + "\n")
+		text.WriteString(T("atoll --version gives the version of this build.") + "\n")
 		text.WriteString(T("--config names the configuration, /etc/atoll/atoll.toml by default; --json gives the output its schema of api/schemas/.") + "\n")
 	} else {
 		at := slices.IndexFunc(helps, func(h commandHelp) bool { return h.name == name })

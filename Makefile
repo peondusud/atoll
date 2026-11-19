@@ -4,7 +4,7 @@ GO            ?= go
 GOLANGCI_LINT ?= golangci-lint
 BIN           := bin/atoll
 
-.PHONY: all build test test-race conformance test-integration test-loopdev qemu-build test-qemu test-mediaservers lint clean
+.PHONY: all build test test-race conformance test-integration test-loopdev qemu-build test-qemu test-mediaservers lint release-snapshot clean
 
 all: build
 
@@ -44,9 +44,11 @@ qemu-build:
 	cp -r conformance bin/qemu/repo/
 
 # test-loopdev as root in qemu, on Debian's kernel and a mainline one, with neither root nor ntfs3 on
-# the host: only Docker (test/qemu/README.md).
+# the host: only Docker (test/qemu/README.md). QEMU_CACHE, a folder of the host, keeps the packages and
+# the kernel it downloads from one run to the next, as the CI's qemu job does.
 test-qemu: qemu-build
 	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e COUNT -e VERBOSE \
+		$(if $(QEMU_CACHE),-v "$(abspath $(QEMU_CACHE)):/var/cache/atoll-qemu" -e CACHE=/var/cache/atoll-qemu) \
 		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
 
 # The notifications on real Plex, Jellyfin and Emby, each in a container, on the last commit: only git
@@ -59,5 +61,15 @@ lint:
 	$(GOLANGCI_LINT) run ./...
 	$(GOLANGCI_LINT) run --build-tags conformance ./cmd/... ./internal/disks/...
 
+# A release as .github/workflows/release.yml makes one (.goreleaser.yaml), into dist/, from this checkout and
+# what it holds uncommitted: no tag, no upload, only Docker. From a clone: a git worktree's .git names a
+# folder the container does not have. What the container writes goes back to whoever runs make.
+GORELEASER_IMAGE := goreleaser/goreleaser:v2.20.0
+release-snapshot:
+	docker run --rm -v "$(CURDIR):/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
+		-e GIT_CONFIG_VALUE_0=/src --entrypoint sh $(GORELEASER_IMAGE) -c \
+		'goreleaser release --snapshot --clean; s=$$?; chown $(shell id -u):$(shell id -g) bin 2>/dev/null; \
+		chown -R $(shell id -u):$(shell id -g) bin/deb dist 2>/dev/null; exit $$s'
+
 clean:
-	rm -rf bin
+	rm -rf bin dist

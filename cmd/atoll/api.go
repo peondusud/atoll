@@ -314,7 +314,8 @@ func listenTCP(ctx context.Context, text string) (net.Listener, error) {
 	return l, nil
 }
 
-// atollVersion is the version the binary was built as, "(devel)" for a build from a working tree.
+// atollVersion is the version the binary was built as: the tag of its commit, which go build reads from git, as a
+// release has it; the pseudo-version of that commit otherwise; "(devel)" for a build with no version control.
 func atollVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
 		return info.Main.Version
