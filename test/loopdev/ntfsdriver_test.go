@@ -80,10 +80,10 @@ func TestTheLinkGuardOnTheTypeNTFS(t *testing.T) {
 
 // TestAForbiddenNameOnTheTypeNTFS pins what the type ntfs does with a name holding one of " * < > ?, which Atoll never
 // writes to NTFS (specs.md §15.8) but another program may, through mergerfs or on the disk itself, or ntfs-3g and
-// Windows may have written: without windows_names it creates such a name, then answers ERANGE to its removal, and under
-// errors=remount-ro, which Atoll asks of the type (§10), that sets the whole volume read-only, which a mount check reads
-// as read-only-mount. With windows_names the creation is refused with EINVAL; a name already there is measured too.
-// Found by GitHub's qemu job on Linux 7.3, 2026-11-19.
+// Windows may have written: without windows_names it creates such a name, and once the file is closed it meets an error
+// on it, which under errors=remount-ro, as Atoll asks of the type (§10), sets the whole volume read-only, which a mount
+// check reads as read-only-mount. With windows_names the creation is refused with EINVAL, and a name already there is
+// removed with no such error. Found by GitHub's qemu job on Linux 7.3, 2026-11-19.
 func TestAForbiddenNameOnTheTypeNTFS(t *testing.T) {
 	needRoot(t)
 	const forbidden = "a\"b"
@@ -91,12 +91,16 @@ func TestAForbiddenNameOnTheTypeNTFS(t *testing.T) {
 		dir := mountImage(t, 64, mkntfs, ntfsKernel(""))
 		f, err := os.Create(filepath.Join(dir, forbidden))
 		mustDo(t, err)
-		mustDo(t, f.Close())
-		if err := os.Remove(filepath.Join(dir, forbidden)); !errors.Is(err, syscall.ERANGE) {
-			t.Errorf("removing %s: %v, want ERANGE", forbidden, err)
+		// Made, and the volume still writable: a folder can be made beside it while the file is open.
+		mustDo(t, os.Mkdir(filepath.Join(dir, "while-open"), 0o755))
+		closed := f.Close()
+		removed := os.Remove(filepath.Join(dir, forbidden))
+		t.Logf("closing %s: %v; removing it: %v", forbidden, closed, removed)
+		if !errors.Is(removed, syscall.ERANGE) && !errors.Is(removed, syscall.EROFS) {
+			t.Errorf("removing %s: %v, want ERANGE or EROFS", forbidden, removed)
 		}
 		if err := os.Mkdir(filepath.Join(dir, "after"), 0o755); !errors.Is(err, syscall.EROFS) {
-			t.Errorf("a folder made after the removal: %v, want EROFS, the volume set read-only", err)
+			t.Errorf("a folder made after it: %v, want EROFS, the volume set read-only", err)
 		}
 	})
 	t.Run("windows_names", func(t *testing.T) {
