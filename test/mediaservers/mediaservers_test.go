@@ -238,7 +238,10 @@ func scenario(t *testing.T, kind string, s notify.Server, list func(context.Cont
 	}
 	waitFor(t, "the library lists the movie it was made with, alone", settle, func(ctx context.Context) (bool, error) {
 		files, err := list(ctx)
-		return len(files) == 1 && files[0] == notify.Seen(viewMount, seed(kind), pathMap), err
+		if err == nil && (len(files) != 1 || files[0] != notify.Seen(viewMount, seed(kind), pathMap)) {
+			return false, fmt.Errorf("the library lists %q", files)
+		}
+		return err == nil, err
 	})
 
 	// A file written straight to a disk: the pass that finds it tells the folder that holds it.
