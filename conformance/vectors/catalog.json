@@ -77,6 +77,7 @@
     {"note": "ops.kind utimens", "sql": ["INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES('d1', 'utimens', x'66', 1, 'planned')"], "query": "SELECT kind FROM ops WHERE id = 8", "rows": [["utimens"]]},
     {"note": "ops.kind chmod", "sql": ["INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES('d1', 'chmod', x'66', 1, 'planned')"], "query": "SELECT kind FROM ops WHERE id = 8", "rows": [["chmod"]]},
     {"note": "ops.kind chown", "sql": ["INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES('d1', 'chown', x'66', 1, 'planned')"], "query": "SELECT kind FROM ops WHERE id = 8", "rows": [["chown"]]},
+    {"note": "ops.kind xattr", "sql": ["INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES('d1', 'xattr', x'66', 1, 'planned')"], "query": "SELECT kind FROM ops WHERE id = 8", "rows": [["xattr"]]},
     {"note": "ops.kind link", "sql": ["INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES('d1', 'link', x'66', 1, 'planned')"], "query": "SELECT kind FROM ops WHERE id = 8", "rows": [["link"]]},
     {"note": "ops.kind unlink", "sql": ["INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES('d1', 'unlink', x'66', 1, 'planned')"], "query": "SELECT kind FROM ops WHERE id = 8", "rows": [["unlink"]]},
     {"note": "ops.state planned", "sql": ["INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES('d1', 'create', x'66', 1, 'planned')"], "query": "SELECT state FROM ops WHERE id = 8", "rows": [["planned"]]},
@@ -301,6 +302,9 @@
     {"note": "view_ops: a hard link without its new name is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('link', 'd1', x'66', NULL, 0, '12', NULL, 'planned', 5)"], "error": true},
     {"note": "view_ops: a hard link without the inode it links is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('link', 'd1', x'66', x'67', 0, NULL, NULL, 'planned', 5)"], "error": true},
     {"note": "view_ops: a hard link of a folder is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('link', 'd1', x'66', x'67', 1, '12', NULL, 'planned', 5)"], "error": true},
+    {"note": "view_ops: an extended attribute of a file names its inode", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('xattr', 'd1', x'66', NULL, 0, '12', NULL, 'planned', 5)"], "query": "SELECT kind, folder, file_key FROM view_ops", "rows": [["xattr", 0, "12"]]},
+    {"note": "view_ops: an extended attribute of a folder", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('xattr', 'd1', x'66', NULL, 1, NULL, NULL, 'done', 5)"], "query": "SELECT kind, folder FROM view_ops", "rows": [["xattr", 1]]},
+    {"note": "view_ops: an extended attribute of a file without its inode is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('xattr', 'd1', x'66', NULL, 0, NULL, NULL, 'planned', 5)"], "error": true},
     {"note": "view_ops: an unknown state is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('create', 'd1', x'66', NULL, 0, NULL, 'taken', 5)"], "error": true}
   ]
 }

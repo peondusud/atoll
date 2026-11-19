@@ -100,6 +100,15 @@
             }
           },
           {
+            "if": { "properties": { "kind": { "const": "xattr" } } },
+            "then": {
+              "description": "The user. extended attributes Atoll's own view changed on one copy, given to another (specs.md §21.2): disk is the copy given, source the disk of the copy changed; kept when its filesystem refuses one, disk-unavailable when its disk cannot be written now.",
+              "required": ["source"],
+              "properties": { "outcome": { "enum": ["applied", "kept", "changed", "io-error", "disk-unavailable"] } },
+              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["reason"] }] }
+            }
+          },
+          {
             "if": { "properties": { "kind": { "const": "replicate" } } },
             "then": {
               "description": "A copy (specs.md §14.1): disk is its target.",
@@ -119,7 +128,7 @@
         ],
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["chown", "chmod", "utimens", "rename", "folder", "trash", "replicate", "transfer"] },
+          "kind": { "enum": ["chown", "chmod", "utimens", "xattr", "rename", "folder", "trash", "replicate", "transfer"] },
           "path": { "type": "string" },
           "path_b64": { "type": "string" },
           "to": { "type": "string" },

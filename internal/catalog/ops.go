@@ -69,6 +69,8 @@ type eventData struct {
 	GID    *int64  `json:"gid,omitempty"`
 	// Link is the file whose link in <workdir>/links/ went to the trash (specs.md §17).
 	Link int64 `json:"link,omitempty"`
+	// Names holds the extended attributes a copy was made without, in byte order (specs.md §14).
+	Names []string `json:"names,omitempty"`
 }
 
 // writeEvent writes an event, in the transaction of the operation it speaks of, so before it runs.

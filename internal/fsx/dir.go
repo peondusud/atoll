@@ -127,6 +127,13 @@ type Dir interface {
 	// owner, the symbolic link itself and not what it leads to. Only Atoll's own view makes one, on a user's behalf.
 	Symlink(target, name string) error
 	Lchown(name string, uid, gid uint32) error
+	// Xattrs gives the extended attributes of a name itself, a symbolic link's included, whose names begin with
+	// namespace, with their values: none where its filesystem holds none. SetXattr sets one, with the flags of
+	// setxattr(2), and RemoveXattr removes one, as lsetxattr and lremovexattr do: what Atoll's own view writes on a
+	// user's behalf (specs.md §21.2).
+	Xattrs(name, namespace string) (map[string][]byte, error)
+	SetXattr(name, attr string, value []byte, flags int) error
+	RemoveXattr(name, attr string) error
 	Close() error
 }
 
@@ -146,6 +153,11 @@ type File interface {
 	// DropCache asks the kernel to forget the file's clean pages, so that the next read comes from the disk: the
 	// scrub's second read of a chunk that did not match (specs.md §16).
 	DropCache() error
+	// Xattrs, SetXattr and RemoveXattr are the extended attributes of the file, as those of a folder's name are: the
+	// user. attributes the copy pipeline reads from a source, and a pass gives a copy (specs.md §14, §21.2).
+	Xattrs(namespace string) (map[string][]byte, error)
+	SetXattr(attr string, value []byte, flags int) error
+	RemoveXattr(attr string) error
 	Close() error
 }
 
@@ -167,6 +179,11 @@ type WritableFile interface {
 	// DropCache asks the kernel to forget the file's pages, so that the next read comes from the disk,
 	// as a verification needs (specs.md §14, step 5). Only clean pages go: sync first.
 	DropCache() error
+	// Xattrs, SetXattr and RemoveXattr are the extended attributes of the file: those a copy in progress takes from
+	// its source (specs.md §14, step 4).
+	Xattrs(namespace string) (map[string][]byte, error)
+	SetXattr(attr string, value []byte, flags int) error
+	RemoveXattr(attr string) error
 	Close() error
 }
 

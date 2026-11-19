@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
@@ -11,8 +12,9 @@ import (
 
 // What a pass makes of the operations of Atoll's own view (specs.md §21.2): it waits at the paths of those under way,
 // as at an operation of its own left planned; a copy the view sent to the trash is gone by the user, which propagates
-// whatever deletes.direct says; an empty folder the view removed goes from the disks where it was not empty yet; and
-// each operation the catalog now presents as the view does is taken in.
+// whatever deletes.direct says; an empty folder the view removed goes from the disks where it was not empty yet; an
+// extended attribute it changed on a copy goes to the file's other copies; and each operation the catalog now presents
+// as the view does is taken in.
 
 // readViewOps reads the view's operations no pass has taken in.
 func (p *pass) readViewOps(ctx context.Context) error {
@@ -96,7 +98,22 @@ func (p *pass) takeInViewOps(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
-	taken, err := view.TakenIn(ctx, p.db, p.viewOps, walkedAll, settings.InView, p.lookForView)
+	// An extended attribute is taken in once the other copies of its file hold what the copy changed holds; one that
+	// waits holds back the later operations at its path, as one under way does.
+	waiting, err := p.giveXattrs(ctx)
+	if err != nil {
+		return err
+	}
+	open := p.viewOps
+	if len(waiting) > 0 {
+		open = slices.Clone(p.viewOps)
+		for i := range open {
+			if waiting[open[i].ID] {
+				open[i].State = catalog.OpPlanned
+			}
+		}
+	}
+	taken, err := view.TakenIn(ctx, p.db, open, walkedAll, settings.InView, p.lookForView)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

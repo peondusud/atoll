@@ -102,6 +102,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverUtimens(ctx, db, op, nowNS)
 	case catalog.OpChmod:
 		return d.recoverChmod(ctx, db, op, nowNS)
+	case catalog.OpXattr:
+		return d.recoverXattrs(ctx, db, op, nowNS)
 	case catalog.OpChown:
 		return d.recoverChown(ctx, db, op, nowNS)
 	case catalog.OpRepair:

@@ -244,6 +244,27 @@ func (f *faultFile) DropCache() error {
 	return f.File.DropCache()
 }
 
+func (f *faultFile) Xattrs(namespace string) (map[string][]byte, error) {
+	if err := f.fail("xattrs", f.name); err != nil {
+		return nil, err
+	}
+	return f.File.Xattrs(namespace)
+}
+
+func (f *faultFile) SetXattr(attr string, value []byte, flags int) error {
+	if err := f.fail("setxattr", f.name); err != nil {
+		return err
+	}
+	return f.File.SetXattr(attr, value, flags)
+}
+
+func (f *faultFile) RemoveXattr(attr string) error {
+	if err := f.fail("removexattr", f.name); err != nil {
+		return err
+	}
+	return f.File.RemoveXattr(attr)
+}
+
 type faultWritable struct {
 	WritableFile
 	name string
@@ -318,4 +339,46 @@ func (f *faultWritable) DropCache() error {
 		return err
 	}
 	return f.WritableFile.DropCache()
+}
+
+func (f *faultWritable) Xattrs(namespace string) (map[string][]byte, error) {
+	if err := f.fail("xattrs", f.name); err != nil {
+		return nil, err
+	}
+	return f.WritableFile.Xattrs(namespace)
+}
+
+func (f *faultWritable) SetXattr(attr string, value []byte, flags int) error {
+	if err := f.fail("setxattr", f.name); err != nil {
+		return err
+	}
+	return f.WritableFile.SetXattr(attr, value, flags)
+}
+
+func (f *faultWritable) RemoveXattr(attr string) error {
+	if err := f.fail("removexattr", f.name); err != nil {
+		return err
+	}
+	return f.WritableFile.RemoveXattr(attr)
+}
+
+func (d *faultDir) Xattrs(name, namespace string) (map[string][]byte, error) {
+	if err := d.fail("xattrs", name); err != nil {
+		return nil, err
+	}
+	return d.Dir.Xattrs(name, namespace)
+}
+
+func (d *faultDir) SetXattr(name, attr string, value []byte, flags int) error {
+	if err := d.fail("setxattr", name); err != nil {
+		return err
+	}
+	return d.Dir.SetXattr(name, attr, value, flags)
+}
+
+func (d *faultDir) RemoveXattr(name, attr string) error {
+	if err := d.fail("removexattr", name); err != nil {
+		return err
+	}
+	return d.Dir.RemoveXattr(name, attr)
 }

@@ -11,6 +11,8 @@ const (
 	OpMkdir   = "mkdir"
 	OpSymlink = "symlink"
 	OpWrite   = "write"
+	// OpXattr is an extended attribute set or removed: what its disk holds at the path is presented, as for a write.
+	OpXattr   = "xattr"
 	OpRename  = "rename"
 	OpReplace = "replace"
 	// OpLink is a hard link: Path the name it was made from, Path2 the new name, on one disk (specs.md §21.2).
@@ -56,7 +58,7 @@ func at(path, p string) bool {
 }
 
 // Resolve says what a path resolves to, the view's own operations given oldest first, the newest deciding: a path
-// made, written, renamed or hard-linked to presents what its disk holds there, the name a hard link was made from
+// made, written, given an extended attribute, renamed or hard-linked to presents what its disk holds there, the name a hard link was made from
 // staying as it was; one deleted, removed, replaced or renamed from, or below a folder removed or renamed from,
 // presents nothing; any other, the catalog's rows, below a folder renamed at its old name (specs.md §21.2). A folder is
 // renamed on every disk that holds it, so a disk always holds a path at the path the view presents it at.
@@ -66,7 +68,7 @@ func Resolve(ops []Op, path string) Source {
 	for i := len(ops) - 1; i >= 0; i-- {
 		o := &ops[i]
 		switch o.Kind {
-		case OpCreate, OpMkdir, OpSymlink, OpWrite:
+		case OpCreate, OpMkdir, OpSymlink, OpWrite, OpXattr:
 			if q == o.Path {
 				return Source{Kind: FromDisk, Disk: o.Disk}
 			}
@@ -125,7 +127,7 @@ func ListOf(ops []Op, dir string) Listing {
 	for k := range ops {
 		var target string
 		switch o := &ops[k]; o.Kind {
-		case OpCreate, OpMkdir, OpSymlink, OpWrite:
+		case OpCreate, OpMkdir, OpSymlink, OpWrite, OpXattr:
 			target = o.Path
 		case OpRename, OpReplace, OpLink:
 			target = o.Path2

@@ -51,6 +51,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `touch` | `disk`, a path, `mtime_ns` | sets a modification time |
 | `chmod` | `disk`, a path, `mode` | sets a file's mode, written in octal digits with a leading 0, as `"0640"`: the permission bits, setuid, setgid and sticky |
 | `chown` | `disk`, a path, `uid`, `gid` | gives a file an owner, both ids from 0 to 4294967294: only in a scenario with `root` |
+| `setxattr` | `disk`, a path, `name`, `text` | gives a file an extended attribute of the `user.` namespace, `name` with the value `text`, as `setfattr` does |
 | `advance` | `by` | moves the clock forward, by a duration of `specs.md` §29.5 |
 | `config` | `text` | rewrites the configuration with that text, `${SANDBOX}` replaced as in `config`, for the steps after it, as a user who edits it would. Only in a scenario with a `config` |
 | `tick` | | waits until the real clock behind a change time has moved, which it may not do within a clock tick (`specs.md` §17.1). `advance` moves another clock |
@@ -67,7 +68,7 @@ A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the to
 
 **`expect_tree`** covers the whole disk. An entry has a path and a `kind`: `file`, when left out, `dir` or `symlink`.
 
-- A file has its content: `text`, a string, or `size`, which means that many bytes of `i mod 251`, the pattern of the official BLAKE3 test vectors. `mtime_ns`, `mode`, written as for `chmod`, and `uid` and `gid`, both or neither, as for `chown`, are compared when given. In a disk's `tree`, they are set.
+- A file has its content: `text`, a string, or `size`, which means that many bytes of `i mod 251`, the pattern of the official BLAKE3 test vectors. `mtime_ns`, `mode`, written as for `chmod`, `uid` and `gid`, both or neither, as for `chown`, and `xattrs`, a list of the file's extended attributes of the `user.` namespace, each a `name` and its `text`, the whole set, are compared when given. In a disk's `tree`, they are set.
 - A symlink has its `target`.
 - The folders on the way to a listed entry need no entry, and an empty folder must have one.
 - A component that is exactly `*` matches any one name, for an operation's id in `Atoll/trash/<date>/<op-id>/…`.

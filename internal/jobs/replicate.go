@@ -20,6 +20,7 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -295,7 +296,15 @@ func (r *replicator) run(ctx context.Context, job *catalog.ReplicateJob) (string
 	}
 	moved, err := c.copy(ctx, resume)
 	if err == nil {
-		return r.commit(ctx, job, op, moved)
+		outcome, err := r.commit(ctx, job, op, moved)
+		if err == nil && len(c.refused) > 0 {
+			// The copy is made all the same: what its filesystem refused is said, never made stale (specs.md §14).
+			slog.Warn("a copy keeps no extended attribute its filesystem refuses", "disk", op.Disk, "path", job.Path, "names", c.refused)
+			if err := catalog.WriteXattrKept(ctx, r.db, op, c.refused, r.machine.Now()); err != nil {
+				return "", fmt.Errorf("catalog: %w", err)
+			}
+		}
+		return outcome, err
 	}
 	var dropped *errDropped
 	switch {
@@ -427,6 +436,8 @@ type copier struct {
 	src  *ops.Disk
 	row  *catalog.KnownCopy
 	hash []byte
+	// refused holds the extended attributes of the source the target's filesystem refused, in byte order.
+	refused []string
 }
 
 // copy runs the steps of specs.md §14.2 up to the copy at its name. An *errDropped is a copy dropped, the
@@ -461,7 +472,11 @@ func (c *copier) copy(ctx context.Context, resume bool) (*ops.Moved, error) {
 	case !still:
 		return nil, c.drop(ctx, trash.OutcomeChanged, true)
 	}
-	if err := c.restore(part, &read); err != nil {
+	attrs, err := source.Xattrs(fsx.UserNamespace)
+	if err != nil {
+		return nil, c.sourceFailed(ctx, err)
+	}
+	if err := c.restore(part, &read, attrs); err != nil {
 		return nil, err
 	}
 	whole, err := c.verify(ctx, part, read.Size)
@@ -595,8 +610,10 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 }
 
 // restore gives the part the source's times and attributes, never its creation time, and syncs it
-// (specs.md §14, step 4). What the target's filesystem cannot hold is clamped, and read back at the end.
-func (c *copier) restore(part *ops.Part, read *fsx.Stat) error {
+// (specs.md §14, step 4). What the target's filesystem cannot hold is clamped, and read back at the end. The user.
+// extended attributes it is given are the source's, attrs; one the target's filesystem refuses is left out and noted,
+// and the copy is made all the same.
+func (c *copier) restore(part *ops.Part, read *fsx.Stat, attrs map[string][]byte) error {
 	if err := part.SetTimes(fsx.OmitTime, read.Mtime); err != nil {
 		return classifyDisk(err)
 	}
@@ -614,8 +631,39 @@ func (c *copier) restore(part *ops.Part, read *fsx.Stat) error {
 	if err := part.SetMode(mode); err != nil {
 		return classifyDisk(err)
 	}
+	if err := c.giveXattrs(part, attrs); err != nil {
+		return err
+	}
 	if err := part.Sync(); err != nil {
 		return fmt.Errorf("%w: %w", ops.ErrDiskLost, err)
+	}
+	return nil
+}
+
+// giveXattrs gives the part the source's user. extended attributes, and takes off any other it holds, as a part
+// resumed may hold those of an earlier try (specs.md §14). What its filesystem refuses is left out, and noted.
+func (c *copier) giveXattrs(part *ops.Part, attrs map[string][]byte) error {
+	have, err := part.Xattrs(fsx.UserNamespace)
+	if err != nil {
+		return classifyDisk(err)
+	}
+	plan := solver.PlanXattrs(attrs, have)
+	c.refused = nil
+	for _, name := range plan.Remove {
+		if err := part.RemoveXattr(name); err != nil && !fsx.IsNoXattr(err) && !fsx.IsXattrRefused(err) {
+			return classifyDisk(err)
+		}
+	}
+	for _, name := range plan.Set {
+		switch err := part.SetXattr(name, attrs[name], 0); {
+		case err == nil:
+		case fsx.IsDiskLost(err):
+			return classifyDisk(err)
+		case fsx.IsXattrRefused(err):
+			c.refused = append(c.refused, name)
+		default:
+			return classifyDisk(err)
+		}
 	}
 	return nil
 }

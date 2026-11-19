@@ -425,6 +425,102 @@ func TestWriterLinks(t *testing.T) {
 	}
 }
 
+// xattrsOn gives the user. extended attributes of a path on a disk, and skips a test on a filesystem that keeps none.
+func (b *bench) xattrsOn(disk, path string) map[string]string {
+	b.t.Helper()
+	full := filepath.Join(b.mount[disk], "media", path)
+	size, err := syscall.Listxattr(full, nil)
+	if errors.Is(err, syscall.ENOTSUP) {
+		b.t.Skip("this filesystem keeps no extended attribute")
+	}
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	list := make([]byte, size)
+	if size, err = syscall.Listxattr(full, list); err != nil {
+		b.t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, name := range strings.Split(string(list[:size]), "\x00") {
+		if !strings.HasPrefix(name, "user.") {
+			continue
+		}
+		value := make([]byte, 1024)
+		n, err := syscall.Getxattr(full, name, value)
+		if err != nil {
+			b.t.Fatal(err)
+		}
+		out[name] = string(value[:n])
+	}
+	return out
+}
+
+// Extended attributes through the view (specs.md §21.2): of the user. namespace alone, set and removed on the copy a
+// file is presented from, its original, alone, and on every disk that holds a folder, each journaled; read from what
+// the view presents; what the disk answers of one passes as it is; a symbolic link and the root take none.
+func TestWriterXattrs(t *testing.T) {
+	b := newBench(t, "ext4")
+	ctx := t.Context()
+	_ = b.xattrsOn("t2", "Films/a.mkv")
+	n := b.lookup("Films/a.mkv")
+	if n.Disk != "t2" {
+		t.Fatalf("the original: %+v", n)
+	}
+	if err := b.w.SetXattr(ctx, "Films/a.mkv", n, "user.DOSATTRIB", []byte("0x20"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.xattrsOn("t2", "Films/a.mkv"); got["user.DOSATTRIB"] != "0x20" || len(b.xattrsOn("t1", "Films/a.mkv")) != 0 {
+		t.Errorf("t2 %v, t1 %v: set on the original alone", got, b.xattrsOn("t1", "Films/a.mkv"))
+	}
+	attrs, err := b.tree.Xattrs("Films/a.mkv", b.lookup("Films/a.mkv"))
+	if err != nil || string(attrs["user.DOSATTRIB"]) != "0x20" || len(attrs) != 1 {
+		t.Errorf("read back: %v, %v", attrs, err)
+	}
+	open, err := catalog.OpenViewOps(ctx, b.w.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := open[len(open)-1]
+	if last.Kind != catalog.ViewXattr || last.Disk != "t2" || last.Path != "Films/a.mkv" || last.State != catalog.OpDone ||
+		last.FileKey != fmt.Sprintf("%d", b.inode("t2", "Films/a.mkv")) {
+		t.Errorf("the journal: %+v", last)
+	}
+	if err := b.w.SetXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB", []byte("0x21"), fsx.XattrCreate); !errors.Is(err, syscall.EEXIST) {
+		t.Errorf("created twice: %v, want EEXIST as the disk answers", err)
+	}
+	if err := b.w.RemoveXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB"); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.xattrsOn("t2", "Films/a.mkv"); len(got) != 0 {
+		t.Errorf("removed: %v", got)
+	}
+	if err := b.w.RemoveXattr(ctx, "Films/a.mkv", b.lookup("Films/a.mkv"), "user.DOSATTRIB"); !errors.Is(err, syscall.ENODATA) {
+		t.Errorf("removed twice: %v, want ENODATA", err)
+	}
+
+	// A folder the catalog holds on both disks takes it on each.
+	if err := b.w.SetXattr(ctx, "Films", b.lookup("Films"), "user.DOSATTRIB", []byte("0x10"), 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, disk := range []string{"t1", "t2"} {
+		if got := b.xattrsOn(disk, "Films"); got["user.DOSATTRIB"] != "0x10" {
+			t.Errorf("the folder on %s: %v", disk, got)
+		}
+	}
+	if _, err := b.w.Symlink(ctx, "Films/l", "a.mkv", Owner{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.w.SetXattr(ctx, "Films/l", b.lookup("Films/l"), "user.x", []byte("1"), 0); !errors.Is(err, ErrXattrOnLink) {
+		t.Errorf("a symbolic link: %v", err)
+	}
+	if err := b.w.SetXattr(ctx, "", b.tree.Root(), "user.x", []byte("1"), 0); !errors.Is(err, ErrXattrOfRoot) {
+		t.Errorf("the root: %v", err)
+	}
+	if attrs, err := b.tree.Xattrs("", b.tree.Root()); err != nil || len(attrs) != 0 {
+		t.Errorf("the root presents %v, %v", attrs, err)
+	}
+}
+
 // A hard link left planned is done when its new name leads to the file it linked, and undone otherwise (specs.md §21.2).
 func TestWriterRepriseOfALink(t *testing.T) {
 	b := newBench(t, "ext4")

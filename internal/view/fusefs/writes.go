@@ -13,6 +13,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/view"
 	"github.com/peondusud/atoll/internal/view/writer"
 )
@@ -30,6 +31,8 @@ var (
 	_ fs.NodeLinker        = (*node)(nil)
 	_ fs.NodeSetxattrer    = (*node)(nil)
 	_ fs.NodeRemovexattrer = (*node)(nil)
+	_ fs.NodeGetxattrer    = (*node)(nil)
+	_ fs.NodeListxattrer   = (*node)(nil)
 )
 
 // errnoOf says what a failed write answers. What says the disk cannot be relied on, or the catalog cannot be read, is
@@ -57,6 +60,10 @@ func errnoOf(what, p string, err error) syscall.Errno {
 		return syscall.ENOSPC
 	case errors.Is(err, writer.ErrNoHandle):
 		return syscall.EROFS
+	case errors.Is(err, writer.ErrXattrOnLink):
+		return syscall.EPERM
+	case errors.Is(err, writer.ErrXattrOfRoot):
+		return syscall.ENOTSUP
 	case errors.Is(err, ops.ErrDiskLost), errors.Is(err, view.ErrUnreadable):
 		return failed(what, p, err)
 	case errors.As(err, &errno):
@@ -177,12 +184,92 @@ func (n *node) Link(ctx context.Context, target fs.InodeEmbedder, name string, o
 	return n.child(ctx, to, v), 0
 }
 
-// Setxattr and Removexattr are refused: the view keeps no extended attribute (specs.md §21.2).
-func (n *node) Setxattr(context.Context, string, []byte, uint32) syscall.Errno {
-	return syscall.ENOTSUP
+// Setxattr sets an extended attribute of the user. namespace, on the copy the view presents, or on every disk that holds
+// a folder (specs.md §21.2); any other namespace, security., trusted. or system., ACLs among them, answers ENOTSUP, as a
+// filesystem that keeps none of them does, and so does the root.
+func (n *node) Setxattr(ctx context.Context, attr string, data []byte, flags uint32) syscall.Errno {
+	if n.w == nil {
+		return syscall.EROFS
+	}
+	if !solver.KeptXattr(attr) {
+		return syscall.ENOTSUP
+	}
+	p := n.logical()
+	v, errno := n.lookup(ctx, p)
+	if errno != 0 {
+		return errno
+	}
+	return errnoOf("the view cannot set an extended attribute", p, n.w.SetXattr(whole(ctx), p, v, attr, data, int(flags)))
 }
 
-func (n *node) Removexattr(context.Context, string) syscall.Errno { return syscall.ENOTSUP }
+// Removexattr removes an extended attribute of the user. namespace, as Setxattr sets one.
+func (n *node) Removexattr(ctx context.Context, attr string) syscall.Errno {
+	if n.w == nil {
+		return syscall.EROFS
+	}
+	if !solver.KeptXattr(attr) {
+		return syscall.ENOTSUP
+	}
+	p := n.logical()
+	v, errno := n.lookup(ctx, p)
+	if errno != 0 {
+		return errno
+	}
+	return errnoOf("the view cannot remove an extended attribute", p, n.w.RemoveXattr(whole(ctx), p, v, attr))
+}
+
+// Getxattr gives an extended attribute of the user. namespace from the copy or the entry the view presents, on its disk
+// alone; of any other namespace it holds none, ENODATA, as a filesystem that keeps none of them answers. A read
+// only view answers as one that writes (specs.md §21.2).
+func (n *node) Getxattr(ctx context.Context, attr string, dest []byte) (uint32, syscall.Errno) {
+	if !solver.KeptXattr(attr) {
+		return 0, syscall.ENODATA
+	}
+	attrs, errno := n.xattrs(ctx)
+	if errno != 0 {
+		return 0, errno
+	}
+	value, ok := attrs[attr]
+	switch {
+	case !ok:
+		return 0, syscall.ENODATA
+	case len(dest) < len(value):
+		return uint32(len(value)), syscall.ERANGE //nolint:gosec // a value is at most 64 KiB
+	}
+	return uint32(copy(dest, value)), 0 //nolint:gosec // a value is at most 64 KiB
+}
+
+// Listxattr lists the extended attributes of the user. namespace Getxattr gives, in byte order, each name ended by a NUL.
+func (n *node) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errno) {
+	attrs, errno := n.xattrs(ctx)
+	if errno != 0 {
+		return 0, errno
+	}
+	var list []byte
+	for _, name := range view.XattrNames(attrs) {
+		list = append(append(list, name...), 0)
+	}
+	if len(dest) < len(list) {
+		return uint32(len(list)), syscall.ERANGE //nolint:gosec // a list is at most 64 KiB
+	}
+	return uint32(copy(dest, list)), 0 //nolint:gosec // a list is at most 64 KiB
+}
+
+func (n *node) xattrs(ctx context.Context) (map[string][]byte, syscall.Errno) {
+	p := n.logical()
+	v, errno := n.lookup(ctx, p)
+	if errno != 0 {
+		return nil, errno
+	}
+	attrs, err := n.tree.Xattrs(p, v)
+	switch {
+	case err == nil:
+		return attrs, 0
+	case fsx.IsAbsent(err):
+		return nil, syscall.ENOENT
+	}
+	return nil, failed("the view cannot read extended attributes", p, err)
+}
 
 func (n *node) Setattr(ctx context.Context, _ fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	if n.w == nil {

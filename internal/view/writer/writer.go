@@ -77,6 +77,9 @@ func New(db *sql.DB, c *config.Config, m disks.Machine, tree *view.Tree, handles
 	return &Writer{db: db, config: c, machine: m, tree: tree, handles: handles, retention: retention, minFree: minFree, log: log}, nil
 }
 
+// Tree gives what the writer looks at what the view presents through.
+func (w *Writer) Tree() *view.Tree { return w.tree }
+
 // File is a file the view opened for writing.
 type File struct {
 	fsx.WritableFile
@@ -584,6 +587,82 @@ func (w *Writer) Link(ctx context.Context, from, to string) (*view.Node, error) 
 		return nil, err
 	}
 	return view.NodeOfStat(n.Disk, &made, ""), nil
+}
+
+// ErrXattrOnLink says that a symbolic link takes no extended attribute of the user. namespace, as Linux answers.
+var ErrXattrOnLink = errors.New("a symbolic link takes no user. attribute")
+
+// ErrXattrOfRoot says that the view keeps no extended attribute of its root, which stands for every disk's.
+var ErrXattrOfRoot = errors.New("the view keeps no attribute of its root")
+
+// SetXattr sets an extended attribute of the user. namespace on what a path presents, on a user's behalf, with the flags
+// of setxattr(2) (specs.md §21.2): a file's on the copy it is presented from, its original, alone, a folder's on every
+// disk that holds it. The pass that takes it in gives the file's other copies the same set. What the disk answers of
+// the attribute, as EEXIST, ENODATA, ENOTSUP or E2BIG, passes as it is.
+func (w *Writer) SetXattr(ctx context.Context, path string, n *view.Node, attr string, value []byte, flags int) error {
+	return w.changeXattr(ctx, path, n, func(d *ops.Disk) error { return d.SetUserXattr(path, attr, value, flags) })
+}
+
+// RemoveXattr removes an extended attribute of the user. namespace from what a path presents, as SetXattr sets one.
+func (w *Writer) RemoveXattr(ctx context.Context, path string, n *view.Node, attr string) error {
+	return w.changeXattr(ctx, path, n, func(d *ops.Disk) error { return d.RemoveUserXattr(path, attr) })
+}
+
+func (w *Writer) changeXattr(ctx context.Context, path string, n *view.Node, change func(*ops.Disk) error) error {
+	switch {
+	case path == "":
+		return ErrXattrOfRoot
+	case n.Kind == view.NodeSymlink:
+		return ErrXattrOnLink
+	}
+	targets := []string{n.Disk}
+	if n.Kind == view.NodeDir {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		holders, err := w.folderHolders(ctx, path)
+		if err != nil {
+			return err
+		}
+		targets = holders
+	}
+	if len(targets) == 0 {
+		return ErrNotFound
+	}
+	v := &catalog.ViewOp{Kind: catalog.ViewXattr, Disk: targets[0], Path: path, Folder: n.Kind == view.NodeDir}
+	if n.Kind != view.NodeDir {
+		// The file is found by its inode on that disk when a pass gives its other copies its attributes, wherever a
+		// rename took it since.
+		err := w.handles.Use(n.Disk, func(d *ops.Disk) error {
+			st, found, err := d.StatRoot(path)
+			switch {
+			case err != nil:
+				return err //nolint:wrapcheck // ops says what failed
+			case !found:
+				return ErrNotFound
+			}
+			v.FileKey = fmt.Sprintf("%d", st.Ino)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if err := w.journal(ctx, v); err != nil {
+		return err
+	}
+	var first error
+	for i, id := range targets {
+		err := w.handles.Use(id, change)
+		switch {
+		case i == 0:
+			first = err
+		case err == nil, errors.Is(err, ops.ErrGone), errors.Is(err, ErrNoHandle):
+		default:
+			// A folder's attributes are no file's: no pass takes them to a disk that missed them (specs.md §21.2).
+			w.log.Warn("a folder keeps an extended attribute on a disk", "disk", id, "path", path, "error", err)
+		}
+	}
+	return w.finish(ctx, v, first)
 }
 
 // linkMovesTimes says whether a hard link made on a disk would move its file's modification time, as the kernel's ntfs

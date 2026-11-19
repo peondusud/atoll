@@ -80,6 +80,14 @@ type entry struct {
 	// UID and GID are a file's owner, which only a scenario that needs root may give.
 	UID *int64 `json:"uid"`
 	GID *int64 `json:"gid"`
+	// Xattrs are a file's extended attributes of the user. namespace, compared as a whole set when given.
+	Xattrs []xattrEntry `json:"xattrs"`
+}
+
+// xattrEntry is one extended attribute: its name and its value, as text.
+type xattrEntry struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
 }
 
 type step struct {
@@ -102,6 +110,7 @@ type step struct {
 	UID        *int64            `json:"uid"`
 	GID        *int64            `json:"gid"`
 	By         string            `json:"by"`
+	Name       *string           `json:"name"`
 	Tree       []entry           `json:"tree"`
 	Query      string            `json:"query"`
 	Rows       json.RawMessage   `json:"rows"`
@@ -126,6 +135,8 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "path", "path_b64", "mode"}, true
 	case "chown":
 		return []string{"disk", "path", "path_b64", "uid", "gid"}, true
+	case "setxattr":
+		return []string{"disk", "path", "path_b64", "name", "text"}, true
 	case "advance":
 		return []string{"by"}, true
 	case "config":
@@ -593,6 +604,11 @@ func (b *sandbox) fileStep(s *step) error {
 		return os.Chmod(full, mode)
 	case "chown":
 		return os.Lchown(full, int(*s.UID), int(*s.GID))
+	case "setxattr":
+		if s.Name == nil || s.Text == nil {
+			return errors.New("setxattr: want a name and a text")
+		}
+		return setXattr(full, *s.Name, *s.Text)
 	default: // touch
 		when := time.Unix(0, *s.MtimeNS)
 		return os.Chtimes(full, when, when)
@@ -986,11 +1002,62 @@ func writeEntry(root, rel string, e *entry) error {
 			return err
 		}
 	}
+	for _, x := range e.Xattrs {
+		if err := setXattr(full, x.Name, x.Text); err != nil {
+			return err
+		}
+	}
 	if e.MtimeNS == nil {
 		return nil
 	}
 	when := time.Unix(0, *e.MtimeNS)
 	return os.Chtimes(full, when, when)
+}
+
+// xattrNamespace is the namespace of the extended attributes a scenario gives and compares (specs.md §14, §21.2).
+const xattrNamespace = "user."
+
+// setXattr gives a file an extended attribute of the user. namespace, as setfattr does.
+func setXattr(full, name, text string) error {
+	if !strings.HasPrefix(name, xattrNamespace) {
+		return fmt.Errorf("setxattr %q: only the %s namespace", name, xattrNamespace)
+	}
+	if err := syscall.Setxattr(full, name, []byte(text), 0); err != nil {
+		return fmt.Errorf("setxattr %q: %w", name, err)
+	}
+	return nil
+}
+
+// userXattrs reads the extended attributes of the user. namespace of a file, as getfattr does; none where its
+// filesystem holds none.
+func userXattrs(full string) (map[string]string, error) {
+	out := map[string]string{}
+	size, err := syscall.Listxattr(full, nil)
+	switch {
+	case errors.Is(err, syscall.ENOTSUP):
+		return out, nil
+	case err != nil:
+		return nil, fmt.Errorf("listxattr: %w", err)
+	}
+	list := make([]byte, size)
+	if size, err = syscall.Listxattr(full, list); err != nil {
+		return nil, fmt.Errorf("listxattr: %w", err)
+	}
+	for _, name := range strings.Split(string(list[:size]), "\x00") {
+		if !strings.HasPrefix(name, xattrNamespace) {
+			continue
+		}
+		n, err := syscall.Getxattr(full, name, nil)
+		if err != nil {
+			return nil, fmt.Errorf("getxattr %q: %w", name, err)
+		}
+		value := make([]byte, n)
+		if n, err = syscall.Getxattr(full, name, value); err != nil {
+			return nil, fmt.Errorf("getxattr %q: %w", name, err)
+		}
+		out[name] = string(value[:n])
+	}
+	return out, nil
 }
 
 // found is what is on a disk at a path.
@@ -1002,7 +1069,8 @@ type found struct {
 	mode    uint32 // for a file: the permission bits, setuid, setgid and sticky
 	uid     int64  // for a file
 	gid     int64
-	empty   bool // for a folder
+	empty   bool              // for a folder
+	xattrs  map[string]string // for a file: its extended attributes of the user. namespace
 }
 
 // listTree reads a whole disk, by path relative to its top.
@@ -1044,6 +1112,9 @@ func listTree(root string) (map[string]*found, error) {
 			f := &found{kind: "file", content: content, mtimeNS: info.ModTime().UnixNano(), mode: modeBits(info.Mode())}
 			if st, ok := info.Sys().(*syscall.Stat_t); ok {
 				f.uid, f.gid = int64(st.Uid), int64(st.Gid)
+			}
+			if f.xattrs, err = userXattrs(full); err != nil {
+				return fmt.Errorf("%q: %w", rel, err)
 			}
 			out[rel] = f
 		default:
@@ -1148,6 +1219,15 @@ func sameEntry(e *entry, f *found) error {
 		}
 		if e.UID != nil && (f.uid != *e.UID || f.gid != *e.GID) {
 			return fmt.Errorf("owner %d:%d, want %d:%d", f.uid, f.gid, *e.UID, *e.GID)
+		}
+		if e.Xattrs != nil {
+			want := map[string]string{}
+			for _, x := range e.Xattrs {
+				want[x.Name] = x.Text
+			}
+			if !maps.Equal(f.xattrs, want) {
+				return fmt.Errorf("extended attributes %v, want %v", f.xattrs, want)
+			}
 		}
 	}
 	return nil

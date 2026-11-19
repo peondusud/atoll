@@ -14,6 +14,9 @@ const (
 	ViewMkdir   = "mkdir"
 	ViewSymlink = "symlink"
 	ViewWrite   = "write"
+	// ViewXattr is an extended attribute of the user. namespace set or removed on a user's behalf: on the disk a file is
+	// presented from, FileKey its inode, or on every disk that holds a folder (specs.md §21.2).
+	ViewXattr   = "xattr"
 	ViewRename  = "rename"
 	ViewReplace = "replace"
 	// ViewLink is a hard link the view made on one disk: Path the name it was made from, Path2 the new name, FileKey
