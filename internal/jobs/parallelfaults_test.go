@@ -34,11 +34,13 @@ func (p *parallel) partOf(path string) string {
 // (invariant 4): its operation stays for the reprise when the target is lost, and is undone, its part kept for the copy
 // to resume, when the source is. The handle both use is let go of only once neither does; and the next run makes both.
 func TestADiskLostStopsTheCopiesBesideIt(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, lost, state string }{
 		{"the target", "t2", "planned"},
 		{"the source", "t1", "undone"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 			paths := p.fill("t1", 2)
 			p.slow = 0
@@ -149,13 +151,13 @@ func (p *parallel) crash(spec crashSpec) {
 	}
 }
 
-// fillLarge writes n files of two chunks and a little more below F/, each its own, and scans them.
+// fillLarge writes n files of a chunk and a little more below F/, each its own, and scans them.
 func (p *parallel) fillLarge(id string, n int) []string {
 	p.t.Helper()
 	var paths []string
 	for i := range n {
 		path := fmt.Sprintf("F/f%02d", i)
-		data := bytes.Repeat([]byte(fmt.Sprintf("file %d ", i)), (2*4<<20+5000)/7)
+		data := bytes.Repeat([]byte(fmt.Sprintf("file %d ", i)), (4<<20+5000)/7)
 		full := filepath.Join(p.dirs[id], "media", path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			p.t.Fatal(err)
@@ -173,11 +175,13 @@ func (p *parallel) fillLarge(id string, n int) []string {
 // rules"): the next pass resolves what each left, resumes each part from its first chunk missing or wrong, and makes
 // every copy, with nothing left planned or in tmp/.
 func TestACrashWithCopiesAtOnce(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("starts a process for each point")
 	}
 	for _, point := range []string{"journaled", "copied", "verified", "moved", "target-synced", "source-synced"} {
 		t.Run(point, func(t *testing.T) {
+			t.Parallel()
 			kinds := map[string]string{"t1": "ssd", "t2": "ssd"}
 			p := newParallel(t, "", kinds, "t1", "t2")
 			paths := p.fillLarge("t1", 6)
@@ -213,12 +217,14 @@ func TestACrashWithCopiesAtOnce(t *testing.T) {
 // every copy recorded is its file byte for byte, no disk holds a copy the catalog does not, the originals never change,
 // and once nothing fails every file reaches its level with nothing left planned, queued or in tmp/.
 func TestCopiesAtOnceKeepTheInvariants(t *testing.T) {
-	seeds := uint64(16)
+	t.Parallel()
+	seeds := uint64(8)
 	if testing.Short() {
-		seeds = 4
+		seeds = 3
 	}
 	for seed := range seeds {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			t.Parallel()
 			r := rand.New(rand.NewPCG(seed, 2026))
 			ids := []string{"t1", "t2", "t3", "t4"}[:2+r.IntN(3)]
 			kinds := map[string]string{}

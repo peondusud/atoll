@@ -10,6 +10,7 @@ import (
 // A disk a copy loses is lost at once for what starts, and for the session, its handle closed, only once no copy uses it
 // any more: a handle closed under a copy could lead its next call to another file that took its number (specs.md §14).
 func TestTheSessionLetsGoOfADiskOnceNoCopyUsesIt(t *testing.T) {
+	t.Parallel()
 	p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 	p.fill("t1", 1)
 	session, err := trash.Open(t.Context(), p.db, p.config, p, true)

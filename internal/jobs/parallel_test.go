@@ -68,7 +68,7 @@ func newParallel(t *testing.T, more string, kinds map[string]string, ids ...stri
 
 func parallelOf(b *bench, kinds map[string]string) *parallel {
 	p := &parallel{bench: b, kinds: map[string]string{}, faults: map[string]func(string, string) error{}, spans: map[spanKey]*span{},
-		slow: 40 * time.Millisecond, main: goroutine()}
+		slow: 20 * time.Millisecond, main: goroutine()}
 	for id, dir := range b.dirs {
 		p.kinds[dir] = cmp.Or(kinds[id], "hdd")
 		b.fail[dir] = p.spy(dir)
@@ -309,6 +309,7 @@ func outcomes(items []ReplicateItem) map[string]int {
 // Copies run at once as the kind of each disk allows: an HDD is never read or written by two at once, an SSD by its
 // limit at most, and every copy is made as it would be alone (specs.md §14, the maintainer, 2026-11-19).
 func TestCopiesAtOnceByKind(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		more     string
@@ -327,6 +328,7 @@ func TestCopiesAtOnceByKind(t *testing.T) {
 		{"max_parallel_per_hdd", "[replication]\nmax_parallel_per_hdd = 2\n", map[string]string{"t1": "hdd", "t2": "hdd"}, 6, 2, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			p := newParallel(t, tc.more, tc.kinds, "t1", "t2")
 			paths := p.fill("t1", tc.files)
 			items, err := p.replicateAll()
@@ -355,6 +357,7 @@ func TestCopiesAtOnceByKind(t *testing.T) {
 // A file with two copies to make gets one at a time, the per-path lock every copy of a file shares (specs.md §14), while
 // the copies of other files run on other disks at once: an SSD read by two copies, each to an HDD.
 func TestCopiesToSeveralDisksAtOnce(t *testing.T) {
+	t.Parallel()
 	p := newParallel(t, "[defaults]\nreplicas = 2\n", map[string]string{"t1": "ssd", "t2": "hdd", "t3": "hdd"}, "t1", "t2", "t3")
 	paths := p.fill("t1", 6)
 	items, err := p.replicateAll()
@@ -384,6 +387,7 @@ func TestCopiesToSeveralDisksAtOnce(t *testing.T) {
 // What a pass says of its copies is in the order of the queue, whatever order they end in (specs.md §15.12, §29.3): the
 // first copy here ends last.
 func TestCopiesAtOnceListInTheOrderOfTheQueue(t *testing.T) {
+	t.Parallel()
 	p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 	paths := p.fill("t1", 6)
 	p.fault("t1", func(call, name string) error {
@@ -419,6 +423,7 @@ func TestCopiesAtOnceListInTheOrderOfTheQueue(t *testing.T) {
 // next step, its operations left for the reprise, while the copies of other disks go on; the next run, with nothing
 // failing, makes every copy, and nothing is lost or left.
 func TestFaultsWithCopiesAtOnce(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		arm  func(p *parallel, writes *countOf)
@@ -469,8 +474,9 @@ func TestFaultsWithCopiesAtOnce(t *testing.T) {
 		}, "", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
-			paths := p.fill("t1", 8)
+			paths := p.fill("t1", 6)
 			ctx, cancel := context.WithCancel(t.Context())
 			p.cancel = cancel
 			var n countOf

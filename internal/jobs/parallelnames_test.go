@@ -23,7 +23,9 @@ func waitFor(cond func() bool, most time.Duration) bool {
 // is put back once, to what it was, not to what the first copy's rename made it. Each case holds the first copy at the
 // point where the second would come in between, for a while: one copy at a time, the second never does.
 func TestCopiesAtOnceTakeTheirNamesOneAtATime(t *testing.T) {
+	t.Parallel()
 	t.Run("a folder made once", func(t *testing.T) {
+		t.Parallel()
 		p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 		paths := p.fill("t1", 2)
 		var mu sync.Mutex
@@ -64,6 +66,7 @@ func TestCopiesAtOnceTakeTheirNamesOneAtATime(t *testing.T) {
 		p.copied("t1", "t2", paths)
 	})
 	t.Run("a folder's time put back once", func(t *testing.T) {
+		t.Parallel()
 		p := newParallel(t, "", map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 		paths := p.fill("t1", 2)
 		folder := filepath.Join(p.dirs["t2"], "media", "F")
