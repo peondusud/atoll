@@ -15,6 +15,14 @@ on:
 permissions:
   contents: read
 
+# In a container job the checkout belongs to another account than root, which runs the jobs, and git refuses such a
+# repository ("dubious ownership"): go build then cannot read the commit it stamps the version from. Git takes this
+# setting from the environment as from its command line.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
 # A newer push to the same branch, or to the same pull request, cancels the run it supersedes.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
