@@ -27,6 +27,7 @@ The Go version runs on Linux, amd64 and arm64. A Rust rewrite with the same cont
 | [TODO.md](TODO.md), [DONE.md](DONE.md) | Open work, and finished work with how it was verified |
 | [LESSONS.md](LESSONS.md) | What the work taught |
 | [docs/research/](docs/research/) | The measurements behind open design decisions |
+| [docs/threat-model.md](docs/threat-model.md) | The threats to each entry point, what holds them, and the gaps left |
 | [conformance/](conformance/README.md) | Vectors and scenarios shared by the Go and Rust versions |
 | [api/](api/README.md) | The `--json` schemas of the command line |
 | [deploy/](deploy/) | A sample configuration, the systemd units, and the `.deb`'s scripts |
