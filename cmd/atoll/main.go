@@ -69,6 +69,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return usage(stderr, T("no command: atoll --help lists them"))
 	}
 	switch {
+	case args[0] == "--version":
+		// The version of the build, as atoll_build_info gives it, before any configuration is read (specs.md §25).
+		if len(args) > 1 {
+			return usage(stderr, T("--version takes nothing after it"))
+		}
+		if err := writeText(stdout, "atoll "+atollVersion()+"\n"); err != nil {
+			return failure(stderr, err)
+		}
+		return exitOK
 	case args[0] == "--help" || args[0] == "-h" || (args[0] == "help" && len(args) == 1):
 		return writeHelp("", "", stdout, stderr)
 	case args[0] == "help" && len(args) == 2:
