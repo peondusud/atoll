@@ -5,6 +5,7 @@
 - Two kernels by default: Debian 13's (Linux 6.12) and a mainline one from kernel.ubuntu.com (v7.3.1), the two the measurements of specs.md were made on.
 - Each guest boots from an initramfs made of the container's own files, with no network. Its only disks are loop images in its own memory: nothing touches a real disk.
 - The guest sets `ATOLL_QEMU=1`: a test that skips on a machine without mergerfs fails in the guest, where `run.sh` installs it.
+- Each guest runs the tests twice. The first run has a shell for PID 1, and no service manager. The second, once the first is over, has systemd for PID 1, as a machine has, and runs the tests that start `deploy/atoll.service` and `deploy/atoll-mount.service` as they are, the real `atoll` at `/usr/local/bin`, as the account `atoll`: the units' hardening is measured there (`test/loopdev/units_test.go`, `*UnderSystemd`). Those tests skip in the first run, and anywhere but in the guest, as they install the units over any of the machine. Nothing of `sysinit.target` runs, as its tmpfiles would empty `/tmp`, where the tests' disks are: `run.sh` masks it.
 - Without KVM, as on Docker Desktop, qemu emulates the processor: a whole run takes about 20 minutes, the tests about 5 of them on each kernel. With `/dev/kvm` they should take far less.
 - The exit code is the worst of the guests': 0 when every test passed, 1 when one failed, 2 when a guest did not say, a download failed or nothing was built.
 
@@ -32,6 +33,7 @@ Environment variables of the second command, passed with `-e NAME=value` (`make 
 | `KERNELS` | `debian mainline` | the kernels to boot, in that order |
 | `MAINLINE` | `v7.3.1` | the mainline version, as kernel.ubuntu.com names its folders |
 | `RUN` | every test | a `-test.run` pattern, such as `TestADeviceThatFails` |
+| `SYSTEMD_RUN` | `UnderSystemd$`, or none when `RUN` is set | the `-test.run` pattern of the second run, under systemd; empty for no second run. `RUN='^$' SYSTEMD_RUN='UnderSystemd$'` runs only the tests of the units |
 | `COUNT` | `1` | how many times each test runs |
 | `VERBOSE` | `0` | `1` lists every test as it passes, fails or is skipped |
 | `TIMEOUT` | `3000s` | the tests' own timeout, in each guest |

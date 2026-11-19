@@ -1,0 +1,16 @@
+# The unit systemd starts in the guest's second run (init, units): the tests of deploy/'s units, as root, on the
+# console. Nothing of sysinit.target, which run.sh masks: its tmpfiles would empty /tmp, where the tests' disks are.
+[Unit]
+Description=test/loopdev under systemd
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/opt/atoll/units
+TimeoutStartSec=infinity
+StandardInput=null
+StandardOutput=tty
+StandardError=inherit
+TTYPath=/dev/console
+TTYReset=no
+TTYVHangup=no

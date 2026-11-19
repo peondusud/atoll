@@ -1,6 +1,6 @@
 #!/bin/bash
 # PID 1 of the qemu guest that run.sh boots: the least a kernel needs, the tests of test/loopdev from
-# their own folder, a line that says how they ended, and off.
+# their own folder, a line that says how they ended, and off; or, when run.sh asks for a second run, systemd.
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 mkdir -p /proc /sys /dev /tmp /run
 mount -t proc proc /proc
@@ -20,7 +20,17 @@ echo "kernel: $(uname -r)"
 export ATOLL_QEMU=1
 mapfile -t args </opt/atoll/args
 cd /opt/atoll/repo/test/loopdev && /opt/atoll/loopdev.test "${args[@]}"
-echo "ATOLL-QEMU-EXIT=$?"
+code=$?
+if [ -s /opt/atoll/units-args ]; then
+	# The second run: systemd as PID 1, as on a machine, for the tests that start deploy/'s units as they are. Its
+	# atoll-qemu-units.service runs them, says how both runs ended, and turns the guest off.
+	echo "$code" >/opt/atoll/first-exit
+	echo "ATOLL-QEMU-FIRST=$code"
+	cd / || exit 1
+	SYSTEMD_IN_INITRD=0 exec /usr/lib/systemd/systemd --unit=atoll-qemu-units.service --log-target=console \
+		--log-level=warning --show-status=no
+fi
+echo "ATOLL-QEMU-EXIT=$code"
 sync
 echo o >/proc/sysrq-trigger
 sleep 10

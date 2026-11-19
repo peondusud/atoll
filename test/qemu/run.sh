@@ -40,9 +40,12 @@ fi
 echo "installing the guest's tools and Debian's kernel"
 "${apt[@]}" update >/dev/null || exit 2
 # What the tests call, and what makes the initramfs. The kernel's package brings its modules. mergerfs brings
-# mount.mergerfs, which the break-glass test mounts through, as a boot would; iproute2 the loopback the init brings up.
+# mount.mergerfs, which the break-glass test mounts through, as a boot would; iproute2 the loopback the init brings up;
+# systemd, PID 1 of the second run, smartmontools, whose smartctl the daemon runs there, and fdisk, whose sfdisk
+# partitions a SCSI disk there.
 "${apt[@]}" install -y --no-install-recommends linux-image-amd64 ntfs-3g e2fsprogs xfsprogs btrfs-progs \
-	util-linux dmsetup procps kmod cpio curl ca-certificates zstd mergerfs iproute2 >/dev/null || exit 2
+	util-linux dmsetup procps kmod cpio curl ca-certificates zstd mergerfs iproute2 systemd smartmontools \
+	fdisk >/dev/null || exit 2
 versions=(/usr/lib/modules/*)
 debian_version=${versions[0]##*/}
 echo "debian kernel: $debian_version"
@@ -98,9 +101,31 @@ done
 cp "$here/init" /init && chmod +x /init
 mkdir -p /opt/atoll && cp "$built/loopdev.test" /opt/atoll/ && cp -r "$built/repo" /opt/atoll/repo || exit 2
 mkdir -p /opt/atoll/repo/test/loopdev
-args=(-test.count="${COUNT:-1}" -test.timeout="${TIMEOUT:-3000s}")
+# atoll where deploy/'s units start it, for the second run.
+if [ -x "$built/atoll" ]; then
+	cp "$built/atoll" /usr/local/bin/atoll || exit 2
+fi
+common=(-test.count="${COUNT:-1}" -test.timeout="${TIMEOUT:-3000s}")
+[ "${VERBOSE:-0}" = 1 ] && common+=(-test.v)
+args=("${common[@]}")
 [ -n "${RUN:-}" ] && args+=(-test.run="$RUN")
-[ "${VERBOSE:-0}" = 1 ] && args+=(-test.v)
+# The second run, under systemd as PID 1: the tests SYSTEMD_RUN names, those of deploy/'s units by default when RUN
+# names none; when RUN names some, only those SYSTEMD_RUN names; none when it is empty.
+units_default='UnderSystemd$'
+if [ -n "${RUN:-}" ]; then
+	systemd_run=${SYSTEMD_RUN-}
+else
+	systemd_run=${SYSTEMD_RUN-$units_default}
+fi
+rm -f /opt/atoll/units-args
+if [ -n "$systemd_run" ]; then
+	printf '%s\n' "${common[@]}" -test.run="$systemd_run" >/opt/atoll/units-args
+	cp "$here/units" /opt/atoll/units && chmod +x /opt/atoll/units || exit 2
+	install -m 644 "$here/atoll-qemu-units.service" /etc/systemd/system/ || exit 2
+	# Nothing of sysinit.target, which no unit of the tests may pull in: its tmpfiles would empty /tmp.
+	ln -sf /dev/null /etc/systemd/system/sysinit.target || exit 2
+	echo "second run, under systemd: $systemd_run"
+fi
 # The soak of the daemon that runs for good (test/loopdev/soak_test.go): SOAK=30m, SOAK_FILES=2000.
 [ -n "${SOAK:-}" ] && args+=(-atoll.soak="$SOAK" -atoll.soak-files="${SOAK_FILES:-2000}")
 # What grows with the pool and no other test reaches (test/loopdev/scale_test.go): SCALE=200000 files a disk.
