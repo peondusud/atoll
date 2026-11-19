@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/telemetry"
 )
 
 // The exit codes of specs.md §29.3.
@@ -33,7 +35,32 @@ const defaultConfig = "/etc/atoll/atoll.toml"
 func main() {
 	limitMemory()
 	french = wantsFrench(os.Getenv)
+	processLogs = telemetry.NewLogs(os.Stderr, logResource()...)
+	slog.SetDefault(slog.New(processLogs))
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// processLogs is the handler of every log of the process, on standard error: JSON lines by default, in the format the
+// configuration gives once it loads (specs.md §23.2). Only main sets it: a test that runs a command in its own process
+// leaves the default logger as it is.
+var processLogs *telemetry.Logs
+
+// logResource is what each record of the log says of the process: OpenTelemetry's service and host (specs.md §23.2).
+func logResource() []slog.Attr {
+	attrs := []slog.Attr{slog.String("service.name", "atoll"), slog.String("service.version", atollVersion())}
+	if host, err := os.Hostname(); err == nil && host != "" {
+		attrs = append(attrs, slog.String("host.name", host))
+	}
+	return attrs
+}
+
+// logsFor gives the handler a process that runs for good logs through: the process's own, or, for a test that runs
+// it in its own process, one on the writer the test gives.
+func logsFor(stderr io.Writer) *telemetry.Logs {
+	if processLogs != nil {
+		return processLogs
+	}
+	return telemetry.NewLogs(stderr, logResource()...)
 }
 
 // softMemoryLimit keeps the process under the 200 MB of specs.md §26 at 200,000 files a disk, with what is outside

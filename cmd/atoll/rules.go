@@ -57,6 +57,10 @@ func readConfig(path string) ([]byte, *config.Config, error) {
 	if err := lookUpZone(zone); err != nil {
 		return nil, nil, &config.Error{Problems: []config.Problem{{Key: "timezone", Message: err.Error()}}}
 	}
+	// What the command logs from now on, it logs in the format the configuration gives (specs.md §23.2).
+	if t, err := c.Telemetry(); err == nil {
+		processLogs.SetFormat(t.LogFormat)
+	}
 	return data, c, nil
 }
 
