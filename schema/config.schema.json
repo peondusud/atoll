@@ -386,6 +386,49 @@
         }
       }
     },
+    "telemetry": {
+      "description": "The log of each process and the export over OpenTelemetry's protocol (specs.md §23.1, §23.2). Left out: the log in JSON, nothing exported.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "log_format": {
+          "description": "How each process writes its log on standard error: json, one record a line in OpenTelemetry's log data model; text, as Go's slog writes key=value.",
+          "enum": ["json", "text"],
+          "default": "json"
+        },
+        "otlp_endpoint": {
+          "description": "An OTLP/HTTP collector, http(s)://host[:port][/path], with no user, query or fragment: the metrics go to <endpoint>/v1/metrics, the log to <endpoint>/v1/logs; empty for none.",
+          "type": "string",
+          "pattern": "^(https?://[^/?#@ \\t\\r\\n]+(/[^?#@ \\t\\r\\n]*)?)?$",
+          "default": ""
+        },
+        "otlp_metrics": {
+          "description": "The daemon sends the metrics of /metrics to the endpoint; it needs otlp_endpoint.",
+          "type": "boolean",
+          "default": false
+        },
+        "otlp_logs": {
+          "description": "The daemon and atoll mount send their log records to the endpoint; it needs otlp_endpoint.",
+          "type": "boolean",
+          "default": false
+        },
+        "otlp_interval": {
+          "description": "How often the metrics are sent.",
+          "$ref": "#/$defs/positive_duration",
+          "default": "1m"
+        },
+        "otlp_timeout": {
+          "description": "How long a request to the endpoint may take.",
+          "$ref": "#/$defs/positive_duration",
+          "default": "10s"
+        },
+        "otlp_headers_file": {
+          "description": "A file of HTTP headers sent with each request, one Name: value a line, such as an Authorization; read at each request, never logged. It needs an https:// endpoint.",
+          "$ref": "#/$defs/optional_path",
+          "default": ""
+        }
+      }
+    },
     "rule": {
       "description": "Ordered: the first matching rule wins (specs.md §11.3).",
       "type": "array",

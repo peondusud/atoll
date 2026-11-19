@@ -154,6 +154,15 @@ token_file = ""                         # the Bearer token TCP asks for; to answ
 [metrics]                               # Prometheus (§23.1), which the API gives on /metrics too
 listen = ""                             # "127.0.0.1:9341": /metrics alone, with no token
 
+[telemetry]                             # the log, and OpenTelemetry (§23.2)
+log_format        = "json"              # json: OpenTelemetry's log data model, a record a line | text
+otlp_endpoint     = ""                  # "http://127.0.0.1:4318": an OTLP/HTTP collector, as Vector or Elastic Agent
+otlp_metrics      = false               # the metrics of /metrics, to <endpoint>/v1/metrics
+otlp_logs         = false               # each record of the log, to <endpoint>/v1/logs
+otlp_interval     = "1m"                # how often the metrics go
+otlp_timeout      = "10s"               # what an export may take, its retries included
+otlp_headers_file = ""                  # "Name: value" lines, as an Authorization; needs https://
+
 # Rules: the first matching rule wins; conditions are combined with AND.
 [[rule]]
 label    = "temporary and system files"

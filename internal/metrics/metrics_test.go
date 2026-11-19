@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -80,7 +81,8 @@ func TestFamiliesAreTheContract(t *testing.T) {
 		t.Fatalf("%d metrics, the contract has %d", len(families), len(doc.Metrics))
 	}
 	for i := range families {
-		if f, want := families[i], doc.Metrics[i]; f.Name != want.Name || f.Type != want.Type || f.Help != want.Help || !slices.Equal(f.Labels, want.Labels) {
+		if f, want := families[i], doc.Metrics[i]; f.Name != want.Name || f.Type != want.Type || f.Help != want.Help || !slices.Equal(f.Labels, want.Labels) ||
+			f.OTelName != want.OTelName || f.Unit != want.Unit {
 			t.Errorf("%+v, the contract says %+v", f, want)
 		}
 	}
@@ -137,13 +139,13 @@ func TestRenderRefusesWhatTheContractLacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := write(families, map[string][]sample{"atoll_passes_total": {{value: "1"}}}); err != nil {
+	if _, err := write(families, map[string][]Point{"atoll_passes_total": {{Value: 1}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := write(families, map[string][]sample{"atoll_nope_total": {{value: "1"}}}); err == nil {
+	if _, err := write(families, map[string][]Point{"atoll_nope_total": {{Value: 1}}}); err == nil {
 		t.Error("a metric the contract does not have is written")
 	}
-	if _, err := write(families, map[string][]sample{"atoll_passes_total": {{labels: []string{"t1"}, value: "1"}}}); err == nil {
+	if _, err := write(families, map[string][]Point{"atoll_passes_total": {{Labels: []string{"t1"}, Value: 1}}}); err == nil {
 		t.Error("a label the contract does not give the metric is written")
 	}
 }
@@ -204,4 +206,116 @@ func TestRecorderIsSafeToShare(t *testing.T) {
 	}
 	var none *Recorder
 	none.Update(func(*Snapshot) { t.Error("a nil recorder records") })
+}
+
+// OpenTelemetry's Prometheus compatibility translation, as its specification gives it (specs.md §23.1).
+func TestPrometheusNameVectors(t *testing.T) {
+	type vector struct {
+		Note       string `json:"note"`
+		Name       string `json:"name"`
+		Unit       string `json:"unit"`
+		Type       string `json:"type"`
+		Prometheus string `json:"prometheus"`
+	}
+	for _, v := range vectors.Load[vector](t, "otel_names.json") {
+		if v.Type != "gauge" && v.Type != "counter" {
+			t.Fatalf("%s: type %q", v.Name, v.Type)
+		}
+		if got := PrometheusName(v.Name, v.Unit, v.Type == "counter"); got != v.Prometheus {
+			t.Errorf("%s %q %s: %s, want %s", v.Name, v.Unit, v.Type, got, v.Prometheus)
+		}
+	}
+}
+
+// Each metric's OpenTelemetry name and unit give its Prometheus name back, exactly: what an OTLP collector writes for
+// Prometheus is what /metrics writes, so one query reads both. The Prometheus name is the contract (specs.md §29.3);
+// none is an exception.
+func TestEachOpenTelemetryNameGivesThePrometheusName(t *testing.T) {
+	families, err := Families()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range families {
+		if got := PrometheusName(f.OTelName, f.Unit, f.Type == "counter"); got != f.Name {
+			t.Errorf("%s (%s, %s) translates to %s", f.OTelName, f.Unit, f.Type, got)
+		}
+	}
+}
+
+// The rules of an OpenTelemetry name: dotted, lowercase, under atoll., none twice, none the namespace of another, as
+// Elasticsearch maps a dotted name to objects; a unit of UCUM, a count in braces.
+func TestOpenTelemetryNamesFollowTheRules(t *testing.T) {
+	good := Family{Name: "atoll_a", Type: "gauge", Labels: []string{}, Help: "h", OTelName: "atoll.a", Unit: "{file}"}
+	for _, tc := range []struct {
+		note string
+		list []Family
+		ok   bool
+	}{
+		{"one", []Family{good}, true},
+		{"no name", []Family{{Name: "atoll_a", Unit: "By"}}, false},
+		{"not under atoll.", []Family{{Name: "atoll_a", OTelName: "a.b", Unit: "By"}}, false},
+		{"atoll alone", []Family{{Name: "atoll_a", OTelName: "atoll", Unit: "By"}}, false},
+		{"uppercase", []Family{{Name: "atoll_a", OTelName: "atoll.A", Unit: "By"}}, false},
+		{"an empty part", []Family{{Name: "atoll_a", OTelName: "atoll..a", Unit: "By"}}, false},
+		{"no unit", []Family{{Name: "atoll_a", OTelName: "atoll.a"}}, false},
+		{"unit 1, which gives _ratio", []Family{{Name: "atoll_a", OTelName: "atoll.a", Unit: "1"}}, false},
+		{"twice", []Family{good, {Name: "atoll_b", OTelName: "atoll.a", Unit: "By"}}, false},
+		{"the namespace of another", []Family{good, {Name: "atoll_a_b", OTelName: "atoll.a.b", Unit: "By"}}, false},
+		{"another's namespace, written after", []Family{{Name: "atoll_a_b", OTelName: "atoll.a.b", Unit: "By"}, good}, false},
+		{"a word of another", []Family{good, {Name: "atoll_a_b", OTelName: "atoll.a_b", Unit: "By"}}, true},
+	} {
+		if err := checkOTelNames(tc.list); (err == nil) != tc.ok {
+			t.Errorf("%s: %v", tc.note, err)
+		}
+	}
+}
+
+// Points are the samples /metrics writes, as numbers: OTLP sends the same values from the same snapshot (specs.md
+// §23.1).
+func TestPointsAreTheText(t *testing.T) {
+	type vector struct {
+		Note     string   `json:"note"`
+		Snapshot Snapshot `json:"snapshot"`
+		Text     string   `json:"text"`
+	}
+	families, err := Families()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range vectors.Load[vector](t, "metrics.json") {
+		points := Points(&v.Snapshot)
+		var lines []string
+		for _, f := range families {
+			for _, p := range points[f.Name] {
+				var b strings.Builder
+				b.WriteString(f.Name)
+				if len(f.Labels) > 0 {
+					b.WriteByte('{')
+					for i, l := range f.Labels {
+						if i > 0 {
+							b.WriteByte(',')
+						}
+						b.WriteString(l + `="` + escapeLabel(p.Labels[i]) + `"`)
+					}
+					b.WriteByte('}')
+				}
+				value := strconv.FormatInt(p.Value, 10)
+				if p.Seconds {
+					value = Seconds(p.Value)
+				}
+				lines = append(lines, b.String()+" "+value)
+			}
+		}
+		var want []string
+		for line := range strings.SplitSeq(v.Text, "\n") {
+			if line != "" && !strings.HasPrefix(line, "#") {
+				want = append(want, line)
+			}
+		}
+		slices.Sort(lines)
+		slices.Sort(want)
+		if !slices.Equal(lines, want) {
+			t.Errorf("%s:\n%s\nwant:\n%s", v.Note, strings.Join(lines, "\n"), strings.Join(want, "\n"))
+		}
+	}
 }

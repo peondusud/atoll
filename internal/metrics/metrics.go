@@ -29,12 +29,15 @@ var FileStates = []string{"ok", "pending", "degraded", "unprotected", "unavailab
 // UPSPowers are what the UPS can run on, each a sample of atoll_ups_power (specs.md §20).
 var UPSPowers = []string{"online", "battery", "low"}
 
-// Family is a metric of the contract: its name, its type, its labels in their order, and its help.
+// Family is a metric of the contract: its name, its type, its labels in their order, and its help; and its name and
+// unit over OTLP, where its labels are its attributes (specs.md §23.1).
 type Family struct {
-	Name   string   `json:"name"`
-	Type   string   `json:"type"`
-	Labels []string `json:"labels"`
-	Help   string   `json:"help"`
+	Name     string   `json:"name"`
+	Type     string   `json:"type"`
+	Labels   []string `json:"labels"`
+	Help     string   `json:"help"`
+	OTelName string   `json:"otel_name"`
+	Unit     string   `json:"unit"`
 }
 
 var (
@@ -44,7 +47,7 @@ var (
 
 // Families reads the contract, api/metrics.json, in its order. An error says that it breaks the rules of the text
 // format: a name or a label it cannot have, a type other than gauge or counter, a counter whose name does not end in
-// _total, or a name twice.
+// _total, or a name twice; or those of its OpenTelemetry names (checkOTelNames).
 func Families() ([]Family, error) {
 	var doc struct {
 		FormatVersion int      `json:"format_version"`
@@ -82,6 +85,9 @@ func Families() ([]Family, error) {
 			}
 			labels[l] = true
 		}
+	}
+	if err := checkOTelNames(doc.Metrics); err != nil {
+		return nil, fmt.Errorf("api/metrics.json: %w", err)
 	}
 	return doc.Metrics, nil
 }
@@ -193,10 +199,20 @@ type UPS struct {
 	Unreachable bool   `json:"unreachable,omitempty"`
 }
 
-// sample is a line of a metric: its label values, in the contract's order, and its value as written.
-type sample struct {
-	labels []string
-	value  string
+// Point is a sample of a metric: its label values, in the contract's order, and its value. Seconds says that the
+// value is nanoseconds, which /metrics writes as seconds with nine digits after the point.
+type Point struct {
+	Labels  []string
+	Value   int64
+	Seconds bool
+}
+
+// text is the value as /metrics writes it.
+func (p *Point) text() string {
+	if p.Seconds {
+		return Seconds(p.Value)
+	}
+	return strconv.FormatInt(p.Value, 10)
 }
 
 // errNoMetric says that a sample names no metric of the contract, or has other labels: a mistake of this package.
@@ -209,11 +225,11 @@ func Render(s *Snapshot) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return write(families, samplesOf(s))
+	return write(families, Points(s))
 }
 
 // write writes the samples of each family, and fails on a sample of no family or with other labels.
-func write(families []Family, samples map[string][]sample) ([]byte, error) {
+func write(families []Family, samples map[string][]Point) ([]byte, error) {
 	var b bytes.Buffer
 	for _, f := range families {
 		list := samples[f.Name]
@@ -222,11 +238,11 @@ func write(families []Family, samples map[string][]sample) ([]byte, error) {
 			continue
 		}
 		for _, one := range list {
-			if len(one.labels) != len(f.Labels) {
-				return nil, fmt.Errorf("%s: %d label values for %d labels: %w", f.Name, len(one.labels), len(f.Labels), errNoMetric)
+			if len(one.Labels) != len(f.Labels) {
+				return nil, fmt.Errorf("%s: %d label values for %d labels: %w", f.Name, len(one.Labels), len(f.Labels), errNoMetric)
 			}
 		}
-		slices.SortFunc(list, func(a, b sample) int { return slices.Compare(a.labels, b.labels) })
+		slices.SortFunc(list, func(a, b Point) int { return slices.Compare(a.Labels, b.Labels) })
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", f.Name, f.Help, f.Name, f.Type)
 		for _, one := range list {
 			b.WriteString(f.Name)
@@ -238,13 +254,13 @@ func write(families []Family, samples map[string][]sample) ([]byte, error) {
 					}
 					b.WriteString(l)
 					b.WriteString(`="`)
-					b.WriteString(escapeLabel(one.labels[i]))
+					b.WriteString(escapeLabel(one.Labels[i]))
 					b.WriteByte('"')
 				}
 				b.WriteByte('}')
 			}
 			b.WriteByte(' ')
-			b.WriteString(one.value)
+			b.WriteString(one.text())
 			b.WriteByte('\n')
 		}
 	}
@@ -254,78 +270,81 @@ func write(families []Family, samples map[string][]sample) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// samplesOf gives the samples of a snapshot, by metric.
-func samplesOf(s *Snapshot) map[string][]sample {
-	out := map[string][]sample{}
-	add := func(name, value string, labels ...string) {
-		out[name] = append(out[name], sample{labels: labels, value: value})
+// Points gives the samples of a snapshot, by metric, in no order: what /metrics writes, and what OTLP sends (specs.md
+// §23.1). It changes nothing in s.
+func Points(s *Snapshot) map[string][]Point {
+	out := map[string][]Point{}
+	add := func(name string, value int64, labels ...string) {
+		out[name] = append(out[name], Point{Labels: labels, Value: value})
 	}
-	integer := func(n int64) string { return strconv.FormatInt(n, 10) }
-	flag := func(b bool) string {
+	addSeconds := func(name string, ns int64, labels ...string) {
+		out[name] = append(out[name], Point{Labels: labels, Value: ns, Seconds: true})
+	}
+	flag := func(b bool) int64 {
 		if b {
-			return "1"
+			return 1
 		}
-		return "0"
+		return 0
 	}
-	add("atoll_build_info", "1", s.Version)
+	add("atoll_build_info", 1, s.Version)
 	for i := range s.Disks {
 		d := &s.Disks[i]
-		add("atoll_disk_info", "1", d.ID, d.FS, d.Role, d.Mount)
+		add("atoll_disk_info", 1, d.ID, d.FS, d.Role, d.Mount)
 		for _, state := range DiskStates {
 			add("atoll_disk_state", flag(d.State == state), d.ID, state)
 		}
 		if d.Space != nil {
-			add("atoll_disk_capacity_bytes", integer(d.Space.Capacity), d.ID)
-			add("atoll_disk_free_bytes", integer(d.Space.Free), d.ID)
+			add("atoll_disk_capacity_bytes", d.Space.Capacity, d.ID)
+			add("atoll_disk_free_bytes", d.Space.Free, d.ID)
 		}
 		if c := d.Catalog; c != nil {
-			add("atoll_disk_copies", integer(c.Copies), d.ID)
-			add("atoll_disk_copy_bytes", integer(c.Bytes), d.ID)
-			add("atoll_trash_entries", integer(c.TrashEntries), d.ID)
-			add("atoll_trash_bytes", integer(c.TrashBytes), d.ID)
-			add("atoll_scrub_due_copies", integer(c.ScrubDueCopies), d.ID)
-			add("atoll_scrub_due_bytes", integer(c.ScrubDueBytes), d.ID)
+			add("atoll_disk_copies", c.Copies, d.ID)
+			add("atoll_disk_copy_bytes", c.Bytes, d.ID)
+			add("atoll_trash_entries", c.TrashEntries, d.ID)
+			add("atoll_trash_bytes", c.TrashBytes, d.ID)
+			add("atoll_scrub_due_copies", c.ScrubDueCopies, d.ID)
+			add("atoll_scrub_due_bytes", c.ScrubDueBytes, d.ID)
 		}
 		if r := d.Smart; r != nil {
 			add("atoll_disk_smart_failing", flag(r.Failing), d.ID)
-			add("atoll_disk_smart_sectors", integer(r.Reallocated), d.ID, "reallocated")
-			add("atoll_disk_smart_sectors", integer(r.Pending), d.ID, "pending")
-			add("atoll_disk_smart_sectors", integer(r.Uncorrectable), d.ID, "uncorrectable")
+			add("atoll_disk_smart_sectors", r.Reallocated, d.ID, "reallocated")
+			add("atoll_disk_smart_sectors", r.Pending, d.ID, "pending")
+			add("atoll_disk_smart_sectors", r.Uncorrectable, d.ID, "uncorrectable")
 			if r.Temperature != 0 {
-				add("atoll_disk_temperature_celsius", integer(r.Temperature), d.ID)
+				add("atoll_disk_temperature_celsius", r.Temperature, d.ID)
 			}
-			add("atoll_disk_smart_read_timestamp_seconds", Seconds(r.ReadNS), d.ID)
+			addSeconds("atoll_disk_smart_read_timestamp_seconds", r.ReadNS, d.ID)
 		}
 		add("atoll_disk_standby", flag(d.Standby), d.ID)
-		add("atoll_scrub_read_copies_total", integer(d.ScrubReadCopies), d.ID)
-		add("atoll_scrub_read_bytes_total", integer(d.ScrubReadBytes), d.ID)
-		add("atoll_scrub_corrupt_total", integer(d.ScrubCorrupt), d.ID)
+		add("atoll_scrub_read_copies_total", d.ScrubReadCopies, d.ID)
+		add("atoll_scrub_read_bytes_total", d.ScrubReadBytes, d.ID)
+		add("atoll_scrub_corrupt_total", d.ScrubCorrupt, d.ID)
 	}
 	if s.Files != nil {
 		for _, state := range FileStates {
-			add("atoll_files", integer(s.Files[state].Files), state)
-			add("atoll_file_bytes", integer(s.Files[state].Bytes), state)
+			add("atoll_files", s.Files[state].Files, state)
+			add("atoll_file_bytes", s.Files[state].Bytes, state)
 		}
 	}
-	add("atoll_passes_total", integer(s.Passes))
-	add("atoll_pass_failures_total", integer(s.PassFailures))
+	add("atoll_passes_total", s.Passes)
+	add("atoll_pass_failures_total", s.PassFailures)
 	if p := s.LastPass; p != nil {
-		add("atoll_last_pass_end_timestamp_seconds", Seconds(p.EndNS))
-		add("atoll_last_pass_duration_seconds", Seconds(p.DurationNS))
+		addSeconds("atoll_last_pass_end_timestamp_seconds", p.EndNS)
+		addSeconds("atoll_last_pass_duration_seconds", p.DurationNS)
 		add("atoll_last_pass_partial", flag(p.Partial))
 		add("atoll_last_pass_held", flag(p.Held))
 	}
 	for _, op := range s.Operations {
-		add("atoll_operations_total", integer(op.Count), op.Kind, op.Outcome)
+		add("atoll_operations_total", op.Count, op.Kind, op.Outcome)
 	}
-	add("atoll_copied_bytes_total", integer(s.CopiedBytes))
+	add("atoll_copied_bytes_total", s.CopiedBytes)
 	if s.Waiting != nil {
-		add("atoll_files_waiting", integer(*s.Waiting))
+		add("atoll_files_waiting", *s.Waiting)
 	}
 	for _, a := range s.Alerts {
 		// A key names a disk after its first colon: "disk-missing:t2" is the alert disk-missing of t2 (specs.md §23).
 		alert, disk, _ := strings.Cut(a.Key, ":")
-		add("atoll_alert", integer(a.Count), alert, disk)
+		add("atoll_alert", a.Count, alert, disk)
 	}
 	if u := s.UPS; u != nil {
 		for _, power := range UPSPowers {

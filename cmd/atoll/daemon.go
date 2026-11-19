@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
@@ -23,6 +24,7 @@ import (
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/solver"
+	"github.com/peondusud/atoll/internal/telemetry"
 	"github.com/peondusud/atoll/internal/value"
 )
 
@@ -156,11 +158,16 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 			}
 		}
 	}()
-	log := slog.New(slog.NewTextHandler(stderr, nil))
+	logs := logsFor(stderr)
+	log := slog.New(logs)
 	// The local API answers with the configuration the daemon runs with, the one a reload takes too (specs.md §25.1).
-	// What the loop records, /metrics gives (specs.md §23.1). Its answers to a guard go through the loop, which runs
-	// each under the catalog's lock, and reload it as SIGHUP does.
+	// What the loop records, /metrics gives (specs.md §23.1), and the export sends, as the log, when [telemetry] asks
+	// it, from that configuration too (§23.2). Its answers to a guard go through the loop, which runs each under the
+	// catalog's lock, and reload it as SIGHUP does.
 	rec := metrics.NewRecorder(atollVersion())
+	tel := telemetry.NewManager(telemetry.Options{Logs: logs, Metrics: rec, Version: atollVersion()})
+	applyTelemetry(ctx, tel, c, log)
+	defer stopTelemetry(tel, log)
 	api := newAPIServer(c, machine, log, rec)
 	work := make(chan *daemon.CatalogWork)
 	api.answerThrough(work, reload, apply)
@@ -170,6 +177,7 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 		next, err := load(configPath)
 		if err == nil {
 			api.current.Store(next)
+			applyTelemetry(ctx, tel, next, log)
 		}
 		return next, err
 	}
@@ -179,6 +187,30 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 	}
 	return exitOK
 }
+
+// applyTelemetry gives a process that runs for good the format of its log and the export [telemetry] asks (specs.md
+// §23.2). An export that cannot start leaves the process running without it, as a collector that is gone does.
+func applyTelemetry(ctx context.Context, tel *telemetry.Manager, c *config.Config, log *slog.Logger) {
+	settings, err := c.Telemetry()
+	if err == nil {
+		err = tel.Apply(ctx, settings)
+	}
+	if err != nil {
+		log.Warn("the OTLP export cannot start: the process runs without it", "error", err)
+	}
+}
+
+// stopTelemetry sends what the export holds, the last metrics and the records queued, within a few seconds at most.
+func stopTelemetry(tel *telemetry.Manager, log *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), telemetryStop)
+	defer cancel()
+	if err := tel.Shutdown(ctx); err != nil {
+		log.Warn("the OTLP export did not send all it held before the stop", "error", err)
+	}
+}
+
+// telemetryStop is the most a stop waits for the export: a collector that is gone must not hold up systemctl stop.
+const telemetryStop = 5 * time.Second
 
 func runPass(c *config.Config, apply bool, sink jobs.Sink, stderr io.Writer) (outcome *jobs.Outcome, err error) {
 	ctx := context.Background()

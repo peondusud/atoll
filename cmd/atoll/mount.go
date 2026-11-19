@@ -14,6 +14,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/daemon"
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/telemetry"
 	"github.com/peondusud/atoll/internal/view/readonly"
 )
 
@@ -74,9 +75,14 @@ func runMount(configPath string, args []string, stderr io.Writer) (code int) {
 	// A signal that comes before the view is mounted unmounts it at once.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	log := slog.New(slog.NewTextHandler(stderr, nil))
-	// What the view logs of a read, through the default logger, goes the same way.
+	logs := logsFor(stderr)
+	log := slog.New(logs)
+	// What the view logs of a read, through the default logger, goes the same way, and over OTLP when [telemetry] asks:
+	// the view has no metrics (specs.md §23.2).
 	slog.SetDefault(log)
+	tel := telemetry.NewManager(telemetry.Options{Logs: logs, Version: atollVersion()})
+	applyTelemetry(ctx, tel, c, log)
+	defer stopTelemetry(tel, log)
 	// systemd is told once every point is mounted; one that fails or is unmounted stops the others.
 	var mounted atomic.Int32
 	ready := func() {
