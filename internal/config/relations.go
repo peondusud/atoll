@@ -494,6 +494,71 @@ func noEffect(tree map[string]any, set map[string]any) []Problem {
 	return out
 }
 
+// inClear warns about a secret that goes over http:// to a host that is not this machine, where anyone on the way can
+// read it (specs.md §24.4): the token or key of a media server, ntfy's topic, which is its secret, with its token,
+// Gotify's token, and a user and a password written in any of their addresses. A warning, not a refusal: version 1
+// takes such a configuration. The OTLP headers file is refused with http:// already (checkRelations).
+func inClear(tree map[string]any) []Problem {
+	var out []Problem
+	add := func(key, url string, secret bool, what string) {
+		if p, ok := clearProblem(key, url, secret, what); ok {
+			out = append(out, p)
+		}
+	}
+	notify := table(tree, "notify")
+	for _, kind := range []string{Plex, Jellyfin, Emby} {
+		t := table(notify, kind)
+		secret := "api_key_file"
+		if kind == Plex {
+			secret = "token_file"
+		}
+		add("notify."+kind+".url", text(t, "url"), text(t, secret) != "", "the secret of notify."+kind+"."+secret)
+	}
+	alerts := table(tree, "alerts")
+	add("alerts.ntfy", text(alerts, "ntfy"), true, "the topic, which is its secret, and any token of alerts.ntfy_token_file,")
+	add("alerts.gotify", text(alerts, "gotify"), text(alerts, "gotify_token_file") != "", "the token of alerts.gotify_token_file")
+	return out
+}
+
+// clearProblem is the warning of inClear for one address, when it is http:// to a host that is not this machine and
+// carries a secret, or a user in the address. The host is what follows the last "@" of the authority, which ends at
+// the first "/", "?" or "#", without its port.
+func clearProblem(key, url string, secret bool, what string) (Problem, bool) {
+	rest, plain := strings.CutPrefix(url, "http://")
+	if !plain {
+		return Problem{}, false
+	}
+	authority := rest
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+		authority = rest[:end]
+	}
+	host, user := authority, false
+	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+		host, user = authority[at+1:], true
+	}
+	if !secret && !user {
+		return Problem{}, false
+	}
+	if strings.HasPrefix(host, "[") {
+		if end := strings.IndexByte(host, ']'); end >= 0 {
+			host = host[:end+1]
+		}
+	} else if colon := strings.LastIndexByte(host, ':'); colon >= 0 {
+		host = host[:colon]
+	}
+	if value.LoopbackHost(host) {
+		return Problem{}, false
+	}
+	switch {
+	case !secret:
+		what = "the user and the password of its address"
+	case user:
+		what += " and the user and the password of its address"
+	}
+	return Problem{Key: key, Message: what + " go in clear over http:// to a host that is not this machine, for anyone on the way to " +
+		"read: use https://, or a loopback address"}, true
+}
+
 // unreadableUPS warns about a UPS the daemon is to read at an address NUT cannot have, as a port past 65535: the
 // schema takes it, and so does a configuration of format version 1, so it loads, and the daemon finds the UPS
 // unreachable (specs.md §20, §24.4).

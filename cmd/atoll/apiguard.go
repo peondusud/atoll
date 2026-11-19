@@ -44,12 +44,13 @@ func (a *apiServer) answerGuard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !req.dryRun {
-		switch {
-		case !a.apply:
+		if !a.apply {
 			send(w, http.StatusConflict, apiError{"the daemon runs with --dry-run, and records no answer: atoll guard " + req.what + " records it"})
 			return
-		case looseToken(r.Context()):
-			send(w, http.StatusForbidden, apiError{"other accounts can read api.token_file: an answer over TCP takes a token only the daemon's accounts can read (chmod o-r)"})
+		}
+		if why := a.tokenRefusal(r.Context()); why != "" {
+			a.log.Warn("the local API refused an answer to a guard: another account could set its token", "disk", req.disk, "why", why, "from", r.RemoteAddr)
+			send(w, http.StatusForbidden, apiError{why})
 			return
 		}
 	}

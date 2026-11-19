@@ -520,6 +520,189 @@ func TestTheAPIAnswerOverTCP(t *testing.T) {
 	}
 }
 
+// tokenPool is a guarded pool whose API takes TCP with a token file in a folder of its own, and the paths of both.
+// named gives the path the configuration names for it, the token's own when nil.
+func tokenPool(t *testing.T, named func(folder, token string) string) (p *guardedPool, a *apiServer, told *atomic.Int32, folder, token string) {
+	t.Helper()
+	p = newGuardedPool(t, clockBase())
+	folder = filepath.Join(t.TempDir(), "secrets")
+	if err := os.Mkdir(folder, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	token = filepath.Join(folder, "api.token")
+	if err := os.WriteFile(token, []byte("s3cret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configured := token
+	if named != nil {
+		configured = named(folder, token)
+	}
+	text, err := os.ReadFile(p.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = append(text, []byte("[api]\nlisten = \"127.0.0.1:7341\"\ntoken_file = "+strconv.Quote(configured)+"\n")...)
+	if err := os.WriteFile(p.configPath, text, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := load(p.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, told = answerAPI(t, c)
+	return p, a, told, folder, token
+}
+
+// An answer over TCP takes a token file only root or the account the daemon runs as can change, and other accounts
+// cannot read: any account that could write the file, or a folder that holds its name, could set the token it then
+// sends. The 403 says why; questions and dry runs are answered as before (specs.md §25.1).
+func TestTheAPIAnswerTakesATokenOnlyItsAccountsCanSet(t *testing.T) {
+	root := os.Geteuid() == 0
+	for _, tc := range []struct {
+		name string
+		// set changes the file or its folder; root says that only root can.
+		set  func(folder, token string) error
+		root bool
+		// says is what the 403 says, "" for an answer taken.
+		says string
+	}{
+		{name: "0600 in a folder 0750", set: func(string, string) error { return nil }},
+		{name: "0640", set: func(_, token string) error { return os.Chmod(token, 0o640) }},
+		{name: "0400", set: func(_, token string) error { return os.Chmod(token, 0o400) }},
+		{name: "others may read it", set: func(_, token string) error { return os.Chmod(token, 0o604) }, says: "other accounts may read api.token_file"},
+		{name: "others may write it", set: func(_, token string) error { return os.Chmod(token, 0o602) }, says: "other accounts may write api.token_file"},
+		{name: "its group may write it", set: func(_, token string) error { return os.Chmod(token, 0o620) }, says: "its group may write api.token_file"},
+		{name: "others may write its folder", set: func(folder, _ string) error { return os.Chmod(folder, 0o757) }, says: "other accounts may write the folder"},
+		{name: "others may write its folder, sticky", set: func(folder, _ string) error { return os.Chmod(folder, os.ModeSticky|0o777) }, says: "other accounts may write the folder"},
+		{name: "the daemon's group may write its folder", set: func(folder, _ string) error { return os.Chmod(folder, 0o770) }},
+		{name: "another account's file", root: true, set: func(_, token string) error { return os.Chown(token, 4321, -1) }, says: "api.token_file belongs to the account 4321"},
+		{name: "another group's file, 0640", root: true, set: func(_, token string) error {
+			return errors.Join(os.Chown(token, -1, 4321), os.Chmod(token, 0o640))
+		}},
+		{name: "another account's folder", root: true, set: func(folder, _ string) error { return os.Chown(folder, 4321, -1) }, says: "belongs to the account 4321"},
+		{name: "another group may write its folder", root: true, set: func(folder, _ string) error {
+			return errors.Join(os.Chown(folder, -1, 4321), os.Chmod(folder, 0o770))
+		}, says: "the group 4321 may write the folder"},
+		{name: "another group may read its folder", root: true, set: func(folder, _ string) error { return os.Chown(folder, -1, 4321) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.root && !root {
+				t.Skip("only root gives a file away")
+			}
+			p, a, told, folder, token := tokenPool(t, nil)
+			tcp := a.withToken(a.routes())
+			if err := tc.set(folder, token); err != nil {
+				t.Fatal(err)
+			}
+			before := p.tables(t)
+			if w := post(tcp, "/v1/guards/t1", `{"answer": "confirm", "dry_run": true}`, "Bearer s3cret"); w.Code != http.StatusOK {
+				t.Errorf("a dry run: %d %s", w.Code, w.Body.String())
+			}
+			if w := ask(tcp, http.MethodGet, "/v1/guards", "Bearer s3cret"); w.Code != http.StatusOK {
+				t.Errorf("a question: %d", w.Code)
+			}
+			w := post(tcp, "/v1/guards/t1", `{"answer": "confirm", "yes": true}`, "Bearer s3cret")
+			if tc.says == "" {
+				if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"done": true`) || told.Load() != 1 {
+					t.Errorf("the answer: %d %s", w.Code, w.Body.String())
+				}
+				return
+			}
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), tc.says) {
+				t.Errorf("the answer: %d %s, want 403 saying %q", w.Code, w.Body.String(), tc.says)
+			}
+			if after := p.tables(t); after != before || told.Load() != 0 {
+				t.Errorf("an answer with a token another account could set was given:\n%s", after)
+			}
+			// The socket asks for no token: its mode says who may ask.
+			if w := post(a.routes(), "/v1/guards/t1", `{"answer": "confirm", "yes": true}`, ""); w.Code != http.StatusOK {
+				t.Errorf("over the socket: %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// A token file reached through a symbolic link is judged by the folders of both: whoever may write the folder of the
+// link's name may point it elsewhere (specs.md §25.1).
+func TestTheAPIAnswerLooksAtTheFoldersOfALink(t *testing.T) {
+	open := filepath.Join(t.TempDir(), "open")
+	p, a, told, _, _ := tokenPool(t, func(_, token string) string {
+		if err := os.Mkdir(open, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(token, filepath.Join(open, "api.token")); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(open, "api.token")
+	})
+	tcp := a.withToken(a.routes())
+	if err := os.Chmod(open, 0o757); err != nil {
+		t.Fatal(err)
+	}
+	before := p.tables(t)
+	if w := post(tcp, "/v1/guards/t1", `{"answer": "confirm", "yes": true}`, "Bearer s3cret"); w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), "other accounts may write the folder "+open) {
+		t.Errorf("a link in a folder others may write: %d %s", w.Code, w.Body.String())
+	}
+	if after := p.tables(t); after != before || told.Load() != 0 {
+		t.Errorf("an answer was given:\n%s", after)
+	}
+	if err := os.Chmod(open, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if w := post(tcp, "/v1/guards/t1", `{"answer": "confirm", "yes": true}`, "Bearer s3cret"); w.Code != http.StatusOK || told.Load() != 1 {
+		t.Errorf("a link in a folder only its owner may write: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// What makes a token file one an answer cannot take, each reason in a fixed order: whose the file is and its mode,
+// then each folder on the way to it (specs.md §25.1).
+func TestTokenDoubts(t *testing.T) {
+	const daemon, group = 998, 997
+	file := func(uid, gid uint32, mode os.FileMode) fsx.Owner { return fsx.Owner{UID: uid, GID: gid, Mode: mode} }
+	folder := func(path string, uid, gid uint32, mode os.FileMode) fsx.Folder {
+		return fsx.Folder{Path: path, Owner: fsx.Owner{UID: uid, GID: gid, Mode: os.ModeDir | mode}}
+	}
+	etc := folder("/etc/atoll", 0, 0, 0o750)
+	for _, tc := range []struct {
+		name    string
+		file    fsx.Owner
+		folders []fsx.Folder
+		want    []string
+	}{
+		{"root's, 0600", file(0, 0, 0o600), []fsx.Folder{etc}, nil},
+		{"root's, 0640 to the daemon's group", file(0, group, 0o640), []fsx.Folder{etc}, nil},
+		{"the daemon's, 0400", file(daemon, group, 0o400), []fsx.Folder{folder("/var/lib/atoll", daemon, group, 0o750)}, nil},
+		{"another group may read it", file(0, 100, 0o640), []fsx.Folder{etc}, nil},
+		{"another account's", file(1000, 1000, 0o600), []fsx.Folder{etc}, []string{"api.token_file belongs to the account 1000"}},
+		{"its group may write it", file(0, group, 0o660), []fsx.Folder{etc}, []string{"its group may write api.token_file"}},
+		{"others may read it", file(0, 0, 0o644), []fsx.Folder{etc}, []string{"other accounts may read api.token_file"}},
+		{"others may write it", file(0, 0, 0o602), []fsx.Folder{etc}, []string{"other accounts may write api.token_file"}},
+		{"everything at once", file(1000, 1000, 0o666), []fsx.Folder{etc}, []string{
+			"api.token_file belongs to the account 1000", "its group may write api.token_file", "other accounts may read api.token_file",
+			"other accounts may write api.token_file",
+		}},
+		{"another account's folder", file(0, 0, 0o600), []fsx.Folder{folder("/home/me", 1000, 1000, 0o700)}, []string{"the folder /home/me belongs to the account 1000"}},
+		{"others may write its folder", file(0, 0, 0o600), []fsx.Folder{folder("/tmp", 0, 0, os.ModeSticky|0o777)}, []string{"other accounts may write the folder /tmp"}},
+		{"root's group may write its folder", file(0, 0, 0o600), []fsx.Folder{folder("/etc/atoll", 0, 0, 0o770)}, nil},
+		{"the daemon's group may write its folder", file(0, 0, 0o600), []fsx.Folder{folder("/etc/atoll", 0, group, 0o770)}, nil},
+		{"another group may write its folder", file(0, 0, 0o600), []fsx.Folder{folder("/srv/keys", 0, 100, 0o770)}, []string{"the group 100 may write the folder /srv/keys"}},
+		{"a link's folder, then the file's", file(0, 0, 0o600), []fsx.Folder{folder("/etc", 0, 0, 0o755), folder("/srv/open", 0, 0, 0o777), etc},
+			[]string{"other accounts may write the folder /srv/open"}},
+	} {
+		got := tokenDoubts(tc.file, tc.folders, daemon, group)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if !strings.HasPrefix(got[i], tc.want[i]) {
+				t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+			}
+		}
+	}
+}
+
 // A daemon in --dry-run records no answer, as it writes nothing; it answers a dry run (specs.md §25.1).
 func TestADaemonInDryRunRecordsNoAnswer(t *testing.T) {
 	p := newGuardedPool(t, clockBase())

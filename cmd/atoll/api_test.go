@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -301,8 +303,265 @@ func TestTheAPIReadsTheCatalogOneAnswerAtATime(t *testing.T) {
 // open for good holds a descriptor of the daemon, which needs them for its disks.
 func TestTheAPIServerLimits(t *testing.T) {
 	s := httpServer(nil)
-	if s.ReadHeaderTimeout != 10*time.Second || s.WriteTimeout != time.Minute || s.IdleTimeout != time.Minute || s.MaxHeaderBytes != 16<<10 {
-		t.Errorf("headers %v, answer %v, idle %v, %d bytes of headers", s.ReadHeaderTimeout, s.WriteTimeout, s.IdleTimeout, s.MaxHeaderBytes)
+	if s.ReadHeaderTimeout != 10*time.Second || s.ReadTimeout != 15*time.Second || s.WriteTimeout != time.Minute || s.IdleTimeout != time.Minute ||
+		s.MaxHeaderBytes != 16<<10 {
+		t.Errorf("headers %v, request %v, answer %v, idle %v, %d bytes of headers", s.ReadHeaderTimeout, s.ReadTimeout, s.WriteTimeout, s.IdleTimeout,
+			s.MaxHeaderBytes)
+	}
+	if apiMaxConns != 32 {
+		t.Errorf("%d connections at once", apiMaxConns)
+	}
+}
+
+// A client that sends its body slowly is cut off once the request's time is over, rather than holding its handler,
+// and its connection, for as long as it likes: the API's server has a time for the whole request, its body included,
+// shortened here (specs.md §25.1).
+func TestASlowClientTimesOut(t *testing.T) {
+	_, c := apiPool(t, "")
+	a := newTestAPI(t, c)
+	a.onCatalog, a.apply = directly(c), true
+	s := httpServer(a.routes())
+	s.ReadTimeout = 300 * time.Millisecond
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = s.Serve(l) }()
+	defer func() { _ = s.Close() }()
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	// The headers, then a byte of a body of 20, and nothing more.
+	if _, err := conn.Write([]byte("POST /v1/guards/t1 HTTP/1.1\r\nHost: atoll\r\nContent-Type: application/json\r\nContent-Length: 20\r\n\r\n{")); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := conn.SetReadDeadline(start.Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	answer, _ := io.ReadAll(conn)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the slow client held its request %v", took)
+	}
+	if len(answer) > 0 && !bytes.HasPrefix(answer, []byte("HTTP/1.1 400")) {
+		t.Errorf("%q", answer)
+	}
+}
+
+// Each listener of the API holds so many connections at once, and no more: past them, a connection waits, unaccepted,
+// until one of them closes. A connection closed twice frees its place once, and a listener closed while one waits
+// gives up the wait (specs.md §25.1).
+func TestTheConnectionsAreCapped(t *testing.T) {
+	inner, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := capConns(inner, 2)
+	defer func() { _ = l.Close() }()
+	accepted := make(chan net.Conn, 8)
+	failed := make(chan error, 1)
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				failed <- err
+				return
+			}
+			accepted <- conn
+		}
+	}()
+	for range 4 {
+		conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", inner.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+	}
+	next := func() net.Conn {
+		select {
+		case conn := <-accepted:
+			return conn
+		case <-time.After(5 * time.Second):
+			t.Fatal("no connection taken")
+			return nil
+		}
+	}
+	none := func(why string) {
+		select {
+		case conn := <-accepted:
+			t.Errorf("%s: a connection past the cap was taken: %v", why, conn.RemoteAddr())
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	first, _ := next(), next()
+	none("two held")
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	third := next()
+	none("a place freed once, though its connection closed twice")
+	_ = third.Close()
+	next()
+	none("four taken")
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-failed:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("a wait given up: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait was not given up")
+	}
+}
+
+// The API's servers take the cap: once every place of the socket is held, a request waits until one closes, then is
+// answered (specs.md §25.1).
+func TestTheAPIWaitsPastItsConnections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "atoll.sock")
+	_, c := apiPool(t, "[api]\nsocket = "+strconv.Quote(path)+"\n")
+	stop := newTestAPI(t, c).start(t.Context(), c)
+	defer stop()
+	var idle []net.Conn
+	for range apiMaxConns {
+		conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle = append(idle, conn)
+	}
+	defer func() {
+		for _, conn := range idle {
+			_ = conn.Close()
+		}
+	}()
+	codes := make(chan int, 1)
+	go func() { codes <- getHealth(t, socketClient(path), "http://atoll/v1/health", "") }()
+	select {
+	case code := <-codes:
+		t.Fatalf("answered past the cap: %d", code)
+	case <-time.After(300 * time.Millisecond):
+	}
+	_ = idle[0].Close()
+	select {
+	case code := <-codes:
+		if code != http.StatusOK {
+			t.Errorf("%d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a place freed, and the request still waits")
+	}
+}
+
+// clockMachine is a machine whose clock the test sets.
+type clockMachine struct {
+	disks.Machine
+	now atomic.Int64
+}
+
+func (m *clockMachine) Now() int64 { return m.now.Load() }
+
+// A token file that cannot be read refuses every request over TCP, and the log says so once a minute at most, with the
+// requests refused since: a client with no token could fill it otherwise (specs.md §25.1).
+func TestAnUnreadableTokenIsLoggedOnceAMinute(t *testing.T) {
+	_, c := apiPool(t, "[api]\nlisten = \"127.0.0.1:7341\"\ntoken_file = "+strconv.Quote(filepath.Join(t.TempDir(), "none"))+"\n")
+	a := newTestAPI(t, c)
+	m := &clockMachine{Machine: a.machine}
+	m.now.Store(time.Hour.Nanoseconds())
+	a.machine = m
+	var log syncLog
+	a.log = slog.New(slog.NewTextHandler(&log, nil))
+	h := a.withToken(a.routes())
+	for range 50 {
+		if w := ask(h, http.MethodGet, "/v1/health", "Bearer x"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("%d", w.Code)
+		}
+	}
+	if n := strings.Count(log.String(), "token cannot be read"); n != 1 || !strings.Contains(log.String(), "refused=1") {
+		t.Errorf("%d lines:\n%s", n, log.String())
+	}
+	m.now.Add(time.Minute.Nanoseconds() - 1)
+	ask(h, http.MethodGet, "/v1/health", "Bearer x")
+	if n := strings.Count(log.String(), "token cannot be read"); n != 1 {
+		t.Errorf("before the minute: %d lines", n)
+	}
+	m.now.Add(1)
+	ask(h, http.MethodGet, "/v1/health", "Bearer x")
+	if n := strings.Count(log.String(), "token cannot be read"); n != 2 || !strings.Contains(log.String(), "refused=51") {
+		t.Errorf("a minute on: %d lines:\n%s", n, log.String())
+	}
+}
+
+// syncLog is a log that requests write at once.
+type syncLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// slowMounts is a machine whose mount checks wait to be let go, and count how many run at once.
+type slowMounts struct {
+	disks.Machine
+	running, most atomic.Int32
+	entered       chan struct{}
+	release       chan struct{}
+}
+
+func (m *slowMounts) Mount(mount string) disks.MountSeen {
+	n := m.running.Add(1)
+	defer m.running.Add(-1)
+	for {
+		most := m.most.Load()
+		if n <= most || m.most.CompareAndSwap(most, n) {
+			break
+		}
+	}
+	m.entered <- struct{}{}
+	<-m.release
+	return m.Machine.Mount(mount)
+}
+
+// The answers that check the disks' mounts, /v1/disks and /v1/disks/{id}, check them one at a time: each reads the
+// mount table and every disk's device, and a client that asks again and again adds no checks at once (specs.md §25.1).
+func TestTheAPIChecksTheMountsOneAnswerAtATime(t *testing.T) {
+	_, c := apiPool(t, "")
+	a := newTestAPI(t, c)
+	m := &slowMounts{Machine: a.machine, entered: make(chan struct{}, 64), release: make(chan struct{})}
+	a.machine = m
+	h := a.routes()
+	codes := make(chan int, 4)
+	for _, path := range []string{"/v1/disks", "/v1/disks", "/v1/disks/t1", "/v1/disks"} {
+		go func() { codes <- serve(t.Context(), h, path) }()
+	}
+	<-m.entered
+	select {
+	case <-m.entered:
+		t.Error("two mount checks at once")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(m.release)
+	for range 4 {
+		if code := <-codes; code != http.StatusOK {
+			t.Errorf("%d", code)
+		}
+	}
+	if most := m.most.Load(); most != 1 {
+		t.Errorf("%d mount checks at once", most)
 	}
 }
 

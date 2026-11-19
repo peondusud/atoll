@@ -69,6 +69,8 @@ func TestHoldings(t *testing.T) {
 		Unnamed:   []UnnamedLinks{{ID: "t9", Links: 3}},
 		Shared:    []SharedDevice{{ID: "t5", Disks: []SharedDisk{{ID: "t5", Device: "sda"}, {ID: "t6", Device: "sda"}}}},
 		Foreign:   []ForeignWorkdir{{ID: "t3", Path: "/mnt/t3/Atoll", UID: 1000, Want: 997}},
+		// Versions a modification replaced, purged for room before their retention ended (specs.md §17).
+		Versions: []VersionsPurged{{ID: "t2", Paths: Refused{Count: 12, First: []string{"a"}}}, {ID: "t4"}},
 		Smart: []SmartLine{
 			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2}}},
 			{ID: "t5", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Temperature: 50}}},
@@ -81,7 +83,7 @@ func TestHoldings(t *testing.T) {
 	}
 	want := []string{"branch-path-too-long:t3=4", "disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
 		"guard-modifications:t3=1", "link-unnamed:t9=3", "manual-waiting=1", "name-refused=2", "no-access:t3=5", "no-access:t9=1", "ntfs-dirty:t7=1", "ntfs-names:t8=2", "pool-full=1", "shared-device:t5=1", "smart-failing:t4=1",
-		"smart-sectors:t4=10", "smart-sectors:t6=3", "trash-full:t3=1", "workdir-owner:t3=1"}
+		"smart-sectors:t4=10", "smart-sectors:t6=3", "trash-full:t3=1", "versions-purged:t2=12", "workdir-owner:t3=1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)
 	}
@@ -131,7 +133,7 @@ func TestGather(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.Used != 290 || f.Capacity != 400 || f.SeenByNS != hour || f.ManualAfter != "1h" || f.Files.ByState["corrupt"] != 2 || f.Files.Manual != 1 ||
-		f.Refused.Count != 3 || len(f.Disks) != 1 || len(f.Guards) != 1 || f.MaxSize != "5%" || len(f.TrashFull) != 0 {
+		f.Refused.Count != 3 || len(f.Disks) != 1 || len(f.Guards) != 1 || f.MaxSize != "5%" || f.Retention != "30d" || len(f.TrashFull) != 0 {
 		t.Errorf("%+v, files %+v", f, f.Files)
 	}
 	smart := []SmartLine{{ID: "a", SmartRecord: disks.SmartRecord{ReadNS: 7, Smart: disks.Smart{Reallocated: 8, Temperature: 41}}},
@@ -284,7 +286,9 @@ func TestDescribe(t *testing.T) {
 		Used:     95,
 		Capacity: 100,
 		SeenByNS: 10, ManualAfter: "7d",
-		Shared: []SharedDevice{{ID: "t2", Disks: []SharedDisk{{"t2", "sda"}, {"t3", "sda,sdb"}, {"t4", "sdb"}}}},
+		Shared:  []SharedDevice{{ID: "t2", Disks: []SharedDisk{{"t2", "sda"}, {"t3", "sda,sdb"}, {"t4", "sdb"}}}},
+		MaxSize: "5%", Retention: "30d",
+		Versions: []VersionsPurged{{ID: "t3", Paths: Refused{Count: 12, First: []string{"Films/a.mkv", "Films/b\xff.mkv"}}}, {ID: "t4", Paths: Refused{Count: 1, First: []string{"x"}}}},
 		Smart: []SmartLine{
 			{ID: "t3", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2, Uncorrectable: 1, Temperature: 52}}},
 			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Reallocated: 3}}},
@@ -335,6 +339,10 @@ func TestDescribe(t *testing.T) {
 		{"branch-path-too-long:t9", 12, "Atoll: 12 names of disk t9 are past the limit of its mergerfs branch", 3, []string{
 			"\ndeep/a\n(base64) ZGVlcC9i/w==\nand 10 more", "mergerfs cannot present", "no copy of that disk is taken for deleted"}},
 		{"branch-path-too-long:t9", 1, "Atoll: 1 name of disk t9 is past the limit of its mergerfs branch", 3, nil},
+		// Versions a modification replaced, purged for room before their retention ended (specs.md §17).
+		{"versions-purged:t3", 12, "Atoll: the trash of disk t3 purged 12 versions of files before their time", 4, []string{
+			"trash.max_size (5%)", "before their 30d", "those versions are lost", "\nFilms/a.mkv\n(base64) RmlsbXMvYv8ubWt2\nand 10 more"}},
+		{"versions-purged:t4", 1, "Atoll: the trash of disk t4 purged 1 version of a file before its time", 4, []string{"\nx"}},
 		{"workdir-owner:t2", 1, "Atoll: a folder Atoll works in on disk t2 belongs to another account", 3, []string{
 			"The folder /mnt/t2/Atoll/links, which Atoll works in on disk t2, belongs to the account 1000", "chown -R 997 /mnt/t2/Atoll/links"}},
 	} {

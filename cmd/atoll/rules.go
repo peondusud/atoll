@@ -148,7 +148,7 @@ func check(configPath string) checkOutput {
 		}
 		return out
 	}
-	for _, w := range c.Warnings {
+	for _, w := range configWarnings(c) {
 		out.Warnings = append(out.Warnings, checkWarning{Key: w.Key, LaterPhase: w.LaterPhase, Message: w.Message})
 	}
 	for _, h := range rules.Hidden(c.Rules) {

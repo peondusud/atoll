@@ -147,11 +147,12 @@ gotify          = ""                    # "https://gotify.example", the server
 gotify_token_file = ""                  # the application token Gotify asks for
 smtp            = ""                    # "smtps://user@mail.example?from=atoll@example&to=me@example"
 smtp_password_file = ""                 # the password of that user
+smtp_require_tls = false                # true: a mail only over TLS, even with no user
 
 [api]                                   # the local API of the daemon (§25.1)
 socket     = "/run/atoll/atoll.sock"
 listen     = ""                         # "127.0.0.1:7341", or an address of the Tailscale network
-token_file = ""                         # the Bearer token TCP asks for; to answer a guard, a file other accounts cannot read
+token_file = ""                         # the Bearer token TCP asks for; to answer a guard, root's or atoll's, 0600 or 0640
 
 [metrics]                               # Prometheus (§23.1), which the API gives on /metrics too
 listen = ""                             # "127.0.0.1:9341": /metrics alone, with no token

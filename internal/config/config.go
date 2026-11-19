@@ -103,6 +103,27 @@ type MediaServer struct {
 	PathMap map[string]string
 }
 
+// SecretFile is a file of a secret the configuration names: its key, and its path.
+type SecretFile struct {
+	Key, Path string
+}
+
+// SecretFiles gives the files of a secret the configuration names, by key in byte order (specs.md §24.4): the token or
+// key of each media server, the tokens and the password of the alert channels, the local API's token and the OTLP
+// headers file. A key left empty names none.
+func (c *Config) SecretFiles() []SecretFile {
+	var out []SecretFile
+	for _, key := range []string{
+		"alerts.gotify_token_file", "alerts.ntfy_token_file", "alerts.smtp_password_file", "api.token_file",
+		"notify.emby.api_key_file", "notify.jellyfin.api_key_file", "notify.plex.token_file", "telemetry.otlp_headers_file",
+	} {
+		if path, _ := c.effective[key].(string); path != "" {
+			out = append(out, SecretFile{Key: key, Path: path})
+		}
+	}
+	return out
+}
+
 // Effective returns every value of the configuration after the rules of specs.md
 // §24.2, by key: a string, an int64, a bool, a []any of these or an empty map. A key
 // with no value is not there. The caller must not change it.
@@ -327,7 +348,7 @@ func Parse(data []byte) (*Config, error) {
 	c.effective = flatten(tree)
 	c.PoolID, c.Strategy = text(tree, "pool_id"), text(tree, "strategy")
 	c.MediaServers = mediaServers(tree)
-	c.Warnings = slices.Concat(unknownLabels(tree), noEffect(tree, set), unreadableUPS(tree), laterPhaseWarnings(set))
+	c.Warnings = slices.Concat(unknownLabels(tree), noEffect(tree, set), unreadableUPS(tree), inClear(tree), laterPhaseWarnings(set))
 	sortProblems(c.Warnings)
 	return c, nil
 }

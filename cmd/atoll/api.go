@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,9 +26,11 @@ import (
 	"github.com/peondusud/atoll/internal/value"
 )
 
-// What a request may take (specs.md §25.1).
+// What a request may take (specs.md §25.1): its headers, then the whole request, its body included, so that a client
+// that sends slowly holds no handler, nor its connection, for long.
 const (
 	apiHeaderTimeout = 10 * time.Second
+	apiReadTimeout   = 15 * time.Second
 	apiWriteTimeout  = 60 * time.Second
 	apiIdleTimeout   = 60 * time.Second
 	apiMaxHeader     = 16 << 10
@@ -45,6 +49,11 @@ type apiServer struct {
 	// reading lets one answer at a time read the catalog: each is made in the daemon's own process, beside its passes,
 	// and one may plan the whole pool.
 	reading chan struct{}
+	// checking lets one answer at a time check the disks' mounts: each reads the mount table and each disk's device.
+	checking chan struct{}
+	// unreadable says when the log last told of a token file that cannot be read, and how many requests it refused
+	// since: once a minute at most, as a client with no token could fill the log otherwise.
+	unreadable onceAMinute
 	// onCatalog runs an answer to a guard on the catalog, under its lock: in the daemon, its loop does, between two
 	// steps (answerThrough). Nil takes no answer.
 	onCatalog func(ctx context.Context, do func(ctx context.Context, db *sql.DB) error) error
@@ -52,10 +61,14 @@ type apiServer struct {
 	apply bool
 	// told tells the daemon of an answer recorded, as SIGHUP would, so that its pass takes it at once.
 	told func()
+	// uid and gid are the account and the group the daemon runs as: with root's, those whose token file an answer
+	// over TCP takes (tokenDoubts).
+	uid, gid uint32
 }
 
 func newAPIServer(c *config.Config, m disks.Machine, log *slog.Logger, rec *metrics.Recorder) *apiServer {
-	a := &apiServer{machine: m, log: log, metrics: rec, reading: make(chan struct{}, 1)}
+	a := &apiServer{machine: m, log: log, metrics: rec, reading: make(chan struct{}, 1), checking: make(chan struct{}, 1)}
+	a.uid, a.gid = uint32(os.Geteuid()), uint32(os.Getegid()) //nolint:gosec // an account's number, never negative on Linux
 	a.current.Store(c)
 	return a
 }
@@ -75,14 +88,16 @@ func (a *apiServer) answers() map[string]apiAnswer {
 		"/v1/status": a.one(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			return http.StatusOK, writeStatus(r.Context(), c, statusArgs{asJSON: true}, w)
 		}),
-		"/v1/disks": func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
+		"/v1/disks": a.checks(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			verdicts, err := disks.CheckAll(r.Context(), a.machine, c.Disks)
 			if err != nil {
 				return 0, fmt.Errorf("%w", err)
 			}
 			return http.StatusOK, writeJSON(w, diskListFrom(c.Disks, verdicts))
-		},
-		"/v1/disks/{id}": func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
+		}),
+		// It reads the catalog too: it takes its turn there first, as a mount check is quick and a catalog's answer
+		// may not be, and a check must not wait for one while holding its own turn.
+		"/v1/disks/{id}": a.one(a.checks(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			at := slices.IndexFunc(c.Disks, func(d config.Disk) bool { return d.ID == r.PathValue("id") })
 			if at < 0 {
 				return http.StatusNotFound, writeJSON(w, apiError{"no such disk"})
@@ -92,7 +107,7 @@ func (a *apiServer) answers() map[string]apiAnswer {
 				return 0, err
 			}
 			return http.StatusOK, writeJSON(w, out)
-		},
+		})),
 		"/v1/trash": a.one(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 			return http.StatusOK, writeTrash(r.Context(), c, true, w)
 		}),
@@ -111,10 +126,21 @@ func (a *apiServer) answers() map[string]apiAnswer {
 // one makes an answer that reads the catalog wait for the one before it, and give up with its request: a client that
 // asks again before its answer came adds no work to the daemon (specs.md §25.1).
 func (a *apiServer) one(answer apiAnswer) apiAnswer {
+	return inTurn(a.reading, answer)
+}
+
+// checks makes an answer that checks the disks' mounts wait for the one before it that does, as one does for the
+// catalog (specs.md §25.1).
+func (a *apiServer) checks(answer apiAnswer) apiAnswer {
+	return inTurn(a.checking, answer)
+}
+
+// inTurn makes an answer wait for the turn that holds one place, and give up with its request.
+func inTurn(turn chan struct{}, answer apiAnswer) apiAnswer {
 	return func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
 		select {
-		case a.reading <- struct{}{}:
-			defer func() { <-a.reading }()
+		case turn <- struct{}{}:
+			defer func() { <-turn }()
 		case <-r.Context().Done():
 			return 0, fmt.Errorf("waiting for another answer: %w", r.Context().Err())
 		}
@@ -205,50 +231,130 @@ func send(w http.ResponseWriter, status int, v any) {
 
 // withToken asks every request for the token api.token_file holds, read again each time, so that a new one takes
 // effect at once (specs.md §25.1). Without it, or with another, the answer is 401 with nothing more. A request let
-// through knows whether other accounts may read that file (looseToken).
+// through carries whose that file is and its mode, which an answer to a guard looks at (tokenRefusal).
 func (a *apiServer) withToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		file, _ := a.current.Load().Effective()["api.token_file"].(string)
-		want, loose, err := readToken(file)
+		want, owner, err := readToken(file)
 		got, bearer := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if err != nil || want == "" || !bearer || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 			if err != nil {
-				a.log.Warn("the local API's token cannot be read: every request over TCP is refused", "file", file, "error", err)
+				if refused, due := a.unreadable.due(a.machine.Now()); due {
+					a.log.Warn("the local API's token cannot be read: every request over TCP is refused", "file", file, "error", err,
+						"refused", refused)
+				}
 			}
 			w.Header().Set("WWW-Authenticate", `Bearer realm="atoll"`)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), looseTokenKey{}, loose)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), tokenFileKey{}, tokenFile{path: file, owner: owner})))
 	})
 }
 
-// looseTokenKey marks a request that came with a token from a file other accounts may read.
-type looseTokenKey struct{}
-
-// looseToken says that a request came over TCP with a token from a file other accounts may read: any account of the
-// machine may then send it, and it answers questions only (specs.md §25.1).
-func looseToken(ctx context.Context) bool {
-	loose, _ := ctx.Value(looseTokenKey{}).(bool)
-	return loose
+// onceAMinute counts what happens, and says when the log may tell of it: the first time, then once a minute at most.
+type onceAMinute struct {
+	mu     sync.Mutex
+	told   bool
+	lastNS int64
+	since  int
 }
 
-// readToken reads a token file, its last line break left out, and says whether other accounts may read it.
-func readToken(file string) (token string, othersMayRead bool, err error) {
-	if file == "" {
-		return "", false, errors.New("no token file")
+// due counts one more, and says whether the log may tell of it now, with how many there were since it last did,
+// this one included.
+func (o *onceAMinute) due(nowNS int64) (int, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.since++
+	if o.told && nowNS-o.lastNS < time.Minute.Nanoseconds() {
+		return 0, false
 	}
-	data, othersMayRead, err := fsx.ReadSecretFile(file, apiMaxToken)
+	n := o.since
+	o.told, o.lastNS, o.since = true, nowNS, 0
+	return n, true
+}
+
+// tokenFileKey marks a request that came over TCP, with the token file it came with.
+type tokenFileKey struct{}
+
+// tokenFile is the token file a request over TCP came with: its path, and whose the file read was, with its mode.
+type tokenFile struct {
+	path  string
+	owner fsx.Owner
+}
+
+// tokenRefusal says why an answer to a guard that came over TCP cannot be taken with the token file it came with, ""
+// when it can, or when it came over the socket (specs.md §25.1): any account that could set the token could send it.
+func (a *apiServer) tokenRefusal(ctx context.Context) string {
+	t, overTCP := ctx.Value(tokenFileKey{}).(tokenFile)
+	if !overTCP {
+		return ""
+	}
+	folders, err := fsx.SecretFolders(t.path)
+	doubts := tokenDoubts(t.owner, folders, a.uid, a.gid)
 	if err != nil {
-		return "", false, fmt.Errorf("token: %w", err)
+		doubts = append(doubts, "the folders on the way to api.token_file cannot be looked at: "+err.Error())
 	}
-	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), othersMayRead, nil
+	if len(doubts) == 0 {
+		return ""
+	}
+	return "an answer over TCP takes a token file that only root or the account the daemon runs as can change, and other " +
+		"accounts cannot read: " + strings.Join(doubts, "; ")
+}
+
+// tokenDoubts says why a token file cannot be taken for an answer to a guard, each reason in a fixed order, and
+// nothing when it can (specs.md §25.1): the file must belong to root or to the account the daemon runs as (uid), with
+// no write for its group or other accounts and no read for other accounts; and each folder that holds its name, or
+// the name of a symbolic link on the way to it, must belong to root or that account, with no write for other
+// accounts, sticky or not, and none for its group unless that group is root's or the daemon's own (gid). Any account
+// that could write either could set the token it then sends. Its group may read it: Prometheus's, say.
+func tokenDoubts(file fsx.Owner, folders []fsx.Folder, uid, gid uint32) []string {
+	ours := func(id uint32) bool { return id == 0 || id == uid }
+	var out []string
+	if !ours(file.UID) {
+		out = append(out, fmt.Sprintf("api.token_file belongs to the account %d, neither root nor the one the daemon runs as (chown root)", file.UID))
+	}
+	perm := file.Mode.Perm()
+	if perm&0o020 != 0 {
+		out = append(out, "its group may write api.token_file (chmod g-w)")
+	}
+	if perm&0o004 != 0 {
+		out = append(out, "other accounts may read api.token_file (chmod o-r)")
+	}
+	if perm&0o002 != 0 {
+		out = append(out, "other accounts may write api.token_file (chmod o-w)")
+	}
+	for _, f := range folders {
+		if !ours(f.UID) {
+			out = append(out, fmt.Sprintf("the folder %s belongs to the account %d, neither root nor the one the daemon runs as (chown root)", f.Path, f.UID))
+		}
+		if f.Mode.Perm()&0o002 != 0 {
+			out = append(out, fmt.Sprintf("other accounts may write the folder %s (chmod o-w)", f.Path))
+		}
+		if f.Mode.Perm()&0o020 != 0 && f.GID != 0 && f.GID != gid {
+			out = append(out, fmt.Sprintf("the group %d may write the folder %s, neither root's nor the daemon's (chmod g-w)", f.GID, f.Path))
+		}
+	}
+	return out
+}
+
+// readToken reads a token file, its last line break left out, and gives whose the file it read is, with its mode.
+func readToken(file string) (token string, owner fsx.Owner, err error) {
+	if file == "" {
+		return "", fsx.Owner{}, errors.New("no token file")
+	}
+	data, owner, err := fsx.ReadSecretFile(file, apiMaxToken)
+	if err != nil {
+		return "", fsx.Owner{}, fmt.Errorf("token: %w", err)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r"), owner, nil
 }
 
 // httpServer is a server with the limits of specs.md §25.1.
 func httpServer(h http.Handler) *http.Server {
 	return &http.Server{
-		Handler: h, ReadHeaderTimeout: apiHeaderTimeout, WriteTimeout: apiWriteTimeout, IdleTimeout: apiIdleTimeout, MaxHeaderBytes: apiMaxHeader,
+		Handler: h, ReadHeaderTimeout: apiHeaderTimeout, ReadTimeout: apiReadTimeout, WriteTimeout: apiWriteTimeout, IdleTimeout: apiIdleTimeout,
+		MaxHeaderBytes: apiMaxHeader,
 	}
 }
 
@@ -256,8 +362,10 @@ func httpServer(h http.Handler) *http.Server {
 // off, with a line of the log: answering questions is no reason to stop the daemon.
 func (a *apiServer) start(ctx context.Context, c *config.Config) func() {
 	var servers []*http.Server
+	// Each listener holds apiMaxConns connections at once, its own: a flood over TCP takes no place of the socket's.
 	serve := func(s *http.Server, l net.Listener) {
 		servers = append(servers, s)
+		l = capConns(l, apiMaxConns)
 		go func() {
 			if err := s.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				a.log.Warn("the local API stopped", "address", l.Addr().String(), "error", err)

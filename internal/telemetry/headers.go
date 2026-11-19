@@ -29,12 +29,10 @@ var reserved = []string{"Content-Type", "Content-Length", "Content-Encoding", "T
 // readHeaders reads a file of headers: one Name: value a line, an empty line or one that starts with # aside. A name is
 // an HTTP token, a value has no control character but a tab, and neither is ever in an error.
 func readHeaders(file string) ([]header, error) {
-	data, err := fsx.ReadFile(file)
+	// Read with its limit, never whole first: a file of headers is a line or a few.
+	data, err := fsx.ReadSmallFile(file, maxHeadersFile)
 	if err != nil {
 		return nil, fmt.Errorf("%w %s: %w", errHeaders, file, err)
-	}
-	if len(data) > maxHeadersFile {
-		return nil, fmt.Errorf("%w %s: more than %d bytes", errHeaders, file, maxHeadersFile)
 	}
 	var out []header
 	for i, line := range strings.Split(string(data), "\n") {
