@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The threat model's G18: the systemd units hardened, 2026-11-19 (specs.md §10, §15.13, §26)
+
+The maintainer's answer: harden the units, the group `disk` included, each setting measured in qemu. Commits `3bad015`, `c8e4b2c`, `689d52b` and `5d529ba`, merged by `5d5cb40`.
+
+- **The units** (`deploy/atoll.service`, `deploy/atoll-mount.service`) set `SystemCallArchitectures=native`, `SystemCallFilter=@system-service @mount`, and `fanotify_init fanotify_mark open_by_handle_at` for the daemon, with `SystemCallErrorNumber=EPERM`, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, `RestrictNamespaces`, `LockPersonality`, `MemoryDenyWriteExecute`, `RestrictRealtime`, `ProtectClock`, `ProtectHostname` and `UMask=0027`, `NoNewPrivileges` kept. **No supplementary group**: the group `disk` gave nothing `CAP_DAC_READ_SEARCH` and `CAP_DAC_OVERRIDE` did not, measured, so no udev rule replaces it. **`CAP_FSETID` added**: without it a copied 2775 folder came out 0775, and so did one made through the view. Left out, each with its reason in the unit: `RestrictSUIDSGID` (with it nothing of a setgid folder was copied), `DevicePolicy`/`DeviceAllow` (the remount opens the device under whatever number it comes back with), and every setting that gives a mount namespace.
+- **Measured under systemd**: qemu's guest has a second run with systemd 257 as PID 1 (`test/qemu/units`, `SYSTEMD_RUN`, on by default, the CI's too), where `TestTheDaemonUnderSystemd` (ext4 on a partition of a SCSI disk through device-mapper, and ntfs-3g) and `TestTheViewUnderSystemd` start both units as they ship, a call outside the filter killing the process, on Linux 6.12 and 7.3: ready, copies through fanotify, setgid kept, the socket, a reload, mergerfs's branches, a remount through `/etc/fstab` after a device-mapper rename, `SG_IO` on the whole disk, smartctl, both views mounted for the host, a stop with 0, each in the host's mount namespace with no device policy. `systemd-analyze security`: 7.3 to 4.4 and 7.1 to 4.2. `TestTheUnitsAreHardened` holds the settings.
+- **Found**: an ntfs-3g disk the daemon remounted is unmounted when the daemon stops or restarts, as its FUSE process belongs to the service's cgroup (ext4 stays): written in §15.13 and `deploy/README.md`, not fixed (a decision in TODO.md). `deploy/README.md` said `/etc/atoll` belongs to `atoll`; it is root's.
+- **Decided without the maintainer, to confirm**: no udev rule; `CAP_FSETID` added; `SystemCallErrorNumber=EPERM` in the units, `kill` in the tests; `UMask=0027`, so a folder §15.12 makes with no model on any disk is 0750 and `atoll`'s; the guest's second run on by default; `ProtectClock` allowed, measured to make no mount namespace.
+
 ## The two flaws TLC found, fixed, 2026-11-19 (specs.md §9, §13.4, §14, §14.1, §14.2, §15.12, §17.2)
 
 The maintainer approved the remedies ("je ok avec tes remèdes de failles"). Commits `2441e45` and `eaa8f82`, merged by `bfc584e`.
