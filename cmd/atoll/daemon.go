@@ -160,6 +160,7 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 	}()
 	logs := logsFor(stderr)
 	log := slog.New(logs)
+	logWarnings(log, c)
 	// The local API answers with the configuration the daemon runs with, the one a reload takes too (specs.md §25.1).
 	// What the loop records, /metrics gives (specs.md §23.1), and the export sends, as the log, when [telemetry] asks
 	// it, from that configuration too (§23.2). Its answers to a guard go through the loop, which runs each under the
@@ -178,6 +179,7 @@ func runForGood(configPath string, c *config.Config, apply bool, stderr io.Write
 		if err == nil {
 			api.current.Store(next)
 			applyTelemetry(ctx, tel, next, log)
+			logWarnings(log, next)
 		}
 		return next, err
 	}

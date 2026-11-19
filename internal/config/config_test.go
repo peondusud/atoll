@@ -563,3 +563,32 @@ func TestAnErrorShowsNoURL(t *testing.T) {
 		t.Errorf("a value that holds no secret is not shown: %v", err)
 	}
 }
+
+// The files of a secret the configuration names, by key in byte order, each that is set (specs.md §24.4).
+func TestSecretFiles(t *testing.T) {
+	c, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[notify.plex]\ntoken_file = \"/etc/atoll/plex.token\"\n" +
+		"[notify.emby]\napi_key_file = \"\"\n[alerts]\nsmtp_password_file = \"/etc/atoll/smtp\"\nntfy_token_file = \"/etc/atoll/ntfy\"\n" +
+		"[api]\ntoken_file = \"/etc/atoll/api.token\"\n[telemetry]\notlp_headers_file = \"/etc/atoll/otlp.headers\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []SecretFile{
+		{"alerts.ntfy_token_file", "/etc/atoll/ntfy"}, {"alerts.smtp_password_file", "/etc/atoll/smtp"}, {"api.token_file", "/etc/atoll/api.token"},
+		{"notify.plex.token_file", "/etc/atoll/plex.token"}, {"telemetry.otlp_headers_file", "/etc/atoll/otlp.headers"},
+	}
+	if got := c.SecretFiles(); !slices.Equal(got, want) {
+		t.Errorf("%v, want %v", got, want)
+	}
+}
+
+// A warning about a secret sent in clear names its key and never the address, which may hold the secret itself: the
+// topic of a ntfy server, or a user and a password (specs.md §23, §24.4).
+func TestAWarningShowsNoURL(t *testing.T) {
+	c, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[alerts]\nntfy = \"http://me:s3cret@ntfy.lan/s3cret-topic\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Warnings) != 1 || c.Warnings[0].Key != "alerts.ntfy" || strings.Contains(c.Warnings[0].Message, "s3cret") {
+		t.Errorf("%+v", c.Warnings)
+	}
+}

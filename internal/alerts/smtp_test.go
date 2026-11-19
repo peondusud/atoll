@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/peondusud/atoll/internal/config"
 )
 
 // smtpMail is what a fake server took.
@@ -263,6 +265,57 @@ func TestSMTPKeepsAPasswordOutOfClearText(t *testing.T) {
 	}
 	if got := f.mails(); len(got) != 1 || got[0].tls {
 		t.Errorf("%+v", got)
+	}
+}
+
+// With alerts.smtp_require_tls, a mail goes only over TLS, even with no user: a server that offers no STARTTLS, or a
+// network that strips it, gets nothing, and the error says why. smtps and STARTTLS go as before (specs.md §23).
+func TestSMTPRequiresTLSWhenAsked(t *testing.T) {
+	f, trust := newFakeSMTP(t, false, false)
+	s := &SMTP{URL: "smtp://" + f.addr + "?from=a@example.com&to=b@example.com", TLS: trust, RequireTLS: true}
+	if err := s.Send(t.Context(), urgent); err == nil || !strings.Contains(err.Error(), "alerts.smtp_require_tls") {
+		t.Errorf("sent in clear: %v", err)
+	}
+	if got := f.mails(); len(got) != 0 {
+		t.Fatalf("%+v", got)
+	}
+	f, trust = newFakeSMTP(t, false, true)
+	s = &SMTP{URL: "smtp://" + f.addr + "?from=a@example.com&to=b@example.com", TLS: trust, RequireTLS: true}
+	if err := s.Send(t.Context(), urgent); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.mails(); len(got) != 1 || !got[0].tls {
+		t.Errorf("over STARTTLS: %+v", got)
+	}
+	f, trust = newFakeSMTP(t, true, false)
+	s = &SMTP{URL: "smtps://" + f.addr + "?from=a@example.com&to=b@example.com", TLS: trust, RequireTLS: true}
+	if err := s.Send(t.Context(), urgent); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.mails(); len(got) != 1 || !got[0].tls {
+		t.Errorf("over TLS: %+v", got)
+	}
+}
+
+// The channels take alerts.smtp_require_tls from the configuration, false when it is left out.
+func TestChannelsTakeRequireTLS(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want bool
+	}{
+		{"", false},
+		{"smtp_require_tls = false\n", false},
+		{"smtp_require_tls = true\n", true},
+	} {
+		c, err := config.Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[alerts]\nsmtp = \"smtp://mail.example?from=a@example.org&to=b@example.org\"\n" + tc.text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		list := Channels(c)
+		s, ok := list[len(list)-1].(*SMTP)
+		if !ok || s.RequireTLS != tc.want {
+			t.Errorf("%q: %+v", tc.text, list)
+		}
 	}
 }
 

@@ -173,6 +173,31 @@ func parsePort(s string) (uint16, bool) {
 	return uint16(n), true
 }
 
+// LoopbackHost says whether the host of a URL is this machine by its text alone, with nothing resolved (specs.md
+// §24.4): the name localhost, in any case of its ASCII letters; an IPv4 address of 127.0.0.0/8 in four decimal parts
+// with no leading zero; or ::1 in brackets, in hex groups with no zone, as ipv6 above. Anything else is not, however a
+// resolver would read it.
+func LoopbackHost(host string) bool {
+	if len(host) == len("localhost") {
+		lower := []byte(host)
+		for i, c := range lower {
+			if 'A' <= c && c <= 'Z' {
+				lower[i] = c + 'a' - 'A'
+			}
+		}
+		if string(lower) == "localhost" {
+			return true
+		}
+	}
+	if inner, ok := strings.CutPrefix(host, "["); ok {
+		inner, ok = strings.CutSuffix(inner, "]")
+		var ip [16]byte
+		return ok && parseIPv6(inner, &ip) && ip == [16]byte{15: 1}
+	}
+	var ip [4]byte
+	return parseIPv4(host, &ip) && ip[0] == 127
+}
+
 // allowed says whether the address is a loopback one (127.0.0.0/8, ::1) or one of the Tailscale network
 // (100.64.0.0/10, fd7a:115c:a1e0::/48).
 func (l Listen) allowed() bool {

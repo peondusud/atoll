@@ -147,6 +147,7 @@ gotify          = ""                    # "https://gotify.example", the server
 gotify_token_file = ""                  # the application token Gotify asks for
 smtp            = ""                    # "smtps://user@mail.example?from=atoll@example&to=me@example"
 smtp_password_file = ""                 # the password of that user
+smtp_require_tls = false                # true: a mail only over TLS, even with no user
 
 [api]                                   # the local API of the daemon (§25.1)
 socket     = "/run/atoll/atoll.sock"

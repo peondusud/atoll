@@ -361,6 +361,11 @@
           "description": "A file that holds the password of the user alerts.smtp names (specs.md §23).",
           "$ref": "#/$defs/optional_path",
           "default": ""
+        },
+        "smtp_require_tls": {
+          "description": "Send a mail only over TLS: with smtp://, only once STARTTLS succeeded, even with no user. false, the default, sends in clear when the server offers no STARTTLS and alerts.smtp names no user (specs.md §23).",
+          "type": "boolean",
+          "default": false
         }
       }
     },
