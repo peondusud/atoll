@@ -34,6 +34,14 @@ func (r *Recorder) Text() ([]byte, error) {
 	return Render(&r.s)
 }
 
+// Points gives the samples of the snapshot as it stands, as /metrics would write them: what OTLP sends (specs.md
+// §23.1). They share nothing the daemon's next steps change.
+func (r *Recorder) Points() map[string][]Point {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return Points(&r.s)
+}
+
 // Configure sets the disks of the configuration, in its order, from what each says of itself: a disk that stays keeps
 // what was recorded of it, and one that went is forgotten.
 func (s *Snapshot) Configure(disks []Disk) {

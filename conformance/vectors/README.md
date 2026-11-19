@@ -56,6 +56,17 @@ One JSON file per function. Every file has this envelope:
 | `snapshot` | object | what the daemon holds: `version`; `disks`, each with `id`, `fs`, `role`, `mount`, `state`, `standby` (`true` or left out), `space` (`capacity`, `free`) and `catalog` (`copies`, `bytes`, `trash_entries`, `trash_bytes`, `scrub_due_copies`, `scrub_due_bytes`) and `smart` (`read_ns`, `failing`, `reallocated`, `pending`, `uncorrectable`, `temperature`), each left out when unknown, and `scrub_read_copies`, `scrub_read_bytes` and `scrub_corrupt`; `files`, by state, each `files` and `bytes`, left out before a pass; `passes`, `pass_failures` and `copied_bytes`; `last_pass` (`end_ns`, `duration_ns`, `partial`, `held`) and `waiting`, left out before a pass; `operations` (`kind`, `outcome`, `count`) and `alerts` (`key`, `count`), in any order; `ups` (`power`, `unreachable`), left out without `ups.enabled`. A flag inside is `true` or left out |
 | `text` | string | what `/metrics` writes: the metrics of `api/metrics.json` that have a sample, in that file's order, each with its `# HELP` and `# TYPE` lines, its samples by their label values in byte order, every line ending in a line feed |
 
+### `otel_names.json` — OpenTelemetry names to Prometheus names (§23.1)
+
+OpenTelemetry's Prometheus compatibility translation, with its suffixes, as the OpenTelemetry Collector and Prometheus apply it. Each metric of `api/metrics.json` gives its own `name` back from its `otel_name` and `unit` so, which a unit test checks over every entry.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | the OpenTelemetry name |
+| `unit` | string | its unit of UCUM, `""` for none |
+| `type` | string | `gauge`, or `counter` for a monotonic sum |
+| `prometheus` | string | the Prometheus name the translation gives |
+
 ### `size.json` — sizes (§29.5)
 
 | Field | Type | Meaning |
