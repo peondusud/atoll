@@ -274,7 +274,60 @@ func modeLike(like *fsx.Stat) uint32 {
 	if like != nil {
 		return like.Mode
 	}
-	return 0o755
+	return FolderMode
+}
+
+// FolderMode is the mode of a folder made below the root that stands for none: open to read and to enter, as the
+// library is, whatever the umask of the process that makes it (specs.md §15.12, step 3, §17.4). Atoll's own folders
+// below the work folder are made with it too, less the umask, as they are not the library (§17.1, step 3).
+const FolderMode = 0o755
+
+// openUp gives a folder just made below the root that stands for none the permission bits of mode, through a handle
+// on it: mkdir took off what the umask holds, and the units' 0027 left it 0750, closed to a media server running under
+// another account, whose library lost what landed below it with nothing said (the maintainer, 2026-11-20). The setgid
+// bit a parent passes on stays, as mkdir gives it whatever the umask, and so does the owner mkdir gave. As adopt does,
+// it reaches the folder by its name without following a link, and leaves one that holds anything, as a folder just
+// made holds nothing; a driver that refuses only leaves the folder as mkdir made it, and only a disk that is gone makes
+// this matter.
+func openUp(parent fsx.Dir, name string, mode uint32) error {
+	err := setPerm(parent, name, mode)
+	switch {
+	case err == nil:
+		return nil
+	case fsx.IsDiskLost(err):
+		return lost(err)
+	default:
+		slog.Warn("a new folder keeps the mode the umask left it", "name", name, "error", err)
+		return nil
+	}
+}
+
+// setPerm sets the permission bits of a folder just made, through a handle on it, and leaves the other bits as they
+// are.
+func setPerm(parent fsx.Dir, name string, mode uint32) error {
+	dir, err := parent.OpenDir(name)
+	if err != nil {
+		return fmt.Errorf("open %q: %w", name, err)
+	}
+	defer func() { _ = dir.Close() }()
+	held, err := dir.Names()
+	switch {
+	case err != nil:
+		return fmt.Errorf("list %q: %w", name, err)
+	case len(held) > 0:
+		return fmt.Errorf("%q: %w", name, fsx.ErrNotNew)
+	}
+	st, err := dir.Info()
+	if err != nil {
+		return fmt.Errorf("look at %q: %w", name, err)
+	}
+	if st.Mode&0o777 == mode&0o777 {
+		return nil
+	}
+	if err := dir.SetMode(st.Mode&^0o777 | mode&0o777); err != nil {
+		return fmt.Errorf("give %q its mode: %w", name, err)
+	}
+	return nil
 }
 
 // adopt gives a new folder the mode and owner it stands in for, where the driver allows it. A driver
@@ -454,9 +507,10 @@ func (d *Disk) LookAt(logical string) (taken bool, missing []string, err error) 
 	return false, nil, nil
 }
 
-// MakeRootFolder makes one folder below the root, for a restore, and keeps the time of the folder it
-// lands in (specs.md §6.1, item 8). like is the folder of the trash at that level, when there is
-// one. It says what it made. The root itself is never made: its absence is an error (invariant 3).
+// MakeRootFolder makes one folder below the root, for a restore, a copy or a rename, and keeps the time of the folder
+// it lands in (specs.md §6.1, item 8). like is the folder it stands for, when there is one, whose mode and owner it
+// takes; with none, it takes the mode FolderMode, whatever the umask, and keeps the owner mkdir gives it (§17.4). It
+// says what it made. The root itself is never made: its absence is an error (invariant 3).
 func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) {
 	if err := d.Verify(); err != nil {
 		return fsx.Stat{}, err
@@ -484,10 +538,14 @@ func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) 
 	case err != nil:
 		return fsx.Stat{}, classify(err)
 	}
+	d.machine.Checkpoint("mkdir-made")
 	if like != nil {
-		if err := adopt(parent, name, like); err != nil {
-			return fsx.Stat{}, err
-		}
+		err = adopt(parent, name, like)
+	} else {
+		err = openUp(parent, name, FolderMode)
+	}
+	if err != nil {
+		return fsx.Stat{}, err
 	}
 	d.machine.Checkpoint("folder-made")
 	if err := syncEntry(parent.Dir, name); err != nil {

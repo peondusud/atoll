@@ -48,7 +48,7 @@ ProtectClock=yes
 ProtectHostname=yes
 # What the daemon makes with no mode to copy, its folders of the trash, its catalog and its backups, is closed to other
 # accounts. A copy, and each folder made for one, takes its source's mode whatever the mask (specs.md §14.2); a folder
-# of the library that no disk holds any more, made for a file moved there, would be 0750 (§15.12).
+# of the library that no disk holds any more, made for a file moved there, is made 0755 whatever the mask (§17.4).
 UMask=0027
 # Left out, as each breaks what the daemon does:
 # - RestrictSUIDSGID: a copy, a folder made for it and a mode carried to the other copies take setuid and setgid with

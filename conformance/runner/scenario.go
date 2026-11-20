@@ -98,6 +98,7 @@ type step struct {
 	StdoutJSON json.RawMessage   `json:"stdout_json"`
 	CrashAt    string            `json:"crash_at"`
 	Full       []string          `json:"full"`
+	Umask      *string           `json:"umask"` // the mask the binary runs with, as a unit's UMask= gives it
 	Disk       string            `json:"disk"`
 	Path       *string           `json:"path"`
 	PathB64    *string           `json:"path_b64"`
@@ -121,7 +122,7 @@ type step struct {
 func stepFields(do string) ([]string, bool) {
 	switch do {
 	case "atoll":
-		return []string{"args", "exit", "stdout_json", "crash_at", "full"}, true
+		return []string{"args", "exit", "stdout_json", "crash_at", "full", "umask"}, true
 	case "write":
 		return []string{"disk", "path", "path_b64", "text", "size", "mtime_ns"}, true
 	case "mkdir", "delete":
@@ -205,6 +206,10 @@ func parseScenario(data []byte) (*scenario, error) {
 			err = checkOwner(st.UID, st.GID, true)
 		case st.Do == "symlink" && st.Target == "":
 			err = errors.New("no target")
+		case st.Do == "atoll" && st.Umask != nil:
+			if _, err = parseUmask(*st.Umask); err == nil {
+				err = checkFull(s.Disks, st.Full)
+			}
 		case st.Do == "atoll":
 			err = checkFull(s.Disks, st.Full)
 		}
@@ -303,8 +308,13 @@ func checkEntry(e *entry) error {
 			return err
 		}
 	case "dir":
-		if e.Text != nil || e.Size != nil || e.Target != "" || e.MtimeNS != nil || e.Mode != nil || e.UID != nil || e.GID != nil {
-			return errors.New("a folder has only a path")
+		if e.Text != nil || e.Size != nil || e.Target != "" || e.MtimeNS != nil || e.UID != nil || e.GID != nil {
+			return errors.New("a folder has only a path, and a mode")
+		}
+		if e.Mode != nil {
+			if _, err := parseMode(*e.Mode); err != nil {
+				return err
+			}
 		}
 	case "symlink":
 		if e.Text != nil || e.Size != nil || e.MtimeNS != nil || e.Mode != nil || e.UID != nil || e.GID != nil {
@@ -740,6 +750,16 @@ func parseMode(text string) (os.FileMode, error) {
 	return mode, nil
 }
 
+// parseUmask reads a mask written as a mode is, in octal digits with a leading 0, from 0000 to 0777: what a unit's
+// UMask= takes.
+func parseUmask(text string) (string, error) {
+	value, err := strconv.ParseUint(text, 8, 32)
+	if err != nil || len(text) != 4 || text[0] != '0' || value > 0o777 {
+		return "", fmt.Errorf("umask %q: want octal digits from 0000 to 0777", text)
+	}
+	return text, nil
+}
+
 // specialBits are the bits above the permission bits, as stat(2) and Go each write them.
 var specialBits = [...]struct {
 	bit  uint32
@@ -782,6 +802,11 @@ func (b *sandbox) runAtoll(s *step) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), stepTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, b.bin, args...)
+	if s.Umask != nil {
+		// A mask is a process's own, which exec.Cmd cannot give the child: a shell sets it, and then becomes the binary,
+		// so that the exit code, a crash's included, is the binary's own.
+		cmd = exec.CommandContext(ctx, "/bin/sh", append([]string{"-c", `umask "$0" && exec "$@"`, *s.Umask, b.bin}, args...)...)
+	}
 	cmd.Dir = b.dir
 	// With a set time zone, what "local" means does not depend on the machine. The runner's own two come last, so that
 	// nothing overrides them: of a name given twice, a run gets the last.
@@ -1074,7 +1099,14 @@ func contentOf(e *entry) []byte {
 func writeEntry(root, rel string, e *entry) error {
 	at := diskAt{top: root}
 	if e.Kind == "dir" {
-		return at.mkdirAll(rel)
+		if err := at.mkdirAll(rel); err != nil || e.Mode == nil {
+			return err
+		}
+		mode, err := parseMode(*e.Mode)
+		if err != nil {
+			return err
+		}
+		return at.chmod(rel, mode)
 	}
 	if err := at.mkdirAll(filepath.Dir(rel)); err != nil {
 		return err
@@ -1175,7 +1207,7 @@ type found struct {
 	content []byte
 	target  string
 	mtimeNS int64
-	mode    uint32 // for a file: the permission bits, setuid, setgid and sticky
+	mode    uint32 // for a file and a folder: the permission bits, setuid, setgid and sticky
 	uid     int64  // for a file
 	gid     int64
 	empty   bool              // for a folder
@@ -1224,7 +1256,7 @@ func listBelow(r *os.Root, dir string, out map[string]*found) error {
 			if err != nil {
 				return err
 			}
-			out[rel] = &found{kind: "dir", empty: len(children) == 0}
+			out[rel] = &found{kind: "dir", empty: len(children) == 0, mode: modeBits(info.Mode())}
 			if err := listBelow(r, rel, out); err != nil {
 				return err
 			}
@@ -1329,6 +1361,12 @@ func sameEntry(e *entry, f *found) error {
 	case "symlink":
 		if f.target != e.Target {
 			return fmt.Errorf("target %q, want %q", f.target, e.Target)
+		}
+	case "dir":
+		if e.Mode != nil {
+			if want, err := parseMode(*e.Mode); err != nil || f.mode != modeBits(want) {
+				return fmt.Errorf("mode %04o, want %s", f.mode, *e.Mode)
+			}
 		}
 	case "file":
 		content := contentOf(e)
