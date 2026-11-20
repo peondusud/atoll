@@ -13,7 +13,7 @@ import (
 // untilBy purges by a slice in a session that may write or not, with the context given, and gives what it reached.
 func (b *bench) untilBy(ctx context.Context, at int64, apply bool, each func(*EntryItem) error) (*Summary, bool, error) {
 	b.t.Helper()
-	s, err := Open(b.t.Context(), b.db, b.config, b, apply)
+	s, err := Open(ctx, b.db, b.config, b, apply)
 	if err != nil {
 		b.t.Fatal(err)
 	}
