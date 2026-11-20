@@ -4,6 +4,7 @@
   "description": "The form Windows gives the short name of a longer one: at most 8 characters before a single dot, the last of them a tilde and digits after at least one other, and at most 3 after the dot, every one of them an ASCII letter of either case, a digit or one of ! # $ % & ' ( ) - @ ^ _ ` { } ~. On NTFS such a name may be the short name of another entry, which every driver answers for and none lists.",
   "cases": [
     { "name": "FILMNA~1.MKV", "short": true },
+    { "name": "FILMN~10.MKV", "short": true, "note": "digits after the tilde, a 0 among them" },
     { "name": "filmna~1.mkv", "short": true, "note": "ntfs3 answers a short name whatever its case" },
     { "name": "MEDIAL~1", "short": true, "note": "a folder's: no dot" },
     { "name": "FILM~123.MKV", "short": true, "note": "more digits, fewer letters" },

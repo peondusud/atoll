@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/peondusud/atoll/internal/vectors"
 )
@@ -144,6 +145,22 @@ func TestUTF16NeverLongerThanUTF8(t *testing.T) {
 		if utf16Len(s) > len(s) {
 			t.Fatalf("%U: %d UTF-16 units, %d bytes", r, utf16Len(s), len(s))
 		}
+	}
+}
+
+// utf16Len counts the UTF-16 code units of the exact text (specs.md §15.8): one for each character of the BMP, up to
+// U+FFFF, and two above it.
+func TestUTF16LenCountsCodeUnits(t *testing.T) {
+	for r := rune(0); r <= 0x10FFFF; r++ {
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue
+		}
+		if got, want := utf16Len(string(r)), len(utf16.Encode([]rune{r})); got != want {
+			t.Fatalf("%U: %d UTF-16 units, want %d", r, got, want)
+		}
+	}
+	if got := utf16Len("a￿\U00010000é"); got != 5 {
+		t.Errorf("utf16Len = %d, want 5", got)
 	}
 }
 
