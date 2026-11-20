@@ -121,7 +121,7 @@ type faultTx struct {
 
 func (t *faultTx) Commit() error {
 	if err := t.f.fail("COMMIT"); err != nil {
-		_ = t.Tx.Rollback()
+		_ = t.Rollback()
 		return err
 	}
 	return t.Tx.Commit() //nolint:wrapcheck // a test double
@@ -173,9 +173,9 @@ func (b *bench) faultyCatalog(at int) (*sql.DB, *catalogFaults) {
 }
 
 // runWithCatalogFault runs a case's pass with the catalog's statement at a position failing (0 fails none), then passes
-// with nothing failing until all is done, and gives the statements, the error of the pass that failed, and what the
-// pool ends with.
-func runWithCatalogFault(t *testing.T, c *passCase, at int) (seen []string, runErr error, end string) {
+// with nothing failing until all is done, and gives the statements, what the pool ends with, and the error of the pass
+// that failed.
+func runWithCatalogFault(t *testing.T, c *passCase, at int) (seen []string, end string, runErr error) {
 	t.Helper()
 	b := c.pool(t)
 	if c.crash != "" {
@@ -189,7 +189,7 @@ func runWithCatalogFault(t *testing.T, c *passCase, at int) (seen []string, runE
 	f.mu.Lock()
 	seen = append(seen, f.seen...)
 	f.mu.Unlock()
-	return seen, runErr, b.settled(false)
+	return seen, b.settled(false), runErr
 }
 
 // settled runs passes with nothing failing until all is done, and says what the pool ends with: settle passed at each,
@@ -224,7 +224,7 @@ func sweepCatalog(t *testing.T, c passCase, stride int) {
 	t.Helper()
 	t.Run(c.name, func(t *testing.T) {
 		t.Parallel()
-		seen, err, want := runWithCatalogFault(t, &c, 0)
+		seen, want, err := runWithCatalogFault(t, &c, 0)
 		if err != nil {
 			t.Fatalf("with nothing failing: %v", err)
 		}
@@ -237,7 +237,7 @@ func sweepCatalog(t *testing.T, c passCase, stride int) {
 		}
 		for i := 0; i < len(seen); i += stride {
 			where := fmt.Sprintf("statement %d of %d (%.80s) failing", i+1, len(seen), seen[i])
-			_, err, got := runWithCatalogFault(t, &c, i+1)
+			_, got, err := runWithCatalogFault(t, &c, i+1)
 			if err != nil && !errors.Is(err, errCatalogFault) {
 				t.Errorf("%s: the pass ended with another error: %v", where, err)
 			}

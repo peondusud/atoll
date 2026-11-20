@@ -52,8 +52,8 @@ func rotten(t *testing.T, c *integrityCase) *bench {
 }
 
 // runIntegrity runs a case with the call at a position failing with inject (0 fails none), then ends it, and gives the
-// calls, the error of the run that failed, and what the pool ends with.
-func runIntegrity(t *testing.T, c *integrityCase, at int, inject error) (calls []string, runErr error, end string) {
+// calls, what the pool ends with, and the error of the run that failed.
+func runIntegrity(t *testing.T, c *integrityCase, at int, inject error) (calls []string, end string, runErr error) {
 	t.Helper()
 	b := rotten(t, c)
 	armed := true
@@ -69,7 +69,7 @@ func runIntegrity(t *testing.T, c *integrityCase, at int, inject error) (calls [
 	}
 	runErr = c.run(b, b.db)
 	armed = false
-	return calls, runErr, endIntegrity(t, c, b)
+	return calls, endIntegrity(t, c, b), runErr
 }
 
 // endIntegrity checks what a run that failed left, then runs it again with nothing failing, then atoll repair, and
@@ -94,7 +94,7 @@ func endIntegrity(t *testing.T, c *integrityCase, b *bench) string {
 }
 
 // runIntegrityCatalog runs a case with the catalog's statement at a position failing (0 fails none), then ends it.
-func runIntegrityCatalog(t *testing.T, c *integrityCase, at int) (seen []string, runErr error, end string) {
+func runIntegrityCatalog(t *testing.T, c *integrityCase, at int) (seen []string, end string, runErr error) {
 	t.Helper()
 	b := rotten(t, c)
 	db, f := b.faultyCatalog(at)
@@ -105,7 +105,7 @@ func runIntegrityCatalog(t *testing.T, c *integrityCase, at int) (seen []string,
 	f.mu.Lock()
 	seen = append(seen, f.seen...)
 	f.mu.Unlock()
-	return seen, runErr, endIntegrity(t, c, b)
+	return seen, endIntegrity(t, c, b), runErr
 }
 
 // sweepIntegrityCatalog is sweepIntegrity with each statement of the catalog failing in turn, one in stride: the run
@@ -114,7 +114,7 @@ func sweepIntegrityCatalog(t *testing.T, c integrityCase, stride int) {
 	t.Helper()
 	t.Run(c.name, func(t *testing.T) {
 		t.Parallel()
-		seen, err, want := runIntegrityCatalog(t, &c, 0)
+		seen, want, err := runIntegrityCatalog(t, &c, 0)
 		if err != nil {
 			t.Fatalf("with nothing failing: %v", err)
 		}
@@ -126,7 +126,7 @@ func sweepIntegrityCatalog(t *testing.T, c integrityCase, stride int) {
 		}
 		for i := 0; i < len(seen); i += stride {
 			where := fmt.Sprintf("statement %d of %d (%.80s) failing", i+1, len(seen), seen[i])
-			_, err, got := runIntegrityCatalog(t, &c, i+1)
+			_, got, err := runIntegrityCatalog(t, &c, i+1)
 			if err != nil && !errors.Is(err, errCatalogFault) {
 				t.Errorf("%s: the run ended with another error: %v", where, err)
 			}
@@ -164,7 +164,7 @@ func sweepIntegrity(t *testing.T, c integrityCase) {
 	t.Helper()
 	t.Run(c.name, func(t *testing.T) {
 		t.Parallel()
-		calls, err, want := runIntegrity(t, &c, 0, nil)
+		calls, want, err := runIntegrity(t, &c, 0, nil)
 		if err != nil {
 			t.Fatalf("with nothing failing: %v", err)
 		}
@@ -177,7 +177,7 @@ func sweepIntegrity(t *testing.T, c integrityCase) {
 					continue
 				}
 				where := fmt.Sprintf("call %d of %d (%s) failing with %v", i+1, len(calls), call, inject)
-				_, err, got := runIntegrity(t, &c, i+1, inject)
+				_, got, err := runIntegrity(t, &c, i+1, inject)
 				if err != nil {
 					t.Errorf("%s: the run ended with %v", where, err)
 				}

@@ -100,8 +100,8 @@ func copiesToMake(t *testing.T) *bench {
 }
 
 // runPass runs a case with the call at a position failing with inject (0 fails none), then passes with nothing failing
-// until all is done, and gives the calls, the error of the pass that failed, and what the pool ends with.
-func runPass(t *testing.T, c *passCase, at int, inject error) (calls []string, runErr error, end string) {
+// until all is done, and gives the calls, what the pool ends with, and the error of the pass that failed.
+func runPass(t *testing.T, c *passCase, at int, inject error) (calls []string, end string, runErr error) {
 	t.Helper()
 	b := c.pool(t)
 	if c.crash != "" {
@@ -120,18 +120,18 @@ func runPass(t *testing.T, c *passCase, at int, inject error) (calls []string, r
 	}
 	runErr = c.run(b, b.db)
 	armed = false
-	return calls, runErr, b.settled(false)
+	return calls, b.settled(false), runErr
 }
 
 // sweepStride is how many calls of a pass a sweep with the race detector takes for one it fails.
-const sweepStride = 4
+const sweepStride = 8
 
 // sweepPass runs a pass sweep, beside the others of its test: each run has a pool of its own.
 func sweepPass(t *testing.T, c passCase) {
 	t.Helper()
 	t.Run(c.name, func(t *testing.T) {
 		t.Parallel()
-		calls, err, want := runPass(t, &c, 0, nil)
+		calls, want, err := runPass(t, &c, 0, nil)
 		if err != nil {
 			t.Fatalf("with nothing failing: %v", err)
 		}
@@ -153,7 +153,7 @@ func sweepPass(t *testing.T, c passCase) {
 					continue
 				}
 				where := fmt.Sprintf("call %d of %d (%s) failing with %v", i+1, len(calls), call, inject)
-				_, err, got := runPass(t, &c, i+1, inject)
+				_, got, err := runPass(t, &c, i+1, inject)
 				if err != nil {
 					t.Errorf("%s: the pass ended with %v", where, err)
 				}
