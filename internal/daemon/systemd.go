@@ -15,8 +15,8 @@ import (
 // disk's /etc/fstab entry, rather than running mount itself: what the mount starts, as ntfs-3g's FUSE process, then
 // belongs to that unit, and a stop or a restart of the daemon's service, which ends every process of the service,
 // leaves the disk mounted. The account atoll may start a mount unit through deploy/50-atoll.rules, polkit's rule the
-// .deb installs. Where systemd is not PID 1, has no unit for the mount point, or refuses, the daemon runs mount itself,
-// as it always did, and says why once.
+// .deb installs, or the pool's alone through the rule atoll polkit-rule prints. Where systemd is not PID 1, has no unit
+// for the mount point, or refuses, the daemon runs mount itself, as it always did, and says why once.
 
 // systemdWay is how the remount reaches systemd.
 type systemdWay struct {
@@ -49,14 +49,15 @@ const (
 	whyNoUnitName  = "the mount point has no mount unit name Atoll can tell"
 	whyNoSystemctl = "systemctl cannot say what systemd holds of the mount point"
 	whyNoUnit      = "systemd has no unit for the mount point: run systemctl daemon-reload once /etc/fstab changed"
-	whyRefused     = "systemd refused to start the mount unit: install Atoll's polkit rule (deploy/README.md)"
+	whyRefused     = "systemd refused to start the mount unit: install Atoll's polkit rule, or, where the pool's is installed, print it again with atoll polkit-rule (deploy/README.md)"
 )
 
-// mountUnit gives the name of the mount unit systemd gives a mount point: what systemd-escape --path --suffix=mount
+// MountUnit gives the name of the mount unit systemd gives a mount point: what systemd-escape --path --suffix=mount
 // writes, and systemd-fstab-generator names the unit of an /etc/fstab entry (conformance/vectors/mount_unit.json).
 // The path loses its empty and "." components; "/" between two becomes "-"; every byte but an ASCII letter, a digit,
-// ":", "_" and a "." that is not first becomes \x and two lowercase hexadecimal digits.
-func mountUnit(where string) (string, error) {
+// ":", "_" and a "." that is not first becomes \x and two lowercase hexadecimal digits. The remount starts that unit,
+// and atoll polkit-rule names it in polkit's rule for the pool (specs.md §15.13, §25).
+func MountUnit(where string) (string, error) {
 	if !strings.HasPrefix(where, "/") {
 		return "", fmt.Errorf("mount unit of %q: not an absolute path", where)
 	}
@@ -148,7 +149,7 @@ func (l *loop) mountUnitOf(ctx context.Context, d *config.Disk) (unit, why, deta
 	} else if !booted {
 		return "", whyNoSystemd, way.booted + " is not there"
 	}
-	unit, err := mountUnit(d.Mount)
+	unit, err := MountUnit(d.Mount)
 	if err != nil {
 		return "", whyNoUnitName, err.Error()
 	}

@@ -23,7 +23,7 @@ func TestMountUnitVectors(t *testing.T) {
 		Note  string `json:"note"`
 	}
 	for i, v := range vectors.Load[vector](t, "mount_unit.json") {
-		got, err := mountUnit(v.Path)
+		got, err := MountUnit(v.Path)
 		switch {
 		case v.Error && err == nil:
 			t.Errorf("case %d, %q: %q, want an error", i, v.Path, got)

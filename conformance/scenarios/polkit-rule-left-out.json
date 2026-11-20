@@ -1,0 +1,78 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.13, \u00a725",
+  "description": "A disk whose mount unit would have a name past 255 bytes, which systemd names by a hash Atoll does not compute, is left out of the rule, as the daemon mounts it again itself: the command exits with 4, the rule printed all the same. With no unit to name, every failed disk or none at all, the rule lets atoll start no mount unit, and the command exits with 0 when no disk in service is left out.",
+  "disks": [],
+  "config": "pool_id = \"home-media\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"/mnt/disk1\"\nfs = \"ext4\"\nstate = \"failed\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"/mnt/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "account": "atoll",
+        "units": [],
+        "left_out": [
+          {
+            "disk": "t1",
+            "reason": "failed"
+          },
+          {
+            "disk": "t2",
+            "reason": "no-unit-name"
+          }
+        ],
+        "rule": "// /etc/polkit-1/rules.d/49-atoll-pool.rules: Atoll's polkit rule for the pool home-media, which atoll polkit-rule prints\n// (deploy/README.md). polkitd reads it before 50-atoll.rules, the .deb's, which lets the account atoll start any mount\n// unit: with it, atoll may start the mount units of the pool's disks below, as the remount after a USB reset does, and\n// the start of any other mount unit is refused. Print it again after atoll disk add, remove, replace or fail: a disk\n// whose unit is not below, the daemon mounts itself, not through systemd.\npolkit.addRule(function (action, subject) {\n\tvar units = [];\n\t// Left out: t1 (failed), t2 (no-unit-name).\n\tif (action.id !== \"org.freedesktop.systemd1.manage-units\" || subject.user !== \"atoll\" ||\n\t\taction.lookup(\"verb\") !== \"start\") {\n\t\treturn polkit.Result.NOT_HANDLED;\n\t}\n\tvar unit = action.lookup(\"unit\") || \"\";\n\tif (units.indexOf(unit) >= 0) {\n\t\treturn polkit.Result.YES;\n\t}\n\tif (/\\.mount$/.test(unit)) {\n\t\treturn polkit.Result.NO;\n\t}\n\treturn polkit.Result.NOT_HANDLED;\n});\n"
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"home-media\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"/mnt/disk1\"\nfs = \"ext4\"\nstate = \"failed\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--json"
+      ],
+      "stdout_json": {
+        "account": "atoll",
+        "units": [],
+        "left_out": [
+          {
+            "disk": "t1",
+            "reason": "failed"
+          }
+        ],
+        "rule": "// /etc/polkit-1/rules.d/49-atoll-pool.rules: Atoll's polkit rule for the pool home-media, which atoll polkit-rule prints\n// (deploy/README.md). polkitd reads it before 50-atoll.rules, the .deb's, which lets the account atoll start any mount\n// unit: with it, atoll may start the mount units of the pool's disks below, as the remount after a USB reset does, and\n// the start of any other mount unit is refused. Print it again after atoll disk add, remove, replace or fail: a disk\n// whose unit is not below, the daemon mounts itself, not through systemd.\npolkit.addRule(function (action, subject) {\n\tvar units = [];\n\t// Left out: t1 (failed).\n\tif (action.id !== \"org.freedesktop.systemd1.manage-units\" || subject.user !== \"atoll\" ||\n\t\taction.lookup(\"verb\") !== \"start\") {\n\t\treturn polkit.Result.NOT_HANDLED;\n\t}\n\tvar unit = action.lookup(\"unit\") || \"\";\n\tif (units.indexOf(unit) >= 0) {\n\t\treturn polkit.Result.YES;\n\t}\n\tif (/\\.mount$/.test(unit)) {\n\t\treturn polkit.Result.NO;\n\t}\n\treturn polkit.Result.NOT_HANDLED;\n});\n"
+      }
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"home-media\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--json"
+      ],
+      "stdout_json": {
+        "account": "atoll",
+        "units": [],
+        "left_out": [],
+        "rule": "// /etc/polkit-1/rules.d/49-atoll-pool.rules: Atoll's polkit rule for the pool home-media, which atoll polkit-rule prints\n// (deploy/README.md). polkitd reads it before 50-atoll.rules, the .deb's, which lets the account atoll start any mount\n// unit: with it, atoll may start the mount units of the pool's disks below, as the remount after a USB reset does, and\n// the start of any other mount unit is refused. Print it again after atoll disk add, remove, replace or fail: a disk\n// whose unit is not below, the daemon mounts itself, not through systemd.\npolkit.addRule(function (action, subject) {\n\tvar units = [];\n\tif (action.id !== \"org.freedesktop.systemd1.manage-units\" || subject.user !== \"atoll\" ||\n\t\taction.lookup(\"verb\") !== \"start\") {\n\t\treturn polkit.Result.NOT_HANDLED;\n\t}\n\tvar unit = action.lookup(\"unit\") || \"\";\n\tif (units.indexOf(unit) >= 0) {\n\t\treturn polkit.Result.YES;\n\t}\n\tif (/\\.mount$/.test(unit)) {\n\t\treturn polkit.Result.NO;\n\t}\n\treturn polkit.Result.NOT_HANDLED;\n});\n"
+      }
+    }
+  ]
+}

@@ -4,6 +4,7 @@ package loopdev
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -851,6 +852,190 @@ func TestAnIdleDiskUnpluggedUnderSystemd(t *testing.T) {
 			u.checkNothingRefused()
 		})
 	}
+}
+
+// poolPolkitRule is where root installs the rule atoll polkit-rule prints (deploy/README.md): polkitd reads it before
+// polkitRule, the .deb's.
+const poolPolkitRule = "/etc/polkit-1/rules.d/49-atoll-pool.rules"
+
+// TestThePoolPolkitRuleUnderSystemd: the rule atoll polkit-rule prints from the configuration (specs.md §15.13, §25;
+// docs/threat-model.md, G22), installed where deploy/README.md says, beside the .deb's rule, as polkitd 126 and systemd
+// 257 read them. The pool's disk is mounted at <dir>/dev-disk-by-uuid-1234, whose unit's name holds \x2d, and a tmpfs
+// of /etc/fstab at <dir>/dev/disk/by/uuid/1234, whose unit is what a rule that left systemd's escapes to JavaScript
+// would name instead, "\x2d" read as "-". With the .deb's rule alone, the account atoll may start both units, through
+// pkcheck, and starts the tmpfs through systemctl. With the pool's rule, polkit says no to the tmpfs's unit, a refusal
+// of the rule's own rather than the action's default, auth_admin, which would ask for a password; atoll's start of it
+// is refused, and the tmpfs stays unmounted; and the daemon still mounts the pool's disk again through its unit after
+// a USB reset.
+func TestThePoolPolkitRuleUnderSystemd(t *testing.T) {
+	needSystemd(t)
+	theAccount(t)
+	original, err := os.ReadFile("/etc/fstab")
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.WriteFile("/etc/fstab", original, 0o644) })
+	machineServices(t, true)
+	m := newMapped(t, names.Ext4)
+	dir := t.TempDir()
+	at := filepath.Join(dir, "dev-disk-by-uuid-1234")
+	elsewhere := filepath.Join(dir, "dev", "disk", "by", "uuid", "1234")
+	mustDo(t, os.MkdirAll(at, 0o755))
+	mustDo(t, os.MkdirAll(elsewhere, 0o755))
+	openAbove(t, at)
+	mountVolume(t, m.volume, "", at)
+	renamed := m.name + "-again"
+	t.Cleanup(func() {
+		_ = exec.CommandContext(context.Background(), "umount", "-l", elsewhere).Run()
+		_ = exec.CommandContext(context.Background(), "umount", "-l", at).Run()
+		time.Sleep(200 * time.Millisecond)
+		_ = exec.CommandContext(context.Background(), "dmsetup", "remove", "-f", "--noudevsync", renamed).Run()
+	})
+	kept := newVolume(t, names.Ext4)
+	keep := mountPoint(t)
+	mountVolume(t, kept, "", keep)
+	mustDo(t, os.MkdirAll(filepath.Join(keep, "media"), 0o755))
+	write(t, at, "film.mkv", "a film")
+	film := filepath.Join(at, "media", "film.mkv")
+	readable := func() bool { data, err := os.ReadFile(film); return err == nil && string(data) == "a film" }
+	source := func() string {
+		out, _ := exec.CommandContext(t.Context(), "findmnt", "-n", "-o", "SOURCE", at).Output()
+		return strings.TrimSpace(string(out))
+	}
+	poolConfig(t, kept, keep, m.volume, at, "[defaults]\nsettle = \"0s\"\n[view]\nmount = "+
+		strconv.Quote(filepath.Join(t.TempDir(), "pool"))+"\n")
+	mustDo(t, os.WriteFile("/etc/fstab", append(slices.Clone(original), []byte("/dev/mapper/"+renamed+" "+at+" ext4 defaults 0 0\n"+
+		"tmpfs "+elsewhere+" tmpfs noauto 0 0\n")...), 0o644))
+	must(t, "systemctl", "daemon-reload")
+	unit := must(t, "systemd-escape", "--path", "--suffix=mount", at)
+	other := must(t, "systemd-escape", "--path", "--suffix=mount", elsewhere)
+	if strings.ReplaceAll(unit, `\x2d`, "-") != other {
+		t.Fatalf("%s and %s: not the names an unescaped rule would mistake", unit, other)
+	}
+	active := func(name string) string {
+		return must(t, "systemctl", "show", "-p", "ActiveState", "--value", "--", name)
+	}
+
+	// A process of the account's, which polkit is asked about through pkcheck, as systemd asks it: the unit and the verb.
+	asAtoll := exec.CommandContext(t.Context(), "setpriv", "--reuid="+strconv.Itoa(unitUID), "--regid="+strconv.Itoa(unitUID),
+		"--clear-groups", "--", "sleep", "600")
+	mustDo(t, asAtoll.Start())
+	t.Cleanup(func() { _ = asAtoll.Process.Kill(); _ = asAtoll.Wait() })
+	pid := strconv.Itoa(asAtoll.Process.Pid)
+	// pkcheck names a process by its pid, its start time and its uid, which polkit checks: once setpriv has set it.
+	waitFor(t, "the process running as atoll", func() bool {
+		status, err := os.ReadFile("/proc/" + pid + "/status")
+		return err == nil && strings.Contains(string(status), "\nUid:\t"+strconv.Itoa(unitUID)+"\t")
+	})
+	stat, err := os.ReadFile("/proc/" + pid + "/stat")
+	mustDo(t, err)
+	// The start time is the 22nd field, the 20th after the command's name, which ends with the last ')'.
+	fields := strings.Fields(string(stat[strings.LastIndexByte(string(stat), ')')+1:]))
+	process := pid + "," + fields[19] + "," + strconv.Itoa(unitUID)
+	pkcheck := func(name string) int {
+		t.Helper()
+		out, err := exec.CommandContext(t.Context(), "pkcheck", "--action-id", "org.freedesktop.systemd1.manage-units",
+			"--process", process, "--detail", "unit", name, "--detail", "verb", "start").CombinedOutput()
+		var exit *exec.ExitError
+		switch {
+		case err == nil:
+			return 0
+		case errors.As(err, &exit):
+			t.Logf("pkcheck %s: exit %d: %s", name, exit.ExitCode(), strings.TrimSpace(string(out)))
+			return exit.ExitCode()
+		}
+		t.Fatalf("pkcheck %s: %v: %s", name, err, out)
+		return -1
+	}
+	systemctlAsAtoll := func(args ...string) error {
+		return attempt(t, "setpriv", append([]string{"--reuid=" + strconv.Itoa(unitUID), "--regid=" + strconv.Itoa(unitUID),
+			"--clear-groups", "--", "systemctl", "--no-ask-password"}, args...)...)
+	}
+
+	// The .deb's rule alone: any mount unit.
+	for _, name := range []string{unit, other} {
+		if got := pkcheck(name); got != 0 {
+			t.Errorf("with the .deb's rule alone, pkcheck says %d for %s, want 0", got, name)
+		}
+	}
+	if err := systemctlAsAtoll("start", "--", other); err != nil {
+		t.Fatalf("with the .deb's rule alone, atoll's start of %s: %v", other, err)
+	}
+	if got := active(other); got != "active" {
+		t.Fatalf("%s is %s once atoll started it", other, got)
+	}
+	must(t, "systemctl", "stop", "--", other)
+
+	// The pool's rule, printed from the configuration and installed as deploy/README.md says.
+	rule, err := exec.CommandContext(t.Context(), atollBinary, "--config", "/etc/atoll/atoll.toml", "polkit-rule").Output()
+	if err != nil {
+		t.Fatalf("atoll polkit-rule: %v", err)
+	}
+	if !strings.Contains(string(rule), `"`+strings.ReplaceAll(unit, `\`, `\\`)+`"`) {
+		t.Fatalf("the rule does not name %s:\n%s", unit, rule)
+	}
+	t.Logf("%s:\n%s", poolPolkitRule, rule)
+	mustDo(t, os.MkdirAll(filepath.Dir(poolPolkitRule), 0o755))
+	mustDo(t, os.WriteFile(poolPolkitRule, rule, 0o644))
+	t.Cleanup(func() { _ = os.Remove(poolPolkitRule) })
+	must(t, "systemctl", "restart", "polkit.service")
+	// 1 is polkit's no, which the rule gives; systemd's policy for the action, auth_admin, would ask for a password, 2.
+	for _, c := range []struct {
+		unit string
+		want int
+	}{{unit, 0}, {other, 1}, {"home.mount", 1}} {
+		if got := pkcheck(c.unit); got != c.want {
+			t.Errorf("with the pool's rule, pkcheck says %d for %s, want %d", got, c.unit, c.want)
+		}
+	}
+	if err := systemctlAsAtoll("start", "--", other); err == nil {
+		t.Errorf("with the pool's rule, atoll started %s", other)
+	} else {
+		t.Logf("atoll's start refused: %v", err)
+	}
+	if got := active(other); got != "inactive" {
+		t.Errorf("%s is %s once atoll's start was refused", other, got)
+	}
+
+	// The remount after a USB reset still goes through the pool disk's unit.
+	u := installUnit(t, "atoll.service")
+	if got := must(t, "systemctl", "show", "-p", "SourcePath", "--value", "--", unit); got != "/etc/fstab" {
+		t.Fatalf("%s comes from %q, not /etc/fstab", unit, got)
+	}
+	u.start()
+	u.checkRunsAsShipped()
+	must(t, "dmsetup", "rename", "--noudevsync", m.name, renamed)
+	must(t, "udevadm", "settle")
+	must(t, "dmsetup", "mknodes")
+	if _, err := os.Lstat("/dev/mapper/" + m.name); err == nil {
+		mustDo(t, os.Remove("/dev/mapper/"+m.name))
+	}
+	for deadline := time.Now().Add(3 * time.Minute); source() != "/dev/mapper/"+renamed && time.Now().Before(deadline); {
+		time.Sleep(time.Second)
+	}
+	if got := source(); got != "/dev/mapper/"+renamed {
+		t.Fatalf("the disk was not mounted again by the daemon within 3 minutes: %q", got)
+	}
+	waitFor(t, "the disk readable once mounted again", readable)
+	waitFor(t, "the daemon saying how the remount ended", func() bool {
+		said := u.said()
+		return strings.Contains(said, "remounted after a reset") || strings.Contains(said, "the remount failed")
+	})
+	said := u.said()
+	for _, line := range strings.Split(said, "\n") {
+		if strings.Contains(line, "remount") {
+			t.Logf("%s", line)
+		}
+	}
+	if !strings.Contains(said, "remounted after a reset") || !strings.Contains(said, strings.ReplaceAll(unit, `\`, `\\`)) ||
+		strings.Contains(said, "the remount mounts the disk itself") {
+		t.Errorf("not remounted through %s", unit)
+	}
+	if got := active(unit); got != "active" {
+		t.Errorf("%s is %s", unit, got)
+	}
+	u.stop()
+	u.checkNothingRefused()
 }
 
 // Atoll's names of mount units are systemd's: each name of conformance/vectors/mount_unit.json is what this machine's

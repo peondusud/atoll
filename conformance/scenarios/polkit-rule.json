@@ -1,0 +1,50 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.13, \u00a725",
+  "description": "The polkit rule that lets the account atoll start the mount units of the pool's disks and refuses it the start of any other mount unit, from the configuration alone: each disk's unit, as systemd-escape --path --suffix=mount names it, in configuration order, a draining disk's included, as the daemon mounts it again after a USB reset; a failed disk's left out, as the daemon never does. In the rule, each unit is a JavaScript string, its backslashes doubled: an escape \\x2d left as it is would read '-', and name another unit. The text without --json is the rule, in English whatever the language, so it is the same as the rule of --json.",
+  "disks": [],
+  "config": "pool_id = \"home-media\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"/mnt/disk1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"/srv/dev-disk-by-uuid-1234-ABCD\"\nfs = \"ext4\"\nstate = \"draining\"\n[[disk]]\nid = \"u1\"\nuuid = \"01D9F3A2B4C5E6F7\"\nmount = \"/mnt/Vid\u00e9os\"\nfs = \"ntfs\"\n[[disk]]\nid = \"t3\"\nuuid = \"9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b\"\nmount = \"/mnt/disk3\"\nfs = \"ext4\"\nstate = \"failed\"\n[[disk]]\nid = \"t4\"\nuuid = \"5c4d3e2f-1a0b-4c9d-8e7f-6a5b4c3d2e1f\"\nmount = \"/mnt/My Disk\"\nfs = \"xfs\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--json"
+      ],
+      "stdout_json": {
+        "account": "atoll",
+        "units": [
+          {
+            "disk": "t1",
+            "unit": "mnt-disk1.mount"
+          },
+          {
+            "disk": "t2",
+            "unit": "srv-dev\\x2ddisk\\x2dby\\x2duuid\\x2d1234\\x2dABCD.mount"
+          },
+          {
+            "disk": "u1",
+            "unit": "mnt-Vid\\xc3\\xa9os.mount"
+          },
+          {
+            "disk": "t4",
+            "unit": "mnt-My\\x20Disk.mount"
+          }
+        ],
+        "left_out": [
+          {
+            "disk": "t3",
+            "reason": "failed"
+          }
+        ],
+        "rule": "// /etc/polkit-1/rules.d/49-atoll-pool.rules: Atoll's polkit rule for the pool home-media, which atoll polkit-rule prints\n// (deploy/README.md). polkitd reads it before 50-atoll.rules, the .deb's, which lets the account atoll start any mount\n// unit: with it, atoll may start the mount units of the pool's disks below, as the remount after a USB reset does, and\n// the start of any other mount unit is refused. Print it again after atoll disk add, remove, replace or fail: a disk\n// whose unit is not below, the daemon mounts itself, not through systemd.\npolkit.addRule(function (action, subject) {\n\tvar units = [\n\t\t\"mnt-disk1.mount\", // t1\n\t\t\"srv-dev\\\\x2ddisk\\\\x2dby\\\\x2duuid\\\\x2d1234\\\\x2dABCD.mount\", // t2\n\t\t\"mnt-Vid\\\\xc3\\\\xa9os.mount\", // u1\n\t\t\"mnt-My\\\\x20Disk.mount\" // t4\n\t];\n\t// Left out: t3 (failed).\n\tif (action.id !== \"org.freedesktop.systemd1.manage-units\" || subject.user !== \"atoll\" ||\n\t\taction.lookup(\"verb\") !== \"start\") {\n\t\treturn polkit.Result.NOT_HANDLED;\n\t}\n\tvar unit = action.lookup(\"unit\") || \"\";\n\tif (units.indexOf(unit) >= 0) {\n\t\treturn polkit.Result.YES;\n\t}\n\tif (/\\.mount$/.test(unit)) {\n\t\treturn polkit.Result.NO;\n\t}\n\treturn polkit.Result.NOT_HANDLED;\n});\n"
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule"
+      ]
+    }
+  ]
+}

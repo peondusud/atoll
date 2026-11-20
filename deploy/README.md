@@ -5,7 +5,7 @@
 | `atoll.toml` | A sample configuration: the example of `specs.md` §24.1, byte for byte. A test compares the two, and loads it. |
 | `atoll.service` | The systemd unit of the daemon that runs for good (`specs.md` §15.13): `Type=notify`, as the dedicated user `atoll`. |
 | `atoll-mount.service` | The systemd unit of `atoll mount` (`specs.md` §21.2): Atoll's own view, at `view.mount` where it writes with `view.engine = "atoll"`, and read only at `view.readonly_mount`, as the same user. |
-| `50-atoll.rules` | polkit's rule that lets the account `atoll` start a mount unit, and nothing else: the daemon's remount after a USB reset goes through systemd (below, "The remount through systemd"). |
+| `50-atoll.rules` | polkit's rule that lets the account `atoll` start a mount unit, and nothing else: the daemon's remount after a USB reset goes through systemd (below, "The remount through systemd"). `atoll polkit-rule` prints the rule that narrows it to the pool's mount units. |
 | `deb/postinst`, `deb/postrm` | The scripts of the `.deb` a release holds (`specs.md` §26, `.goreleaser.yaml`): the account, and nothing else. |
 
 ## The .deb
@@ -80,19 +80,18 @@ systemd itself unmounts an idle disk mounted from `/etc/fstab` as soon as its de
 
 The account `atoll` may start a mount unit through polkit: `50-atoll.rules`, which the `.deb` installs in `/usr/share/polkit-1/rules.d/`, lets it start a unit whose name ends in `.mount`, and nothing else. Any other verb (`stop`, `restart`, `reload`, `kill`, `reset-failed`), any other unit (a service, a timer, a socket, a target) and any other action of systemd's (enabling a unit, reloading systemd) stay refused to it, as polkit's defaults have them for a system account. Debian 12's polkitd (122) and Debian 13's (126) read JavaScript rules there: measured with each through `pkcheck`, which asks as systemd does, with the unit and the verb, and in qemu by the daemon's own remount, with systemd 257. Without polkitd, or without the rule, systemd refuses the start, and the daemon mounts the disk itself (below).
 
-The rule cannot name the pool's mount points: polkit reads no file of Atoll's, the configuration being root's, and a list that the account `atoll` could write would let whoever runs code as that account lengthen it. To narrow it to them, give polkit a rule of your own that comes before it, in `/etc/polkit-1/rules.d/`, with each disk's unit:
+The rule cannot name the pool's mount points: polkit reads no file of Atoll's, the configuration being root's, and a list that the account `atoll` could write would let whoever runs code as that account lengthen it. `atoll polkit-rule` prints, from the configuration, a rule that narrows it to them (`specs.md` §25, `docs/threat-model.md`, G22), which root installs in `/etc/polkit-1/rules.d/`, where polkitd reads it before `50-atoll.rules`:
 
-```js
-// /etc/polkit-1/rules.d/49-atoll-pool.rules: atoll starts these mount units, and no other.
-polkit.addRule(function (action, subject) {
-	if (action.id === "org.freedesktop.systemd1.manage-units" && subject.user === "atoll" &&
-		["mnt-disk1.mount", "mnt-disk2.mount"].indexOf(action.lookup("unit")) < 0) {
-		return polkit.Result.NO;
-	}
-});
+```bash
+sudo sh -c 'atoll polkit-rule > /etc/polkit-1/rules.d/49-atoll-pool.rules.new &&
+  mv /etc/polkit-1/rules.d/49-atoll-pool.rules.new /etc/polkit-1/rules.d/49-atoll-pool.rules'
 ```
 
-The daemon mounts the disk itself, `mount <mount point>`, as before 2026-11-19: where systemd is not PID 1; where systemd has no unit with a configuration for the mount point, as before a `systemctl daemon-reload` that follows a change of `/etc/fstab`; where `systemctl` cannot reach systemd, as with no system bus; where systemd refuses the start, as without the rule; and where the unit's name would pass 255 bytes, which systemd names by a hash. Its log says why, once a run for each reason. The disk's FUSE process is then the service's, and a stop, a restart or an upgrade of the daemon unmounts an ntfs-3g disk until `mount /mnt/disk1` mounts it again.
+`atoll` may then start the mount unit of each disk of the configuration, a disk `failed` aside, and is refused the start of any other mount unit; anything else stays as the rules after it have it. polkitd reads its rules again when a file of their folders changes, as polkit(8) says; `systemctl restart polkit` makes sure of it. A unit's name holds systemd's escapes, as `srv-dev\x2ddisk\x2dby\x2duuid\x2d1234.mount` for openmediavault's `/srv/dev-disk-by-uuid-1234`: the rule writes each as a JavaScript string, its backslashes doubled, which a rule written by hand easily misses, as JavaScript reads `\x2d` as `-`, and the name as another mount point's unit. Measured in qemu with polkitd 126 and systemd 257 (`test/loopdev/units_test.go`, `TestThePoolPolkitRuleUnderSystemd`): with the rule, polkit says yes to `atoll` for the pool disk's unit and no for another mount unit, `pkcheck` exiting with 1, the rule's own refusal, and `atoll`'s start of that other unit is refused; the remount still goes through the disk's unit.
+
+The rule names the disks the configuration has when it is printed: print it again after `atoll disk add`, `remove`, `replace` or `fail`. polkit refuses the start of a unit it leaves out, and the daemon then mounts that disk itself (below), as its log says once a run. The command exits with 4 when it leaves out a disk the daemon would mount again, one whose unit's name would pass 255 bytes, which systemd names by a hash: standard error names it, and the `&&` above installs nothing. Removing the package leaves the rule, as it leaves the account: `rm /etc/polkit-1/rules.d/49-atoll-pool.rules` takes it away.
+
+The daemon mounts the disk itself, `mount <mount point>`, as before 2026-11-19: where systemd is not PID 1; where systemd has no unit with a configuration for the mount point, as before a `systemctl daemon-reload` that follows a change of `/etc/fstab`; where `systemctl` cannot reach systemd, as with no system bus; where systemd refuses the start, as without the rule, or for a disk the pool's rule leaves out; and where the unit's name would pass 255 bytes, which systemd names by a hash. Its log says why, once a run for each reason. The disk's FUSE process is then the service's, and a stop, a restart or an upgrade of the daemon unmounts an ntfs-3g disk until `mount /mnt/disk1` mounts it again.
 
 The units need nothing more for it: `systemctl` reaches systemd over the system bus, a local socket (`AF_UNIX`), with calls of `@system-service`, and polkit authorizes over D-Bus, with no setuid program, so `NoNewPrivileges` changes nothing (measured in qemu, with a call out of the filter ending the process).
 

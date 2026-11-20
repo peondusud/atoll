@@ -142,6 +142,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGuard(configPath, args[1:], stdout, stderr)
 	case "mergerfs-config":
 		return runMergerfsConfig(configPath, args[1:], stdout, stderr)
+	case "polkit-rule":
+		return runPolkitRule(configPath, args[1:], stdout, stderr)
 	case "mount":
 		return runMount(configPath, args[1:], stderr)
 	case "notify":
