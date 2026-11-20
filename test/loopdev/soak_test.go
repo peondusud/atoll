@@ -74,7 +74,8 @@ func firstPassWithin(files int) time.Duration {
 // they trip measures a daemon that holds what the writer does and decides nothing more, as the first one did.
 const soakGuards = "[deletes]\ndebounce = \"1s\"\n" +
 	"[deletes.mass_guard]\nfiles = 1000000000\npercent = \"100%\"\nwindow = \"1m\"\n" +
-	"[modifies.mass_guard]\nfiles = 1000000000\npercent = \"100%\"\nwindow = \"1m\"\n"
+	"[modifies.mass_guard]\nfiles = 1000000000\npercent = \"100%\"\nwindow = \"1m\"\n" +
+	"[modifies.day_guard]\nfiles = 1000000000\npercent = \"100%\"\nwindow = \"1m\"\n"
 
 // memorySample is the memory of the process at one moment, after a collection, and the size of the catalog. live,
 // held and peak are what a goMemory saw since it was last asked.

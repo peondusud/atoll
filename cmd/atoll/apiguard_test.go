@@ -330,7 +330,7 @@ func TestTheAPIAnswersTheModifyGuardAsTheCommand(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := catalog.WriteModifyGuardEvent(t.Context(), db, "t1", 1_000); err != nil {
+			if err := catalog.WriteModifyGuardEvent(t.Context(), db, "t1", "", 1_000); err != nil {
 				t.Fatal(err)
 			}
 			if err := db.Close(); err != nil {

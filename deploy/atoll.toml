@@ -90,6 +90,7 @@ mass_guard = { files = 100, percent = "5%", window = "10m" }
 
 [modifies]
 mass_guard = { files = 100, percent = "5%", window = "10m" }   # files modified, not touched
+day_guard  = { files = 1000, percent = "10%", window = "24h" } # the same over a day: a slow rewrite
 
 [balance]
 schedule = "02:00-06:00"                # never | immediate | time window

@@ -342,7 +342,7 @@ func TestTheModifyGuardReadsItsEvents(t *testing.T) {
 	event(101, EventModified, `{"disk":"t1","path_b64":"YP8="}`)
 	event(102, EventModified, `{"disk":"t1","path":"answered","answered":true}`)
 	event(103, EventModified, `{"disk":"t2","path":"elsewhere"}`)
-	read, err := ReadModifyGuard(t.Context(), db, "t1", 110, 50)
+	read, err := ReadModifyGuard(t.Context(), db, "t1", 110, 50, 50)
 	if err != nil || read.Count != 2 || read.Stands || read.Answer != "" {
 		t.Fatalf("%+v, %v", read, err)
 	}
@@ -354,15 +354,69 @@ func TestTheModifyGuardReadsItsEvents(t *testing.T) {
 		t.Errorf("an answer with no guard: %+v, %v", upTo, err)
 	}
 	event(120, EventModifyGuard, `{"disk":"t1"}`)
-	if read, err = ReadModifyGuard(t.Context(), db, "t1", 130, 50); err != nil || !read.Stands || read.GuardNS != 120 {
+	if read, err = ReadModifyGuard(t.Context(), db, "t1", 130, 50, 50); err != nil || !read.Stands || read.GuardNS != 120 {
 		t.Fatalf("%+v, %v", read, err)
 	}
 	upTo, err := AnswerModifyGuard(t.Context(), db, "t1", EventModifyGuardReject, 140)
 	if err != nil || !upTo.Valid || upTo.Int64 != 120 {
 		t.Fatalf("%+v, %v", upTo, err)
 	}
-	read, err = ReadModifyGuard(t.Context(), db, "t1", 150, 50)
+	read, err = ReadModifyGuard(t.Context(), db, "t1", 150, 50, 50)
 	if err != nil || read.Stands || read.Count != 0 || read.Answer != EventModifyGuardReject || !read.Answers(120) || read.Answers(121) {
 		t.Errorf("%+v, %v", read, err)
+	}
+}
+
+// The day of the mass-modification guard counts as its window does, over modifies.day_guard.window, but from the last
+// answer to a hold the day tripped: an answer to a hold the window tripped starts the window's count again and leaves
+// the day's as it was. A hold the day tripped says so in its event, and so does the answer to it (specs.md §15.6).
+func TestTheModifyGuardReadsItsDay(t *testing.T) {
+	db, _ := newPool(t)
+	event := func(ts int64, kind, data string) {
+		exec(t, db, "INSERT INTO events(ts_ns, level, kind, data) VALUES (?, 'info', ?, ?)", ts, kind, data)
+	}
+	event(10, EventModified, `{"disk":"t1","path":"old"}`)
+	event(100, EventModified, `{"disk":"t1","path":"a"}`)
+	event(1000, EventModified, `{"disk":"t1","path":"b"}`)
+	event(1001, EventModified, `{"disk":"t1","path":"c","answered":true}`)
+	event(1002, EventModified, `{"disk":"t2","path":"elsewhere"}`)
+	read, err := ReadModifyGuard(t.Context(), db, "t1", 1010, 50, 1000)
+	if err != nil || read.Count != 1 || read.DayCount != 2 || read.Stands || read.Window != "" || read.DayAnswerID != 0 {
+		t.Fatalf("%+v, %v", read, err)
+	}
+	paths, err := ModifiedPaths(t.Context(), db, "t1", 1010, 1000, read.DayAnswerID)
+	if err != nil || !slices.Equal(paths, []string{"a", "b"}) {
+		t.Errorf("the day's paths: %q, %v", paths, err)
+	}
+	// A hold the window tripped, answered: the window counts again from none, the day goes on.
+	event(1020, EventModifyGuard, `{"disk":"t1"}`)
+	if read, err = ReadModifyGuard(t.Context(), db, "t1", 1030, 50, 1000); err != nil || !read.Stands || read.Window != "" {
+		t.Fatalf("%+v, %v", read, err)
+	}
+	if upTo, err := AnswerModifyGuard(t.Context(), db, "t1", EventModifyGuardConfirm, 1040); err != nil || !upTo.Valid || upTo.Int64 != 1020 {
+		t.Fatalf("%+v, %v", upTo, err)
+	}
+	event(1050, EventModified, `{"disk":"t1","path":"d"}`)
+	read, err = ReadModifyGuard(t.Context(), db, "t1", 1060, 50, 1000)
+	if err != nil || read.Stands || read.Count != 1 || read.DayCount != 3 || read.DayAnswerID != 0 {
+		t.Fatalf("after an answer to the window: %+v, %v", read, err)
+	}
+	// A hold the day tripped: its event and the answer to it say so, and both count again from none.
+	if err := WriteModifyGuardEvent(t.Context(), db, "t1", WindowDay, 1070); err != nil {
+		t.Fatal(err)
+	}
+	if read, err = ReadModifyGuard(t.Context(), db, "t1", 1080, 50, 1000); err != nil || !read.Stands || read.Window != WindowDay || read.GuardNS != 1070 {
+		t.Fatalf("%+v, %v", read, err)
+	}
+	upTo, err := AnswerModifyGuard(t.Context(), db, "t1", EventModifyGuardReject, 1090)
+	if err != nil || !upTo.Valid || upTo.Int64 != 1070 {
+		t.Fatalf("%+v, %v", upTo, err)
+	}
+	if got := countOf(t, db, "SELECT count(*) FROM events WHERE kind IN (?, ?) AND json_extract(data, '$.window') = 'day'", EventModifyGuard, EventModifyGuardReject); got != 2 {
+		t.Errorf("%d events say the day tripped, want the guard's and its answer's", got)
+	}
+	read, err = ReadModifyGuard(t.Context(), db, "t1", 1100, 50, 1000)
+	if err != nil || read.Stands || read.Count != 0 || read.DayCount != 0 || read.DayAnswerID == 0 || read.DayAnswerID != read.AnswerID {
+		t.Errorf("after an answer to the day: %+v, %v", read, err)
 	}
 }

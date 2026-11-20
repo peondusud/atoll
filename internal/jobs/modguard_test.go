@@ -282,3 +282,188 @@ func TestAnAnswerToTheModifyGuardHoldsForItsWindow(t *testing.T) {
 		t.Errorf("answered %s", got)
 	}
 }
+
+// slowGuard is a guard whose window lets many files through and whose day lets two: a rewrite slow enough for the
+// window, which the day stops (specs.md §15.6).
+const slowGuard = "[defaults]\nsettle = \"0s\"\n[modifies.mass_guard]\nfiles = 100\npercent = \"100%\"\nwindow = \"10m\"\n" +
+	"[modifies.day_guard]\nfiles = 2\npercent = \"100%\"\nwindow = \"24h\"\n"
+
+// slowGuarded gives a pool of files on two disks under slowGuard, at top, so that a test can open it again, as the
+// process after a restart does.
+func slowGuarded(t *testing.T, top string, names ...string) *bench {
+	t.Helper()
+	b := benchIn(t, top, slowGuard, true, "t1", "t2")
+	for _, id := range []string{"t1", "t2"} {
+		for _, n := range names {
+			b.write(id, n, "x")
+		}
+	}
+	b.scan(true)
+	return b
+}
+
+// A rewrite an hour apart, which the window never sees past one file, is counted over the day: the third file of the
+// day trips it, held with nothing read, its other copy left as it was, and the guard says it was the day's.
+func TestTheDayStopsWhatTheWindowLetsThrough(t *testing.T) {
+	b := slowGuarded(t, t.TempDir(), "a", "b", "c", "d")
+	for _, n := range []string{"a", "b"} {
+		b.rewrite(n)
+		if out := b.pass(); !slices.Equal(decisionsOf(out), []Decision{{Path: n, Kind: "modified"}}) || out.Held {
+			t.Fatalf("%s: %+v", n, out)
+		}
+		b.now += int64(time.Hour)
+	}
+	b.rewrite("c")
+	b.now += int64(time.Hour)
+	out := b.pass()
+	if len(out.Decisions) != 0 || !out.Held {
+		t.Fatalf("%+v", out)
+	}
+	if want := []GuardLine{{Disk: "t1", Kind: GuardModifications, Count: 2, Window: WindowDay}}; !slices.Equal(out.Guards, want) {
+		t.Errorf("guards %+v", out.Guards)
+	}
+	if b.read("t2", "c") != "x" {
+		t.Error("a held file reached the other copy")
+	}
+	if got := b.text("SELECT json_extract(data, '$.window') FROM events WHERE kind = 'modify-guard' AND level = 'warning'"); got != "day" {
+		t.Errorf("the guard's event says %q", got)
+	}
+	// It stands, as a hold of the window does, until someone answers: a day later, with nothing counted, it holds.
+	b.now += int64(25 * time.Hour)
+	opened := 0
+	b.fail[b.dirs["t1"]] = func(call, name string) error {
+		if call == "openfile" && name == "c" {
+			opened++
+		}
+		return nil
+	}
+	out = b.pass()
+	if want := []GuardLine{{Disk: "t1", Kind: GuardModifications, Window: WindowDay}}; !out.Held || opened != 0 || !slices.Equal(out.Guards, want) {
+		t.Errorf("a day later: %+v, %d reads", out, opened)
+	}
+}
+
+// What left the day counts for nothing: a file a day and a half after the last is the first of a new day.
+func TestTheDayForgetsWhatLeftIt(t *testing.T) {
+	b := slowGuarded(t, t.TempDir(), "a", "b", "c")
+	b.rewrite("a", "b")
+	if out := b.pass(); len(out.Decisions) != 2 || out.Held {
+		t.Fatalf("%+v", out)
+	}
+	b.rewrite("c")
+	b.now += int64(36 * time.Hour)
+	if out := b.pass(); !slices.Equal(decisionsOf(out), []Decision{{Path: "c", Kind: "modified"}}) || out.Held {
+		t.Errorf("%+v", out)
+	}
+}
+
+// The day's count is read from the catalog's events, never kept by a process: a restart between two files, the
+// catalog opened again by another process, does not start it again from none.
+func TestARestartKeepsTheDaysCount(t *testing.T) {
+	top := t.TempDir()
+	b := slowGuarded(t, top, "a", "b", "c")
+	b.rewrite("a", "b")
+	if out := b.pass(); len(out.Decisions) != 2 || out.Held {
+		t.Fatalf("%+v", out)
+	}
+	again := benchIn(t, top, slowGuard, false, "t1", "t2")
+	again.now = b.now + int64(time.Hour)
+	again.rewrite("c")
+	out := again.pass()
+	if want := []GuardLine{{Disk: "t1", Kind: GuardModifications, Count: 2, Window: WindowDay}}; len(out.Decisions) != 0 || !out.Held || !slices.Equal(out.Guards, want) {
+		t.Errorf("after a restart: %+v", out)
+	}
+}
+
+// A pass killed once a modification is recorded: the next counts it in the day from its event, and the day trips on
+// the next file, as it would have in one pass.
+func TestTheDayCountsWhatACrashLeft(t *testing.T) {
+	b := slowGuarded(t, t.TempDir(), "a", "b", "c")
+	b.rewrite("a")
+	if out := b.pass(); out.Held {
+		t.Fatalf("%+v", out)
+	}
+	b.now += int64(time.Hour)
+	b.rewrite("b", "c")
+	b.crashAt("modified")
+	b.now += int64(time.Hour)
+	out := b.pass()
+	if want := []GuardLine{{Disk: "t1", Kind: GuardModifications, Count: 2, Window: WindowDay}}; len(out.Decisions) != 0 || !out.Held || !slices.Equal(out.Guards, want) {
+		t.Errorf("%+v", out)
+	}
+}
+
+// An answer to a hold the window tripped speaks of the window's files: the window counts again from none, and the
+// day goes on counting what it held before, so that a hold of the window answered every few hours does not let a whole
+// day through. An answer to a hold the day tripped starts the day again.
+func TestAnAnswerToTheWindowLeavesTheDay(t *testing.T) {
+	more := "[defaults]\nsettle = \"0s\"\n[modifies.mass_guard]\nfiles = 2\npercent = \"100%\"\nwindow = \"10m\"\n" +
+		"[modifies.day_guard]\nfiles = 3\npercent = \"100%\"\n"
+	b := newBenchWith(t, more, "t1", "t2")
+	for _, id := range []string{"t1", "t2"} {
+		for _, n := range []string{"a", "b", "c", "d", "e", "f"} {
+			b.write(id, n, "x")
+		}
+	}
+	b.scan(true)
+	b.rewrite("a", "b", "c")
+	out := b.pass()
+	if want := []GuardLine{{Disk: "t1", Kind: GuardModifications, Count: 2}}; len(out.Decisions) != 2 || !slices.Equal(out.Guards, want) {
+		t.Fatalf("the window: %+v", out)
+	}
+	if got := b.text("SELECT COALESCE(json_extract(data, '$.window'), '') FROM events WHERE kind = 'modify-guard'"); got != "" {
+		t.Errorf("a hold of the window says %q", got)
+	}
+	if _, err := catalog.AnswerModifyGuard(t.Context(), b.db, "t1", catalog.EventModifyGuardConfirm, b.now); err != nil {
+		t.Fatal(err)
+	}
+	if out := b.pass(); !slices.Equal(decisionsOf(out), []Decision{{Path: "c", Kind: "modified"}}) || out.Held {
+		t.Fatalf("under the answer: %+v", out)
+	}
+	// a and b count in the day still, c, answered, does not: d is the third, e would be the fourth.
+	b.now += int64(time.Hour)
+	b.rewrite("d")
+	if out := b.pass(); !slices.Equal(decisionsOf(out), []Decision{{Path: "d", Kind: "modified"}}) || out.Held {
+		t.Fatalf("d: %+v", out)
+	}
+	b.now += int64(time.Hour)
+	b.rewrite("e")
+	out = b.pass()
+	if want := []GuardLine{{Disk: "t1", Kind: GuardModifications, Count: 3, Window: WindowDay}}; len(out.Decisions) != 0 || !slices.Equal(out.Guards, want) {
+		t.Fatalf("the day: %+v", out)
+	}
+	if _, err := catalog.AnswerModifyGuard(t.Context(), b.db, "t1", catalog.EventModifyGuardConfirm, b.now); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.text("SELECT json_extract(data, '$.window') FROM events WHERE kind = 'modify-guard-confirm' ORDER BY id DESC LIMIT 1"); got != "day" {
+		t.Errorf("the answer to the day says %q", got)
+	}
+	if out := b.pass(); !slices.Equal(decisionsOf(out), []Decision{{Path: "e", Kind: "modified"}}) || out.Held {
+		t.Fatalf("under the answer to the day: %+v", out)
+	}
+	// The day starts again from that answer: f is its first.
+	b.now += int64(time.Hour)
+	b.rewrite("f")
+	if out := b.pass(); !slices.Equal(decisionsOf(out), []Decision{{Path: "f", Kind: "modified"}}) || out.Held {
+		t.Errorf("f: %+v", out)
+	}
+}
+
+// A dry run says what the day would hold, as a real pass does, and writes no event.
+func TestADryRunTellsOfTheDay(t *testing.T) {
+	b := slowGuarded(t, t.TempDir(), "a", "b", "c")
+	b.rewrite("a", "b")
+	b.pass()
+	b.now += int64(time.Hour)
+	b.rewrite("c")
+	dry, err := Run(t.Context(), b.db, b.config, b, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []GuardLine{{Disk: "t1", Kind: GuardModifications, Count: 2, Window: WindowDay}}; !dry.Held || !slices.Equal(dry.Guards, want) {
+		t.Errorf("%+v", dry)
+	}
+	if got := b.count("SELECT count(*) FROM events WHERE kind = 'modify-guard'"); got != 0 {
+		t.Errorf("a dry run wrote %d guard events", got)
+	}
+}

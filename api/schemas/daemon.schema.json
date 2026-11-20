@@ -146,10 +146,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["disk", "kind", "count"],
+        "dependentSchemas": { "window": { "properties": { "kind": { "const": "modifications" } } } },
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
           "kind": { "enum": ["deletions", "modifications"] },
-          "count": { "type": "integer", "minimum": 0 }
+          "count": { "description": "What the window that tripped it counted: the guard's own, or with window the day's.", "type": "integer", "minimum": 0 },
+          "window": { "description": "Only for a mass-modification guard tripped on what its day counted, modifies.day_guard (specs.md §15.6); left out when its own window tripped it.", "enum": ["day"] }
         }
       }
     },
