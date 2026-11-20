@@ -1366,10 +1366,11 @@ func (s *Session) purgeEntry(ctx context.Context, e *catalog.TrashEntry) (string
 		return outcomeUnavailable, nil
 	}
 	if !layout.IsChunks(e.TrashPath) {
-		if err := s.dropLinksOf(ctx, handle, e); err != nil {
+		known, err := s.dropLinksOf(ctx, handle, e)
+		if err != nil {
 			return "", err
 		}
-		if !s.writable(e.Disk) {
+		if !known || !s.writable(e.Disk) {
 			return OutcomeIOError, nil
 		}
 	}

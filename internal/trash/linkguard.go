@@ -296,18 +296,25 @@ func (s *Session) dropLink(ctx context.Context, handle *ops.Disk, op *catalog.Op
 }
 
 // dropLinksOf removes the links of the guard that lead to an entry about to be purged: Atoll sent that data to the
-// trash itself, and a link left behind would keep it once purged, and send it back to the trash at the next pass.
-func (s *Session) dropLinksOf(ctx context.Context, handle *ops.Disk, e *catalog.TrashEntry) error {
+// trash itself, and a link left behind would keep it once purged, and send it back to the trash at the next pass. It
+// says false when it cannot tell which links lead there: the entry is not purged then, as one could keep its data; a
+// disk that failed is lost (invariant 4), and anything else leaves the entry for the next purge.
+func (s *Session) dropLinksOf(ctx context.Context, handle *ops.Disk, e *catalog.TrashEntry) (bool, error) {
 	ids, err := handle.OwnLinksOf(e.TrashPath, e.FileKey)
 	if err != nil {
-		return s.guardFailed(ctx, e.Disk, err)
+		if errors.Is(err, ops.ErrDiskLost) {
+			return false, s.lose(ctx, e.Disk, err)
+		}
+		slog.Warn("an entry stays in the trash: whether a link of the guard keeps its data cannot be told", "disk", e.Disk,
+			"path", e.TrashPath, "error", err)
+		return false, nil
 	}
 	list := make([]catalog.LinkStart, len(ids))
 	for i, fileID := range ids {
 		list[i] = catalog.LinkStart{FileID: fileID, Path: e.Path, FileKey: e.FileKey}
 	}
 	_, err = s.linkOps(ctx, handle, catalog.OpUnlink, list)
-	return err
+	return true, err
 }
 
 // countUnnamed records on a disk's row the links its run found whose data nothing names, for the alert link-unnamed

@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -109,20 +108,38 @@ func (d *Disk) HighestLinkID() (int64, error) {
 	return highest, nil
 }
 
-// ownLinks says how many links of the guard lead to an inode: names of Atoll's, which no count of a file's names
+// errLinksHidden says that another mount covers the links folder: the links below it are there still, and cannot be
+// counted. It does not wrap ErrOtherMount, which says that nothing moved: what cannot count them may come after a move.
+var errLinksHidden = errors.New("another mount covers the links folder, and hides the links below it")
+
+// ownLinks gives the files whose link of the guard leads to an inode: names of Atoll's, which no count of a file's names
 // includes (specs.md §17). The links folder is read once a session; the guard's own operations keep the count.
-func (d *Disk) ownLinks(ino uint64) []int64 {
+func (d *Disk) ownLinks(ino uint64) ([]int64, error) {
 	d.ownMu.Lock()
 	defer d.ownMu.Unlock()
-	if d.own == nil {
-		_, own, err := d.links()
-		if err != nil {
-			slog.Warn("the links folder cannot be read: link counts include the guard's", "disk", d.ID, "error", err)
-			own = map[uint64][]int64{}
-		}
-		d.own = own
+	if err := d.readOwn(); err != nil {
+		return nil, err
 	}
-	return slices.Clone(d.own[ino])
+	return slices.Clone(d.own[ino]), nil
+}
+
+// readOwn reads the links folder, unless this session did, ownMu held. A folder that is not there holds no link; one
+// that cannot be read is never taken for one with no link, which would let a purge go on while a link keeps the purged
+// data (invariant 4): a disk's error is the disk lost, and any other says nothing, for the caller to stop on. Nothing
+// of a read that failed is kept, so the next look reads the folder again.
+func (d *Disk) readOwn() error {
+	if d.own != nil {
+		return nil
+	}
+	_, own, err := d.links()
+	switch {
+	case errors.Is(err, ErrOtherMount):
+		return fmt.Errorf("the guard's links cannot be counted: %w", errLinksHidden)
+	case err != nil:
+		return fmt.Errorf("the guard's links cannot be counted: %w", err)
+	}
+	d.own = own
+	return nil
 }
 
 // forget says that a link of the guard is gone.
@@ -156,18 +173,23 @@ func (d *Disk) OwnLinksOf(trashPath, fileKey string) ([]int64, error) {
 		// With one name, the entry is all there is: no link leads to it, and the folder need not be read.
 		return nil, nil
 	}
-	return slices.Clone(d.ownLinks(st.Ino)), nil
+	return d.ownLinks(st.Ino)
 }
 
 // withoutOwn takes the guard's links out of what a look counts of a file's names. A file with one name has none of
-// them, and spares reading the folder.
-func (d *Disk) withoutOwn(st *fsx.Stat) {
+// them, and spares reading the folder. A folder that cannot be read fails the look (readOwn).
+func (d *Disk) withoutOwn(st *fsx.Stat) error {
 	if st.Kind != fsx.KindFile || st.Nlink < 2 {
-		return
+		return nil
 	}
-	if n := uint32(len(d.ownLinks(st.Ino))); n > 0 {
+	own, err := d.ownLinks(st.Ino)
+	if err != nil {
+		return err
+	}
+	if n := uint32(len(own)); n > 0 {
 		st.Nlink -= min(n, st.Nlink-1)
 	}
+	return nil
 }
 
 // LinksFolder is the links folder, open to make or remove links in it, made if need be: only on a disk confirmed in this
@@ -262,6 +284,14 @@ func (d *Disk) MakeLink(op *Op, links *LinksFolder) (*catalog.Links, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The links already made are read before this one is, so that a folder that cannot be read stops it before anything
+	// is made: what the names of its file record takes them out (specs.md §17).
+	d.ownMu.Lock()
+	err = d.readOwn()
+	d.ownMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	switch err := source.Link(from, links.dir.Dir, name); {
 	case err == nil:
 	case fsx.IsAbsent(err):
@@ -295,8 +325,11 @@ func (d *Disk) MakeLink(op *Op, links *LinksFolder) (*catalog.Links, error) {
 	}
 	d.ownMu.Unlock()
 	// Its own row records the change time too, which the link moved: what it had just before says whether it holds a
-	// change nobody has looked at.
-	d.withoutOwn(&st)
+	// change nobody has looked at. The folder was read above, so this reads nothing; were it to, the link is made, and
+	// only a reprise can say what its names record.
+	if err := d.withoutOwn(&st); err != nil {
+		return nil, lost(err)
+	}
 	left := linksFrom(&st)
 	if left != nil {
 		left.PriorNS = timeOf(before.Ctime)

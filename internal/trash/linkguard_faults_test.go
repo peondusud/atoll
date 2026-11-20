@@ -166,3 +166,67 @@ func TestAPurgeWhoseLinksCannotBeLookedFor(t *testing.T) {
 		t.Error("the link stays")
 	}
 }
+
+// A purge that cannot read the links folder purges nothing of its entry: a link there may keep the entry's data, which
+// would stay behind it once purged, and go back to the trash at the next pass. A folder that fails on a disk that fails
+// loses the disk, the entry left for later (invariant 4); any other error leaves the entry for the next purge, the disk
+// kept, and so does another mount over the folder, which hides the links below it (specs.md §17).
+func TestAPurgeThatCannotReadTheLinksFolder(t *testing.T) {
+	failing := func(call string, err syscall.Errno) func(b *bench) {
+		return func(b *bench) {
+			b.fail[b.dirs["t3"]] = func(c, name string) error {
+				if c == call && name == "links" {
+					return err
+				}
+				return nil
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		fail func(b *bench)
+		lost bool
+	}{
+		{"read on a disk that fails", failing("names", syscall.EIO), true},
+		{"opened on a disk gone", failing("opendir", syscall.ENODEV), true},
+		{"read with no right to", failing("names", syscall.EACCES), false},
+		{"opened with no file left to open", failing("opendir", syscall.EMFILE), false},
+		{"another mount over it", func(b *bench) { b.otherMount[b.dirs["t3"]] = "links" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBench(t)
+			if _, lost := b.guarded("t3", true); lost {
+				t.Fatal("lost")
+			}
+			b.prune()
+			tc.fail(b)
+			outcomes, summary := b.purgedAll()
+			if len(outcomes) != 1 || outcomes[0] != OutcomeIOError || summary.DiskLost != tc.lost {
+				t.Fatalf("%v, %+v", outcomes, summary)
+			}
+			if tc.lost != (b.diskState("t3") == "missing") {
+				t.Errorf("t3 is %s", b.diskState("t3"))
+			}
+			if _, err := os.Stat(b.inTrash(2, "a")); err != nil || b.count("SELECT count(*) FROM trash") != 1 {
+				t.Errorf("the entry: %v", err)
+			}
+			if inodeOf(t, b.linkOf("t3", 1)) == 0 {
+				t.Error("the link went")
+			}
+			if b.count("SELECT count(*) FROM ops WHERE kind = 'unlink'") != 0 {
+				t.Error("an unlink was journaled")
+			}
+			delete(b.fail, b.dirs["t3"])
+			delete(b.otherMount, b.dirs["t3"])
+			if outcomes, _ := b.purgedAll(); len(outcomes) != 1 || outcomes[0] != OutcomePurged {
+				t.Errorf("once readable: %v", outcomes)
+			}
+			if inodeOf(t, b.linkOf("t3", 1)) != 0 {
+				t.Error("the link stays")
+			}
+			if b.count("SELECT count(*) FROM trash") != 0 || b.count("SELECT count(*) FROM ops WHERE state = 'planned'") != 0 {
+				t.Error("the purge did not end")
+			}
+		})
+	}
+}
