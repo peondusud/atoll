@@ -10,7 +10,7 @@ test/tla/run.sh Copy.cfg Live.cfg        # some of them
 make model-flaws                         # the black-box scenarios of the flaws still open: none now
 ```
 
-`test/tla/run.sh` needs only Docker: it runs TLC in `eclipse-temurin:21.0.12_8-jre-noble`, with 2 workers, a 2 GiB heap and 2 CPUs, so that it leaves the machine to whatever else runs there. It downloads `tla2tools.jar` 1.7.4 once into `bin/tla/`, git-ignored, and checks its SHA-256. Each instance's log, with the full trace of a violation, goes to `bin/tla/<instance>.log`. With `--inside`, it runs TLC where it is, in that image, as the CI's `tla` job and `test/ci/run.sh` do.
+`test/tla/run.sh` needs only Docker: it runs TLC in `eclipse-temurin:21.0.13_9-jre-noble`, with 2 workers, a 2 GiB heap and 2 CPUs, so that it leaves the machine to whatever else runs there. It downloads `tla2tools.jar` 1.7.4 once into `bin/tla/`, git-ignored, and checks its SHA-256. Each instance's log, with the full trace of a violation, goes to `bin/tla/<instance>.log`. With `--inside`, it runs TLC where it is, in that image, as the CI's `tla` job and `test/ci/run.sh` do.
 
 The first line of each `.cfg` says what TLC must find there: `\* expect: pass`, or `\* expect: <invariant>` for a flaw of `specs.md` that the model found and that waits for the maintainer's remedy. An instance that finds anything else fails `make model-check`, a flaw fixed included: its expectation then becomes `pass`.
 
