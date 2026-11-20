@@ -31,7 +31,8 @@ concurrency:
 jobs:
   race:
     runs-on: ubuntu-latest
-    # The image of test/ci/run.sh: its Go, its golangci-lint, and root, as the local CI runs the tests.
+    # The image of test/ci/run.sh: its golangci-lint, and root, as the local CI runs the tests. Its GOTOOLCHAIN is auto:
+    # its go fetches go.mod's version of Go when newer than its own, checked against sum.golang.org, and kept in the cache.
     container: golangci/golangci-lint:v2.15.0
     timeout-minutes: 45
     steps:

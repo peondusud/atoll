@@ -127,7 +127,7 @@ What this work taught, so the next change goes faster and breaks less. Finished 
 
 ## Tooling on the maintainer's Windows machine
 
-- There is no Go or make on the host. Everything compiles in the `golangci/golangci-lint:v2.15.0` image (Go 1.27.2, make, gcc), with the project mounted read-only and copied inside the container.
+- There is no Go or make on the host. Everything compiles in the `golangci/golangci-lint:v2.15.0` image (Go 1.27.2, make, gcc; its `GOTOOLCHAIN=auto` fetches go.mod's newer Go, 1.27.4, into the module cache on first use), with the project mounted read-only and copied inside the container.
 - Docker Desktop can fail to start with `remove …: The file cannot be accessed by the system`, on `%LOCALAPPDATA%\Docker\run\dockerInference`, then on `%LOCALAPPDATA%\docker-secrets-engine\engine.sock`.
   - `docker desktop stop` sometimes leaves these empty Unix sockets behind, and each failed start recreates the ones before it, so removing one socket at a time never ends.
   - From a tool, Windows refuses to open them, even through the reparse point: `Remove-Item`, `del` and the recycle bin all give error 1920. Git Bash `rm -f` returns 0 and removes nothing, so check with `dir /a`.

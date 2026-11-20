@@ -61,7 +61,7 @@ Then `sudo atoll init --pool-id <id> --view-mount <path>` writes `/etc/atoll/ato
 
 ## Building and testing
 
-Go 1.27 or later:
+Go 1.27.4 or later:
 
 ```bash
 make build              # bin/atoll
@@ -79,7 +79,7 @@ GitHub Actions runs the same checks on each push to `beta` and `main` and each p
 The maintainer alone pushes a tag `vX.Y.Z` on a commit the CI passed, `v0.Y.Z` while the core is proven and `v1.0.0` once it is declared solid: `git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0`. A tag is Semantic Versioning, as Go reads it; the `.deb` takes the same version with a Debian revision, `0.1.0-1`. `.github/workflows/release.yml` builds it with GoReleaser (`.goreleaser.yaml`), drafts the release, marked a prerelease for `-alpha`, `-beta` and `-rc`, and attests each archive and package. Once that run has passed, publish the draft. `make release-snapshot` tries the same on this machine, from a clone; on Windows, from PowerShell at the root of one:
 
 ```powershell
-docker run --rm -v "${PWD}:/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src goreleaser/goreleaser:v2.20.0 release --snapshot --clean
+docker run --rm -v "${PWD}:/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src -e GOTOOLCHAIN=auto goreleaser/goreleaser:v2.20.0 release --snapshot --clean
 ```
 
 ## License
