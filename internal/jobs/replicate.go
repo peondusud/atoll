@@ -832,12 +832,14 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 // recordPlaced commits, on its own, the change time the look right after the rename found, before the copy's row: a
 // reprise compares the change time it finds with it, another being a write since the rename (specs.md §14.2). A look
 // whose times cannot be read records nothing, and the copy is resolved at once, as a reprise with no record would.
+// The copy is at its name already, so a stop that comes now, as SIGTERM or a low battery, does not cancel this one
+// commit: without it, the reprise would record the copy unverified, which a crash may leave but a stop never should.
 func (c *copier) recordPlaced(ctx context.Context, placed *fsx.Stat) error {
 	look, err := ops.LookOf(placed)
 	if err != nil {
 		return fmt.Errorf("replicate: %w", err)
 	}
-	if err := catalog.RecordPlaced(ctx, c.r.db, c.job, c.op, look.CtimeNS); err != nil {
+	if err := catalog.RecordPlaced(context.WithoutCancel(ctx), c.r.db, c.job, c.op, look.CtimeNS); err != nil {
 		return fmt.Errorf("%w: %w", errCatalog, err)
 	}
 	return nil
