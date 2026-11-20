@@ -149,7 +149,9 @@ func TestAFilesystemMarkGivesWhatWaits(t *testing.T) {
 }
 
 // startMergerfs starts a process that the system names mergerfs, with args on its command line, as the view's
-// mergerfs is told by those: a shell, run by a link of that name, that waits for its input to end.
+// mergerfs is told by those: a shell, run by a link of that name, that says it runs, then waits for its input to end.
+// Start returns as soon as the child let go of the parent's memory, before the kernel has laid out its arguments:
+// its name is already the new one there and its command line still empty, so the shell's word is waited for.
 func startMergerfs(t *testing.T, args ...string) int {
 	t.Helper()
 	sh, err := exec.LookPath("sh")
@@ -160,8 +162,12 @@ func startMergerfs(t *testing.T, args ...string) int {
 	if err := os.Symlink(sh, link); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(t.Context(), link, append([]string{"-c", "read x", "mergerfs"}, args...)...)
+	cmd := exec.CommandContext(t.Context(), link, append([]string{"-c", "echo; read x", "mergerfs"}, args...)...)
 	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +178,9 @@ func startMergerfs(t *testing.T, args ...string) int {
 		_ = stdin.Close()
 		_ = cmd.Wait()
 	})
+	if _, err := stdout.Read(make([]byte, 1)); err != nil {
+		t.Fatalf("the shell did not start: %v", err)
+	}
 	pid := cmd.Process.Pid
 	if comm, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm"); err != nil || strings.TrimSpace(string(comm)) != "mergerfs" {
 		t.Fatalf("the process stands as %q: %v", comm, err)
