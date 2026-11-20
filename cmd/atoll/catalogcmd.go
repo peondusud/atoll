@@ -9,6 +9,7 @@ import (
 	"io"
 	"path"
 	"slices"
+	"strings"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
@@ -268,7 +269,7 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 	}
 	old, err := catalog.SetAside(file, fresh, m.Now())
 	if err != nil {
-		return failure(stderr, fmt.Errorf(T("catalog rebuild: the new catalog is %s, not yet in place: %w"), fresh, err))
+		return failure(stderr, notInPlace(fresh, err))
 	}
 	if old != "" {
 		out.SetAside = &old
@@ -280,6 +281,23 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 		code = exitPartial
 	}
 	return writeRebuild(&out, flags["--json"], code, stdout, stderr)
+}
+
+// notInPlace says what a set-aside that failed left: the new catalog not yet in place, the old one where it was; or,
+// once the swap went through, the new one in place, where the old one stays, where its log went, and the rename that
+// puts them together, before a rebuild run again removes the name the old one stays at (specs.md §9, §25).
+func notInPlace(fresh string, err error) error {
+	var half *catalog.OldNotSetAside
+	switch {
+	case !errors.As(err, &half):
+		return fmt.Errorf(T("catalog rebuild: the new catalog is %s, not yet in place: %w"), fresh, err)
+	case len(half.Log) == 0:
+		return fmt.Errorf(T("catalog rebuild: the new catalog is in place at %s; the old one could not be renamed to %s, and stays at %s, which a rebuild run again would remove: rename it to %s yourself: %w"),
+			half.File, half.Want, half.At, half.Want, half.Err)
+	default:
+		return fmt.Errorf(T("catalog rebuild: the new catalog is in place at %s; the old one could not be renamed to %s, and stays at %s, which a rebuild run again would remove, while its log went to %s: rename it to %s yourself, which puts them together: %w"),
+			half.File, half.Want, half.At, strings.Join(half.Log, ", "), half.Want, half.Err)
+	}
 }
 
 // rebuildInto fills the new catalog: its operations past the highest id the disks' trash and tmp/ name, and its files
