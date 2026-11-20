@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -32,10 +33,43 @@ type passCase struct {
 	crash string
 	// needs names calls the pass makes on the disk with nothing failing: what says it does what the case is about.
 	needs []string
+	// from is the call from which on the sweep fails calls, the first of that kind; "" for the first call.
+	from string
+	// act is what runs on the catalog given: a pass when nil, as the daemon's.
+	act func(b *bench, db *sql.DB) error
 	// keepsTrash is a disk whose trash may keep what the pass sent there to be purged at once, "" for none: the SSD
 	// cache's copy a transfer sends there stays for the retention when a fault comes between its move and its purge,
 	// as its reprise finishes it as any move to the trash (specs.md §19). A limit: nothing is lost.
 	keepsTrash string
+}
+
+// run runs a case's act on a catalog.
+func (c *passCase) run(b *bench, db *sql.DB) error {
+	if c.act != nil {
+		return c.act(b, db)
+	}
+	_, err := Run(b.t.Context(), db, b.config, b, true)
+	return err
+}
+
+// replicateNow is atoll replicate --now of a path, as a case's act.
+func replicateNow(path string) func(b *bench, db *sql.DB) error {
+	return func(b *bench, db *sql.DB) error {
+		_, err := Replicate(b.t.Context(), db, b.config, b, ReplicateOptions{Path: path, Now: true}, func(*ReplicateItem) error { return nil })
+		return err
+	}
+}
+
+// copiesToMake gives a pool of two disks, t1 holding a file and a folder of two that t2 lacks, scanned: atoll replicate
+// copies them, the folders made like t1's (specs.md §14.2, §14.3).
+func copiesToMake(t *testing.T) *bench {
+	t.Helper()
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "a", "content")
+	b.write("t1", "Films/Deep/b", "film b")
+	b.write("t1", "Films/Deep/c", "film c")
+	b.scan(false)
+	return b
 }
 
 // runPass runs a case with the call at a position failing with inject (0 fails none), then passes with nothing failing
@@ -57,7 +91,7 @@ func runPass(t *testing.T, c *passCase, at int, inject error) (calls []string, r
 		}
 		return nil
 	}
-	_, runErr = Run(t.Context(), b.db, b.config, b, true)
+	runErr = c.run(b, b.db)
 	armed = false
 	return calls, runErr, b.settled(c.keepsTrash)
 }
@@ -79,7 +113,14 @@ func sweepPass(t *testing.T, c passCase) {
 				t.Fatalf("with nothing failing, no %s: %q", need, calls)
 			}
 		}
-		for i, call := range calls {
+		first := 0
+		if c.from != "" {
+			if first = slices.IndexFunc(calls, func(call string) bool { return strings.HasPrefix(call, c.from+" ") }); first < 0 {
+				t.Fatalf("with nothing failing, no %s: %q", c.from, calls)
+			}
+		}
+		for i, call := range calls[first:] {
+			i += first
 			for k, inject := range []error{syscall.EIO, syscall.EACCES} {
 				if raceBuild && (i+2*k)%sweepStride != 0 {
 					continue
@@ -98,15 +139,15 @@ func sweepPass(t *testing.T, c passCase) {
 }
 
 // snapshot says what the pool holds: on each disk, each name below its root and what it holds, each entry of its trash
-// by the logical path below its operation's folder, but on the disk whose trash is left out, and what is in its tmp/;
-// then the operations left planned, and the rows of the files and their copies. What differs between two runs that end
-// the same, the times, the inodes, the ids and dates of operations, is left out.
+// by the logical path below its operation's folder, but on the disk whose trash is left out ("*" for every disk), and
+// what is in its tmp/; then the operations left planned, and the rows of the files and their copies. What differs
+// between two runs that end the same, the times, the inodes, the ids and dates of operations, is left out.
 func (b *bench) snapshot(trashLeftOut string) string {
 	b.t.Helper()
 	var lines []string
 	for _, id := range slices.Sorted(maps.Keys(b.dirs)) {
 		lines = append(lines, b.tree(id, "media", 0)...)
-		if id != trashLeftOut {
+		if id != trashLeftOut && trashLeftOut != "*" {
 			lines = append(lines, b.tree(id, "Atoll/trash", 2)...)
 		}
 		lines = append(lines, b.tree(id, "Atoll/tmp", 0)...)
@@ -129,8 +170,11 @@ func (b *bench) snapshot(trashLeftOut string) string {
 	if err := rows.Err(); err != nil {
 		b.t.Fatal(err)
 	}
-	lines = append(lines, fmt.Sprintf("trash entries: %d, jobs: %d", b.count("SELECT count(*) FROM trash WHERE disk_id != ?", trashLeftOut),
-		b.count("SELECT count(*) FROM jobs")))
+	entries := 0
+	if trashLeftOut != "*" {
+		entries = b.count("SELECT count(*) FROM trash WHERE disk_id != ?", trashLeftOut)
+	}
+	lines = append(lines, fmt.Sprintf("trash entries: %d, jobs: %d", entries, b.count("SELECT count(*) FROM jobs")))
 	return strings.Join(lines, "\n")
 }
 
@@ -169,7 +213,7 @@ func (b *bench) tree(id, folder string, skip int) []string {
 			if err != nil {
 				return err
 			}
-			what = string(data)
+			what = string(data) + userXattrs(path)
 		}
 		out = append(out, fmt.Sprintf("%s %s: %s = %q", id, folder, name, what))
 		return nil
@@ -179,6 +223,45 @@ func (b *bench) tree(id, folder string, skip int) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// userXattrs gives the user. extended attributes of a file, sorted, as " name=value" each; none where a filesystem keeps
+// none.
+func userXattrs(path string) string {
+	size, err := syscall.Listxattr(path, nil)
+	if err != nil || size == 0 {
+		return ""
+	}
+	list := make([]byte, size)
+	if size, err = syscall.Listxattr(path, list); err != nil {
+		return ""
+	}
+	var out []string
+	for _, name := range strings.Split(string(list[:size]), "\x00") {
+		if !strings.HasPrefix(name, "user.") {
+			continue
+		}
+		value := make([]byte, 1024)
+		n, err := syscall.Getxattr(path, name, value)
+		if err != nil {
+			n = 0
+		}
+		out = append(out, " "+name+"="+string(value[:n]))
+	}
+	slices.Sort(out)
+	return strings.Join(out, "")
+}
+
+// attributed gives a pool of two disks with Films/a.mkv on both, where a user set an extended attribute through
+// Atoll's own view, on the copy on t1 it presents: the next pass gives it the copy on t2 (specs.md §21.2).
+func attributed(t *testing.T) *bench {
+	t.Helper()
+	b, w, _, other := xattrPool(t, "")
+	if other != "t2" {
+		t.Fatalf("the view presents the copy on %s", other)
+	}
+	setThroughView(b, w, "Films/a.mkv", "user.DOSATTRIB", "0x20")
+	return b
 }
 
 // propagated gives a pool of two disks, each with the same files, where a user, on t1, renamed a file, deleted
@@ -263,8 +346,12 @@ func TestAPassEndsTheSameWhereverItFails(t *testing.T) {
 	for _, point := range []string{"mkdir-made", "copied", "placed", "source-synced"} {
 		sweepPass(t, passCase{name: "a copy's reprise after a crash at " + point, pool: refreshed, disk: "t2", crash: point, needs: []string{"rename"}})
 	}
+	sweepPass(t, passCase{name: "atoll replicate, on the target", pool: copiesToMake, disk: "t2", act: replicateNow(""), needs: copies})
+	sweepPass(t, passCase{name: "atoll replicate, on the source", pool: copiesToMake, disk: "t1", act: replicateNow(""), needs: []string{"read"}})
 	sweepPass(t, passCase{name: "a transfer, on the cache", pool: cached, disk: "c", needs: []string{"rename", "unlink"}, keepsTrash: "c"})
 	sweepPass(t, passCase{name: "a transfer, on a data disk", pool: cached, disk: "t1", needs: []string{"create", "rename"}})
+	// From the look at the copy to give: a disk lost before it keeps its own set, disk-unavailable (specs.md §21.2).
+	sweepPass(t, passCase{name: "an attribute set through the view", pool: attributed, disk: "t2", needs: []string{"setxattr"}, from: "xattrs"})
 	sweepPass(t, passCase{name: "two names exchanged", pool: swapped, disk: "t2", needs: []string{"exchange"}})
 	sweepPass(t, passCase{name: "two names exchanged, after a crash at moved", pool: swapped, disk: "t2", crash: "moved", needs: []string{"stat"}})
 }

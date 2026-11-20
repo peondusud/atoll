@@ -183,7 +183,7 @@ func runWithCatalogFault(t *testing.T, c *passCase, at int) (seen []string, runE
 	}
 	db, f := b.faultyCatalog(at)
 	f.arm(true)
-	_, runErr = Run(t.Context(), db, b.config, b, true)
+	runErr = c.run(b, db)
 	f.arm(false)
 	_ = db.Close()
 	f.mu.Lock()
@@ -255,4 +255,8 @@ func TestAPassEndsTheSameWhereverItsCatalogFails(t *testing.T) {
 	sweepCatalog(t, passCase{name: "a refresh and a copy", pool: refreshed}, 1)
 	sweepCatalog(t, passCase{name: "the reprise after a crash at moved", pool: propagated, crash: "moved"}, 1)
 	sweepCatalog(t, passCase{name: "two names exchanged", pool: swapped}, 1)
+	sweepCatalog(t, passCase{name: "a copy's reprise after a crash at placed", pool: refreshed, crash: "placed"}, 1)
+	sweepCatalog(t, passCase{name: "a transfer", pool: cached, keepsTrash: "c"}, 1)
+	sweepCatalog(t, passCase{name: "an attribute set through the view", pool: attributed}, 1)
+	sweepCatalog(t, passCase{name: "atoll replicate", pool: copiesToMake, act: replicateNow("")}, 1)
 }
