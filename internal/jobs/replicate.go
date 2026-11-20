@@ -391,7 +391,7 @@ func (r *replicator) commit(ctx context.Context, job *catalog.ReplicateJob, op *
 	row := ops.CreatedRow(job.Look, &placed)
 	made := ops.NewCopyFrom(job.Path, strconv.FormatUint(moved.Placed.Ino, 10), &row)
 	// The time it is now, not when the run began: a run can last hours, and the copy is seen and verified as it ends.
-	if err := catalog.FinishCreate(ctx, r.db, op, job, made, r.machine.Now()); err != nil {
+	if err := catalog.FinishCreate(ctx, r.db, op, job, made, r.machine.Now(), false); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	r.on.MarkChanged()
@@ -814,7 +814,7 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 			return nil, err
 		}
 	}
-	moved, err := c.dst.PlacePart(c.op, c.job.Path)
+	moved, err := c.dst.PlacePart(c.op, c.job.Path, func(placed *fsx.Stat) error { return c.recordPlaced(ctx, placed) })
 	switch {
 	case err == nil:
 		return moved, nil
@@ -827,6 +827,20 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 	default:
 		return nil, err
 	}
+}
+
+// recordPlaced commits, on its own, the change time the look right after the rename found, before the copy's row: a
+// reprise compares the change time it finds with it, another being a write since the rename (specs.md §14.2). A look
+// whose times cannot be read records nothing, and the copy is resolved at once, as a reprise with no record would.
+func (c *copier) recordPlaced(ctx context.Context, placed *fsx.Stat) error {
+	look, err := ops.LookOf(placed)
+	if err != nil {
+		return fmt.Errorf("replicate: %w", err)
+	}
+	if err := catalog.RecordPlaced(ctx, c.r.db, c.job, c.op, look.CtimeNS); err != nil {
+		return fmt.Errorf("%w: %w", errCatalog, err)
+	}
+	return nil
 }
 
 // obstacleOutcome says what a copy ends with when its target is not free: something at the path itself is

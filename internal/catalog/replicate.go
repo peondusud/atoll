@@ -30,6 +30,10 @@ type ReplicateJob struct {
 	// into it once its name is in the library reads as an edit at the next look (specs.md §14.2). Nil until then, and
 	// for a job an earlier version verified.
 	Look *PartLook
+	// Placed is the change time the copy had right after the rename of the operation that placed it, recorded in a
+	// commit of its own before its row: what a reprise compares the change time it finds with, another being a write
+	// since (specs.md §14.2). Nil until then, and for a job an earlier version ran.
+	Placed *Placed
 	// Replaces is the disk whose user copy this copy stands in for, as atoll balance --move-originals makes it: the
 	// copy becomes a user copy, and that one an Atoll copy, when it is recorded (specs.md §13.3).
 	Replaces string
@@ -52,11 +56,19 @@ type PartLook struct {
 	Nlink   int64  `json:"nlink"`
 }
 
+// Placed is what a job records of its copy right after the rename of operation Op: its change time, which the rename
+// moved, in its payload as placed (specs.md §9, §14.2).
+type Placed struct {
+	Op      int64 `json:"op"`
+	CtimeNS int64 `json:"ctime_ns"`
+}
+
 // jobPayload is what a replicate job holds beyond its columns (specs.md §9).
 type jobPayload struct {
 	Part     string    `json:"part,omitempty"`
 	Blake3   string    `json:"blake3,omitempty"`
 	PartLook *PartLook `json:"part_look,omitempty"`
+	Placed   *Placed   `json:"placed,omitempty"`
 	Replaces string    `json:"replaces,omitempty"`
 	Refresh  bool      `json:"refresh,omitempty"`
 }
@@ -66,6 +78,7 @@ func (j *ReplicateJob) payload() (string, error) {
 	if j.Hash != nil {
 		data.Blake3 = hex.EncodeToString(j.Hash)
 		data.PartLook = j.Look
+		data.Placed = j.Placed
 	}
 	text, err := json.Marshal(data)
 	if err != nil {
@@ -88,14 +101,25 @@ func (j *ReplicateJob) readPayload(text sql.NullString) error {
 		if err != nil || len(hash) != 32 {
 			return fmt.Errorf("job %d: payload: hash %q", j.ID, data.Blake3)
 		}
-		j.Hash, j.Look = hash, data.PartLook
+		j.Hash, j.Look, j.Placed = hash, data.PartLook, data.Placed
 	}
 	return nil
 }
 
-// dropPart forgets a job's part, with what its verification recorded: the next operation makes one of its own.
+// dropPart forgets a job's part, with what its verification and its rename recorded: the next operation makes one of its
+// own.
 func (j *ReplicateJob) dropPart() {
-	j.Part, j.Hash, j.Look = "", nil, nil
+	j.Part, j.Hash, j.Look, j.Placed = "", nil, nil, nil
+}
+
+// PlacedBy gives the change time the job recorded right after the rename of an operation, and nil when it recorded none
+// for that one: the crash came between that rename and its record, or the record is an earlier operation's.
+func (j *ReplicateJob) PlacedBy(op int64) *int64 {
+	if j == nil || j.Placed == nil || j.Placed.Op != op {
+		return nil
+	}
+	ctime := j.Placed.CtimeNS
+	return &ctime
 }
 
 // Queue is one copy the plan wants made.
@@ -379,6 +403,8 @@ func BeginCreate(ctx context.Context, db *sql.DB, job *ReplicateJob, nowNS int64
 		if op.ID, err = result.LastInsertId(); err != nil {
 			return fmt.Errorf("journal: %w", err)
 		}
+		// What an earlier operation recorded of its rename is no longer of the copy this one makes.
+		job.Placed = nil
 		if job.Part == "" {
 			job.dropPart()
 			job.Part = layout.PartName(op.ID)
@@ -477,7 +503,22 @@ func JobChunks(ctx context.Context, db *sql.DB, jobID int64) ([]byte, error) {
 // RecordVerified records the whole-file hash a verification gave, and what the part was then, before anything is
 // renamed, so that a reprise that finds the copy at its name can finish it, its row what was verified (specs.md §14.2).
 func RecordVerified(ctx context.Context, db *sql.DB, job *ReplicateJob, hash []byte, look *PartLook) error {
-	job.Hash, job.Look = hash, look
+	job.Hash, job.Look, job.Placed = hash, look, nil
+	payload, err := job.payload()
+	if err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE jobs SET payload = ? WHERE id = ?", payload, job.ID); err != nil {
+		return fmt.Errorf("job %d: %w", job.ID, err)
+	}
+	return nil
+}
+
+// RecordPlaced records, in a commit of its own, the change time a job's copy had right after the rename of its
+// operation, before the copy's row is written: a reprise that finds another knows that someone wrote into the copy since,
+// however long Atoll was down (specs.md §14.2).
+func RecordPlaced(ctx context.Context, db *sql.DB, job *ReplicateJob, op *Op, ctimeNS int64) error {
+	job.Placed = &Placed{Op: op.ID, CtimeNS: ctimeNS}
 	payload, err := job.payload()
 	if err != nil {
 		return err
@@ -490,8 +531,10 @@ func RecordVerified(ctx context.Context, db *sql.DB, job *ReplicateJob, hash []b
 
 // FinishCreate says that a copy is made: the operation done, the pending copy ok with made, what its part was when
 // verified, the file's hash where it had none, the source verified, and the job gone with its chunks (specs.md §14.2).
-// A job gone meanwhile leaves the copy unverified, as nothing says what was checked.
-func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, made *NewCopy, nowNS int64) error {
+// A job gone meanwhile leaves the copy unverified, as nothing says what was checked; so does unverified, for a copy a
+// reprise found whose change time may be a write's as well as the rename's: the source and the file's hash stand, as
+// they are what was read.
+func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, made *NewCopy, nowNS int64, unverified bool) error {
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
 		if err := markOp(ctx, tx, op.ID, "done"); err != nil {
 			return err
@@ -513,6 +556,10 @@ func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, ma
 		if hash != nil && (known == nil || string(known) == string(hash)) {
 			verified = sql.NullInt64{Int64: nowNS, Valid: true}
 		}
+		own := verified
+		if unverified {
+			own = sql.NullInt64{}
+		}
 		// A copy made in place of a user copy takes its part: it becomes the user copy, and the one it replaces an
 		// Atoll copy, in this transaction, so that the file never has fewer user copies (specs.md §6.1, §13.3).
 		createdBy := "atoll"
@@ -528,7 +575,7 @@ func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, ma
 				btime_ns = ?8, first_seen_ns = ?9, verified_ns = ?10, gone_ns = NULL, gone_kind = NULL, old_lpath = NULL, old_lpath_key = NULL,
 				mode = ?11, uid = ?12, gid = ?13
 			WHERE file_id = ?1 AND disk_id = ?2`,
-			fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, verified, made.Mode, made.UID, made.GID, createdBy)
+			fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, nowNS, own, made.Mode, made.UID, made.GID, createdBy)
 		if err != nil {
 			return fmt.Errorf("copy: %w", err)
 		}
@@ -538,7 +585,7 @@ func FinishCreate(ctx context.Context, db *sql.DB, op *Op, job *ReplicateJob, ma
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO copies(file_id, disk_id, file_key, nlink, size, mtime_ns, ctime_ns, btime_ns, created_by, first_seen_ns, verified_ns, state, mode, uid, gid)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?, ?)`,
-				fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, createdBy, nowNS, verified, made.Mode, made.UID, made.GID); err != nil {
+				fileID, op.Disk, made.FileKey, made.Nlink, made.Size, made.MtimeNS, made.CtimeNS, made.BtimeNS, createdBy, nowNS, own, made.Mode, made.UID, made.GID); err != nil {
 				return fmt.Errorf("copy: %w", err)
 			}
 		}

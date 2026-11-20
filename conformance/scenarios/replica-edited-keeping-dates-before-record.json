@@ -1,0 +1,168 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14.2, §17.2, §15.10; conformance/models/README.md, flaw 1 and its limit",
+  "description": "A crash between a replica's rename and the commit of the change time it had then (moved), and a write into the replica while Atoll is down by a program that keeps the size and the dates, so that only the change time tells it: with no change time recorded, the reprise cannot tell the write from the rename, takes the change time it finds, and records the copy unverified, as that is not the change time the part was verified with. The source stays verified, and the file takes the hash it was read with. A full scan then reads the write as another version of an unverified copy: a conflict, both versions kept, never a corruption that a repair would overwrite. Before the remedy of 2026-11-20, the reprise recorded the copy verified, and the full scan only took its verified_ns away, leaving the scrub to call the write a corruption and repair it away.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a",
+        "--now"
+      ],
+      "crash_at": "moved",
+      "exit": 137
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT json_extract(j.payload, '$.placed') IS NULL, json_type(j.payload, '$.part_look'), o.state FROM jobs j, ops o WHERE o.kind = 'create'",
+      "rows": [
+        [
+          1,
+          "object",
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/a",
+      "text": "y",
+      "mtime_ns": 1600000000000000000
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state, verified_ns IS NOT NULL FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "user",
+          "ok",
+          1
+        ],
+        [
+          "t2",
+          "atoll",
+          "ok",
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state, blake3 IS NOT NULL FROM files",
+      "rows": [
+        [
+          "a",
+          "ok",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT (SELECT count(*) FROM ops WHERE state = 'planned'), (SELECT count(*) FROM jobs)",
+      "rows": [
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files",
+      "rows": [
+        [
+          "a",
+          "conflict"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "y",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    }
+  ]
+}

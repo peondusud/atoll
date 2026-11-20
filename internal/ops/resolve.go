@@ -124,6 +124,26 @@ func CreatedRow(verified, found *catalog.PartLook) catalog.PartLook {
 	return row
 }
 
+// RecoveredRow says what the row of a copy a reprise finds at its name records, and whether it is recorded unverified
+// (specs.md §14.2): placed is the change time the job recorded right after the rename, in a commit of its own, and nil
+// when the crash came between the rename and that commit. With it, a change time found other than it is a write since
+// the rename, which the row reads as an edit at the next look: the row is the part's, whose change time the look finds
+// moved. Without it, a write that moved only the change time cannot be told from the rename: the row is what CreatedRow
+// gives, unverified when the change time found is not the one the part was verified with, so that a mismatch read later
+// is a conflict, never a corruption a repair would overwrite. A job an earlier version verified recorded no look: what is
+// found, unverified.
+func RecoveredRow(verified *catalog.PartLook, placed *int64, found *catalog.PartLook) (catalog.PartLook, bool) {
+	switch {
+	case verified == nil:
+		return *found, true
+	case placed == nil:
+		return CreatedRow(verified, found), found.CtimeNS != verified.CtimeNS
+	case found.CtimeNS != *placed:
+		return *verified, false
+	}
+	return CreatedRow(verified, found), false
+}
+
 // onlyCtimeMoved says whether two looks at one inode differ in nothing but their change time. A creation time on one
 // alone is a difference.
 func onlyCtimeMoved(a, b *catalog.PartLook) bool {

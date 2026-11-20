@@ -10,7 +10,7 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "63b5b04773da1a719777dc77af24f22517f55b938fe76aec3ea932554603d621"
+      "sha256": "33afeee1fa7cdb1355dc7d9f94343f41b05cbb16287d65ce7fbb66b346c3f4c5"
     },
     {
       "section": "10",
@@ -25,7 +25,7 @@
     {
       "section": "14",
       "title": "## 14. Replication",
-      "sha256": "4a0430024d64948acf2fa7a00ceb810f6256449ceee7d09d34329799f9ca26f2"
+      "sha256": "a4cd92cbedfdb2147e1efa78c3499d4bc9a705049b8607638dcdae95c0a56397"
     },
     {
       "section": "14.1",
@@ -35,7 +35,7 @@
     {
       "section": "14.2",
       "title": "### 14.2 The operation `create`",
-      "sha256": "730ccf30a522cd8bc2e35e0e183c0d28fe9c7053fffe788d1e94770b51c0e236"
+      "sha256": "8764f52172c3b10a62bd06c766377f102cf145e8904ef019f82c63b1c843544c"
     },
     {
       "section": "15.4",
@@ -65,7 +65,7 @@
     {
       "section": "17.2",
       "title": "### 17.2 Reprise after a crash",
-      "sha256": "8834140fb8d241c6f849abf2138795af13a851fef7b068978b14a7683e4c300b"
+      "sha256": "c4ac56122e6e4eefd4b3586231da5416161ab052d7c064daebaf417622d4541d"
     },
     {
       "section": "20",

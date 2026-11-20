@@ -377,8 +377,20 @@ A look is an object of `size`, `mtime_ns`, `ctime_ns`, `btime_ns`, left out wher
 | Field | Type | Meaning |
 |---|---|---|
 | `verified` | object | what the part was when it was verified, before the rename |
-| `found` | object | what a look at its name found once the copy was there: right after the rename, or in a reprise, however long after a crash or a disk lost |
+| `found` | object | what a look at its name found once the copy was there: right after the rename, or in a reprise, however long after a crash or a disk lost, as `create_reprise.json` says when |
 | `row` | object | what the copy's row records: `verified`, with the change time `found` gives when the two differ in nothing else, a creation time present on one alone being a difference |
+
+### `create_reprise.json` — what a reprise records of a copy it finds at its name (§14.2, §17.2)
+
+A look is as in `create_row.json`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verified` | object | optional: what the part was when it was verified, `part_look`; left out for a job an earlier version verified, which recorded none |
+| `placed_ctime_ns` | integer | optional: the change time the job recorded right after the rename of this operation, in a commit of its own (`placed`, §9); left out when the crash or the disk lost came between the rename and that commit |
+| `found` | object | what the reprise's look at its name found once the names are durable, however long after |
+| `row` | object | what the copy's row records: with `placed_ctime_ns`, what `create_row.json` gives when `found` has that change time, and `verified` otherwise, a write since the rename that the next look reads as an edit; without it, what `create_row.json` gives; with no `verified`, `found` |
+| `unverified` | boolean | `true` when the copy is recorded unverified, `verified_ns` NULL: with no `placed_ctime_ns` and a change time found other than `verified`'s, or with no `verified`. Left out otherwise |
 
 ### `copy_verdict.json` — what a look found of one copy (§15.1, §15.12)
 

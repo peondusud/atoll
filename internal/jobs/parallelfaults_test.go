@@ -179,7 +179,7 @@ func TestACrashWithCopiesAtOnce(t *testing.T) {
 	if testing.Short() {
 		t.Skip("starts a process for each point")
 	}
-	for _, point := range []string{"journaled", "copied", "verified", "moved", "target-synced", "source-synced"} {
+	for _, point := range []string{"journaled", "copied", "verified", "moved", "placed", "target-synced", "source-synced"} {
 		t.Run(point, func(t *testing.T) {
 			t.Parallel()
 			kinds := map[string]string{"t1": "ssd", "t2": "ssd"}
@@ -207,6 +207,11 @@ func TestACrashWithCopiesAtOnce(t *testing.T) {
 					break
 				}
 				p.now += 3_600_000_000_000
+			}
+			if point == "moved" {
+				// A copy the crash left right after its rename, before the commit of the change time it had then, is
+				// recorded unverified, as that change time may be a write's (specs.md §14.2): a full scan reads it.
+				p.scan(true)
 			}
 			p.copied("t1", "t2", paths)
 		})
