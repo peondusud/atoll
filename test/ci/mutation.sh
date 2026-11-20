@@ -45,8 +45,10 @@ GOBIN=$(pwd)/$out go install "github.com/go-gremlins/gremlins/cmd/gremlins@$grem
 # Each test run with one CPU, through GOFLAGS, never gremlins' --test-cpu: v0.6.0 hands that to go test as the single
 # argument "-cpu N", a flag go test does not know, which it passes with the package after it to a test binary of the
 # folder it runs in, the module's root. Every run then failed before a test started, and every mutant was counted
-# killed.
-export GOFLAGS="${GOFLAGS:+$GOFLAGS }-cpu=1"
+# killed. -count=1 too: gremlins gives each mutant three times the time its first run of the tests took, and a result
+# go test took from its cache, as for a package whose code and tests are those of a run before, timed out mutants the
+# tests kill.
+export GOFLAGS="${GOFLAGS:+$GOFLAGS }-cpu=1 -count=1"
 
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 {
