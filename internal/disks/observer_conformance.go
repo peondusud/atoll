@@ -194,6 +194,17 @@ func (folders) Root(mount, root string) RootSeen {
 	return lookAtRoot(mount, root)
 }
 
+// Hiberfil reads hiberfil.sys at the top of the real folder, at each check: a folder is no mount, so there is no mount
+// to read it once for.
+func (folders) Hiberfil(mount string, _ *MountEntry) HiberfilSeen {
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return hiberfilError(err)
+	}
+	defer func() { _ = top.Close() }()
+	return ReadHiberfil(top)
+}
+
 func (f folders) Now() int64 {
 	return f.now
 }

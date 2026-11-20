@@ -175,24 +175,30 @@ type checkEntry struct {
 }
 
 type checkCase struct {
-	FS         *string         `json:"fs"`
-	UUID       *string         `json:"uuid"`
-	Mount      *string         `json:"mount"`
-	Path       *string         `json:"path"`
-	NoEntry    bool            `json:"no_entry"`
-	Entry      *checkEntry     `json:"entry"`
-	Device     *string         `json:"device"`
-	NoMagic    bool            `json:"no_magic"`
-	ID         *string         `json:"id"`
-	Variant    string          `json:"variant"`
-	NoJournal  bool            `json:"no_journal"`
-	RootFolder *string         `json:"root_folder"`
-	OtherCase  bool            `json:"other_case"`
-	Marker     json.RawMessage `json:"marker"`
-	State      string          `json:"state"`
-	Reason     string          `json:"reason"`
-	MountOwner bool            `json:"mount_owner"`
-	Note       string          `json:"note"`
+	FS         *string     `json:"fs"`
+	UUID       *string     `json:"uuid"`
+	Mount      *string     `json:"mount"`
+	Path       *string     `json:"path"`
+	NoEntry    bool        `json:"no_entry"`
+	Entry      *checkEntry `json:"entry"`
+	Device     *string     `json:"device"`
+	NoMagic    bool        `json:"no_magic"`
+	ID         *string     `json:"id"`
+	Variant    string      `json:"variant"`
+	NoJournal  bool        `json:"no_journal"`
+	RootFolder *string     `json:"root_folder"`
+	OtherCase  bool        `json:"other_case"`
+	// Hiberfil is what the top of the mount holds at hiberfil.sys; a file has its size, the bytes of its content that are
+	// not zero, and how many of its first bytes a read gave.
+	Hiberfil      *string         `json:"hiberfil"`
+	HiberfilSize  int64           `json:"hiberfil_size"`
+	HiberfilBytes []bytesAt       `json:"hiberfil_bytes"`
+	HiberfilRead  *int            `json:"hiberfil_read"`
+	Marker        json.RawMessage `json:"marker"`
+	State         string          `json:"state"`
+	Reason        string          `json:"reason"`
+	MountOwner    bool            `json:"mount_owner"`
+	Note          string          `json:"note"`
 }
 
 func or[T any](p *T, fallback T) T {
@@ -202,12 +208,19 @@ func or[T any](p *T, fallback T) T {
 	return fallback
 }
 
+// bytesAt is a run of bytes at an offset, in hexadecimal.
+type bytesAt struct {
+	At  int    `json:"at"`
+	Hex string `json:"hex"`
+}
+
 // answers plays a machine from a case of disk_check.json, and notes what was asked.
 type answers struct {
-	seen   MountSeen
-	device DeviceSeen
-	root   RootSeen
-	asked  []string
+	seen     MountSeen
+	device   DeviceSeen
+	root     RootSeen
+	hiberfil HiberfilSeen
+	asked    []string
 }
 
 func (a *answers) Mount(string) MountSeen {
@@ -225,7 +238,40 @@ func (a *answers) Root(string, string) RootSeen {
 	return a.root
 }
 
-func answersFor(c *checkCase) (*config.Disk, *answers) {
+func (a *answers) Hiberfil(string, *MountEntry) HiberfilSeen {
+	a.asked = append(a.asked, "hiberfil")
+	return a.hiberfil
+}
+
+// hiberfilOf gives what a case says the top holds at hiberfil.sys: a file's content is zeros but for its bytes, and a
+// read gives its first 4 KiB, or as much as the case says.
+func hiberfilOf(t *testing.T, c *checkCase) HiberfilSeen {
+	t.Helper()
+	seen := HiberfilSeen{File: HiberfilAnswer(or(c.Hiberfil, "absent"))}
+	if seen.File != HiberfilFile {
+		return seen
+	}
+	read := or(c.HiberfilRead, int(min(c.HiberfilSize, HiberfilHeader)))
+	content := make([]byte, 2*HiberfilHeader)
+	for _, b := range c.HiberfilBytes {
+		raw, err := hex.DecodeString(b.Hex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b.At+len(raw) > len(content) || b.At+len(raw) > int(c.HiberfilSize) {
+			t.Fatalf("bytes past the file: %+v (%s)", b, c.Note)
+		}
+		copy(content[b.At:], raw)
+	}
+	if read > len(content) || int64(read) > c.HiberfilSize {
+		t.Fatalf("a read of %d bytes (%s)", read, c.Note)
+	}
+	seen.Size, seen.Head = c.HiberfilSize, content[:read]
+	return seen
+}
+
+func answersFor(t *testing.T, c *checkCase) (*config.Disk, *answers) {
+	t.Helper()
 	fs := names.Filesystem(or(c.FS, "ext4"))
 	uuid := "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"
 	fstype, super := string(fs), []string{"rw"}
@@ -254,6 +300,7 @@ func answersFor(c *checkCase) (*config.Disk, *answers) {
 		a.device.Identity = &Identity{ID: or(c.ID, uuid), Variant: Variant(c.Variant), NoJournal: c.NoJournal, TimePrecisionNS: 100}
 	}
 	a.root = RootSeen{Folder: FolderAnswer(or(c.RootFolder, "ok")), OtherCase: c.OtherCase}
+	a.hiberfil = hiberfilOf(t, c)
 	return d, a
 }
 
@@ -261,7 +308,7 @@ func TestCheck(t *testing.T) {
 	cases := vectors.Load[checkCase](t, "disk_check.json")
 	for i := range cases {
 		c := &cases[i]
-		d, a := answersFor(c)
+		d, a := answersFor(t, c)
 		got := Check(a, d)
 		if c.Marker != nil {
 			got = MarkerVerdict(got, markerText(t, c.Marker), true, "p", d)
@@ -303,8 +350,19 @@ func TestCheckStopsAtTheFirstFailure(t *testing.T) {
 		{"no magic", checkCase{NoMagic: true}, []string{"mount", "device"}},
 		{"another disk", checkCase{ID: text("x")}, []string{"mount", "device"}},
 		{"shut down", checkCase{Entry: &checkEntry{SuperOptions: &[]string{"rw", "shutdown"}}}, []string{"mount", "device"}},
+		// hiberfil.sys is the only file of a disk a check reads: on an NTFS disk alone, once questions 1 to 10 passed, and
+		// only when a driver's options leave the disk online (specs.md §10).
+		{"healthy ntfs", checkCase{FS: text("ntfs")}, []string{"mount", "device", "root", "hiberfil"}},
+		{"ntfs without its root", checkCase{FS: text("ntfs"), RootFolder: text("absent")}, []string{"mount", "device", "root"}},
+		{"ntfs gone", checkCase{FS: text("ntfs"), Device: text("gone")}, []string{"mount", "device"}},
+		{"ntfs3 ads", checkCase{FS: text("ntfs"), Entry: &checkEntry{SuperOptions: &[]string{"rw", "iocharset=utf8", "ads"}}}, []string{"mount", "device", "root"}},
+		{"ntfs errors=continue", checkCase{FS: text("ntfs"), Entry: &checkEntry{FSType: text("ntfs"), SuperOptions: &[]string{"rw", "iocharset=utf8"}}},
+			[]string{"mount", "device", "root"}},
+		{"ntfs-3g read-only", checkCase{FS: text("ntfs"), Entry: &checkEntry{FSType: text("fuseblk"), MountOptions: &[]string{"ro"}, SuperOptions: &[]string{"ro"}}},
+			[]string{"mount", "device", "root", "hiberfil"}},
+		{"ntfs3 ignoring case", checkCase{FS: text("ntfs"), OtherCase: true}, []string{"mount", "device", "root", "hiberfil"}},
 	} {
-		d, a := answersFor(&tc.c)
+		d, a := answersFor(t, &tc.c)
 		Check(a, d)
 		if !slices.Equal(a.asked, tc.want) {
 			t.Errorf("%s: asked %v, want %v", tc.name, a.asked, tc.want)
@@ -323,7 +381,7 @@ func TestDiskCheckCoversEveryReason(t *testing.T) {
 	}
 	for _, r := range []Reason{
 		NotMounted, IOError, PartialMount, WrongFilesystem, DeviceGone, DeviceUnread, WrongIdentifier, NoRoot,
-		ADS, NoCase, IOCharset, ErrorsContinue, IgnoreCase, Casefold, ASCIICI, NoJournal, ReadOnlyMount, OtherMarker,
+		ADS, NoCase, IOCharset, ErrorsContinue, Hibernated, IgnoreCase, Casefold, ASCIICI, NoJournal, ReadOnlyMount, OtherMarker,
 	} {
 		if !seen[string(r)] {
 			t.Errorf("no vector gives %q", r)
@@ -348,7 +406,7 @@ func TestWhatTheTypeNTFSDoesOtherwise(t *testing.T) {
 }
 
 func TestCheckAll(t *testing.T) {
-	d, a := answersFor(&checkCase{})
+	d, a := answersFor(t, &checkCase{})
 	second := *d
 	second.UUID = "another"
 	got, err := CheckAll(context.Background(), a, []config.Disk{*d, second})

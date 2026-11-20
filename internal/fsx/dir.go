@@ -769,6 +769,48 @@ func OpenFileAt(root Dir, path string) (File, error) {
 	return f, nil
 }
 
+// ReadStart reads up to n bytes from the start of a regular file of a folder, and gives its size: what reads a file of a
+// disk that must write nothing there, as the mount check's look at hiberfil.sys (specs.md §10). No symlink is followed,
+// and the file is opened without changing its access time where the process may, O_NOATIME, which takes the file's
+// owner or CAP_FOWNER; elsewhere the read may change it, as any read does. A file that ends first gives fewer bytes.
+// Through Fault, the call is named readstart.
+func ReadStart(d Dir, name string, n int) (size int64, start []byte, err error) {
+	if f, ok := d.(*faultDir); ok {
+		if err := f.fail("readstart", name); err != nil {
+			return 0, nil, err
+		}
+		return ReadStart(f.Dir, name, n)
+	}
+	r, err := realOf(d)
+	if err != nil {
+		return 0, nil, err
+	}
+	// O_NONBLOCK: a name that has become a FIFO must not hang this.
+	const flags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
+	fd, err := unix.Openat(r.fd(), name, flags|unix.O_NOATIME, 0)
+	if errors.Is(err, unix.EPERM) {
+		fd, err = unix.Openat(r.fd(), name, flags, 0)
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("open %q: %w", name, err)
+	}
+	f := &realFile{file: os.NewFile(uintptr(fd), name)}
+	defer func() { _ = f.Close() }()
+	st, err := f.Info()
+	if err != nil {
+		return 0, nil, err
+	}
+	if st.Kind != KindFile {
+		return 0, nil, fmt.Errorf("open %q: %w", name, ErrNotARegularFile)
+	}
+	buf := make([]byte, n)
+	got, err := io.ReadFull(io.NewSectionReader(f, 0, int64(n)), buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, nil, fmt.Errorf("read %q: %w", name, err)
+	}
+	return st.Size, buf[:got], nil
+}
+
 func splitPath(path string) (folders []string, name string) {
 	parts := strings.Split(path, "/")
 	return parts[:len(parts)-1], parts[len(parts)-1]

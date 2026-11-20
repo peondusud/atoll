@@ -39,6 +39,9 @@ func (m *folderDisks) Device(_ names.Filesystem, entry *disks.MountEntry) disks.
 func (m *folderDisks) Root(string, string) disks.RootSeen {
 	return disks.RootSeen{Folder: disks.FolderOK}
 }
+func (m *folderDisks) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
 func (m *folderDisks) Now() int64 { return time.Now().UnixNano() }
 
 // A disk whose watch ended while the disk stayed there is watched again at the next mount check, and looked at

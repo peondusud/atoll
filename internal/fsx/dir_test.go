@@ -516,3 +516,70 @@ func TestSyncFS(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+// ReadStart reads the start of a regular file and its size, follows no symlink, waits on no FIFO, and is a call of
+// its own to the fault layer (specs.md §10).
+func TestReadStart(t *testing.T) {
+	top := t.TempDir()
+	if err := os.WriteFile(filepath.Join(top, "long"), []byte("0123456789"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("long", filepath.Join(top, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(top, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	if size, start, err := ReadStart(dir, "long", 4); err != nil || size != 10 || string(start) != "0123" {
+		t.Errorf("%d %q %v", size, start, err)
+	}
+	if size, start, err := ReadStart(dir, "long", 64); err != nil || size != 10 || string(start) != "0123456789" {
+		t.Errorf("past its end: %d %q %v", size, start, err)
+	}
+	if _, _, err := ReadStart(dir, "link", 4); !IsUnreadableName(err) {
+		t.Errorf("a symlink: %v", err)
+	}
+	if _, _, err := ReadStart(dir, "pipe", 4); !errors.Is(err, ErrNotARegularFile) {
+		t.Errorf("a FIFO: %v", err)
+	}
+	if _, _, err := ReadStart(dir, "none", 4); !IsAbsent(err) {
+		t.Errorf("absent: %v", err)
+	}
+	faulty := Fault(dir, func(call, name string) error {
+		if call == "readstart" && name == "long" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	if _, _, err := ReadStart(faulty, "long", 4); !errors.Is(err, syscall.EIO) {
+		t.Errorf("through the fault layer: %v", err)
+	}
+}
+
+// UniqueMountID gives the same id for two paths of one mount, where the kernel has it (Linux 6.8), and an error for a
+// path that is not there.
+func TestUniqueMountID(t *testing.T) {
+	top := t.TempDir()
+	sub := filepath.Join(top, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a, ok, err := UniqueMountID(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Skip("this kernel gives no unique mount id")
+	}
+	if b, ok, err := UniqueMountID(sub); err != nil || !ok || b != a {
+		t.Errorf("%d, then %d %v %v", a, b, ok, err)
+	}
+	if _, _, err := UniqueMountID(filepath.Join(top, "none")); !IsAbsent(err) {
+		t.Errorf("absent: %v", err)
+	}
+}

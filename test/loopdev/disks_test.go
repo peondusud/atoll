@@ -556,8 +556,8 @@ func TestNameVariants(t *testing.T) {
 		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.IOCharset)
 	})
 	// A hiberfil.sys of 10 bytes at the top stands for Windows hibernated, as the driver's source reads it: with
-	// errors=remount-ro the volume is mounted read-only, which the check reads as any mount read-only (measured,
-	// docs/research/ntfs-driver.md).
+	// errors=remount-ro the volume is mounted read-only, and the check says why, before it says read-only (measured,
+	// docs/research/ntfs-driver.md; every driver in TestAHibernatedVolumeOnEachDriver).
 	t.Run("ntfs hibernated", func(t *testing.T) {
 		kind := ntfsType(t)
 		v := newVolume(t, names.NTFS)
@@ -570,7 +570,7 @@ func TestNameVariants(t *testing.T) {
 		must(t, "umount", at)
 		time.Sleep(200 * time.Millisecond)
 		mountVolume(t, v, kind, at, ntfsOptions...)
-		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.ReadOnlyMount)
+		want(t, check(t, diskOf(v, at)), disks.Readonly, disks.Hibernated)
 		if err := os.WriteFile(filepath.Join(at, "media", "x"), []byte("x"), 0o644); err == nil {
 			t.Error("a file was written to a hibernated volume")
 		}

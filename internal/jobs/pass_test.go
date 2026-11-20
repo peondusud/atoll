@@ -94,7 +94,10 @@ func (b *bench) ReadPastCache(_ names.Filesystem, entry *disks.MountEntry) disks
 }
 
 func (b *bench) Root(string, string) disks.RootSeen { return disks.RootSeen{Folder: disks.FolderOK} }
-func (b *bench) Now() int64                         { return b.now }
+func (b *bench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
+func (b *bench) Now() int64 { return b.now }
 func (b *bench) Space(mount string) (capacity, free int64, err error) {
 	if s, ok := b.spaces[mount]; ok {
 		return s[0], s[1], nil

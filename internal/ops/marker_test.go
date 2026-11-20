@@ -208,6 +208,9 @@ func (m *onDisk) Device(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
 	return disks.DeviceSeen{}
 }
 func (m *onDisk) Root(string, string) disks.RootSeen { return disks.RootSeen{} }
+func (m *onDisk) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
 func (m *onDisk) Now() int64                         { return 0 }
 func (m *onDisk) Space(string) (int64, int64, error) { return 0, 0, nil }
 func (m *onDisk) Checkpoint(string)                  {}
