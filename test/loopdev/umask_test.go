@@ -12,7 +12,6 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
-	"github.com/peondusud/atoll/internal/names"
 )
 
 // faultTop is a machine whose disks' tops, by mount, can make a call fail, as the unit tests' fault layer does
@@ -45,9 +44,10 @@ func (b *passBench) replicateStopping(path, point string) {
 }
 
 // TestAFolderWithNoModelOnEachDriver: under the units' mask, 0027, a folder a copy makes below the root that stands for
-// none is 0755 on ext4, XFS and btrfs, whose mkdir gave it 0750, a media server running under another account reading
-// below it; and killed between its mkdir and the mode it is then given, the reprise gives it 0755. Each NTFS driver
-// gives it what it gives, logged, the copy landing all the same and nothing left planned (specs.md §17.2, §17.4).
+// none is 0755 on ext4, XFS, btrfs, ntfs3 and the type ntfs, whose mkdir gave it 0750, a media server running under
+// another account reading below it; and killed between its mkdir and the mode it is then given, the reprise gives it
+// 0755. ntfs-3g and lowntfs-3g give it what their mount says, 0777, the copy landing all the same; nothing is left
+// planned on any driver (specs.md §17.2, §17.4).
 func TestAFolderWithNoModelOnEachDriver(t *testing.T) {
 	needRoot(t)
 	for _, tc := range trashDrivers {
@@ -77,14 +77,20 @@ func TestAFolderWithNoModelOnEachDriver(t *testing.T) {
 			opState := func(folder string) string {
 				return b.text("SELECT group_concat(state) FROM ops WHERE kind = 'mkdir' AND CAST(path AS TEXT) = ?", folder)
 			}
-			strict := tc.fs != names.NTFS
+			// ntfs-3g and lowntfs-3g, mounted without permissions, give every folder the mode their mount says, 0777
+			// here, whatever is asked (measured); the other drivers keep what they are given.
+			fuse := tc.driver == "ntfs-3g" || tc.driver == "lowntfs-3g"
+			made, wanted := uint32(0o750), uint32(0o755)
+			if fuse {
+				made, wanted = 0o777, 0o777
+			}
 
 			if items := b.replicate("p"); len(items) != 1 || items[0].Outcome != jobs.OutcomeReplicated {
 				t.Fatalf("%+v", items)
 			}
 			t.Logf("%s: a folder made with no model is %04o", tc.name, modeOn("p"))
-			if got := modeOn("p"); strict && got != 0o755 {
-				t.Errorf("p is %04o, want 0755", got)
+			if got := modeOn("p"); got != wanted {
+				t.Errorf("p is %04o, want %04o", got, wanted)
 			}
 			if got := opState("p"); got != "done" {
 				t.Errorf("p's operation: %q", got)
@@ -92,8 +98,8 @@ func TestAFolderWithNoModelOnEachDriver(t *testing.T) {
 
 			b.replicateStopping("q", "mkdir-made")
 			t.Logf("%s: as mkdir made it, %04o", tc.name, modeOn("q"))
-			if got := modeOn("q"); strict && got != 0o750 {
-				t.Errorf("q as mkdir made it: %04o, want 0750", got)
+			if got := modeOn("q"); got != made {
+				t.Errorf("q as mkdir made it: %04o, want %04o", got, made)
 			}
 			if got := opState("q"); got != "planned" {
 				t.Fatalf("q's operation: %q", got)
@@ -102,8 +108,8 @@ func TestAFolderWithNoModelOnEachDriver(t *testing.T) {
 				t.Errorf("after the reprise: %+v", items)
 			}
 			t.Logf("%s: after the reprise, %04o", tc.name, modeOn("q"))
-			if got := modeOn("q"); strict && got != 0o755 {
-				t.Errorf("q after the reprise: %04o, want 0755", got)
+			if got := modeOn("q"); got != wanted {
+				t.Errorf("q after the reprise: %04o, want %04o", got, wanted)
 			}
 			if got := opState("q"); got != "done" {
 				t.Errorf("q's operation: %q", got)
