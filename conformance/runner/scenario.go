@@ -322,6 +322,7 @@ func checkEntry(e *entry) error {
 // sandbox is one run of a scenario, in its own temporary folder.
 type sandbox struct {
 	bin    string
+	env    []string // what each run of the binary gets besides the runner's environment: GOCOVERDIR, for make cover
 	dir    string
 	s      *scenario
 	now    time.Time
@@ -336,7 +337,7 @@ type sandbox struct {
 // errNeedsRoot says that a scenario gives files away, which only root may.
 var errNeedsRoot = errors.New("it needs root")
 
-func runFile(bin, file string) error {
+func runFile(bin, file string, env []string) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
@@ -353,7 +354,7 @@ func runFile(bin, file string) error {
 		return fmt.Errorf("sandbox: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	box := &sandbox{bin: bin, dir: dir, s: s, tops: map[string]map[string]bool{}, hidden: map[string]bool{}, away: map[string]bool{}}
+	box := &sandbox{bin: bin, env: env, dir: dir, s: s, tops: map[string]map[string]bool{}, hidden: map[string]bool{}, away: map[string]bool{}}
 	if err := box.setUp(); err != nil {
 		return fmt.Errorf("set up: %w", err)
 	}
@@ -782,8 +783,9 @@ func (b *sandbox) runAtoll(s *step) (err error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, b.bin, args...)
 	cmd.Dir = b.dir
-	// With a set time zone, what "local" means does not depend on the machine.
-	cmd.Env = append(os.Environ(), controlEnv+"="+b.controlPath(), "TZ=UTC")
+	// With a set time zone, what "local" means does not depend on the machine. The runner's own two come last, so that
+	// nothing overrides them: of a name given twice, a run gets the last.
+	cmd.Env = append(append(os.Environ(), b.env...), controlEnv+"="+b.controlPath(), "TZ=UTC")
 	cmd.WaitDelay = time.Second // a child holding the output open must not outlast the timeout
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

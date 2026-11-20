@@ -42,7 +42,7 @@ type verdictCase struct {
 func checkVerdicts(t *testing.T, cases []verdictCase) {
 	t.Helper()
 	for _, c := range cases {
-		err := runFile(fakeBinary(t, c.script), scenarioFile(t, c.body))
+		err := runFile(fakeBinary(t, c.script), scenarioFile(t, c.body), nil)
 		switch {
 		case c.fails == "" && err != nil:
 			t.Errorf("%s: %v", c.note, err)
@@ -318,7 +318,7 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 		"disks": [{"id": "t1", "uuid": "u", "fs": "ext4", "capacity": 1, "tree": [], "renameat2": false, "refuses": ["a"]},
 		          {"id": "t2", "uuid": "v", "fs": "ext4", "capacity": 1, "tree": []},
 		          {"id": "t3", "uuid": "w", "fs": "ntfs", "capacity": 1, "tree": [], "driver": "ntfs"}],
-		"steps": [{"do": "atoll", "crash_at": "moved", "full": ["t2"]}, {"do": "atoll"}]}`))
+		"steps": [{"do": "atoll", "crash_at": "moved", "full": ["t2"]}, {"do": "atoll"}]}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 
 func TestControlFile(t *testing.T) {
 	body := `{"format_version": 1, "clock": "2026-10-26T01:00:00+02:00", "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "capacity": 10, "tree": []}], "steps": [{"do": "atoll", "stdout_json": {"now": "2026-10-26T01:00:00+02:00", "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "path": "${SANDBOX}/disks/d", "capacity": 10}]}}]}`
-	if err := runFile(fakeBinary(t, `cat "$ATOLL_CONFORMANCE"`), scenarioFile(t, body)); err != nil {
+	if err := runFile(fakeBinary(t, `cat "$ATOLL_CONFORMANCE"`), scenarioFile(t, body), nil); err != nil {
 		t.Error(err)
 	}
 }
@@ -484,7 +484,7 @@ func TestTimeout(t *testing.T) {
 	stepTimeout = 100 * time.Millisecond
 	defer func() { stepTimeout = 2 * time.Minute }()
 	start := time.Now()
-	err := runFile(fakeBinary(t, `echo started; sleep 30`), scenarioFile(t, steps(`{"do": "atoll"}`)))
+	err := runFile(fakeBinary(t, `echo started; sleep 30`), scenarioFile(t, steps(`{"do": "atoll"}`)), nil)
 	if err == nil || !strings.Contains(err.Error(), "no end within") || !strings.Contains(err.Error(), "started") {
 		t.Errorf("a binary that never ends: %v", err)
 	}
@@ -521,11 +521,11 @@ func TestRunFolder(t *testing.T) {
 	}
 	write("README.md", "not a scenario, and not refused")
 	write("a.json", steps(`{"do": "atoll"}`))
-	if err := run(ok, folder); err != nil {
+	if err := run(ok, folder, nil); err != nil {
 		t.Errorf("a good folder: %v", err)
 	}
 	write("b.json", steps(`{"do": "atoll", "exit": 9}`))
-	err := run(ok, folder)
+	err := run(ok, folder, nil)
 	if err == nil || !strings.Contains(err.Error(), "1 of 2") || !strings.Contains(err.Error(), "b.json") {
 		t.Errorf("one failure in two: %v", err)
 	}
@@ -533,17 +533,65 @@ func TestRunFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(other, "notes.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(ok, other); err == nil {
+	if err := run(ok, other, nil); err == nil {
 		t.Error("a file that is no scenario was skipped")
 	}
-	if err := run(filepath.Join(t.TempDir(), "absent"), folder); err == nil {
+	if err := run(filepath.Join(t.TempDir(), "absent"), folder, nil); err == nil {
 		t.Error("a binary that does not exist was accepted")
 	}
-	if err := run(ok, filepath.Join(t.TempDir(), "absent")); err == nil {
+	if err := run(ok, filepath.Join(t.TempDir(), "absent"), nil); err == nil {
 		t.Error("a folder that does not exist was accepted")
 	}
-	if err := run(ok, t.TempDir()); err == nil {
+	if err := run(ok, t.TempDir(), nil); err == nil {
 		t.Error("a folder with no scenario was accepted")
+	}
+}
+
+// With --cover-dir, each run of the binary gets GOCOVERDIR, absolute though the flag was not, as the binary runs in its
+// scenario's folder, over one the runner's environment had, and a folder there; what else it sees does not change.
+// Without the flag, it sees the runner's environment as it is (make cover, specs.md §27).
+func TestCoverDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("GOCOVERDIR", "inherited")
+	if env, err := coverEnv(""); err != nil || env != nil {
+		t.Errorf("no cover dir: %q, %v", env, err)
+	}
+	inherited := fakeBinary(t, `[ "$GOCOVERDIR" = inherited ]`)
+	if err := runFile(inherited, scenarioFile(t, steps(`{"do": "atoll"}`)), nil); err != nil {
+		t.Errorf("without the flag, the runner's GOCOVERDIR: %v", err)
+	}
+
+	env, err := coverEnv("bin/cover/scenarios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counters, err := filepath.Abs("bin/cover/scenarios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"GOCOVERDIR=" + counters}; !reflect.DeepEqual(env, want) {
+		t.Errorf("env %q, want %q", env, want)
+	}
+	// A run writes its counters there, a file each, and the rest is as without the flag: the checks of every step
+	// would fail on a file left in the sandbox.
+	bin := fakeBinary(t, `[ "$GOCOVERDIR" = "`+counters+`" ] && [ "$TZ" = UTC ] && [ "$ATOLL_CONFORMANCE" = "$PWD/conformance.json" ] &&
+		touch "$GOCOVERDIR/covcounters.$$"`)
+	folder := t.TempDir()
+	if err := os.WriteFile(filepath.Join(folder, "a.json"), []byte(steps(`{"do": "atoll"}, {"do": "atoll"}`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(bin, folder, env); err != nil {
+		t.Errorf("with the flag: %v", err)
+	}
+	if runs, err := os.ReadDir(counters); err != nil || len(runs) != 2 {
+		t.Errorf("counters of two runs: %v, %v", runs, err)
+	}
+
+	if err := os.WriteFile("taken", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coverEnv("taken/scenarios"); err == nil {
+		t.Error("a cover dir that cannot be made was accepted")
 	}
 }
 

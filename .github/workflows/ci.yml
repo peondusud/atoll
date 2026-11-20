@@ -47,8 +47,9 @@ jobs:
           restore-keys: go-race-${{ runner.arch }}-
       - run: make test-race
 
-  # The coverage of the unit tests (make cover): the share of statements run, by package and in all, to the run's
-  # summary, and the profile with its HTML as an artifact. A measure, never a gate, which test/ci/run.sh leaves out.
+  # The coverage of the unit tests and of the scenarios (make cover): the share of statements each runs, and either, by
+  # package and in all, with how long each took, to the run's summary; the profiles with their HTML as an artifact. A
+  # measure, never a gate, which test/ci/run.sh leaves out; a failing test or scenario fails it, as in its own job.
   cover:
     runs-on: ubuntu-latest
     container: golangci/golangci-lint:v2.15.0
@@ -72,6 +73,9 @@ jobs:
           path: |
             bin/cover/cover.out
             bin/cover/cover.html
+            bin/cover/scenarios.out
+            bin/cover/merged.out
+            bin/cover/merged.html
           if-no-files-found: ignore
           retention-days: 30
 

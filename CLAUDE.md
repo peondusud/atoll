@@ -52,7 +52,7 @@ make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
 make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
 make test-mediaservers  # the notifications on real Plex, Jellyfin and Emby, each in a container, with only Docker (test/mediaservers/run.sh)
-make cover              # the unit tests' coverage by package and in all, from one profile of the module (bin/cover/); the CI's cover job
+make cover              # the coverage of the unit tests, of the scenarios (a conformance build with -cover) and of either, by package and in all (bin/cover/); the CI's cover job
 make fuzz FUZZTIME=10s  # every fuzz target in turn, or PKG=./internal/value TARGET=FuzzSize; each night for 5 minutes in fuzz.yml
 make mutation PKG=./internal/glob  # mutation testing (gremlins) of one package, of the pure core without PKG; each night in mutation.yml
 test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint, qemu and tla on a commit, all at once; --report posts each to its pull request

@@ -73,14 +73,13 @@ test-qemu: qemu-build
 test-mediaservers:
 	bash test/mediaservers/run.sh
 
-# The coverage of the unit tests: one profile of the whole module into bin/cover/, each package's tests counting toward
-# every package they reach, then the share of statements run by package and in all (test/ci/cover.sh), and the profile
-# as HTML. A measure, never a gate; the CI's cover job runs it.
+# The coverage of the unit tests and of the conformance scenarios (test/ci/cover.sh), into bin/cover/: one profile of
+# the whole module by the unit tests, each package's tests counting toward every package they reach; one by the
+# scenarios, run against a conformance build made with -cover; then the share of statements each runs, and either, by
+# package and in all, the time each took, and the profiles as HTML. A measure, never a gate; the CI's cover job runs it.
 .PHONY: cover
 cover:
-	mkdir -p bin/cover
-	$(GO) test -coverpkg=./... -coverprofile=bin/cover/cover.out ./...
-	bash test/ci/cover.sh bin/cover/cover.out
+	GO="$(GO)" bash test/ci/cover.sh
 
 # Mutation testing with gremlins (test/ci/mutation.sh) of one package, PKG=./internal/glob, or of the whole pure core
 # without PKG, as .github/workflows/mutation.yml runs it each night. The log and gremlins' JSON go to bin/mutation/;

@@ -41,7 +41,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 
 | `do` | Fields | Meaning |
 |---|---|---|
-| `atoll` | `args`, `exit`, `stdout_json`, `crash_at`, `full` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input. `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, and `full` the ids of disks that have no room left, for this run only |
+| `atoll` | `args`, `exit`, `stdout_json`, `crash_at`, `full` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input; and `GOCOVERDIR`, absolute, when the runner has `--cover-dir`, for a Go binary built with `-cover` (`make cover`, `specs.md` §27). `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, and `full` the ids of disks that have no room left, for this run only |
 | `write` | `disk`, a path, `text` or `size`, `mtime_ns` | writes a file and any folders above it, replacing the content of what is there in place |
 | `mkdir` | `disk`, a path | creates a folder and its parents |
 | `rename` | `disk`, a path, `to` or `to_b64` | renames, replacing what is at the target as `rename(2)` does |
