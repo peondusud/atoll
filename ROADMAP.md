@@ -20,7 +20,7 @@ A milestone is reached when its phase and every phase before it are done.
 | — | 4 — Windows | a Windows service and a WinFsp pool drive, in Rust | |
 | — | 5 | web interface, openmediavault plugin, duplicates by metadata | |
 
-Progress counts everything needed to reach the milestone, weighted by an estimate of the effort each part takes. It is an estimate, not a measurement, as of 2026-11-16.
+Progress counts everything needed to reach the milestone, weighted by an estimate of the effort each part takes. It is an estimate, not a measurement, as of 2026-11-20.
 
 ## Alpha: phase 1a, the safe core
 

@@ -61,7 +61,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 ## GitHub Actions and releases (DONE.md, 2026-11-19)
 
 - The first release, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven and after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
-- GoReleaser v2.20.2 or later once two weeks old (2026-11-26); x/text v0.44.0, sqlite v1.62.0 with its libc, govulncheck v1.10.0 and the other releases DONE.md lists as too fresh on 2026-11-20, each once 14 days old; the qemu guest's mainline kernel past 7.3.1.
+- x/sys v0.50.0 once 14 days old (2026-11-20 19:57 UTC) and the qemu guest's mainline kernel at 7.3.2 or later (14 days old at 17:24 UTC that day); GoReleaser v2.20.2 or later once two weeks old (2026-11-26); x/text v0.44.0, sqlite v1.62.0 with its libc, govulncheck v1.10.0 and the other releases DONE.md lists as too fresh on 2026-11-20, each once 14 days old; the qemu guest's mainline kernel past 7.3.1.
 
 ## After the two flaws TLC found, fixed on 2026-11-19 (DONE.md)
 
@@ -79,8 +79,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 ## The tests after the gaps of 2026-11-19 (DONE.md)
 
-- Read the first nights of mutation tests on `names`, `rules`, `config`, `integrity` and `solver`, sort the mutants that lived, then set the gate (95 % efficacy, 85 % mutant coverage a pure package); then `jobs`, `ops`, `trash` and `watch`.
-- Read the `cover` table of a GitHub run, which counts the scenarios since 2026-11-20 (DONE.md), and set its gate.
+- Set the gates once the maintainer agrees: mutation tests at 95 % efficacy and 85 % mutator coverage a pure package (100 % efficacy everywhere on 2026-11-20; `names`, `rules` and `integrity` under 85 % of coverage, DONE.md), then `jobs`, `ops`, `trash` and `watch`; and a floor of coverage from the `cover` job (84.7 % by the unit tests, 89.3 % with the scenarios).
 - **decision**: the check after a rename, and §17.2's table, know a file by its inode alone: a file re-created at a copy's name just before its move, with the same inode number, would go to the trash in its place (seen once in the sweeps, not reproduced). Compare size and modification time too, as the link path does, which changes what a reprise decides.
 - An SSD-cache copy a transfer sent to the trash stays for the retention when a fault comes between its move and its purge (§19), kept rather than purged at once; and a disk lost earlier in a pass keeps its own set of the view's attributes (§21.2).
 - A guard link a purge cannot remove for an error that is not the disk's (`EACCES` on its unlink) only gets a warning, and the purge goes on: the purged data stays behind that link until the next pass (DONE.md, the four flaws).
