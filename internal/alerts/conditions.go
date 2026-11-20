@@ -359,9 +359,16 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 	case strings.HasPrefix(h.Key, KeyGuard):
 		kind, id, _ := strings.Cut(strings.TrimPrefix(h.Key, KeyGuard), ":")
 		m.Priority = priorityHigh
+		line := guardLine(f, kind, id)
 		m.Title = fmt.Sprintf("Atoll: the mass-%s guard of disk %s tripped", strings.TrimSuffix(kind, "s"), id)
-		m.Body = fmt.Sprintf("Atoll holds the %s it found on disk %s (%d) and spreads none of them to the other copies "+
-			"until you answer: atoll guard list.", kind, id, guardCount(f, kind, id))
+		count := fmt.Sprint(line.Count)
+		if line.Window == jobs.WindowDay {
+			// Its day tripped it, modifies.day_guard: a rewrite slower than its window lets through (specs.md §15.6).
+			m.Title += " on what a day changed"
+			count += " within a day"
+		}
+		m.Body = fmt.Sprintf("Atoll holds the %s it found on disk %s (%s) and spreads none of them to the other copies "+
+			"until you answer: atoll guard list.", kind, id, count)
 	case h.Key == KeyManual:
 		paths, err := catalog.FirstManualPaths(ctx, db, f.SeenByNS, FirstN)
 		if err != nil {
@@ -567,13 +574,14 @@ func why(f *Facts, id string) string {
 	return ""
 }
 
-func guardCount(f *Facts, kind, id string) int64 {
+// guardLine gives the line of the guard of that kind of a disk that tripped, an empty one when none did.
+func guardLine(f *Facts, kind, id string) jobs.GuardLine {
 	for _, g := range f.Guards {
 		if g.Disk == id && g.Kind == kind {
-			return g.Count
+			return g
 		}
 	}
-	return 0
+	return jobs.GuardLine{}
 }
 
 func files(n int64) string { return plural(n, "file", "files") }

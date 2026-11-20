@@ -169,6 +169,8 @@ type eventRow struct {
 	UpTo *int64 `json:"up_to,omitempty"`
 	// Answered says that a confirm of the mass-modification guard answered a modified: it counts for nothing.
 	Answered bool `json:"answered,omitempty"`
+	// Window is, for a modify-guard event and the answer to it, WindowDay when the day's count tripped the guard.
+	Window string `json:"window,omitempty"`
 }
 
 func (e *eventRow) setPath(p string) {

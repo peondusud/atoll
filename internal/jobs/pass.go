@@ -87,10 +87,13 @@ type DiskLine struct {
 const RefusedShown = 10
 
 // GuardLine is a guard tripped: the mass-deletion guard of a disk, or its mass-modification guard (specs.md §15.6).
+// Window says whose count tripped a mass-modification guard: WindowDay for its day, whose count Count is then, and ""
+// for its own window, as for every mass-deletion guard.
 type GuardLine struct {
-	Disk  string
-	Kind  string
-	Count int64
+	Disk   string
+	Kind   string
+	Count  int64
+	Window string
 }
 
 // The kinds of a guard.
@@ -98,6 +101,9 @@ const (
 	GuardDeletions     = "deletions"
 	GuardModifications = "modifications"
 )
+
+// WindowDay is the window of a mass-modification guard tripped on its day's count, modifies.day_guard (specs.md §15.6).
+const WindowDay = catalog.WindowDay
 
 // Sink is told of what a pass does as it does it: holding a rename of a whole pool until the end would
 // not fit in the memory of specs.md §26. Every decision comes before the first operation.
@@ -209,10 +215,14 @@ type pass struct {
 	window    time.Duration
 	files     int64
 	percent   value.Percent
-	// the settings of the mass-modification guard, and its state by disk (specs.md §15.6)
+	// the settings of the mass-modification guard, over its window and over its day, and its state by disk (specs.md
+	// §15.6)
 	modWindow   time.Duration
 	modFiles    int64
 	modPercent  value.Percent
+	dayWindow   time.Duration
+	dayFiles    int64
+	dayPercent  value.Percent
 	modGuards   map[string]*modGuard
 	rows        map[string]int64
 	walked      map[string]bool
@@ -401,6 +411,15 @@ func (p *pass) readSettings() error {
 		return fmt.Errorf("modifies.mass_guard.percent: %w", err)
 	}
 	p.modFiles, _ = effective["modifies.mass_guard.files"].(int64)
+	text, _ = effective["modifies.day_guard.window"].(string)
+	if p.dayWindow, err = value.ParseDuration(text); err != nil {
+		return fmt.Errorf("modifies.day_guard.window: %w", err)
+	}
+	text, _ = effective["modifies.day_guard.percent"].(string)
+	if p.dayPercent, err = value.ParsePercent(text); err != nil {
+		return fmt.Errorf("modifies.day_guard.percent: %w", err)
+	}
+	p.dayFiles, _ = effective["modifies.day_guard.files"].(int64)
 	p.linkGuardOn, _ = effective["trash.link_guard"].(bool)
 	return nil
 }

@@ -210,6 +210,20 @@
             },
             "window": { "$ref": "#/$defs/positive_duration", "default": "10m" }
           }
+        },
+        "day_guard": {
+          "description": "The second window of the mass-modification guard, a day long: what a tool that rewrites a library more slowly than mass_guard allows changes in a day (specs.md §15.6).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "files": { "description": "Files modified from a copy on a disk within the window.", "type": "integer", "minimum": 0, "default": 1000 },
+            "percent": {
+              "description": "Of a disk's copies.",
+              "$ref": "#/$defs/percent",
+              "default": "10%"
+            },
+            "window": { "$ref": "#/$defs/positive_duration", "default": "24h" }
+          }
         }
       }
     },

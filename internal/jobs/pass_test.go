@@ -169,9 +169,13 @@ func benchIn(t *testing.T, top, more string, create bool, ids ...string) *bench 
 		b.dirs[id] = dir
 		fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3%d\"\nmount = %q\nfs = \"ext4\"\n", id, i, dir)
 	}
-	// The deletion guard last: a test's more adds to its table. A test that sets the modification guard gives its own.
+	// The deletion guard last: a test's more adds to its table. A test that sets the modification guard, over its
+	// window or over its day, gives its own.
 	if !strings.Contains(more, "[modifies.mass_guard]") {
 		text.WriteString("[modifies.mass_guard]\npercent = \"100%\"\n")
+	}
+	if !strings.Contains(more, "[modifies.day_guard]") {
+		text.WriteString("[modifies.day_guard]\npercent = \"100%\"\n")
 	}
 	text.WriteString("[deletes.mass_guard]\npercent = \"100%\"\n")
 	b.base = text.String()
@@ -3664,7 +3668,7 @@ func reconfigured(t *testing.T, b *bench, guard string) *config.Config {
 		d := &b.config.Disks[i]
 		fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = %q\nmount = %q\nfs = \"ext4\"\n", d.ID, d.UUID, d.Mount)
 	}
-	text.WriteString("[modifies.mass_guard]\npercent = \"100%\"\n[deletes.mass_guard]\n" + guard)
+	text.WriteString("[modifies.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n[deletes.mass_guard]\n" + guard)
 	c, err := config.Parse([]byte(text.String()))
 	if err != nil {
 		t.Fatal(err)

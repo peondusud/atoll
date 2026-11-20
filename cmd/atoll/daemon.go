@@ -59,11 +59,13 @@ type daemonOperation struct {
 	Outcome string `json:"outcome"`
 }
 
-// daemonGuard is one guard of api/schemas/daemon.schema.json.
+// daemonGuard is one guard of api/schemas/daemon.schema.json. Window is there for a mass-modification guard its day
+// tripped alone, so that every other line stays as it was.
 type daemonGuard struct {
-	Disk  string `json:"disk"`
-	Kind  string `json:"kind"`
-	Count int64  `json:"count"`
+	Disk   string `json:"disk"`
+	Kind   string `json:"kind"`
+	Count  int64  `json:"count"`
+	Window string `json:"window,omitempty"`
 }
 
 // daemonRest is what is known of a pass only at its end: the disks, decisions and operations go out as
@@ -277,7 +279,8 @@ func daemonOperationOf(op *jobs.Operation) daemonOperation {
 func daemonRestOf(o *jobs.Outcome) daemonRest {
 	rest := daemonRest{Guards: []daemonGuard{}, Waiting: o.Waiting}
 	for i := range o.Guards {
-		rest.Guards = append(rest.Guards, daemonGuard{Disk: o.Guards[i].Disk, Kind: o.Guards[i].Kind, Count: o.Guards[i].Count})
+		g := &o.Guards[i]
+		rest.Guards = append(rest.Guards, daemonGuard{Disk: g.Disk, Kind: g.Kind, Count: g.Count, Window: g.Window})
 	}
 	if o.NextDue.Valid {
 		due := timeText(o.NextDue.Int64)
@@ -428,6 +431,10 @@ func (t *textDaemon) end(o *jobs.Outcome) error {
 	}
 	for i := range o.Guards {
 		g := &o.Guards[i]
+		if g.Kind == jobs.GuardModifications && g.Window == jobs.WindowDay {
+			fmt.Fprintf(&text, T("%s: the mass-modification guard holds what changed after %d files modified within a day: atoll guard list\n"), g.Disk, g.Count)
+			continue
+		}
 		if g.Kind == jobs.GuardModifications {
 			fmt.Fprintf(&text, T("%s: the mass-modification guard holds what changed after %d files modified: atoll guard list\n"), g.Disk, g.Count)
 			continue
@@ -448,13 +455,15 @@ func shownB64(path, b64 string) string {
 	return shownPath(path)
 }
 
-// guardItem is one disk of api/schemas/guard-list.schema.json.
+// guardItem is one disk of api/schemas/guard-list.schema.json. Window is there for a mass-modification guard that
+// stands as its day tripped it, whose count and paths are then the day's (specs.md §15.6).
 type guardItem struct {
 	Disk    string     `json:"disk"`
 	Kind    string     `json:"kind"`
 	Tripped bool       `json:"tripped"`
 	Count   int64      `json:"count"`
 	Paths   []pathItem `json:"paths"`
+	Window  string     `json:"window,omitempty"`
 }
 
 // guardAnswer is the output of api/schemas/guard-answer.schema.json. DryRun and Paths are there with --dry-run alone, so
@@ -527,7 +536,11 @@ func guardList(configPath string, args []string, stdout, stderr io.Writer) int {
 			if it.Tripped {
 				state = "tripped"
 			}
-			fmt.Fprintf(&text, "%s, %s: %s, %d\n", it.Disk, it.Kind, state, it.Count)
+			day := ""
+			if it.Window == jobs.WindowDay {
+				day = T(" within a day")
+			}
+			fmt.Fprintf(&text, "%s, %s: %s, %d%s\n", it.Disk, it.Kind, state, it.Count, day)
 			printPaths(&text, "  held", it.Paths)
 		}
 		err = writeText(stdout, text.String())
@@ -568,21 +581,29 @@ func readGuards(ctx context.Context, c *config.Config) (items []guardItem, err e
 }
 
 // readModifyGuard says what the mass-modification guard of a disk holds, from events: tripped while a modify-guard
-// event stands, with the files it counted, as which files wait only a look can tell (specs.md §15.6). It gives the
-// time of the event that stands, which an answer would go up to, invalid with none.
+// event stands, with the files it counted, as which files wait only a look can tell (specs.md §15.6); over its day
+// when its day tripped it, and over its window otherwise. It gives the time of the event that stands, which an answer
+// would go up to, invalid with none.
 func readModifyGuard(ctx context.Context, db *sql.DB, disk string, s *guardSettings, now int64) (*guardItem, sql.NullInt64, error) {
-	read, err := catalog.ReadModifyGuard(ctx, db, disk, now, s.modWindow)
+	read, err := catalog.ReadModifyGuard(ctx, db, disk, now, s.modWindow, s.dayWindow)
 	if err != nil {
 		return nil, sql.NullInt64{}, fmt.Errorf("catalog: %w", err)
 	}
-	paths := []string{}
+	item := &guardItem{Disk: disk, Kind: jobs.GuardModifications, Tripped: read.Stands, Count: read.Count, Paths: []pathItem{}}
+	window, after := s.modWindow, read.AnswerID
+	if read.Stands && read.Window == jobs.WindowDay {
+		item.Count, item.Window = read.DayCount, jobs.WindowDay
+		window, after = s.dayWindow, read.DayAnswerID
+	}
 	if read.Stands {
-		if paths, err = catalog.ModifiedPaths(ctx, db, disk, now, s.modWindow, read.AnswerID); err != nil {
+		paths, err := catalog.ModifiedPaths(ctx, db, disk, now, window, after)
+		if err != nil {
 			return nil, sql.NullInt64{}, fmt.Errorf("catalog: %w", err)
 		}
+		item.Paths = pathItems(paths)
 	}
 	stands := sql.NullInt64{Int64: read.GuardNS, Valid: read.Stands}
-	return &guardItem{Disk: disk, Kind: jobs.GuardModifications, Tripped: read.Stands, Count: read.Count, Paths: pathItems(paths)}, stands, nil
+	return item, stands, nil
 }
 
 // nowOf reads the clock as a command that looks at no disk does: in a conformance build, that is the
@@ -600,6 +621,7 @@ type guardSettings struct {
 	percent   value.Percent
 	window    int64
 	modWindow int64
+	dayWindow int64
 }
 
 func guardSettingsOf(c *config.Config) (*guardSettings, error) {
@@ -620,7 +642,12 @@ func guardSettingsOf(c *config.Config) (*guardSettings, error) {
 	if err != nil {
 		return nil, fmt.Errorf("modifies.mass_guard.window: %w", err)
 	}
-	return &guardSettings{files: files, percent: percent, window: window.Nanoseconds(), modWindow: modWindow.Nanoseconds()}, nil
+	text, _ = effective["modifies.day_guard.window"].(string)
+	dayWindow, err := value.ParseDuration(text)
+	if err != nil {
+		return nil, fmt.Errorf("modifies.day_guard.window: %w", err)
+	}
+	return &guardSettings{files: files, percent: percent, window: window.Nanoseconds(), modWindow: modWindow.Nanoseconds(), dayWindow: dayWindow.Nanoseconds()}, nil
 }
 
 // readGuard says what the mass-deletion guard of a disk holds, from rows and events (specs.md §15.6). It gives the time

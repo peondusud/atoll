@@ -281,7 +281,8 @@ func TestDescribe(t *testing.T) {
 			{ID: "t9", Verdict: disks.Verdict{State: disks.Online}, Walked: true, TooLong: 12, TooLongFirst: []string{"deep/a", "deep/b\xff"}}},
 		Unopened: map[string][]string{"t7": {"bob.mkv", "dave.mkv"}},
 		Foreign:  []ForeignWorkdir{{ID: "t2", Path: "/mnt/t2/Atoll/links", UID: 1000, Want: 997}},
-		Guards:   []jobs.GuardLine{{Disk: "t1", Kind: jobs.GuardDeletions, Count: 40}, {Disk: "t2", Kind: jobs.GuardModifications, Count: 7}},
+		Guards: []jobs.GuardLine{{Disk: "t1", Kind: jobs.GuardDeletions, Count: 40}, {Disk: "t2", Kind: jobs.GuardModifications, Count: 7},
+			{Disk: "t3", Kind: jobs.GuardModifications, Count: 1000, Window: jobs.WindowDay}},
 		Refused:  Refused{Count: 1, First: []string{"bad\xff"}},
 		Used:     95,
 		Capacity: 100,
@@ -306,6 +307,9 @@ func TestDescribe(t *testing.T) {
 		{"disk-readonly:t2", 1, "Atoll: disk t2 is read-only", 3, []string{"read-only."}},
 		{"guard-deletions:t1", 1, "Atoll: the mass-deletion guard of disk t1 tripped", 4, []string{"deletions it found on disk t1 (40)", "atoll guard list"}},
 		{"guard-modifications:t2", 1, "Atoll: the mass-modification guard of disk t2 tripped", 4, []string{"modifications it found on disk t2 (7)"}},
+		// Tripped on what its day counted, modifies.day_guard (specs.md §15.6).
+		{"guard-modifications:t3", 1, "Atoll: the mass-modification guard of disk t3 tripped on what a day changed", 4, []string{
+			"modifications it found on disk t3 (1000 within a day)", "atoll guard list"}},
 		{"files-corrupt", 12, "Atoll: 12 corrupt files", 4, []string{"\nc/00\nc/01\n", "\nc/09\nand 2 more"}},
 		{"files-conflict", 1, "Atoll: 1 conflict file", 3, []string{"\na/conflict"}},
 		{"manual-waiting", 1, "Atoll: 1 file in manual mode left unprotected", 3, []string{"more than 7d", "\nm/x"}},

@@ -45,7 +45,7 @@ func newPassBench(t *testing.T, v *volume, at string) *passBench {
 }
 
 // benchGuards is what the bench sets of the guards: a debounce of a second, and their counts alone to trip them.
-const benchGuards = "[deletes]\ndebounce = \"1s\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n"
+const benchGuards = "[deletes]\ndebounce = \"1s\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n"
 
 // newPassBenchWith adds more to the bench's configuration, as whole tables.
 func newPassBenchWith(t *testing.T, v *volume, at, more string) *passBench {

@@ -68,7 +68,7 @@ func TestVersionsPurgedEarlyAreCounted(t *testing.T) {
 // (specs.md §17, §23, §23.1).
 func TestTheDaemonTellsOfVersionsPurgedEarly(t *testing.T) {
 	window := aroundNow()
-	c, m, _ := upsBench(t, "[maintenance]\nwindow = \""+window+"\"\n[modifies.mass_guard]\npercent = \"100%\"\n"+
+	c, m, _ := upsBench(t, "[maintenance]\nwindow = \""+window+"\"\n[modifies.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n"+
 		"[[rule]]\nlabel = \"all\"\npath = \"**\"\nmode = \"immediate\"\n")
 	machine := &smallDisks{flushDisks: m}
 	a := filepath.Join(c.Disks[0].Mount, "media", "a")
