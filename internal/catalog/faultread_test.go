@@ -127,7 +127,7 @@ func TestEveryReaderFailsWhole(t *testing.T) {
 		}},
 		{"CountForMetrics", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) { return one(CountForMetrics(ctx, db, 100)) }},
 		{"ReadModifyGuard", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
-			return one(ReadModifyGuard(ctx, db, "u1", 20, 100))
+			return one(ReadModifyGuard(ctx, db, "u1", 20, 100, 1000))
 		}},
 		{"ModifiedPaths", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
 			return one(ModifiedPaths(ctx, db, "u1", 20, 100, 0))

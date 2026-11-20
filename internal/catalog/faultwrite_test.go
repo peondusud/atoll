@@ -80,7 +80,7 @@ func TestEveryWriterFailsWhole(t *testing.T) {
 			return none(EndOps(ctx, db, []int64{5, 6}, OpDone))
 		}},
 		{"WriteModifyGuardEvent", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
-			return none(WriteModifyGuardEvent(ctx, db, "u2", 100))
+			return none(WriteModifyGuardEvent(ctx, db, "u2", "", 100))
 		}},
 		// The answers to a guard give the time of the guard they answer with their error: the daemon drops it with the
 		// error (cmd/atoll/daemon.go, answerGuardOn), and the answer is not recorded.
@@ -127,7 +127,8 @@ func TestEveryWriterFailsWhole(t *testing.T) {
 			return none(FinishTrash(ctx, db, op(2, "u1", OpTrash, "C/d", "20260101/2/C/d", "14"), nil, nil))
 		}},
 		{"BeginMkdir", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
-			return BeginMkdir(ctx, db, "u1", "F", &MkdirLike{Mode: 493, UID: 1, GID: 2}, 100)
+			uid, gid := int64(1), int64(2)
+			return BeginMkdir(ctx, db, "u1", "F", &MkdirLike{Mode: 493, UID: &uid, GID: &gid}, 100)
 		}},
 		{"FinishMkdir", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
 			fk := "205"
@@ -252,7 +253,7 @@ func TestEveryWriterFailsWhole(t *testing.T) {
 		{"FinishCreate", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
 			j := job()
 			j.Hash = make([]byte, 32)
-			return none(FinishCreate(ctx, db, op(3, "u2", OpCreate, "B/c", "3.part", "33"), j, &NewCopy{Path: "B/c", Size: 5, MtimeNS: 5, CtimeNS: 9, FileKey: "33", Nlink: 1, Mode: 420}, 100))
+			return none(FinishCreate(ctx, db, op(3, "u2", OpCreate, "B/c", "3.part", "33"), j, &NewCopy{Path: "B/c", Size: 5, MtimeNS: 5, CtimeNS: 9, FileKey: "33", Nlink: 1, Mode: 420}, 100, false))
 		}},
 		{"RetryJob", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
 			return none(RetryJob(ctx, db, job(), sql.NullInt64{Int64: 200, Valid: true}, false))
