@@ -208,11 +208,10 @@ func TestACrashWithCopiesAtOnce(t *testing.T) {
 				}
 				p.now += 3_600_000_000_000
 			}
-			if point == "moved" {
-				// A copy the crash left right after its rename, before the commit of the change time it had then, is
-				// recorded unverified, as that change time may be a write's (specs.md §14.2): a full scan reads it.
-				p.scan(true)
-			}
+			// A copy the crash left right after its rename, before the commit of the change time it had then, is
+			// recorded unverified, as that change time may be a write's (specs.md §14.2): a full scan reads it. With
+			// copies at once, a crash at any point of one copy can find another copy there, so the scan is at each.
+			p.scan(true)
 			p.copied("t1", "t2", paths)
 		})
 	}
