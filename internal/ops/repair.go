@@ -335,7 +335,14 @@ func (d *Disk) PurgeChunks(op *Op) error {
 			slog.Warn("something not a chunk stays in the trash", "disk", d.config.ID, "entry", op.Path2, "name", chunk)
 			continue
 		}
-		if st, err := dir.Stat(chunk); err != nil || st.Kind != fsx.KindFile {
+		// A chunk that cannot be looked at says nothing of itself: the purge stays planned, for the reprise to end it, as
+		// one ended here would leave that chunk in the trash with no entry left to purge it (invariant 4).
+		switch st, err := dir.Stat(chunk); {
+		case fsx.IsAbsent(err):
+			continue
+		case err != nil:
+			return classify(err)
+		case st.Kind != fsx.KindFile:
 			continue
 		}
 		if err := dir.Unlink(chunk); err != nil && !fsx.IsAbsent(err) {
