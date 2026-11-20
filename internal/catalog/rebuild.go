@@ -127,14 +127,29 @@ func SetAside(file, fresh string, nowNS int64) (string, error) {
 		return "", nil
 	}
 	old := file + ".old-" + time.Unix(0, nowNS).UTC().Format("20060102T150405Z")
-	// The log goes first: left beside the new catalog, SQLite would play the old one's frames into it.
+	// The log goes first: left beside the new catalog, SQLite would play the old one's frames into it. A swap that
+	// fails puts it back: the old catalog stays at its name, and what its log holds, committed and not yet moved into
+	// it when no checkpoint could run, would be lost to it.
+	var moved []string
+	putBack := func(err error) error {
+		for _, suffix := range moved {
+			if back := fsx.RenameFile(old+suffix, file+suffix); back != nil {
+				err = errors.Join(err, back)
+			}
+		}
+		return fmt.Errorf("catalog: %w", err)
+	}
 	for _, suffix := range []string{"-wal", "-shm"} {
-		if err := fsx.RenameFile(file+suffix, old+suffix); err != nil && !fsx.IsAbsent(err) {
-			return "", fmt.Errorf("catalog: %w", err)
+		err := fsx.RenameFile(file+suffix, old+suffix)
+		switch {
+		case err == nil:
+			moved = append(moved, suffix)
+		case !fsx.IsAbsent(err):
+			return "", putBack(err)
 		}
 	}
 	if err := fsx.ExchangeFiles(fresh, file); err != nil {
-		return "", fmt.Errorf("catalog: %w", err)
+		return "", putBack(err)
 	}
 	if err := fsx.RenameFile(fresh, old); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
