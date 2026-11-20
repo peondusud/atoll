@@ -50,7 +50,7 @@ All of it is done but the maintainer's own step, moving Plex's libraries to the 
 Still open, though the solver, the scanner and `atoll names check` are built:
 
 - Measure on the maintainer's Windows machine, with their go-ahead, what a report says is not established: which reserved names Windows 11 still refuses, and what Windows does with `Film.mkv` beside `film.mkv` on an NTFS volume (a VHD).
-- Hibernated NTFS volumes on every driver (point 3 of `docs/research/ntfs-driver.md`), as the maintainer decided on 2026-11-20 ("Oui, readonly"): ntfs3, and the type `ntfs` with `errors=continue`, mount them read-write. The mount check, once the mount is confirmed, makes such a disk `readonly` when a `hiberfil.sys` at its top is under 4 KiB or its first 4 KiB are not all zeros (the rule of `ntfs`'s source), with a new reason (§10, an addition to the closed list of §29.3 and the `reason` enums): vectors in `disk_check.json` first, then the loop-device tests on ntfs3 and `ntfs`.
+- **decision**: a data volume Windows had mounted when Fast Startup ran holds no `hiberfil.sys`, and the check of 2026-11-20 does not see it (DONE.md): its sign, a `$LogFile` left unclean, which ntfs-3g refuses, is neither read nor measured. Read it too, a second file read of the disk, or say it in §22 alone.
 - The type `ntfs` without `windows_names` (§22): `windows_names` is recommended since 2026-11-19, as the maintainer chose; whether Atoll leaves a name holding `" * < > ?` alone on a disk mounted without it, as a name refused, is still to decide, and its own trash move on such a name is still to measure there.
 - Run `test/loopdev` on the type `ntfs` in qemu (mainline 7.3), and consider booting Debian sid's 7.3.3, the kernel with no ntfs3 (point 7 of the report).. Measured in `docs/research/ntfs-driver.md`, whose last section lists the decisions it needs. Until then a disk mounted with it is `readonly`.
 
@@ -65,7 +65,6 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 ## After the two flaws TLC found, fixed on 2026-11-19 (DONE.md)
 
-- The limit of flaw 1's fix, a write that keeps size, times, mode and owner and moves only the change time, as the maintainer decided on 2026-11-20 ("Les deux"): (b) the job records the change time right after the rename, in a commit of its own, which a reprise compares; (a) a reprise that finds no such record, a crash having come between the rename and that commit, and another change time than the verified one, records the copy unverified (it stops `balance --move-originals` there). A scenario first, and a flaw instance of the TLA+ model if it can show it.
 - A file renamed while a job runs reappears at its old name on that disk once the reprise finishes the copy: the reprise could take `first_seen_ns` from the operation's `started_ns`.
 - `atoll scan` and `conflicts resolve` still touch a running job; `restore --to` records the look after its syncs.
 - Run in qemu the loop-device tests these two fixes touch: replicate, a device failing during a copy, copies at once, precision, mode, owner, break glass, the failed mount; ntfs-3g first.
@@ -74,17 +73,17 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 ## The threat model after 2026-11-19 (DONE.md)
 
-- G5, as the maintainer decided on 2026-11-20 ("Garde sur 24 h"): a second window, a day long, for the mass-modification guard (§15.6); past its threshold, propagation pauses and the other copies keep the version before. A new configuration key, an addition at format 1: vectors first.
 - The threat model's low gaps G7 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask).
 - An empty mount point under another mount reads `not-mounted` with "the mount is at /tmp: write that path, not one through a symlink" (seen in qemu): the parent's entry, which the message takes for a symlink. Say "nothing is mounted at that path" when the entry's mount point is a parent of the disk's.
 - Measure the remount through systemd with systemd 252 (Debian 12, openmediavault 7): the polkit rule is checked there, the remount itself is not.
-- A folder §15.12 makes with no model on any disk (step 3) takes 0755 whatever the umask, as the maintainer decided on 2026-11-20 ("Forcer 0755"): the units' `UMask=0027` makes it 0750 and `atoll`'s, which a media server under another account cannot read. Its `mkdir` operation records 0755, set again by `fchmod` once made.
 - The view (experimental): a file or folder it makes takes the caller's group, not a setgid folder's; a non-owner's write to a setuid file whose presented mode differs from its disk's fails until a pass. Run `TestViewAsAnotherAccount` on Linux 7.3 too.
 
 ## The tests after the gaps of 2026-11-19 (DONE.md)
 
 - Read the first nights of mutation tests on `names`, `rules`, `config`, `integrity` and `solver`, sort the mutants that lived, then set the gate (95 % efficacy, 85 % mutant coverage a pure package); then `jobs`, `ops`, `trash` and `watch`.
-- Read the first `cover` table, and count the scenarios too: the conformance build with `-cover` and `GOCOVERDIR`, merged by `go tool covdata`.
+- Read the `cover` table of a GitHub run, which counts the scenarios since 2026-11-20 (DONE.md), and set its gate.
+- **decision**: a copy looks for the model of a folder it makes on the source's disk alone (§14.2). When the source sits behind and the disk that holds the real folder is away, it makes the folder with no model, 0755 since 2026-11-20: a folder kept 0700 there is more open on the copy's disk. Look on the other disks first, or wait (`io-error`), as §15.12's step 3 does (DONE.md, the folder with no model).
+- A copy recorded unverified after a reprise (flaw 1's limit, DONE.md) waits for `--full` or a scrub to be read; and which two drivers' renames left the change time as it was on Linux 6.12 is to measure.
 - Update the CI's image from Go 1.27.2, whose standard library has GO-2026-6859 and GO-2026-6809 (fixed in 1.27.3 and 1.27.4, which GitHub's govulncheck and the releases use already).
 
 ## Atoll's own view, after 2026-11-19 (DONE.md)
