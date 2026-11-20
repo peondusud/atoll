@@ -190,6 +190,12 @@ func (u *unit) checkRunsAsShipped() {
 			if want := map[string]string{"NoNewPrivs": "1", "Seccomp": "2"}[key]; value != want {
 				u.t.Errorf("%s: %s %s, want %s", u.name, key, value, want)
 			}
+		case "Umask":
+			// The unit's UMask: what a folder of the library made with no model would have kept of 0755 but for the
+			// fchmod that gives it 0755 whatever the mask (specs.md §17.4; TestAFolderWithNoModelOnEachDriver).
+			if value != "0027" {
+				u.t.Errorf("%s: umask %s, want 0027", u.name, value)
+			}
 		}
 	}
 }

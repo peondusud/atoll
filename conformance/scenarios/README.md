@@ -41,7 +41,7 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 
 | `do` | Fields | Meaning |
 |---|---|---|
-| `atoll` | `args`, `exit`, `stdout_json`, `crash_at`, `full` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input. `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, and `full` the ids of disks that have no room left, for this run only |
+| `atoll` | `args`, `exit`, `stdout_json`, `crash_at`, `full`, `umask` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input. `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, and `full` the ids of disks that have no room left, for this run only. `umask` is the mask the binary runs with, written in octal digits with a leading 0 from `"0000"` to `"0777"`, as a unit's `UMask=` gives it, `"0027"` as Atoll's units do; left out, it is the runner's own |
 | `write` | `disk`, a path, `text` or `size`, `mtime_ns` | writes a file and any folders above it, replacing the content of what is there in place |
 | `mkdir` | `disk`, a path | creates a folder and its parents |
 | `rename` | `disk`, a path, `to` or `to_b64` | renames, replacing what is at the target as `rename(2)` does |
@@ -69,6 +69,7 @@ A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the to
 **`expect_tree`** covers the whole disk. An entry has a path and a `kind`: `file`, when left out, `dir` or `symlink`.
 
 - A file has its content: `text`, a string, or `size`, which means that many bytes of `i mod 251`, the pattern of the official BLAKE3 test vectors. `mtime_ns`, `mode`, written as for `chmod`, `uid` and `gid`, both or neither, as for `chown`, and `xattrs`, a list of the file's extended attributes of the `user.` namespace, each a `name` and its `text`, the whole set, are compared when given. In a disk's `tree`, they are set.
+- A folder may have its `mode`, written as for `chmod`, compared when given, and set in a disk's `tree`.
 - A symlink has its `target`.
 - The folders on the way to a listed entry need no entry, and an empty folder must have one.
 - A component that is exactly `*` matches any one name, for an operation's id in `Atoll/trash/<date>/<op-id>/…`.
@@ -108,6 +109,7 @@ After each `atoll` step, on each disk (`specs.md` §6):
 | `copied` | once a `create` has copied the whole source into its `.part` and recorded every chunk hash, before the source is looked at again and the times are restored |
 | `verified` | once a `create` has re-read its `.part` against the chunk hashes and recorded the whole-file hash, before the target is resolved |
 | `trash-folders` | once the folders of a move to the trash are made and synced, before the copy is looked at again and moved. A restore and a purge have none |
+| `mkdir-made` | once a folder below the root is made, by `mkdir`, before it is given the mode and the owner of the folder it stands for, or the mode 0755 when it stands for none (`specs.md` §17.2, §17.4) |
 | `folder-made` | once a restore has made a folder below the root, before it is synced or recorded |
 | `linked` | between `link` and the `fsync` that follows it, so only on a disk with `renameat2` at `false` |
 | `moved` | once the name has moved, a file's or a folder's, or the file of a purge is gone, before any later `fsync` of what holds it. With `renameat2` at `false`, `unlink` has run too, so the source's name is gone, which is not yet synced, and the target folder was synced once already, between `link` and `unlink` |

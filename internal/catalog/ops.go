@@ -452,15 +452,18 @@ func CopyCtimes(ctx context.Context, db *sql.DB, fileID int64) (map[string]sql.N
 	return out, nil
 }
 
-// MkdirLike is the mode and owner a folder made below the root is to take: those of the folder it stands for
-// (specs.md §17.4).
+// MkdirLike is what a folder made below the root is to take (specs.md §17.4): the mode and owner of the folder it
+// stands for; or, for one that stands for none, the mode 0755 alone, whatever the umask, as it keeps the owner mkdir
+// gives it (§15.12, step 3).
 type MkdirLike struct {
-	Mode, UID, GID int64
+	Mode int64
+	// UID and GID are the owner of the folder it stands for, both nil for one that stands for none.
+	UID, GID *int64
 }
 
-// BeginMkdir journals a folder made below the root (specs.md §6.1, §17.4). With like, its event holds the mode and
-// owner the folder is to take: it is made, then given them, and a reprise that finds it made and not yet given them
-// has nothing else to say whose it is (§17.2).
+// BeginMkdir journals a folder made below the root (specs.md §6.1, §17.4). With like, its event holds what the folder
+// is to take: it is made, then given it, and a reprise that finds it made and not yet given it has nothing else to say
+// what it is to be (§17.2).
 func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, like *MkdirLike, nowNS int64) (*Op, error) {
 	op := &Op{Disk: disk, Kind: OpMkdir, Path: path}
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
@@ -474,7 +477,7 @@ func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, like *MkdirL
 		if like == nil {
 			return nil
 		}
-		return writeEventData(ctx, tx, nowNS, "info", OpMkdir, op, eventData{Mode: &like.Mode, UID: &like.UID, GID: &like.GID})
+		return writeEventData(ctx, tx, nowNS, "info", OpMkdir, op, eventData{Mode: &like.Mode, UID: like.UID, GID: like.GID})
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%q: %w", path, err)
@@ -482,8 +485,9 @@ func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, like *MkdirL
 	return op, nil
 }
 
-// MkdirLikeOf gives the mode and owner the event of a folder's operation holds, and nil when it holds none: a folder
-// that stood for none, or one journaled before its event held them.
+// MkdirLikeOf gives what the event of a folder's operation holds: the mode and owner of the folder it stands for, or
+// the mode alone for one that stands for none; and nil when it holds no mode, as for a folder that stood for none
+// journaled before its event held one.
 func MkdirLikeOf(ctx context.Context, db *sql.DB, opID int64) (*MkdirLike, error) {
 	var mode, uid, gid sql.NullInt64
 	err := db.QueryRowContext(ctx, `
@@ -494,10 +498,12 @@ func MkdirLikeOf(ctx context.Context, db *sql.DB, opID int64) (*MkdirLike, error
 		return nil, nil //nolint:nilnil // no event is an answer
 	case err != nil:
 		return nil, fmt.Errorf("event: %w", err)
-	case !mode.Valid || !uid.Valid || !gid.Valid:
+	case !mode.Valid || uid.Valid != gid.Valid:
 		return nil, nil //nolint:nilnil // likewise
+	case !uid.Valid:
+		return &MkdirLike{Mode: mode.Int64}, nil
 	}
-	return &MkdirLike{Mode: mode.Int64, UID: uid.Int64, GID: gid.Int64}, nil
+	return &MkdirLike{Mode: mode.Int64, UID: &uid.Int64, GID: &gid.Int64}, nil
 }
 
 // FinishMkdir says that a folder is there, and Atoll's own.
