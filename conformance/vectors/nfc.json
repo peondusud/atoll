@@ -37,6 +37,7 @@
     { "path_b64": "882E", "nfc_b64": "88yIzIE=", "note": "a 4-byte lead byte then one 2-byte character at the end: still normalized" },
     { "path_b64": "8M2A", "nfc_b64": "8MyA", "note": "U+0340 is a singleton for U+0300" },
     { "path_b64": "882EeA==", "nfc_b64": "88yIzIF4" },
+    { "path_b64": "//PNhA==", "nfc_b64": "//PMiMyB", "note": "two bytes that are not UTF-8 in a row, then U+0344, which NFC decomposes: each byte is kept, and the run after them is normalized" },
     { "path_b64": "YcyB/8yW", "nfc_b64": "w6H/zJY=" }
   ]
 }

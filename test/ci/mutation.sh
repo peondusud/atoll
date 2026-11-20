@@ -42,6 +42,13 @@ out=bin/mutation
 mkdir -p "$out" || exit 1
 workers=${WORKERS:-$(nproc)}
 GOBIN=$(pwd)/$out go install "github.com/go-gremlins/gremlins/cmd/gremlins@$gremlins_version" || exit 1
+# Each test run with one CPU, through GOFLAGS, never gremlins' --test-cpu: v0.6.0 hands that to go test as the single
+# argument "-cpu N", a flag go test does not know, which it passes with the package after it to a test binary of the
+# folder it runs in, the module's root. Every run then failed before a test started, and every mutant was counted
+# killed. -count=1 too: gremlins gives each mutant three times the time its first run of the tests took, and a result
+# go test took from its cache, as for a package whose code and tests are those of a run before, timed out mutants the
+# tests kill.
+export GOFLAGS="${GOFLAGS:+$GOFLAGS }-cpu=1 -count=1"
 
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 {
@@ -73,7 +80,7 @@ for pkg in "$@"; do
 	start=$(date +%s)
 	# One operator a word, split on purpose.
 	# shellcheck disable=SC2086
-	"$out/gremlins" unleash --workers "$workers" --test-cpu 1 $operators ${excludes[@]+"${excludes[@]}"} \
+	"$out/gremlins" unleash --workers "$workers" $operators ${excludes[@]+"${excludes[@]}"} \
 		-o "$out/$name.json" "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | tee "$log"
 	status=${PIPESTATUS[0]}
 	spent=$(($(date +%s) - start))
