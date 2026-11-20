@@ -92,8 +92,10 @@ func TestUserOperationsLoseNothingWhereverTheyFail(t *testing.T) {
 				put(t, mount, "media/Series/e01", "episode")
 				key := keyAt(t, mount, "media/Series/e01")
 				return swept{
-					op:   func(d *Disk) error { return d.RenameUser("Series/e01", "Films/New/e01", false, key, like) },
-					done: func() bool { return holding(mount, "media/Films/New/e01", "episode") && absent(mount, "media/Series/e01") },
+					op: func(d *Disk) error { return d.RenameUser("Series/e01", "Films/New/e01", false, key, like) },
+					done: func() bool {
+						return holding(mount, "media/Films/New/e01", "episode") && absent(mount, "media/Series/e01")
+					},
 					kept: func() bool {
 						return holding(mount, "media/Films/New/e01", "episode") || holding(mount, "media/Series/e01", "episode")
 					},
@@ -103,8 +105,10 @@ func TestUserOperationsLoseNothingWhereverTheyFail(t *testing.T) {
 				put(t, mount, "media/Series/S01/e01", "episode")
 				key := keyAt(t, mount, "media/Series/S01")
 				return swept{
-					op:   func(d *Disk) error { return d.RenameUser("Series/S01", "Films/New/S01", true, key, like) },
-					done: func() bool { return holding(mount, "media/Films/New/S01/e01", "episode") && absent(mount, "media/Series/S01") },
+					op: func(d *Disk) error { return d.RenameUser("Series/S01", "Films/New/S01", true, key, like) },
+					done: func() bool {
+						return holding(mount, "media/Films/New/S01/e01", "episode") && absent(mount, "media/Series/S01")
+					},
 					kept: func() bool {
 						return holding(mount, "media/Films/New/S01/e01", "episode") || holding(mount, "media/Series/S01/e01", "episode")
 					},

@@ -189,14 +189,14 @@ func runWithCatalogFault(t *testing.T, c *passCase, at int) (seen []string, runE
 	f.mu.Lock()
 	seen = append(seen, f.seen...)
 	f.mu.Unlock()
-	return seen, runErr, b.settled(c.keepsTrash)
+	return seen, runErr, b.settled(false)
 }
 
 // settled runs passes with nothing failing until all is done, and says what the pool ends with: settle passed at each,
 // so that what was put back waits for nothing, until a pass finds nothing to do; then a full scan, which reads a copy a
 // reprise recorded unverified, as its change time may be a write's (specs.md §14.2), and passes again, as what waited
 // on that copy goes then.
-func (b *bench) settled(trashLeftOut string) string {
+func (b *bench) settled(trashLeftOut bool) string {
 	b.t.Helper()
 	settle := func() {
 		for range 4 {
@@ -241,7 +241,7 @@ func sweepCatalog(t *testing.T, c passCase, stride int) {
 			if err != nil && !errors.Is(err, errCatalogFault) {
 				t.Errorf("%s: the pass ended with another error: %v", where, err)
 			}
-			if got != want {
+			if !endsAsWanted(got, want) {
 				t.Errorf("%s: it ends otherwise:\n%s\nwhere nothing failing ends:\n%s", where, got, want)
 			}
 		}
@@ -256,7 +256,7 @@ func TestAPassEndsTheSameWhereverItsCatalogFails(t *testing.T) {
 	sweepCatalog(t, passCase{name: "the reprise after a crash at moved", pool: propagated, crash: "moved"}, 1)
 	sweepCatalog(t, passCase{name: "two names exchanged", pool: swapped}, 1)
 	sweepCatalog(t, passCase{name: "a copy's reprise after a crash at placed", pool: refreshed, crash: "placed"}, 1)
-	sweepCatalog(t, passCase{name: "a transfer", pool: cached, keepsTrash: "c"}, 1)
+	sweepCatalog(t, passCase{name: "a transfer", pool: cached}, 1)
 	sweepCatalog(t, passCase{name: "an attribute set through the view", pool: attributed}, 1)
 	sweepCatalog(t, passCase{name: "atoll replicate", pool: copiesToMake, act: replicateNow("")}, 1)
 }

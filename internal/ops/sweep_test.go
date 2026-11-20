@@ -137,14 +137,14 @@ func sweep(t *testing.T, c sweepCase) {
 					t.Errorf("%s: the cause is lost: %v", where, err)
 				}
 				for _, answer := range []error{ErrGone, ErrPathTaken, ErrNameRefused, ErrNotEmpty, ErrNoLink, ErrLastName} {
-					if errors.Is(err, answer) && (inject != syscall.EACCES || answer != c.refusal) {
+					if errors.Is(err, answer) && (!errors.Is(inject, syscall.EACCES) || !errors.Is(answer, c.refusal)) {
 						t.Errorf("%s: taken for %q: %v", where, answer, err)
 					}
 				}
 				switch {
-				case inject == syscall.EIO && !c.raw && !errors.Is(err, ErrDiskLost):
+				case errors.Is(inject, syscall.EIO) && !c.raw && !errors.Is(err, ErrDiskLost):
 					t.Errorf("%s: not the disk lost: %v", where, err)
-				case inject == syscall.EACCES && !syncs[kind] && errors.Is(err, ErrDiskLost):
+				case errors.Is(inject, syscall.EACCES) && !syncs[kind] && errors.Is(err, ErrDiskLost):
 					t.Errorf("%s: a refusal taken for the disk lost: %v", where, err)
 				}
 			}
@@ -280,7 +280,9 @@ func TestMovesLoseNothingWhereverTheyFail(t *testing.T) {
 			done: func() bool {
 				return recorded && holding(mount, "media/Films/a", "film") && absent(mount, "Atoll/tmp/5.part")
 			},
-			kept: func() bool { return holding(mount, "media/Films/a", "film") || holding(mount, "Atoll/tmp/5.part", "film") },
+			kept: func() bool {
+				return holding(mount, "media/Films/a", "film") || holding(mount, "Atoll/tmp/5.part", "film")
+			},
 		}
 	}
 	linkToTrash := func(t *testing.T, mount string) swept {

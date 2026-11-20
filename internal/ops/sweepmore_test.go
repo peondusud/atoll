@@ -257,8 +257,10 @@ func TestWritesLoseNothingWhereverTheyFail(t *testing.T) {
 	// disk add stops at any error a marker gives.
 	sweep(t, sweepCase{name: "a marker written", raw: true, prepare: func(t *testing.T, mount string) swept {
 		return swept{
-			op:   func(d *Disk) error { return d.WriteMarker("pool_id = \"p\"\n") },
-			done: func() bool { return holding(mount, "Atoll/disk.toml", "pool_id = \"p\"\n") && absent(mount, "Atoll/disk.toml.new") },
+			op: func(d *Disk) error { return d.WriteMarker("pool_id = \"p\"\n") },
+			done: func() bool {
+				return holding(mount, "Atoll/disk.toml", "pool_id = \"p\"\n") && absent(mount, "Atoll/disk.toml.new")
+			},
 		}
 	}})
 	sweep(t, sweepCase{name: "a marker written with the rename ntfs-3g refuses", driver: asNTFS3G, raw: true,
@@ -344,7 +346,9 @@ func TestLooksSayNothingOfWhatTheyCannotRead(t *testing.T) {
 					absent(mount, "Atoll/tmp/6.part") && holding(mount, "Atoll/tmp/4.part", "4.part") && holding(mount, "Atoll/tmp/notes", "notes")
 			},
 			// A part an operation left planned names, and what is no part of Atoll's, stay.
-			kept: func() bool { return holding(mount, "Atoll/tmp/4.part", "4.part") && holding(mount, "Atoll/tmp/notes", "notes") },
+			kept: func() bool {
+				return holding(mount, "Atoll/tmp/4.part", "4.part") && holding(mount, "Atoll/tmp/notes", "notes")
+			},
 		}
 	}})
 	sweep(t, sweepCase{name: "what stands on the way of a path", prepare: func(t *testing.T, mount string) swept {

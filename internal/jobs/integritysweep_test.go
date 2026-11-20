@@ -90,7 +90,7 @@ func endIntegrity(t *testing.T, c *integrityCase, b *bench) string {
 	if _, err := Repair(t.Context(), b.db, b.config, b, RepairOptions{Apply: true}); err != nil {
 		t.Fatalf("a repair, with nothing failing: %v", err)
 	}
-	return b.settled("*")
+	return b.settled(true)
 }
 
 // runIntegrityCatalog runs a case with the catalog's statement at a position failing (0 fails none), then ends it.

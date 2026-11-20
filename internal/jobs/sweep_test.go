@@ -37,10 +37,37 @@ type passCase struct {
 	from string
 	// act is what runs on the catalog given: a pass when nil, as the daemon's.
 	act func(b *bench, db *sql.DB) error
-	// keepsTrash is a disk whose trash may keep what the pass sent there to be purged at once, "" for none: the SSD
-	// cache's copy a transfer sends there stays for the retention when a fault comes between its move and its purge,
-	// as its reprise finishes it as any move to the trash (specs.md §19). A limit: nothing is lost.
-	keepsTrash string
+}
+
+// endsAsWanted says whether a pool ends as another, from their snapshots: the same lines, but for the trash's (marked
+// ~), of which it may hold more, never fewer. A fault can leave more there, nothing lost: an old copy a refresh sent
+// there, as a copy on a disk lost when its metadata changed becomes stale and is made again (specs.md §15.4), or the
+// SSD cache's copy a transfer sent there, which stays for the retention when a fault comes between its move and its
+// purge, as its reprise ends it as any move to the trash (§19), a limit.
+func endsAsWanted(got, want string) bool {
+	split := func(s string) (main, trash []string) {
+		for _, line := range strings.Split(s, "\n") {
+			if strings.HasPrefix(line, "~") {
+				trash = append(trash, line)
+			} else {
+				main = append(main, line)
+			}
+		}
+		return main, trash
+	}
+	gotMain, gotTrash := split(got)
+	wantMain, wantTrash := split(want)
+	if !slices.Equal(gotMain, wantMain) {
+		return false
+	}
+	for _, line := range wantTrash {
+		at := slices.Index(gotTrash, line)
+		if at < 0 {
+			return false
+		}
+		gotTrash = slices.Delete(gotTrash, at, at+1)
+	}
+	return true
 }
 
 // run runs a case's act on a catalog.
@@ -93,7 +120,7 @@ func runPass(t *testing.T, c *passCase, at int, inject error) (calls []string, r
 	}
 	runErr = c.run(b, b.db)
 	armed = false
-	return calls, runErr, b.settled(c.keepsTrash)
+	return calls, runErr, b.settled(false)
 }
 
 // sweepStride is how many calls of a pass a sweep with the race detector takes for one it fails.
@@ -130,7 +157,7 @@ func sweepPass(t *testing.T, c passCase) {
 				if err != nil {
 					t.Errorf("%s: the pass ended with %v", where, err)
 				}
-				if got != want {
+				if !endsAsWanted(got, want) {
 					t.Errorf("%s: it ends otherwise:\n%s\nwhere nothing failing ends:\n%s", where, got, want)
 				}
 			}
@@ -139,16 +166,18 @@ func sweepPass(t *testing.T, c passCase) {
 }
 
 // snapshot says what the pool holds: on each disk, each name below its root and what it holds, each entry of its trash
-// by the logical path below its operation's folder, but on the disk whose trash is left out ("*" for every disk), and
-// what is in its tmp/; then the operations left planned, and the rows of the files and their copies. What differs
-// between two runs that end the same, the times, the inodes, the ids and dates of operations, is left out.
-func (b *bench) snapshot(trashLeftOut string) string {
+// by the logical path below its operation's folder, marked ~, unless the trash is left out, and what is in its tmp/;
+// then the operations left planned, and the rows of the files and their copies. What differs between two runs that end
+// the same, the times, the inodes, the ids and dates of operations, is left out.
+func (b *bench) snapshot(trashLeftOut bool) string {
 	b.t.Helper()
 	var lines []string
 	for _, id := range slices.Sorted(maps.Keys(b.dirs)) {
 		lines = append(lines, b.tree(id, "media", 0)...)
-		if id != trashLeftOut && trashLeftOut != "*" {
-			lines = append(lines, b.tree(id, "Atoll/trash", 2)...)
+		if !trashLeftOut {
+			for _, line := range b.tree(id, "Atoll/trash", 2) {
+				lines = append(lines, "~"+line)
+			}
 		}
 		lines = append(lines, b.tree(id, "Atoll/tmp", 0)...)
 	}
@@ -170,17 +199,13 @@ func (b *bench) snapshot(trashLeftOut string) string {
 	if err := rows.Err(); err != nil {
 		b.t.Fatal(err)
 	}
-	entries := 0
-	if trashLeftOut != "*" {
-		entries = b.count("SELECT count(*) FROM trash WHERE disk_id != ?", trashLeftOut)
-	}
-	lines = append(lines, fmt.Sprintf("trash entries: %d, jobs: %d", entries, b.count("SELECT count(*) FROM jobs")))
+	lines = append(lines, fmt.Sprintf("jobs: %d", b.count("SELECT count(*) FROM jobs")))
 	return strings.Join(lines, "\n")
 }
 
-// tree lists the files and symbolic links below a folder of a disk, and what each holds, by their path below it less
-// its first skip names: an entry of the trash by its logical path. Folders are left out: one the trash keeps empty
-// harms nothing.
+// tree lists the files and symbolic links below a folder of a disk, and what each holds, its permission bits and its
+// user. extended attributes, by their path below it less its first skip names: an entry of the trash by its logical
+// path. Folders are left out: one the trash keeps empty harms nothing.
 func (b *bench) tree(id, folder string, skip int) []string {
 	b.t.Helper()
 	top := filepath.Join(b.dirs[id], filepath.FromSlash(folder))
@@ -213,7 +238,11 @@ func (b *bench) tree(id, folder string, skip int) []string {
 			if err != nil {
 				return err
 			}
-			what = string(data) + userXattrs(path)
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			what = fmt.Sprintf("%s %o%s", data, info.Mode().Perm(), userXattrs(path))
 		}
 		out = append(out, fmt.Sprintf("%s %s: %s = %q", id, folder, name, what))
 		return nil
@@ -265,7 +294,8 @@ func attributed(t *testing.T) *bench {
 }
 
 // propagated gives a pool of two disks, each with the same files, where a user, on t1, renamed a file, deleted
-// another, renamed a folder, edited one in place and changed a mode: the next pass acts on t2 (specs.md §15.12).
+// another, renamed a folder, and changed the mode and the time of one: the next pass acts on t2 (specs.md §15.4,
+// §15.12).
 func propagated(t *testing.T) *bench {
 	t.Helper()
 	b := newBench(t, "t1", "t2")
@@ -280,13 +310,12 @@ func propagated(t *testing.T) *bench {
 	b.rename("t1", "Films/a", "Films/Kept/a")
 	b.remove("t1", "Films/b")
 	b.rename("t1", "Series", "Shows")
-	if err := os.Chmod(filepath.Join(b.dirs["t1"], "media", "x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// A change of mode waits for settle from its change time, which the disk gives.
-	b.now = b.ctimeOf("t1", "x") + settleNS
 	b.pass()
-	b.now += 30_000_000_000
+	// The mode and the time after that first pass, which would apply them: a change of metadata waits for settle from
+	// its change time, which the disk gives, and the deletions and renames for the debounce.
+	b.chmod("t1", "x", 0o600, 0o640)
+	b.touch("t1", "x", touchedNS)
+	b.now = max(b.now+30_000_000_000, b.ctimeOf("t1", "x")+settleNS)
 	return b
 }
 
@@ -335,9 +364,9 @@ func swapped(t *testing.T) *bench {
 // whatever call fails on it when it resumes after a crash at each point (specs.md §15.12, §17.2): renames, a folder's
 // included, deletions, metadata, a refresh, copies, and an exchange of two names.
 func TestAPassEndsTheSameWhereverItFails(t *testing.T) {
-	moves := []string{"rename", "mkdir"}
+	moves := []string{"rename", "mkdir", "setmode", "settimes"}
 	sweepPass(t, passCase{name: "a pass", pool: propagated, disk: "t2", needs: moves})
-	for _, point := range []string{"journaled", "trash-folders", "moved", "target-synced"} {
+	for _, point := range []string{"journaled", "mode-set", "times-set", "trash-folders", "moved", "target-synced"} {
 		sweepPass(t, passCase{name: "the reprise after a crash at " + point, pool: propagated, disk: "t2", crash: point, needs: []string{"rename"}})
 	}
 	copies := []string{"create", "write", "rename", "mkdir"}
@@ -348,7 +377,7 @@ func TestAPassEndsTheSameWhereverItFails(t *testing.T) {
 	}
 	sweepPass(t, passCase{name: "atoll replicate, on the target", pool: copiesToMake, disk: "t2", act: replicateNow(""), needs: copies})
 	sweepPass(t, passCase{name: "atoll replicate, on the source", pool: copiesToMake, disk: "t1", act: replicateNow(""), needs: []string{"read"}})
-	sweepPass(t, passCase{name: "a transfer, on the cache", pool: cached, disk: "c", needs: []string{"rename", "unlink"}, keepsTrash: "c"})
+	sweepPass(t, passCase{name: "a transfer, on the cache", pool: cached, disk: "c", needs: []string{"rename", "unlink"}})
 	sweepPass(t, passCase{name: "a transfer, on a data disk", pool: cached, disk: "t1", needs: []string{"create", "rename"}})
 	// From the look at the copy to give: a disk lost before it keeps its own set, disk-unavailable (specs.md §21.2).
 	sweepPass(t, passCase{name: "an attribute set through the view", pool: attributed, disk: "t2", needs: []string{"setxattr"}, from: "xattrs"})
