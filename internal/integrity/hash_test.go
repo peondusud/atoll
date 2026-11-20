@@ -196,30 +196,30 @@ func (r *failingReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// A cancelled context ends HashReader before its next read, with the context's error and no hashes: every long loop
-// can be cancelled.
+// A canceled context ends HashReader before its next read, with the context's error and no hashes: every long loop
+// can be canceled.
 func TestHashReaderCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	reads := &countingReader{r: bytes.NewReader(pattern(10))}
 	file, chunks, err := HashReader(ctx, reads)
 	if !errors.Is(err, context.Canceled) || file != ([HashSize]byte{}) || chunks != nil {
-		t.Errorf("cancelled before: %x, %d chunk bytes, %v, want only context.Canceled", file, len(chunks), err)
+		t.Errorf("canceled before: %x, %d chunk bytes, %v, want only context.Canceled", file, len(chunks), err)
 	}
 	if reads.n != 0 {
-		t.Errorf("cancelled before: %d reads, want none", reads.n)
+		t.Errorf("canceled before: %d reads, want none", reads.n)
 	}
 
-	// Cancelled during the first read: no other read follows.
+	// Canceled during the first read: no other read follows.
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 	reads = &countingReader{r: bytes.NewReader(pattern(3 << 20)), cancel: cancel}
 	file, chunks, err = HashReader(ctx, reads)
 	if !errors.Is(err, context.Canceled) || file != ([HashSize]byte{}) || chunks != nil {
-		t.Errorf("cancelled during: %x, %d chunk bytes, %v, want only context.Canceled", file, len(chunks), err)
+		t.Errorf("canceled during: %x, %d chunk bytes, %v, want only context.Canceled", file, len(chunks), err)
 	}
 	if reads.n != 1 {
-		t.Errorf("cancelled during: %d reads, want 1", reads.n)
+		t.Errorf("canceled during: %d reads, want 1", reads.n)
 	}
 }
 
