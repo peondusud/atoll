@@ -70,6 +70,10 @@ func (b *bench) Root(string, string) disks.RootSeen {
 	return disks.RootSeen{Folder: disks.FolderOK}
 }
 
+func (b *bench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
+
 func (b *bench) Now() int64 { return b.now }
 
 func (b *bench) OpenTop(mount string) (fsx.Dir, error) {

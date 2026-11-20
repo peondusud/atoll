@@ -34,6 +34,20 @@ func StatPath(path string) (PathInfo, error) {
 	return PathInfo{MountID: st.Mnt_id, Dev: unix.Mkdev(st.Dev_major, st.Dev_minor), IsDir: st.Mode&unix.S_IFMT == unix.S_IFDIR, Ino: st.Ino}, nil
 }
 
+// UniqueMountID gives the id of the mount a path leads to, without following a last symlink, that no other mount is
+// given while the system runs: STATX_MNT_ID_UNIQUE, of Linux 6.8 and later. The id of the mount table may be given
+// again to a mount made once this one is gone. ok is false on a kernel that has none.
+func UniqueMountID(path string) (id uint64, ok bool, err error) {
+	var st unix.Statx_t
+	if err := unix.Statx(unix.AT_FDCWD, path, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID_UNIQUE, &st); err != nil {
+		return 0, false, fmt.Errorf("statx %q: %w", path, err)
+	}
+	if st.Mask&unix.STATX_MNT_ID_UNIQUE == 0 {
+		return 0, false, nil
+	}
+	return st.Mnt_id, true, nil
+}
+
 // IsAbsent says whether an error means that a path does not exist. Any other error says nothing
 // about the path (invariant 4).
 func IsAbsent(err error) bool {

@@ -36,7 +36,7 @@ func TestDeviceLeftVectors(t *testing.T) {
 // The mount check gives the device a disk that is not missing was mounted from, as the mount table names it, and
 // none for a missing disk (specs.md §15.13).
 func TestACheckGivesTheSourceOfADiskFound(t *testing.T) {
-	d, a := answersFor(&checkCase{})
+	d, a := answersFor(t, &checkCase{})
 	a.seen.Entry.Source = "/dev/sdb1"
 	if got := Check(a, d); got.State == Missing || got.Source != "/dev/sdb1" {
 		t.Errorf("online: %+v", got)

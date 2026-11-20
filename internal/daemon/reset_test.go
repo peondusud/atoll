@@ -41,6 +41,10 @@ func (m *unpluggedBench) Root(string, string) disks.RootSeen {
 	return disks.RootSeen{Folder: disks.FolderOK}
 }
 
+func (m *unpluggedBench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
+
 func (m *unpluggedBench) Now() int64 { return time.Now().UnixNano() }
 
 func (m *unpluggedBench) DeviceNode(path string) (fsx.DeviceNode, error) {

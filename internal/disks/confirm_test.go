@@ -26,7 +26,10 @@ func (a *pastCache) Device(names.Filesystem, *MountEntry) DeviceSeen {
 }
 
 func (a *pastCache) Root(string, string) RootSeen { return RootSeen{Folder: FolderOK} }
-func (a *pastCache) Now() int64                   { return 0 }
+func (a *pastCache) Hiberfil(string, *MountEntry) HiberfilSeen {
+	return HiberfilSeen{File: HiberfilAbsent}
+}
+func (a *pastCache) Now() int64 { return 0 }
 func (a *pastCache) Space(string) (capacity, free int64, err error) {
 	return 0, 0, nil
 }

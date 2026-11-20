@@ -865,6 +865,10 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `no_journal` | boolean | the head says that the ext4 keeps no journal |
 | `root_folder` | string | `ok` (when left out), `absent`, `not-a-folder`, `other-mount` or `io-error`: question 10 |
 | `other_case` | boolean | `<root>` also answers in the other case, with the same inode |
+| `hiberfil` | string | what the top of the mount holds at `hiberfil.sys`, which a check asks of a disk of `fs` `ntfs` alone, once questions 1 to 10 pass and the reasons before `hibernated` leave it online (§10): `absent` (when left out), `file`, `not-a-file`, `io-error` for an error that makes the disk unknown, as `EIO`, or `unreadable` for any other |
+| `hiberfil_size` | integer | the size of that `file` |
+| `hiberfil_bytes` | array of objects | the bytes of its content that are not zero, each `at` an offset and `hex`, as `bytes` in `superblock.json`; the rest is zeros |
+| `hiberfil_read` | integer | how many bytes of its start a read gave: its first 4096, or all of it when it is smaller, when left out |
 | `marker` | object or string | what `<workdir>/disk.toml` holds, which a confirmation reads (§10): an object of `pool_id`, `disk_id` and `fs_uuid`, the pool being `p`, or `not-a-marker` for a file there that this version does not read; none when left out |
 | `state` | string | `online`, `readonly` or `missing` |
 | `reason` | string | the reason; left out when `online` |

@@ -14,7 +14,7 @@
         {"from": "online", "to": "missing", "label": "check fails, or EIO", "when": "a mount check fails, or an I/O error on a disk that then does not confirm (invariant 4)", "spec": "§10, §16, §17.1"},
         {"from": "standby", "to": "missing", "label": "check fails", "when": "a mount check fails", "spec": "§10"},
         {"from": "missing", "to": "online", "label": "check passes", "when": "a mount check passes again; reconciliation first", "spec": "§10, §18"},
-        {"from": "online", "to": "readonly", "label": "second table of §10", "when": "ro, ads, nocase, iocharset, errors-continue, casefold, ascii-ci, no-journal, ignore-case or other-marker", "spec": "§10"},
+        {"from": "online", "to": "readonly", "label": "second table of §10", "when": "ro, ads, nocase, iocharset, errors-continue, hibernated, casefold, ascii-ci, no-journal, ignore-case or other-marker", "spec": "§10"},
         {"from": "readonly", "to": "online", "label": "remounted", "when": "mounted again without what made it readonly", "spec": "§10"},
         {"from": "readonly", "to": "missing", "label": "check fails", "when": "a mount check fails", "spec": "§10"},
         {"from": "online", "to": "draining", "label": "disk remove --evacuate", "when": "`disk remove --evacuate` or `disk replace` set its state to draining", "spec": "§18"},

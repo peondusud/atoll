@@ -60,6 +60,9 @@ func (m *folderMachine) ReadPastCache(fs names.Filesystem, entry *disks.MountEnt
 func (m *folderMachine) Root(string, string) disks.RootSeen {
 	return disks.RootSeen{Folder: disks.FolderOK}
 }
+func (m *folderMachine) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
 func (m *folderMachine) Now() int64 { return m.now.Load() }
 
 // guardedPool is a pool of two disks that are folders, each holding a, b and c, whose guard allows one deletion: the
