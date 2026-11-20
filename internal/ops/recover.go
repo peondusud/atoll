@@ -348,11 +348,15 @@ func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if restore {
 		err = catalog.FinishRestoreTo(ctx, db, op, nowNS, NewCopyOf(&found), linksOf(&st))
 	} else {
-		made, rowErr := createdByReprise(job, target, &st, &found)
+		made, unverified, rowErr := createdByReprise(job, op, target, &st, &found)
 		if rowErr != nil {
 			return rowErr
 		}
-		err = catalog.FinishCreate(ctx, db, op, job, made, nowNS)
+		if unverified {
+			slog.Warn("a copy found after a crash or a disk lost is recorded unverified, as its change time may be a write's",
+				"disk", op.Disk, "path", target, "op", op.ID)
+		}
+		err = catalog.FinishCreate(ctx, db, op, job, made, nowNS, unverified)
 	}
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
@@ -361,20 +365,20 @@ func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	return nil
 }
 
-// createdByReprise says what the row of a copy a reprise finds at its name records, as the commit would have: what its
-// part was when verified, as its job recorded it, never what is there now, but for the change time when nothing else
-// moved, however long Atoll was down (specs.md §14.2). With no job, or a job that recorded no look, as one an earlier
-// version verified, it is what is found.
-func createdByReprise(job *catalog.ReplicateJob, target string, st *fsx.Stat, found *watch.FoundFile) (*catalog.NewCopy, error) {
-	if job == nil || job.Look == nil {
-		return NewCopyOf(found), nil
+// createdByReprise says what the row of a copy a reprise finds at its name records, as the commit would have, and
+// whether it is unverified: what its part was when verified, as its job recorded it, never what is there now, but for
+// the change time, compared with the one the job recorded right after the rename, however long Atoll was down
+// (specs.md §14.2, RecoveredRow). With no job, it is what is found, which FinishCreate records unverified.
+func createdByReprise(job *catalog.ReplicateJob, op *Op, target string, st *fsx.Stat, found *watch.FoundFile) (*catalog.NewCopy, bool, error) {
+	if job == nil {
+		return NewCopyOf(found), false, nil
 	}
 	now, err := LookOf(st)
 	if err != nil {
-		return nil, fmt.Errorf("reprise: %w", err)
+		return nil, false, fmt.Errorf("reprise: %w", err)
 	}
-	row := CreatedRow(job.Look, &now)
-	return NewCopyFrom(target, found.FileKey, &row), nil
+	row, unverified := RecoveredRow(job.Look, job.PlacedBy(op.ID), &now)
+	return NewCopyFrom(target, found.FileKey, &row), unverified, nil
 }
 
 // recoverRename resolves a rename left planned, as §17.2 does a restore: the target is a logical path,

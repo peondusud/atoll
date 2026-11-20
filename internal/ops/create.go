@@ -175,10 +175,11 @@ func (d *Disk) SourceStill(logical string, read *fsx.Stat) (bool, error) {
 }
 
 // PlacePart moves a verified part to a logical path, whose parents are there by now, each an operation of
-// its own: the rename without replacing, the file synced at its new name, then the target folder, whose
-// time is restored, then the folder of the part (specs.md §14.2). ErrPathTaken with IsExisting means
-// that something took the name since the look.
-func (d *Disk) PlacePart(op *Op, logical string) (*Moved, error) {
+// its own: the rename without replacing, a look at the copy, then record, when given, which commits the change time
+// that look found, the file synced at its new name, then the target folder, whose time is restored, then the folder of
+// the part (specs.md §14.2). ErrPathTaken with IsExisting means that something took the name since the look. An error
+// record gives is given back as it is.
+func (d *Disk) PlacePart(op *Op, logical string, record func(placed *fsx.Stat) error) (*Moved, error) {
 	if err := d.Verify(); err != nil {
 		return nil, err
 	}
@@ -222,6 +223,15 @@ func (d *Disk) PlacePart(op *Op, logical string) (*Moved, error) {
 	}
 	d.withoutOwn(&placed)
 	d.machine.Checkpoint("moved")
+	// The change time that look found, in a commit of its own, before anything long: a reprise that finds another knows
+	// the copy written into since, however long Atoll was down. A crash before it leaves none, which the reprise reads
+	// as a doubt (specs.md §14.2).
+	if record != nil {
+		if err := record(&placed); err != nil {
+			return nil, err
+		}
+		d.machine.Checkpoint("placed")
+	}
 	if err := syncEntry(target.Dir, newName); err != nil {
 		return nil, err
 	}

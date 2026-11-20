@@ -327,12 +327,17 @@ func TestACanceledPassStopsBetweenCopies(t *testing.T) {
 }
 
 // A pass killed at any step of a copy: the next pass's reprise finishes or undoes the operation, and the
-// copy is made, verified, with nothing left of its job, of its operation or in tmp/ (specs.md §14.2, §17.2).
+// copy is made, verified, with nothing left of its job, of its operation or in tmp/ (specs.md §14.2, §17.2). Killed at
+// moved, between the rename and the commit of the change time it gave, the copy is unverified, as that change time is
+// past the part's and may be a write's: the rename comes past a clock tick here, so that it moves it.
 func TestAPassKilledDuringACopy(t *testing.T) {
-	for _, point := range []string{"journaled", "copied", "verified", "moved", "target-synced", "source-synced"} {
+	for _, point := range []string{"journaled", "copied", "verified", "moved", "placed", "target-synced", "source-synced"} {
 		t.Run(point, func(t *testing.T) {
 			b := replicatePool(t)
 			b.replicate("a", ReplicateOptions{})
+			if point != "verified" {
+				b.at["verified"] = pastTick
+			}
 			b.crashAt(point)
 			out := b.pass()
 			if out.Partial {
@@ -341,8 +346,12 @@ func TestAPassKilledDuringACopy(t *testing.T) {
 			if b.read("t2", "a") != "content" {
 				t.Error("not copied")
 			}
-			if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND state = 'ok' AND verified_ns IS NOT NULL"); got != 1 {
-				t.Error("the copy is not verified")
+			verified := 1
+			if point == "moved" {
+				verified = 0
+			}
+			if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND state = 'ok' AND verified_ns IS NOT NULL"); got != verified {
+				t.Errorf("%d copies on t2 verified, want %d", got, verified)
 			}
 			if got := b.count("SELECT count(*) FROM jobs") + b.count("SELECT count(*) FROM ops WHERE state = 'planned'"); got != 0 {
 				t.Errorf("%d left", got)

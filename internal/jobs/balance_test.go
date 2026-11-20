@@ -2,11 +2,13 @@ package jobs
 
 import (
 	"database/sql"
+	"errors"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/solver"
 )
 
 // An old copy goes to the trash only when the plan marked it surplus, and only an Atoll copy: a copy the plan keeps,
@@ -114,6 +116,62 @@ func TestBalanceAtollLeavesUserCopies(t *testing.T) {
 	}
 	if got != "t1 user ok, t3 atoll ok" {
 		t.Errorf("the copies: %s", got)
+	}
+}
+
+// A copy atoll balance --move-originals makes in place of a user copy, found by a reprise after a crash between its rename
+// and the commit of the change time it had then, is recorded unverified, as its change time may be a write's: it is the
+// user copy from then on, and the one it stands in for, an Atoll copy now, stays where it is, as atoll prune would keep
+// it, until a full scan reads the new one (specs.md §13.3, §14.2, §17.3; the maintainer, 2026-11-20).
+func TestAMoveOfAnOriginalStopsAtACopyRecordedUnverified(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "a", "x")
+	b.scan(true)
+	b.base = strings.Replace(b.base, "id = \"t2\"\n", "id = \"t2\"\ntags = [\"usb\"]\n", 1)
+	b.reconfigure("[[rule]]\nlabel = \"x\"\npath = \"**\"\nreplicas = 0\ntags = [\"usb\"]\ntags_mode = \"strict\"\n")
+	run := func() []BalanceItem {
+		t.Helper()
+		var items []BalanceItem
+		if _, err := Balance(t.Context(), b.db, b.config, b, true, 0, true, func(item *BalanceItem) error {
+			items = append(items, *item)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return items
+	}
+	// The rename past a clock tick, so that it moves the change time; Atoll killed right after it.
+	b.at["verified"] = pastTick
+	stop := errors.New("stopped")
+	b.at["moved"] = func() { panic(stop) } //nolint:forbidigo // what stands for kill -9
+	func() {
+		defer func() {
+			if err, ok := recover().(error); !ok || !errors.Is(err, stop) {
+				t.Fatalf("it did not stop at moved: %v", err)
+			}
+		}()
+		run()
+	}()
+	items := run()
+	if len(items) != 1 || items[0].From != "t1" || items[0].Outcome != string(solver.PruneUnverified) {
+		t.Fatalf("%+v", items)
+	}
+	copies := func() string {
+		return b.text("SELECT group_concat(line, ', ') FROM (SELECT disk_id || ' ' || created_by || ' ' || state || ' ' || (verified_ns IS NOT NULL) AS line FROM copies ORDER BY disk_id)")
+	}
+	if got := copies(); got != "t1 atoll surplus 1, t2 user ok 0" {
+		t.Errorf("the copies: %s", got)
+	}
+	if b.read("t1", "a") != "x" {
+		t.Error("the copy on t1 is gone")
+	}
+	// Read by a full scan, the new copy is verified, and the next run moves the old one to the trash.
+	b.scan(true)
+	if items := run(); len(items) != 1 || items[0].From != "t1" || items[0].Outcome != OutcomeMoved {
+		t.Fatalf("%+v", items)
+	}
+	if got := copies(); got != "t2 user ok 1" {
+		t.Errorf("the copies after a full scan: %s", got)
 	}
 }
 

@@ -4,7 +4,8 @@
    again, and a user acting on any disk at any moment (specs.md §14, §15.12, §17, §20).
 
    What it keeps: files, their copies on disks (by object, which stands for an inode with its creation time), the
-   content each holds (a version number) and its change count (what size, modification and change time say), the
+   content each holds (a version number), its change count (what size, modification and change time say) and the count
+   of what moved its change time alone (a rename, or a write that kept the size and the dates), the
    names of each disk as the kernel shows them and as they would survive a power cut, the catalog's rows (files,
    copies, jobs, the ops journal), the parts in <workdir>/tmp/ and the entries of <workdir>/trash/, and the mount
    check. What it leaves out: names and paths (one logical path a file), renames and folders, NTFS, the bytes of the
@@ -31,7 +32,7 @@ CONSTANTS
     Waits,      \* TRUE: a decision may wait, as for a debounce or settle (specs.md §15.12, Due); FALSE for liveness
     Grace,      \* TRUE: a plan may find a missing disk past health.missing_grace (specs.md §13.4, §18)
     Fixes,      \* the remedies proposed for the flaws it found and still open, by name (README.md); {} is specs.md as it is
-    UserActs    \* what a user may do: some of "modify", "replace", "delete", "create"
+    UserActs    \* what a user may do: some of "modify", "replace", "delete", "create", "rewrite"
 
 Disks == 1..NDisks
 Files == 1..NFiles
@@ -45,7 +46,7 @@ ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3
        /\ LinkDisks \subseteq Disks
        /\ \A f \in Files : \A a, b \in Start[f] : a # b => Phys[a] # Phys[b]
        /\ Fixes = {}    \* no flaw open: each remedy is specs.md's, and the model's whatever Fixes says
-       /\ UserActs \subseteq {"modify", "replace", "delete", "create"}
+       /\ UserActs \subseteq {"modify", "replace", "delete", "create", "rewrite"}
 
 (* Names on a disk: a file's logical path below <root>/, a part <op-id>.part in <workdir>/tmp/,
    and an entry <date>/<op-id>/<logical path> in <workdir>/trash/ (specs.md §6, §14.2, §17). *)
@@ -59,26 +60,31 @@ Size(v) == v % 2    \* versions 1 and 3 share a size, 2 another: a size alone ca
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 
 (* A copy's row (specs.md §9): st is "none" for no row; obj its file_key (inode and creation time); gen what
-   size, mtime and ctime say; verified its verified_ns; by its created_by; gone its gone_kind; seen its
-   first_seen_ns, as a clock that ticks. gver is no column: what the copy held when its row was written, for
-   the invariants only. *)
-NoRow == [st |-> "none", obj |-> 0, gen |-> 0, gver |-> 0, verified |-> FALSE, by |-> "none", gone |-> "no", seen |-> 0]
+   size, mtime and ctime say; cg what the ctime alone says; verified its verified_ns; by its created_by; gone its
+   gone_kind; seen its first_seen_ns, as a clock that ticks. gver and doubt are no columns, for the invariants only:
+   what the copy held when its row was written, and that a reprise recorded it unverified as its change time may be a
+   write's (specs.md §14.2). *)
+NoRow == [st |-> "none", obj |-> 0, gen |-> 0, cg |-> 0, gver |-> 0, verified |-> FALSE, by |-> "none", gone |-> "no", seen |-> 0,
+          doubt |-> FALSE]
 (* An operation of ops (specs.md §9): kind, disk, file (path), file_key, state, the part it names (path2 of a create:
    the op whose id names the part, as a part resumed keeps its name) and the trash entry's reason. *)
 NoOp == [k |-> "none", d |-> 0, f |-> 0, key |-> 0, st |-> "none", part |-> 0, reason |-> "none"]
 (* A replicate job (specs.md §14.1): src_disk, the part it owns, the chunk hashes recorded (hver: the version they
-   describe), the whole-file hash once verified (whash), and running once its operation is journaled. *)
-NoRJob == [on |-> FALSE, src |-> 0, part |-> 0, hver |-> 0, whash |-> 0, running |-> FALSE]
+   describe), the whole-file hash once verified (whash) with the part's change time then (vcg, of part_look), the
+   change time its copy had right after the rename of operation pop (pcg, placed; pop 0 for none), and running once its
+   operation is journaled. *)
+NoRJob == [on |-> FALSE, src |-> 0, part |-> 0, hver |-> 0, whash |-> 0, vcg |-> 0, pop |-> 0, pcg |-> 0, running |-> FALSE]
 (* A trash job (specs.md §15.12): src_disk and reason. *)
 NoTJob == [on |-> FALSE, src |-> 0, reason |-> "none"]
 (* What this pass's look found of a copy edited or replaced: the changed copies of §15.4. *)
-NoLook == [obj |-> 0, gen |-> 0]
+NoLook == [obj |-> 0, gen |-> 0, cg |-> 0]
 NoLooks == [f \in Files |-> [d \in Disks |-> NoLook]]
 Idle == [ph |-> "idle"]
 NoSess == [d \in Disks |-> 0]
 
 VARIABLES
-    objs,    \* the files on the disks: [d, ver (content now), dver (content a power cut leaves), gen, atoll (a part Atoll made)]
+    objs,    \* the files on the disks: [d, ver (content now), dver (content a power cut leaves), gen, cg, atoll (a part Atoll
+             \* made)]
     vol,     \* [Disks -> [Names -> object or 0]]: the names as the kernel shows them
     dur,     \* [Disks -> [Names -> object or 0]]: the names as they would survive a power cut
     dstat,   \* [Disks -> {"up", "gone"}]: gone answers EIO, or is an empty mount point
@@ -140,7 +146,7 @@ NextIn(d, S) == LET c == {e \in S : e > d} IN IF c = {} THEN NDisks + 1 ELSE Min
 (* The start: each file of Start at its level or below, every copy a user's, verified. *)
 
 Init ==
-    /\ objs = [o \in 1..NPairs |-> [d |-> PD(o), ver |-> PF(o), dver |-> PF(o), gen |-> 0, atoll |-> FALSE]]
+    /\ objs = [o \in 1..NPairs |-> [d |-> PD(o), ver |-> PF(o), dver |-> PF(o), gen |-> 0, cg |-> 0, atoll |-> FALSE]]
     /\ vol = [d \in Disks |-> [n \in Names |-> IF n \in Files /\ d \in Start[n] THEN ObjOf(n, d) ELSE 0]]
     /\ dur = vol
     /\ dstat = [d \in Disks |-> "up"]
@@ -148,7 +154,8 @@ Init ==
     /\ cfile = [f \in Files |-> [on |-> TRUE, ver |-> f, size |-> Size(f), conflict |-> FALSE]]
     /\ crow = [f \in Files |-> [d \in Disks |->
             IF d \in Start[f]
-            THEN [st |-> "ok", obj |-> ObjOf(f, d), gen |-> 0, gver |-> f, verified |-> TRUE, by |-> "user", gone |-> "no", seen |-> 0]
+            THEN [st |-> "ok", obj |-> ObjOf(f, d), gen |-> 0, cg |-> 0, gver |-> f, verified |-> TRUE, by |-> "user", gone |-> "no",
+                  seen |-> 0, doubt |-> FALSE]
             ELSE NoRow]]
     /\ cdisk = [d \in Disks |-> "online"]
     /\ ops = [p \in OpIds |-> NoOp]
@@ -190,6 +197,14 @@ UserModify(f, d) ==
            v == nver + 1
        IN UserAct(d, vol, [objs EXCEPT ![o].ver = v, ![o].dver = v, ![o].gen = @ + 1], objs[o].ver, f, v, FALSE)
 
+(* §14.2, §15.4: an edit in place by a program that keeps the size and the dates, or sets them back, as a tagger may:
+   same inode, new content, and only the change time moves. *)
+UserRewrite(f, d) ==
+    /\ "rewrite" \in UserActs /\ cnt.user < MaxUser /\ Up(d) /\ vol[d][M(f)] # 0
+    /\ LET o == vol[d][M(f)]
+           v == nver + 1
+       IN UserAct(d, vol, [objs EXCEPT ![o].ver = v, ![o].dver = v, ![o].cg = @ + 1], objs[o].ver, f, v, FALSE)
+
 (* §15.2, §15.4: an atomic save, rename(tmp, file), as through mergerfs on the first branch: a new file at the name. *)
 UserReplace(f, d) ==
     /\ "replace" \in UserActs /\ cnt.user < MaxUser /\ Up(d) /\ vol[d][M(f)] # 0
@@ -197,7 +212,7 @@ UserReplace(f, d) ==
            n == Len(objs) + 1
            v == nver + 1
        IN UserAct(d, [vol EXCEPT ![d][M(f)] = n],
-                  Append(objs, [d |-> d, ver |-> v, dver |-> v, gen |-> 0, atoll |-> FALSE]),
+                  Append(objs, [d |-> d, ver |-> v, dver |-> v, gen |-> 0, cg |-> 0, atoll |-> FALSE]),
                   objs[o].ver, f, v, FALSE)
 
 (* §15.5: a deletion directly on one disk, or through mergerfs on each branch, one disk at a time. *)
@@ -212,7 +227,7 @@ UserCreate(f, d) ==
     /\ LET n == Len(objs) + 1
            v == nver + 1
        IN UserAct(d, [vol EXCEPT ![d][M(f)] = n],
-                  Append(objs, [d |-> d, ver |-> v, dver |-> v, gen |-> 0, atoll |-> FALSE]),
+                  Append(objs, [d |-> d, ver |-> v, dver |-> v, gen |-> 0, cg |-> 0, atoll |-> FALSE]),
                   0, f, v, FALSE)
 
 (* §10, invariant 4: a disk lost, as a USB drop whose mount answers EIO, or a mount that failed and left its mount
@@ -250,7 +265,7 @@ PowerCut ==
     /\ UNCHANGED <<dur, dstat, mgen, cat, nver, ghost>>
 
 World ==
-    \/ \E f \in Files, d \in Disks : UserModify(f, d) \/ UserReplace(f, d) \/ UserDelete(f, d) \/ UserCreate(f, d)
+    \/ \E f \in Files, d \in Disks : UserModify(f, d) \/ UserRewrite(f, d) \/ UserReplace(f, d) \/ UserDelete(f, d) \/ UserCreate(f, d)
     \/ \E d \in Disks : Drop(d) \/ Return(d)
     \/ Crash
     \/ PowerCut
@@ -303,9 +318,11 @@ RepCreate(d, p) ==
         v1 == IF tg = "same"
               THEN IF pt = "same" THEN [v0 EXCEPT ![T(q)] = 0] ELSE v0
               ELSE IF ~owned /\ (pt = "same" \/ (key = 0 /\ pt # "absent")) THEN [v0 EXCEPT ![T(q)] = 0] ELSE v0
+        \* The name in tmp/ that goes moves the copy's change time, as an unlink does.
+        objs1 == IF tg = "same" /\ pt = "same" THEN [objs EXCEPT ![key].cg = @ + 1] ELSE objs
     IN /\ vol' = [vol EXCEPT ![d] = v1]
        /\ dur' = [dur EXCEPT ![d][M(f)] = v1[M(f)], ![d][T(q)] = v1[T(q)]]
-       /\ objs' = SyncObjs(objs, {v1[M(f)], v1[T(q)]} \ {0})
+       /\ objs' = SyncObjs(objs1, {v1[M(f)], v1[T(q)]} \ {0})
        /\ pc' = [ph |-> "repcommit", d |-> d, p |-> p, out |-> IF tg = "same" THEN "done" ELSE "undone", keep |-> pt = "same"]
 
 RepriseOp ==
@@ -344,19 +361,20 @@ TrashFinish(d, p) ==
    the file's hash when it had none, the source verified, the job gone. The part's gen is 0: the row says the copy is
    untouched since it was verified, so that a write into it once its name is in the library, before the commit or
    while Atoll is down, reads as an edit at the next look (flaw 1 of README.md, fixed); its reprise takes it from what
-   the job recorded, never from what it finds. The model's gen stands for size, times and change time at once, and the
-   rename and the look right after it are one step, so the change time the code takes from that look, or from a reprise's
-   when nothing else moved, is the part's here. A reprise that finds no job left for the part records the copy as
-   internal/catalog FinishCreate does: ok, created_by atoll, never verified, when the file still has a row, with what it
-   finds; and nothing when it has none. *)
-CreateFinish(d, p) ==
+   the job recorded, never from what it finds. The model's gen stands for size, times and change time at once, and cg
+   for what moves the change time alone, the rename's and a write's that keeps the size and the dates: cgRow is the
+   change time the row takes, which the commit takes from the look right after the rename, and a reprise as RepriseRow
+   says. doubt is a copy a reprise records unverified, as its change time may be a write's: the source and the file's
+   hash stand. A reprise that finds no job left for the part records the copy as internal/catalog FinishCreate does: ok,
+   created_by atoll, never verified, when the file still has a row, with what it finds; and nothing when it has none. *)
+CreateFinish(d, p, cgRow, doubt) ==
     LET f == ops[p].f
         key == ops[p].key
         job == rjob[f][d]
         owned == job.on /\ job.part = ops[p].part
         verified == owned /\ job.whash # 0 /\ (cfile[f].ver = 0 \/ cfile[f].ver = job.whash)
-        newRow == [st |-> "ok", obj |-> key, gen |-> IF owned THEN 0 ELSE objs[key].gen, gver |-> objs[key].ver,
-                   verified |-> verified, by |-> "atoll", gone |-> "no", seen |-> tick + 1]
+        newRow == [st |-> "ok", obj |-> key, gen |-> IF owned THEN 0 ELSE objs[key].gen, cg |-> cgRow, gver |-> objs[key].ver,
+                   verified |-> verified /\ ~doubt, by |-> "atoll", gone |-> "no", seen |-> tick + 1, doubt |-> doubt]
     IN /\ ops' = [ops EXCEPT ![p].st = "done"]
        /\ crow' = IF ~cfile[f].on THEN crow
                   ELSE [crow EXCEPT ![f] = [e \in Disks |->
@@ -368,14 +386,32 @@ CreateFinish(d, p) ==
        /\ tick' = IF cfile[f].on THEN tick + 1 ELSE tick
        /\ rjob' = IF owned THEN [rjob EXCEPT ![f][d] = NoRJob] ELSE rjob
 
-(* §14.2: undone; its job back in the queue, keeping its part when that is still there (catalog.Requeue). *)
+(* §14.2 Reprise: the change time the row of a copy found at its name takes, and whether it is recorded unverified. The
+   change time found is compared with the one the job recorded right after the rename of this operation (placed):
+   another is a write since, and the row is the part's, which the next look finds moved; with none recorded, the crash
+   having come between the rename and that record, the row takes what the commit would, and the copy is unverified when
+   that change time is not the part's (the maintainer, 2026-11-20). With no job, what it finds. *)
+RepriseRow(d, p) ==
+    LET f == ops[p].f
+        key == ops[p].key
+        job == rjob[f][d]
+        owned == job.on /\ job.part = ops[p].part
+        found == objs[key].cg
+        nothingElse == objs[key].gen = 0
+    IN CASE ~owned -> [cg |-> found, doubt |-> FALSE]
+         [] job.pop = p -> [cg |-> IF found = job.pcg /\ nothingElse THEN found ELSE job.vcg, doubt |-> FALSE]
+         [] OTHER -> [cg |-> IF nothingElse THEN found ELSE job.vcg, doubt |-> found # job.vcg]
+
+(* §14.2: undone; its job back in the queue, keeping its part when that is still there (catalog.Requeue). What it
+   recorded of its rename is of this operation alone. *)
 CreateUndo(d, p, keep) ==
     LET f == ops[p].f
         owned == rjob[f][d].on /\ rjob[f][d].part = ops[p].part
     IN /\ ops' = [ops EXCEPT ![p].st = "undone"]
        /\ rjob' = IF ~owned THEN rjob
-                  ELSE [rjob EXCEPT ![f][d] = [@ EXCEPT !.running = FALSE,
-                           !.part = IF keep THEN @ ELSE 0, !.hver = IF keep THEN @ ELSE 0, !.whash = IF keep THEN @ ELSE 0]]
+                  ELSE [rjob EXCEPT ![f][d] = [@ EXCEPT !.running = FALSE, !.pop = 0, !.pcg = 0,
+                           !.part = IF keep THEN @ ELSE 0, !.hver = IF keep THEN @ ELSE 0, !.whash = IF keep THEN @ ELSE 0,
+                           !.vcg = IF keep THEN @ ELSE 0]]
 
 RepriseCommit ==
     /\ pc.ph = "repcommit"
@@ -389,7 +425,7 @@ RepriseCommit ==
                ELSE /\ ops' = [ops EXCEPT ![p].st = "undone"]
                     /\ UNCHANGED <<cfile, crow, rjob, tjob, tick, ghost>>
           ELSE IF pc.out = "done"
-               THEN /\ CreateFinish(d, p)
+               THEN /\ CreateFinish(d, p, RepriseRow(d, p).cg, RepriseRow(d, p).doubt)
                     /\ ghost' = Flag(ghost, "inv7", ~Durable(d, M(ops[pc.p].f), ops[pc.p].key))
                     /\ UNCHANGED tjob
                ELSE /\ CreateUndo(d, p, pc.keep)
@@ -433,7 +469,8 @@ WalkStart ==
     /\ LET d == pc.d IN
        pc' = [ph |-> "walkend", d |-> d, real |-> Up(d), mg |-> mgen[d],
               snap |-> [f \in Files |-> IF Up(d) /\ vol[d][M(f)] # 0
-                                        THEN [obj |-> vol[d][M(f)], gen |-> objs[vol[d][M(f)]].gen] ELSE NoLook],
+                                        THEN [obj |-> vol[d][M(f)], gen |-> objs[vol[d][M(f)]].gen, cg |-> objs[vol[d][M(f)]].cg]
+                                        ELSE NoLook],
               own |-> IF Up(d) THEN {vol[d][n] : n \in WorkNames} \ {0} ELSE {}]
     /\ UNCHANGED <<phys, cat, sess, look, cnt, nver, ghost>>
 
@@ -441,7 +478,7 @@ WalkStart ==
 Verdict(f, d, s, own) ==
     LET r == crow[f][d] IN
     IF PlannedAt(d, f) THEN "unknown"
-    ELSE IF s.obj = r.obj /\ s.gen = r.gen THEN "there"
+    ELSE IF s.obj = r.obj /\ s.gen = r.gen /\ s.cg = r.cg THEN "there"
     ELSE IF s.obj = r.obj THEN "edited"
     ELSE IF s.obj # 0 THEN "replaced"
     ELSE IF r.obj \in own THEN "own"
@@ -454,8 +491,8 @@ WalkCommit(d) ==
         own == pc.own
         isNew(f) == crow[f][d].st = "none" /\ s[f].obj # 0 /\ ~PlannedAt(d, f)
         anyNew == \E f \in Files : isNew(f)
-        newRow(f) == [st |-> "ok", obj |-> s[f].obj, gen |-> s[f].gen, gver |-> objs[s[f].obj].ver, verified |-> FALSE,
-                      by |-> "user", gone |-> "no", seen |-> tick + 1]
+        newRow(f) == [st |-> "ok", obj |-> s[f].obj, gen |-> s[f].gen, cg |-> s[f].cg, gver |-> objs[s[f].obj].ver,
+                      verified |-> FALSE, by |-> "user", gone |-> "no", seen |-> tick + 1, doubt |-> FALSE]
         v(f) == Verdict(f, d, s[f], own)
     IN /\ crow' = [f \in Files |-> [e \in Disks |->
               IF e # d THEN crow[f][e]
@@ -566,7 +603,8 @@ ModifyWaits(f) ==
     \/ \E d \in Copies(f) : crow[f][d].gone # "no"
     \/ \E d \in Disks : rjob[f][d].running
     \/ \E d \in Disks : PlannedAt(d, f) /\ crow[f][d].st # "none"
-    \/ \E d \in Changed(f) : ~(Ok(d) /\ vol[d][M(f)] = look[f][d].obj /\ objs[look[f][d].obj].gen = look[f][d].gen)
+    \/ \E d \in Changed(f) : ~(Ok(d) /\ vol[d][M(f)] = look[f][d].obj /\ objs[look[f][d].obj].gen = look[f][d].gen
+                               /\ objs[look[f][d].obj].cg = look[f][d].cg)
 
 ModifyFile ==
     /\ pc.ph = "modify" /\ pc.f <= NFiles
@@ -575,8 +613,8 @@ ModifyFile ==
            vs == {objs[look[f][d].obj].ver : d \in C}
            v == CHOOSE x \in vs : TRUE
            conflict == (\E d \in C : crow[f][d].st = "stale") \/ Cardinality(vs) > 1
-           taken(d) == [crow[f][d] EXCEPT !.obj = look[f][d].obj, !.gen = look[f][d].gen,
-                          !.gver = objs[look[f][d].obj].ver, !.verified = TRUE,
+           taken(d) == [crow[f][d] EXCEPT !.obj = look[f][d].obj, !.gen = look[f][d].gen, !.cg = look[f][d].cg,
+                          !.gver = objs[look[f][d].obj].ver, !.verified = TRUE, !.doubt = FALSE,
                           !.seen = IF look[f][d].obj # crow[f][d].obj THEN tick + 1 ELSE @]
        IN /\ cfile[f].on /\ C # {} /\ ~ModifyWaits(f)
           /\ IF conflict
@@ -668,7 +706,7 @@ TrashMove ==
            f == ops[p].f
            d == ops[p].d
            key == ops[p].key
-           untouched == vol[d][M(f)] = key /\ key # 0 /\ objs[key].gen = crow[f][d].gen
+           untouched == vol[d][M(f)] = key /\ key # 0 /\ objs[key].gen = crow[f][d].gen /\ objs[key].cg = crow[f][d].cg
            replacing == ops[p].reason = "deleted" /\ objs[key].ver = ghost.latest[f] /\ ghost.latest[f] \notin ghost.udel
        IN /\ Ok(d)
           /\ IF ~untouched
@@ -829,16 +867,17 @@ CopyPick ==
           THEN \* no longer a source (§14.1): the job goes with its pending copy
                /\ EndJob(f, d) /\ pc' = nexti
                /\ UNCHANGED <<cdisk, ops, nextOp, tjob, tick, sess, look>>
-          ELSE IF vol[s][M(f)] # r.obj \/ objs[r.obj].gen # r.gen \/ nextOp > MaxOps
+          ELSE IF vol[s][M(f)] # r.obj \/ objs[r.obj].gen # r.gen \/ objs[r.obj].cg # r.cg \/ nextOp > MaxOps
           THEN \* the source no longer what its row says: changed, nothing journaled, it waits settle
                /\ pc' = nexti /\ UNCHANGED <<cat, sess, look>>
-          ELSE \* journaled: the operation create, planned; the job running and owning its part
+          ELSE \* journaled: the operation create, planned; the job running and owning its part. What an earlier
+               \* operation recorded of its rename is not this one's.
                LET q == IF job.part # 0 THEN job.part ELSE nextOp IN
                /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "create", d |-> d, f |-> f, key |-> 0, st |-> "planned",
                                                   part |-> q, reason |-> "none"]]
                /\ nextOp' = nextOp + 1
-               /\ rjob' = [rjob EXCEPT ![f][d].running = TRUE, ![f][d].part = q]
-               /\ pc' = [ph |-> "cstep", i |-> i, p |-> nextOp, s |-> "journaled", o |-> 0]
+               /\ rjob' = [rjob EXCEPT ![f][d].running = TRUE, ![f][d].part = q, ![f][d].pop = 0, ![f][d].pcg = 0]
+               /\ pc' = [ph |-> "cstep", i |-> i, p |-> nextOp, s |-> "journaled", o |-> 0, cg |-> 0]
                /\ UNCHANGED <<cfile, crow, cdisk, tjob, tick, sess, look>>
     /\ UNCHANGED <<phys, cnt, nver, ghost>>
 
@@ -854,7 +893,7 @@ CopyPart ==
           /\ IF vol[d][T(q)] # 0
              THEN /\ pc' = [pc EXCEPT !.s = "partmade", !.o = vol[d][T(q)]]
                   /\ UNCHANGED <<objs, vol, dur>>
-             ELSE /\ objs' = Append(objs, [d |-> d, ver |-> 0, dver |-> 0, gen |-> 0, atoll |-> TRUE])
+             ELSE /\ objs' = Append(objs, [d |-> d, ver |-> 0, dver |-> 0, gen |-> 0, cg |-> 0, atoll |-> TRUE])
                   /\ vol' = [vol EXCEPT ![d][T(q)] = n]
                   /\ dur' = [dur EXCEPT ![d][T(q)] = n]
                   /\ pc' = [pc EXCEPT !.s = "partmade", !.o = n]
@@ -905,7 +944,7 @@ CopyRecheck ==
            s == rjob[f][d].src
            r == crow[f][s]
        IN /\ Ok(d) /\ Ok(s)
-          /\ IF vol[s][M(f)] = r.obj /\ objs[r.obj].gen = r.gen
+          /\ IF vol[s][M(f)] = r.obj /\ objs[r.obj].gen = r.gen /\ objs[r.obj].cg = r.cg
              THEN /\ objs' = SyncObjs(objs, {pc.o})
                   /\ pc' = [pc EXCEPT !.s = "synced"]
                   /\ UNCHANGED <<vol, ops, rjob>>
@@ -917,7 +956,8 @@ CopyRecheck ==
     /\ UNCHANGED <<dur, dstat, mgen, cfile, crow, cdisk, nextOp, tjob, tick, sess, look, cnt, nver, ghost>>
 
 (* The re-read without cache against the chunk hashes, which gives the whole-file hash, recorded before anything is
-   renamed (verified); one that is not the file's hash drops the copy as changed. *)
+   renamed with what the part is then, its change time among it (part_look; verified); one that is not the file's hash
+   drops the copy as changed. *)
 CopyVerify ==
     /\ pc.ph = "cstep" /\ pc.s = "synced"
     /\ LET p == pc.p
@@ -926,7 +966,7 @@ CopyVerify ==
            h == objs[pc.o].dver
        IN /\ Ok(d)
           /\ IF h = rjob[f][d].hver /\ (cfile[f].ver = 0 \/ cfile[f].ver = h)
-             THEN /\ rjob' = [rjob EXCEPT ![f][d].whash = h]
+             THEN /\ rjob' = [rjob EXCEPT ![f][d].whash = h, ![f][d].vcg = objs[pc.o].cg]
                   /\ pc' = [pc EXCEPT !.s = "verified"]
                   /\ UNCHANGED <<vol, ops>>
              ELSE /\ vol' = [vol EXCEPT ![d][T(ops[p].part)] = 0]
@@ -935,15 +975,18 @@ CopyVerify ==
                   /\ pc' = [ph |-> "copy", i |-> pc.i + 1]
     /\ UNCHANGED <<objs, dur, dstat, mgen, cfile, crow, cdisk, nextOp, tjob, tick, sess, look, cnt, nver, ghost>>
 
-(* The target resolved, the rename without replacing anything: a path taken since the look ends as conflict, with
-   nothing overwritten (§14). Without RENAME_NOREPLACE: link, fsync of the file and of the target folder, unlink.
-   Write 1 of §6.1, or write 2 for the copy that takes the place of a stale one. *)
+(* The target resolved, the rename without replacing anything, which moves the copy's change time: a path taken since
+   the look ends as conflict, with nothing overwritten (§14). Then a look at the copy, in the same step: what it finds of
+   the change time is the row's. Without RENAME_NOREPLACE: link, fsync of the file and of the target folder, unlink,
+   and the look after the unlink, so that a write that keeps the size and the dates between the link and that look is
+   the limit of §14.2 there. Write 1 of §6.1, or write 2 for the copy that takes the place of a stale one. *)
 CopyRename ==
     /\ pc.ph = "cstep" /\ pc.s = "verified"
     /\ LET p == pc.p
            f == ops[p].f
            d == ops[p].d
            q == ops[p].part
+           objs1 == [objs EXCEPT ![pc.o].cg = @ + 1]
        IN /\ Ok(d)
           /\ IF vol[d][M(f)] # 0
              THEN /\ ops' = [ops EXCEPT ![p].st = "undone"]
@@ -952,11 +995,13 @@ CopyRename ==
                   /\ UNCHANGED <<vol, dur, objs>>
              ELSE IF d \in LinkDisks
              THEN /\ vol' = [vol EXCEPT ![d][M(f)] = pc.o]
+                  /\ objs' = objs1
                   /\ pc' = [pc EXCEPT !.s = "linked"]
-                  /\ UNCHANGED <<objs, dur, ops, cfile, crow, rjob>>
+                  /\ UNCHANGED <<dur, ops, cfile, crow, rjob>>
              ELSE /\ vol' = [vol EXCEPT ![d][M(f)] = pc.o, ![d][T(q)] = 0]
-                  /\ pc' = [pc EXCEPT !.s = "moved"]
-                  /\ UNCHANGED <<objs, dur, ops, cfile, crow, rjob>>
+                  /\ objs' = objs1
+                  /\ pc' = [pc EXCEPT !.s = "moved", !.cg = objs1[pc.o].cg]
+                  /\ UNCHANGED <<dur, ops, cfile, crow, rjob>>
     /\ UNCHANGED <<dstat, mgen, cdisk, nextOp, tjob, tick, sess, look, cnt, nver, ghost>>
 
 CopyUnlink ==
@@ -967,28 +1012,41 @@ CopyUnlink ==
        IN /\ Ok(d)
           /\ dur' = [dur EXCEPT ![d][M(f)] = vol[d][M(f)]]
           /\ vol' = [vol EXCEPT ![d][T(ops[p].part)] = 0]
-    /\ pc' = [pc EXCEPT !.s = "moved"]
+    /\ pc' = [pc EXCEPT !.s = "moved", !.cg = objs[pc.o].cg]
     /\ UNCHANGED <<objs, dstat, mgen, cat, sess, look, cnt, nver, ghost>>
+
+(* The change time the look right after the rename found, recorded in the job in a commit of its own, with the
+   operation's id (placed): a catalog write, which needs no disk (the maintainer, 2026-11-20). A crash before it, at
+   moved, leaves none for the reprise. *)
+CopyRecord ==
+    /\ pc.ph = "cstep" /\ pc.s = "moved"
+    /\ LET p == pc.p
+           f == ops[p].f
+           d == ops[p].d
+       IN rjob' = [rjob EXCEPT ![f][d].pop = p, ![f][d].pcg = pc.cg]
+    /\ pc' = [pc EXCEPT !.s = "placed"]
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, ops, nextOp, tjob, tick, sess, look, cnt, nver, ghost>>
 
 (* fsync of the file at its new name, then of the target folder (target-synced); fsync of the tmp folder
    (source-synced). *)
 CopySync ==
-    /\ pc.ph = "cstep" /\ pc.s \in {"moved", "tsynced"}
+    /\ pc.ph = "cstep" /\ pc.s \in {"placed", "tsynced"}
     /\ LET p == pc.p
            d == ops[p].d
-           n == IF pc.s = "moved" THEN M(ops[p].f) ELSE T(ops[p].part)
+           n == IF pc.s = "placed" THEN M(ops[p].f) ELSE T(ops[p].part)
        IN /\ Ok(d)
           /\ dur' = [dur EXCEPT ![d][n] = vol[d][n]]
           /\ objs' = SyncObjs(objs, {vol[d][n]} \ {0})
-    /\ pc' = [pc EXCEPT !.s = IF pc.s = "moved" THEN "tsynced" ELSE "ssynced"]
+    /\ pc' = [pc EXCEPT !.s = IF pc.s = "placed" THEN "tsynced" ELSE "ssynced"]
     /\ UNCHANGED <<vol, dstat, mgen, cat, sess, look, cnt, nver, ghost>>
 
-(* The catalog commit: a replica exists only now (invariant 7). *)
+(* The catalog commit: a replica exists only now (invariant 7). The row takes the change time of the look right after
+   the rename. *)
 CopyCommit ==
     /\ pc.ph = "cstep" /\ pc.s = "ssynced"
     /\ LET p == pc.p
            d == ops[p].d
-       IN /\ CreateFinish(d, p)
+       IN /\ CreateFinish(d, p, pc.cg, FALSE)
           /\ ghost' = Flag(ghost, "inv7", ~Durable(d, M(ops[p].f), pc.o) \/ objs[pc.o].dver # objs[pc.o].ver)
     /\ pc' = [ph |-> "copy", i |-> pc.i + 1]
     /\ UNCHANGED <<phys, cdisk, nextOp, tjob, sess, look, cnt, nver>>
@@ -1011,7 +1069,7 @@ Atoll ==
     \/ TrashPick \/ TrashMove \/ TrashLinkSync \/ TrashUnlink \/ TrashSync \/ TrashCommit \/ TrashLost
     \/ PlanStep
     \/ CopyPick \/ CopyPart \/ CopyKey \/ CopySourceLost \/ CopyData \/ CopyRecheck \/ CopyVerify
-    \/ CopyRename \/ CopyUnlink \/ CopySync \/ CopyCommit \/ CopyLost
+    \/ CopyRename \/ CopyUnlink \/ CopyRecord \/ CopySync \/ CopyCommit \/ CopyLost
 
 Next == Atoll \/ World
 
@@ -1074,13 +1132,19 @@ Inv12_JournalFirst ==
 Inv13_OnePhysicalDisk == "inv13" \notin ghost.flags
 
 (* A replica is a replica: a copy Atoll made, that the catalog calls ok and that nobody touched since its row was
-   written, holds the version the catalog says is current (G2: a file with N replicas survives N disks). *)
+   written, holds the version the catalog says is current (G2: a file with N replicas survives N disks). But for one a
+   reprise recorded unverified, as nothing told a write that moved only its change time from the rename's (doubt): the
+   limit of §14.2 that the maintainer accepted on 2026-11-20, whose write a later read finds a conflict. *)
 ReplicaInSync ==
     \A f \in Files, d \in Disks : LET r == crow[f][d] IN
         (/\ cfile[f].on /\ ~cfile[f].conflict /\ cfile[f].ver # 0
-         /\ r.st = "ok" /\ r.by = "atoll" /\ Up(d)
-         /\ vol[d][M(f)] = r.obj /\ objs[r.obj].gen = r.gen)
+         /\ r.st = "ok" /\ r.by = "atoll" /\ Up(d) /\ ~r.doubt
+         /\ vol[d][M(f)] = r.obj /\ objs[r.obj].gen = r.gen /\ objs[r.obj].cg = r.cg)
         => objs[r.obj].ver = cfile[f].ver
+
+(* A copy a reprise recorded in doubt is never vouched for: it is unverified until a read takes it again (§14.2). *)
+DoubtUnverified ==
+    \A f \in Files, d \in Disks : crow[f][d].doubt => ~crow[f][d].verified
 
 TypeOK ==
     /\ dstat \in [Disks -> {"up", "gone"}]

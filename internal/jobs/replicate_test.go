@@ -702,7 +702,10 @@ func TestChunksAreRecordedAsTheCopyGoes(t *testing.T) {
 }
 
 // A walk that meets an operation create the reprise could not conclude leaves the copy at its target to that
-// reprise: it is not a file of the user's, and the job and its pending copy stay (specs.md §17.2).
+// reprise: it is not a file of the user's, and the job and its pending copy stay (specs.md §17.2). Its crash came between
+// the link and the record of the change time the copy had after the unlink: the reprise that finishes it records the copy
+// unverified, as the change time it finds, past the part's, may be a write's, and a full scan then verifies it
+// (specs.md §14.2).
 func TestAWalkLeavesAPlannedCopyAlone(t *testing.T) {
 	b := replicatePool(t)
 	refused := func(call, name string) error {
@@ -724,9 +727,14 @@ func TestAWalkLeavesAPlannedCopyAlone(t *testing.T) {
 		t.Errorf("%d of the job and its pending copy left", got)
 	}
 	b.fail[b.dirs["t2"]] = refused
+	pastTick()
 	b.replicate("a", ReplicateOptions{Now: true})
+	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND state = 'ok' AND verified_ns IS NULL"); got != 1 {
+		t.Errorf("%d copies unverified", got)
+	}
+	b.scan(true)
 	if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 't2' AND state = 'ok' AND verified_ns IS NOT NULL"); got != 1 {
-		t.Errorf("%d copies verified", got)
+		t.Errorf("%d copies verified after a full scan", got)
 	}
 }
 

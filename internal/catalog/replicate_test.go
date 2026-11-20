@@ -144,11 +144,15 @@ func TestFinishCreate(t *testing.T) {
 		known    []byte
 		verified int
 		gone     bool
+		// unverified is a copy a reprise found whose change time may be a write's: it alone is not verified.
+		unverified bool
 	}{
-		{"a file with no hash", nil, 1, false},
-		{"a file with that hash", bytes.Repeat([]byte{9}, 32), 1, false},
-		{"a file with another hash", bytes.Repeat([]byte{8}, 32), 0, false},
-		{"a pending copy gone meanwhile", nil, 1, true},
+		{"a file with no hash", nil, 1, false, false},
+		{"a file with that hash", bytes.Repeat([]byte{9}, 32), 1, false, false},
+		{"a file with another hash", bytes.Repeat([]byte{8}, 32), 0, false, false},
+		{"a pending copy gone meanwhile", nil, 1, true, false},
+		{"a copy recorded unverified, of a file with no hash", nil, 1, false, true},
+		{"a copy recorded unverified, of a file with that hash", bytes.Repeat([]byte{9}, 32), 1, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, job := newReplicateDB(t)
@@ -167,14 +171,23 @@ func TestFinishCreate(t *testing.T) {
 			}
 			// What a reprise reads back: the hash, and what the part was then.
 			if back, err := JobOfPart(t.Context(), b.sql(), "u2", job.Part); err != nil || back == nil || back.Look == nil || *back.Look.BtimeNS != 3 ||
-				back.Look.CtimeNS != 77 || back.Look.UID != 5 || !bytes.Equal(back.Hash, job.Hash) {
+				back.Look.CtimeNS != 77 || back.Look.UID != 5 || !bytes.Equal(back.Hash, job.Hash) || back.Placed != nil {
+				t.Fatalf("%+v, %v", back, err)
+			}
+			// The change time right after the rename, in a commit of its own: a reprise reads it back for its operation
+			// alone.
+			if err := RecordPlaced(t.Context(), b.sql(), job, op, 99); err != nil {
+				t.Fatal(err)
+			}
+			if back, err := JobOfPart(t.Context(), b.sql(), "u2", job.Part); err != nil || back == nil || back.PlacedBy(op.ID) == nil ||
+				*back.PlacedBy(op.ID) != 99 || back.PlacedBy(op.ID+1) != nil || back.Look == nil || !bytes.Equal(back.Hash, job.Hash) {
 				t.Fatalf("%+v, %v", back, err)
 			}
 			if tc.gone {
 				b.exec("DELETE FROM copies WHERE disk_id = 'u2'")
 			}
 			made := &NewCopy{Path: "a", Size: 1, MtimeNS: 1, CtimeNS: 77, FileKey: "88", Nlink: 1, Mode: 0o640}
-			if err := FinishCreate(t.Context(), b.sql(), op, job, made, 60); err != nil {
+			if err := FinishCreate(t.Context(), b.sql(), op, job, made, 60, tc.unverified); err != nil {
 				t.Fatal(err)
 			}
 			if got := b.count("SELECT count(*) FROM ops WHERE state = 'done'"); got != 1 {
@@ -183,7 +196,14 @@ func TestFinishCreate(t *testing.T) {
 			if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 'u2' AND state = 'ok' AND created_by = 'atoll' AND file_key = '88' AND ctime_ns = 77 AND first_seen_ns = 60 AND mode = 416"); got != 1 {
 				t.Errorf("%d copies made", got)
 			}
-			if got := b.count("SELECT count(*) FROM copies WHERE verified_ns = 60"); got != 2*tc.verified {
+			want := 2 * tc.verified
+			if tc.unverified {
+				want = tc.verified
+				if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 'u2' AND verified_ns IS NULL"); got != 1 {
+					t.Error("the copy is verified")
+				}
+			}
+			if got := b.count("SELECT count(*) FROM copies WHERE verified_ns = 60"); got != want {
 				t.Errorf("%d verified", got)
 			}
 			if got := b.count("SELECT count(*) FROM jobs") + b.count("SELECT count(*) FROM job_chunks"); got != 0 {

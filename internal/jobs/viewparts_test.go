@@ -98,7 +98,7 @@ func TestAFileWrittenInParallelBecomesAReplica(t *testing.T) {
 // A pass stopped at each step of the copy from a part, as kill -9 stops it, is resumed or undone by the reprise: the
 // part a pending job owns is kept, and the next pass makes the replica (specs.md §14.2, §17.2).
 func TestACopyFromAPartSurvivesACrashAtEachStep(t *testing.T) {
-	for _, point := range []string{"journaled", "copied", "verified", "moved", "target-synced", "source-synced"} {
+	for _, point := range []string{"journaled", "copied", "verified", "moved", "placed", "target-synced", "source-synced"} {
 		t.Run(point, func(t *testing.T) {
 			b, w := parallelPool(t, "")
 			writeThroughView(b, w, "new.mkv", "a new film")

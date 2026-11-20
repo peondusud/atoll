@@ -99,3 +99,27 @@ func TestCreatedRowVectors(t *testing.T) {
 		}
 	}
 }
+
+type createRepriseVector struct {
+	Verified   *catalog.PartLook `json:"verified"`
+	Placed     *int64            `json:"placed_ctime_ns"`
+	Found      *catalog.PartLook `json:"found"`
+	Row        *catalog.PartLook `json:"row"`
+	Unverified bool              `json:"unverified"`
+	Note       string            `json:"note"`
+}
+
+// What the row of a copy a reprise finds at its name records, and whether it is unverified: a change time other than
+// the one the job recorded right after the rename is a write since, and without that record, one other than the verified
+// one leaves the copy unverified (specs.md §14.2, the limit of flaw 1).
+func TestRecoveredRowVectors(t *testing.T) {
+	for i, v := range vectors.Load[createRepriseVector](t, "create_reprise.json") {
+		if v.Found == nil || v.Row == nil {
+			t.Fatalf("vector %d: want found and row", i)
+		}
+		row, unverified := RecoveredRow(v.Verified, v.Placed, v.Found)
+		if !reflect.DeepEqual(row, *v.Row) || unverified != v.Unverified {
+			t.Errorf("vector %d (%s): %+v, unverified %v", i, v.Note, row, unverified)
+		}
+	}
+}
