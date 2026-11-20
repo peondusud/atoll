@@ -72,8 +72,10 @@ func runIntegrity(t *testing.T, c *integrityCase, at int, inject error) (calls [
 	return calls, endIntegrity(t, c, b), runErr
 }
 
-// endIntegrity checks what a run that failed left, then runs it again with nothing failing, then atoll repair, and
-// passes until all is done, and says what the pool ends with.
+// endIntegrity checks what a run that failed left, then runs it again with nothing failing, and passes until all is
+// done, and says what the pool ends with. A copy a scrub could neither repair nor send to the trash, its disk failing
+// then, stays corrupt where it is, and the scrub run again takes it first (specs.md §16): no atoll repair by hand is
+// needed for it.
 func endIntegrity(t *testing.T, c *integrityCase, b *bench) string {
 	t.Helper()
 	if got := b.read("t1", "a.mkv"); got != healthyFilm {
@@ -84,11 +86,6 @@ func endIntegrity(t *testing.T, c *integrityCase, b *bench) string {
 	}
 	if err := c.run(b, b.db); err != nil {
 		t.Fatalf("the run again, with nothing failing: %v", err)
-	}
-	// A copy a scrub could neither repair nor send to the trash, its disk failing then, stays corrupt where it is, and
-	// no later scrub reads it again: atoll repair begins again (specs.md §16.1).
-	if _, err := Repair(t.Context(), b.db, b.config, b, RepairOptions{Apply: true}); err != nil {
-		t.Fatalf("a repair, with nothing failing: %v", err)
 	}
 	return b.settled(true)
 }

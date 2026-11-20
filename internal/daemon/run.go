@@ -243,6 +243,10 @@ type loop struct {
 	scrubSpent  time.Duration
 	scrubOpened int64
 	scrubIdle   int64
+	// scrubTaken holds the corrupt copies left in the root that the scrub took again in that stretch: each is taken
+	// once a stretch, so that one that cannot go, as one whose name its trash refuses, costs a read of its healthy copy
+	// a night and not one a slice. A restart takes them again (specs.md §15.13, §16).
+	scrubTaken map[catalog.CorruptCopy]bool
 	// backupOpened is the stretch of maintenance.window whose catalog backup was made, or tried (specs.md §9).
 	backupOpened int64
 	checkDue     int64
@@ -1276,18 +1280,19 @@ func (l *loop) stillUnopened() map[string][]string {
 
 // scrub reads the copies due for a slice of time, under the catalog's lock, within what is left of the budget of the
 // stretch of integrity.window that began at opened, and moves a corrupt copy to the trash when another is healthy:
-// starting the daemon is the consent (specs.md §15.13, §16). A corrupt copy brings a pass, which sends its alert, and
-// makes the copy moved again.
+// starting the daemon is the consent (specs.md §15.13, §16). The corrupt copies an earlier scrub left in the root come
+// first, each once a stretch. A corrupt copy found, repaired or moved brings a pass, which sends its alert, and makes
+// the copy moved again.
 func (l *loop) scrub(ctx context.Context, opened int64) {
 	if l.scrubOpened != opened {
-		l.scrubOpened, l.scrubSpent = opened, 0
+		l.scrubOpened, l.scrubSpent, l.scrubTaken = opened, 0, nil
 	}
 	slice := min(hashSlice, l.set.scrubBudget-l.scrubSpent)
 	start := l.opt.Machine.Now()
 	var out *jobs.ScrubOutcome
 	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		var err error
-		out, err = jobs.Scrub(ctx, db, l.opt.Config, l.opt.Machine, jobs.ScrubOptions{Budget: slice, Apply: true, Quarantine: true})
+		out, err = jobs.Scrub(ctx, db, l.opt.Config, l.opt.Machine, jobs.ScrubOptions{Budget: slice, Apply: true, Quarantine: true, Taken: l.scrubTaken})
 		return nil, err
 	})
 	l.scrubSpent += time.Duration(l.opt.Machine.Now() - start)
@@ -1300,18 +1305,25 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		return
 	}
 	l.recordScrub(out)
+	for _, cc := range out.Taken {
+		if l.scrubTaken == nil {
+			l.scrubTaken = map[catalog.CorruptCopy]bool{}
+		}
+		l.scrubTaken[cc] = true
+	}
 	left, corrupt := false, 0
 	refused := map[string][]string{}
 	for i := range out.Disks {
 		d := &out.Disks[i]
 		left = left || d.Left
-		corrupt += len(d.Corrupt)
+		// Repaired and moved are of the copies found corrupt, or taken again.
+		corrupt += len(d.Corrupt) + len(d.Repaired) + len(d.Quarantined)
 		if len(d.Refused) > 0 {
 			refused[d.ID] = d.Refused
 		}
-		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Changed) > 0 {
-			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "repaired", len(d.Repaired), "quarantined", len(d.Quarantined),
-				"kept", len(d.Kept), "changed", len(d.Changed))
+		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Again) > 0 || len(d.Changed) > 0 {
+			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "again", len(d.Again), "repaired", len(d.Repaired),
+				"quarantined", len(d.Quarantined), "kept", len(d.Kept), "changed", len(d.Changed))
 		}
 	}
 	if !left {
