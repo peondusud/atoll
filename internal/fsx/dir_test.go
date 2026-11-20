@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -145,6 +147,56 @@ func TestDirNeverFollowsASymlink(t *testing.T) {
 
 // TestStatSaysWhatStatxSays: each field, against what the os package reads. A wrong one would be
 // compared with itself on every later scan, and nothing else would show it.
+// Names gives every name of a folder each time it is asked, as the Dir interface says, never what is left past the
+// handle's position: a handle listed twice lists the folder whole twice, what came since included, and so do callers
+// that list one handle at once, as copies at once share a disk's top. The fault layer passes the call on, and keeps
+// that. The folder holds more names than one read of the kernel gives.
+func TestNamesGivesEveryNameEachTime(t *testing.T) {
+	top := t.TempDir()
+	var want []string
+	for i := range 1000 {
+		name := "file-with-a-long-name-" + strconv.Itoa(i)
+		if err := os.WriteFile(filepath.Join(top, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, name)
+	}
+	slices.Sort(want)
+	listed := func(t *testing.T, dir Dir, want []string) {
+		t.Helper()
+		names, err := dir.Names()
+		slices.Sort(names)
+		if err != nil || !slices.Equal(names, want) {
+			t.Errorf("%d names of %d, %v", len(names), len(want), err)
+		}
+	}
+	for _, layer := range []string{"real", "fault"} {
+		t.Run(layer, func(t *testing.T) {
+			dir, err := OpenDir(top)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = dir.Close() }()
+			if layer == "fault" {
+				dir = Fault(dir, func(string, string) error { return nil })
+			}
+			listed(t, dir, want)
+			listed(t, dir, want)
+			more := slices.Concat(want, []string{"zz-" + layer})
+			if err := os.WriteFile(filepath.Join(top, "zz-"+layer), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Remove(filepath.Join(top, "zz-"+layer)) }()
+			listed(t, dir, more)
+			var wg sync.WaitGroup
+			for range 8 {
+				wg.Go(func() { listed(t, dir, more) })
+			}
+			wg.Wait()
+		})
+	}
+}
+
 func TestStatSaysWhatStatxSays(t *testing.T) {
 	top := t.TempDir()
 	full := filepath.Join(top, "file")

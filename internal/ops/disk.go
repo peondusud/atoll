@@ -430,7 +430,9 @@ func (d *Disk) stat(path []string) (fsx.Stat, bool, error) {
 	case err != nil:
 		return fsx.Stat{}, false, classify(err)
 	}
-	d.withoutOwn(&st)
+	if err := d.withoutOwn(&st); err != nil {
+		return fsx.Stat{}, false, err
+	}
 	return st, true, nil
 }
 
@@ -743,12 +745,16 @@ func (d *Disk) likeSource(source *folder, src, dst []string) (map[int]fsx.Stat, 
 	return like, nil
 }
 
+// movedFrom looks at what a move left at its target. A look that fails after the move, its count of names included,
+// is resolved as a reprise would (specs.md §17.1, §17.2).
 func (d *Disk) movedFrom(dir fsx.Dir, name string, seen *fsx.Stat) (*Moved, error) {
 	st, err := dir.Stat(name)
 	if err != nil {
 		return nil, classify(err)
 	}
-	d.withoutOwn(&st)
+	if err := d.withoutOwn(&st); err != nil {
+		return nil, err
+	}
 	return &Moved{Stat: st, PriorNS: timeOf(seen.Ctime)}, nil
 }
 
@@ -1321,6 +1327,10 @@ func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
 	case st.Kind != fsx.KindFile || keyOf(&st) != op.FileKey:
 		return Purged{}, ErrGone
 	}
+	// Counted before the unlink, so that a links folder that cannot be read purges nothing.
+	if err := d.withoutOwn(&st); err != nil {
+		return Purged{}, err
+	}
 	if err := parent.Unlink(name); err != nil && !fsx.IsAbsent(err) {
 		return Purged{}, classify(err)
 	}
@@ -1329,7 +1339,6 @@ func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
 		return Purged{}, lost(err)
 	}
 	d.machine.Checkpoint("source-synced")
-	d.withoutOwn(&st)
 	return Purged{Nlink: st.Nlink, PriorNS: timeOf(st.Ctime)}, nil
 }
 

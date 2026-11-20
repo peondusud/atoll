@@ -221,7 +221,9 @@ func (d *Disk) PlacePart(op *Op, logical string, record func(placed *fsx.Stat) e
 	if err != nil {
 		return nil, err
 	}
-	d.withoutOwn(&placed)
+	if err := d.withoutOwn(&placed); err != nil {
+		return nil, err
+	}
 	d.machine.Checkpoint("moved")
 	// The change time that look found, in a commit of its own, before anything long: a reprise that finds another knows
 	// the copy written into since, however long Atoll was down. A crash before it leaves none, which the reprise reads

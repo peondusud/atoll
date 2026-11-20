@@ -329,6 +329,33 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+// An entry of the mount table that is not the mount path's is either a mount the path leads to through a symlink, or
+// the mount that holds the path, as an empty mount point gives its parent's entry (specs.md §10, question 2): the
+// message says which, so that an empty mount point under /tmp, seen in qemu, does not read as a symlink. Only whole
+// components make a parent.
+func TestNotMountedSaysWhatIsMountedThere(t *testing.T) {
+	text := func(s string) *string { return &s }
+	for _, tc := range []struct {
+		mount, entry string
+		want         string
+	}{
+		{"/mnt/t1", "/", `nothing is mounted at that path: it is part of the mount at "/"`},
+		{"/mnt/t1", "/mnt", `nothing is mounted at that path: it is part of the mount at "/mnt"`},
+		{"/tmp/atoll/t1", "/tmp", `nothing is mounted at that path: it is part of the mount at "/tmp"`},
+		{"/mnt/t1", "/srv/t1", `the mount is at "/srv/t1": write that path, not one through a symlink`},
+		{"/mnt/t1", "/mnt/t", `the mount is at "/mnt/t": write that path, not one through a symlink`},
+		{"/mnt/t1", "/mnt/T1", `the mount is at "/mnt/T1": write that path, not one through a symlink`},
+		{"/mnt/t1", "/mnt/t1/", `the mount is at "/mnt/t1/": write that path, not one through a symlink`},
+		{"/mnt/t1", "/mnt/t1/sub", `the mount is at "/mnt/t1/sub": write that path, not one through a symlink`},
+	} {
+		d, a := answersFor(t, &checkCase{Mount: text(tc.mount), Entry: &checkEntry{MountPoint: text(tc.entry)}})
+		got := Check(a, d)
+		if got.State != Missing || got.Reason != NotMounted || got.Message != tc.want {
+			t.Errorf("%s with the entry of %s: %s %s %q, want %q", tc.mount, tc.entry, got.State, got.Reason, got.Message, tc.want)
+		}
+	}
+}
+
 // TestCheckStopsAtTheFirstFailure: nothing past a failure is read, as reading a device or a
 // folder may wake a disk, or hang on one that is dying.
 func TestCheckStopsAtTheFirstFailure(t *testing.T) {

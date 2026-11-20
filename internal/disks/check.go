@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
@@ -182,6 +183,9 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	switch {
 	case e == nil:
 		return missing(NotMounted, "nothing is mounted at that path")
+	case e.MountPoint != d.Mount && below(e.MountPoint, d.Mount):
+		// An empty mount point gives the entry of the mount that holds it.
+		return missing(NotMounted, fmt.Sprintf("nothing is mounted at that path: it is part of the mount at %q", e.MountPoint))
 	case e.MountPoint != d.Mount:
 		return missing(NotMounted, fmt.Sprintf("the mount is at %q: write that path, not one through a symlink", e.MountPoint))
 	case e.Root != "/":
@@ -235,6 +239,14 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	verdict.MountOwner = e.FSType == "fuseblk"
 	verdict.Source = e.Source
 	return verdict
+}
+
+// below says whether path lies below the mount point mount, by whole components.
+func below(mount, path string) bool {
+	if mount == "/" {
+		return path != "/" && strings.HasPrefix(path, "/")
+	}
+	return strings.HasPrefix(path, mount+"/")
 }
 
 // Confirm runs a mount check, then reads the head past the page cache, so that a disk whose answers

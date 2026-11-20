@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -189,6 +190,9 @@ type WritableFile interface {
 
 type realDir struct {
 	file *os.File
+	// listing keeps two Names of one handle from reading the folder at once: each starts it from its start, and a
+	// handle may be shared, as a disk's top is by copies at once.
+	listing sync.Mutex
 }
 
 // OpenDir opens a folder given by a path whose last component is no symlink.
@@ -205,7 +209,13 @@ func (d *realDir) fd() int {
 }
 
 func (d *realDir) Names() ([]string, error) {
-	// Not the file's own position: a folder is read once, and from its start.
+	d.listing.Lock()
+	defer d.listing.Unlock()
+	// From the start of the folder each time, never from where a listing before this one left the handle: a second
+	// listing would give nothing. Seek also lets go of what the one before kept of the folder.
+	if _, err := d.file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("list %q: %w", d.file.Name(), err)
+	}
 	names, err := d.file.Readdirnames(-1)
 	if err != nil {
 		return nil, fmt.Errorf("list %q: %w", d.file.Name(), err)

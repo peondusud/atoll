@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/peondusud/atoll/internal/fsx"
@@ -111,6 +112,31 @@ func Checkpoint(ctx context.Context, file string) (err error) {
 	return nil
 }
 
+// OldNotSetAside says that a rebuilt catalog is in place, and that the old one could not take the name it was to go to,
+// <catalog>.old-<UTC time>: it stays at the name the new one was made at, which a rebuild run again removes, while its
+// write-ahead log and shared memory, when it had them, went beside the name it was to take. Renaming it there puts
+// them together (specs.md §9).
+type OldNotSetAside struct {
+	// File is the catalog's name, where the new one is.
+	File string
+	// At is where the old catalog stays, and Want the name it was to take.
+	At, Want string
+	// Log is where its log and shared memory went, in that order, without what it did not have.
+	Log []string
+	Err error
+}
+
+func (e *OldNotSetAside) Error() string {
+	where := ""
+	if len(e.Log) > 0 {
+		where = ", its log at " + strings.Join(e.Log, " and ")
+	}
+	return fmt.Sprintf("the new catalog is in place at %s, but the old one stays at %s%s, as it could not be renamed to %s: %v",
+		e.File, e.At, where, e.Want, e.Err)
+}
+
+func (e *OldNotSetAside) Unwrap() error { return e.Err }
+
 // SetAside puts a rebuilt catalog, built at fresh, in place of the one at file, which goes to the name it gives,
 // <file>.old-<UTC time>, with its write-ahead log and shared memory beside it. The swap leaves no moment with no
 // catalog at file, so that a command that waits for the lock finds one, and locks it (specs.md §9). With no catalog
@@ -151,8 +177,15 @@ func SetAside(file, fresh string, nowNS int64) (string, error) {
 	if err := fsx.ExchangeFiles(fresh, file); err != nil {
 		return "", putBack(err)
 	}
+	// The new catalog is in place from here on. The old one, at fresh now, is left where it is should it not take its
+	// name, as moving its log back beside it would leave both where a rebuild run again removes them: the error says
+	// where each is, and that renaming it puts them together.
 	if err := fsx.RenameFile(fresh, old); err != nil {
-		return "", fmt.Errorf("catalog: %w", err)
+		half := &OldNotSetAside{File: file, At: fresh, Want: old, Err: err}
+		for _, suffix := range moved {
+			half.Log = append(half.Log, old+suffix)
+		}
+		return "", fmt.Errorf("catalog: %w", half)
 	}
 	return old, nil
 }
