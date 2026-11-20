@@ -120,9 +120,12 @@ func TestRegexErrorsSayWhereAndWhy(t *testing.T) {
 		{`(?:a{10}){101}`, 9, "nested repeats multiply to more than 1000"},
 		{`a{500}b{501}`, 0, "weighs more than 1000"},
 		{`a{1001}`, 1, "a repeat count is at most 1000"},
+		{`a{1001,}`, 1, "a repeat count is at most 1000"},
+		{`a{0,1001}`, 1, "a repeat count is at most 1000"},
 		{`a{3,2}`, 1, "n must not exceed m"},
 		{`a{2}{3}`, 4, "a repeat applies to an atom"},
 		{`[!-&&]`, 3, "&& in a class is a set operation in Rust"},
+		{`[--a]`, 1, "-- in a class is a set operation in Rust"},
 		{`[a~~]`, 2, "~~ in a class is a set operation in Rust"},
 		{`[b-a]`, 2, "reversed range"},
 		{`[a-\pL]`, 2, "a range ends with a character, not a property"},
@@ -138,6 +141,7 @@ func TestRegexErrorsSayWhereAndWhy(t *testing.T) {
 		{`a)`, 1, ") without ("},
 		{`[]`, 0, "empty class"},
 		{`[a`, 0, "[ without ]"},
+		{`[a-`, 3, "[ without ]"},
 	} {
 		err := checkRegex(c.pattern)
 		var re *RegexError
