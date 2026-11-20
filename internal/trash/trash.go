@@ -385,6 +385,12 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 				handle.Close()
 				return nil, err
 			}
+			// A disk that failed there is lost, and whoever asked gets no handle on it, as for one that does not
+			// confirm: the session writes to it no more (specs.md §17.1).
+			if !readable(sl.state) {
+				handle.Close()
+				return nil, nil //nolint:nilnil // a disk lost is one that cannot be reached
+			}
 		}
 	}
 	sl.handle = handle
