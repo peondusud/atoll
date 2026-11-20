@@ -26,6 +26,11 @@ var ErrNotRepaired = errors.New("a chunk written in place does not read back as 
 // other place, or its disk is failing, which a confirmation tells (specs.md §10, §16.1).
 var ErrReadBack = errors.New("a chunk written in place cannot be read back")
 
+// ErrChunkUnreadable says that a chunk of a copy could not be read when a repair, or its reprise, looked at the copy
+// whole: the chunk's fault on a disk that confirms right after, and the disk's on one that does not, which the caller
+// asks (invariant 4, specs.md §16.1). The operation stays planned either way, for a reprise that can read it.
+var ErrChunkUnreadable = errors.New("a chunk of the copy cannot be read")
+
 // OpenRepair opens a corrupt copy for reading and writing in place, after a look that its name still holds what
 // its row says (specs.md §16.1). ErrGone means it no longer does.
 func (d *Disk) OpenRepair(row *catalog.KnownCopy) (fsx.WritableFile, fsx.Stat, error) {
@@ -480,9 +485,11 @@ func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved m
 				continue
 			}
 			if err == nil || errors.Is(err, io.EOF) {
-				err = io.ErrUnexpectedEOF
+				return nil, io.ErrUnexpectedEOF
 			}
-			return nil, classify(err)
+			// Not the disk lost on the strength of this read alone: a sector that cannot be read, on a disk that confirms,
+			// would lose it at every reprise, for as long as the sector cannot be read.
+			return nil, fmt.Errorf("%w: chunk %d: %w", ErrChunkUnreadable, i, err)
 		}
 		sum := integrity.ChunkSum(buf[:length])
 		was, isSaved := saved[i]

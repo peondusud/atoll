@@ -315,6 +315,17 @@ func (s *Session) recoverAll(ctx context.Context) error {
 			return fmt.Errorf("%w", err)
 		case err != nil:
 			s.lost = true
+			// The reprise of a repair that could not read a chunk of its copy: the copy's fault while the disk confirms,
+			// which is written to as before; the disk's otherwise (invariant 4, specs.md §16.1).
+			if errors.Is(err, ops.ErrChunkUnreadable) {
+				confirmed, cerr := s.Confirms(ctx, id, err)
+				if cerr != nil {
+					return cerr
+				}
+				if !confirmed {
+					continue
+				}
+			}
 		}
 		// What the reprise resolved keeps its parts no more: tmp/ is cleaned after it, as it was when the disk was
 		// opened for what earlier runs had resolved (specs.md §14.2).
@@ -373,6 +384,12 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 			if err := s.cleanTmp(ctx, id, handle); err != nil {
 				handle.Close()
 				return nil, err
+			}
+			// A disk that failed there is lost, and whoever asked gets no handle on it, as for one that does not
+			// confirm: the session writes to it no more (specs.md §17.1).
+			if !readable(sl.state) {
+				handle.Close()
+				return nil, nil //nolint:nilnil // a disk lost is one that cannot be reached
 			}
 		}
 	}
