@@ -4,7 +4,7 @@
 
 Atoll adds file-level redundancy to heterogeneous disks (SATA, USB DAS) that hold a media library (Plex, Emby, Jellyfin), without moving existing files.
 
-**Under development and not ready for real data.** The alpha, phase 1a, is in progress: see [ROADMAP.md](ROADMAP.md).
+**Under development and not ready for real data.** The alpha, the beta and Atoll's own view (phases 1a, 1b and 2a) are close to done. The first release, `v0.1.0`, waits for the core to be proven: a soak of 24 hours, then tries on real disks. See [ROADMAP.md](ROADMAP.md).
 
 **The core first.** The first release is the core, used through mergerfs, made very reliable and very secure before any feature is added. What came after it is **experimental**, off by default, and not part of what that release promises (specs.md §28):
 
@@ -23,8 +23,9 @@ Atoll adds file-level redundancy to heterogeneous disks (SATA, USB DAS) that hol
 - **The merged view.** A merged view presents each file once: mergerfs in phase 1, Atoll's own FUSE view from phase 2a. Media servers read that view. Atoll's own view already serves them read only beside mergerfs (`atoll mount`): browsing it wakes no disk, and each file reads from its original copy.
 - **Break glass.** Stopping or uninstalling Atoll breaks nothing. Existing paths stay as they were, no disk holds a hidden file, and plain mergerfs, mounted from the line `atoll mergerfs-config` prints, gives the same view.
 - **No data lost.** Atoll never deletes or overwrites the last verified copy of a file. What it replaces goes to a trash on the same disk first. When in doubt, it keeps both versions and reports a conflict.
-- **Checked.** Every copy is verified by a BLAKE3 hash before it takes its place.
-- **Disks.** A disk is known by its filesystem's identifier. Atoll writes to it only once it has confirmed that identifier.
+- **Guards.** A deletion or a modification made on one disk reaches the other copies only through their trash. The mass-deletion and mass-modification guards pause it when too much changes at once, within minutes or over a day, until `atoll guard` answers.
+- **Checked.** Every copy is verified by a BLAKE3 hash before it takes its place, and the scrub reads the copies again within their time windows. A corrupt copy is repaired from a healthy one or moved to the trash, never presented.
+- **Disks.** A disk is known by its filesystem's identifier. Atoll writes to it only once it has confirmed, in the current session, that the disk is mounted as expected. A disk that is away counts as missing, never as empty. An NTFS volume that Windows left hibernated is only read. After a USB reset, the disk is mounted again through systemd.
 - **The catalog.** The SQLite catalog is a cache that can be rebuilt: the truth is on the disks.
 
 The Go version runs on Linux, amd64 and arm64. A Rust rewrite with the same contracts follows, then Windows.
@@ -68,11 +69,16 @@ make build              # bin/atoll
 go test ./...           # unit and property tests, with the conformance vectors
 make conformance        # the black-box scenarios against a conformance build
 make test-qemu          # test/loopdev as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host
+make model-check        # the TLA+ model of the replication protocol, checked by TLC, with only Docker
+make cover              # the coverage of the unit tests and of the scenarios, by package (bin/cover/)
+make fuzz FUZZTIME=5m   # each fuzz target in turn
+make mutation           # mutation tests of the pure core (gremlins)
+make test-mediaservers  # the notifications on real Plex, Jellyfin and Emby in containers, with no account
 test/ci/run.sh [REV]    # every check of a commit, with only git and Docker
 make release-snapshot   # a release as a tag makes one, into dist/, with only Docker: nothing is uploaded
 ```
 
-GitHub Actions runs the same checks on each push to `beta` and `main` and each pull request (`.github/workflows/ci.yml`), the unit tests on arm64 too, and the media-server test once a week.
+GitHub Actions runs the same checks on each push to `beta` and `main` and each pull request (`.github/workflows/ci.yml`), with the unit tests on arm64 too. Once the workflows are on `main`, it also runs the fuzz targets and the mutation tests each night, and the media-server test each week.
 
 ## Releasing
 
