@@ -31,7 +31,8 @@ concurrency:
 jobs:
   race:
     runs-on: ubuntu-latest
-    # The image of test/ci/run.sh: its Go, its golangci-lint, and root, as the local CI runs the tests.
+    # The image of test/ci/run.sh: its golangci-lint, and root, as the local CI runs the tests. Its GOTOOLCHAIN is auto:
+    # its go fetches go.mod's version of Go when newer than its own, checked against sum.golang.org, and kept in the cache.
     container: golangci/golangci-lint:v2.15.0
     timeout-minutes: 45
     steps:
@@ -138,7 +139,7 @@ jobs:
   # test/tla/run.sh, which runs it there with --inside: 2 workers, the jar's SHA-256 checked, the jar kept in the cache.
   tla:
     runs-on: ubuntu-latest
-    container: eclipse-temurin:21.0.12_8-jre-noble
+    container: eclipse-temurin:21.0.13_9-jre-noble
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

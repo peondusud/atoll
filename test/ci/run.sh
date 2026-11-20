@@ -15,9 +15,10 @@ set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
 
+# Its GOTOOLCHAIN is auto: its go fetches go.mod's version of Go, when newer than its own, into the module cache.
 image=golangci/golangci-lint:v2.15.0
 # test/tla/run.sh's image, with Java, for the TLA+ model.
-tla_image=eclipse-temurin:21.0.12_8-jre-noble
+tla_image=eclipse-temurin:21.0.13_9-jre-noble
 all_jobs="race integration conformance lint qemu tla"
 jobs=$all_jobs report=0 rev=HEAD
 while [ $# -gt 0 ]; do
