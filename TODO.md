@@ -61,7 +61,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 ## GitHub Actions and releases (DONE.md, 2026-11-19)
 
 - The first release, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven and after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
-- GoReleaser v2.20.2 or later once two weeks old.
+- GoReleaser v2.20.2 or later once two weeks old (2026-11-26); x/text v0.44.0, sqlite v1.62.0 with its libc, govulncheck v1.10.0 and the other releases DONE.md lists as too fresh on 2026-11-20, each once 14 days old; the qemu guest's mainline kernel past 7.3.1.
 
 ## After the two flaws TLC found, fixed on 2026-11-19 (DONE.md)
 
@@ -85,10 +85,12 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - `ops.ownLinks` takes a links folder it cannot read, `EIO` included, for one with no link: a purge goes on, and the purged data stays behind its link until the next pass sends it to the trash again. No data is lost, but `EIO` there is to read as the disk unknown (invariant 4), with a test that fails first (DONE.md, the tests of fsx and the trash).
 - A second `Names` on one folder handle of `fsx` lists nothing, as it reads from the handle's position, where the interface says every name: every caller lists a handle once today; seek back, or say so in the interface.
 - `catalog.SetAside`: a rename that fails after a successful exchange leaves the old catalog at `<catalog>.rebuild` and says the new one is not in place, though it is (DONE.md, the catalog and the watch).
+- A corrupt copy the scrub could neither repair nor quarantine, its disk failing then, stays in the root until `atoll repair`: no later scrub reads it (`ScrubDue` takes `ok` and `surplus` copies) and no pass sends it to the trash, against invariant 14 with mergerfs. Try it again, as §15.4 does a stale copy's trash job (DONE.md, the fault sweeps of jobs and ops).
+- **decision**: the check after a rename, and §17.2's table, know a file by its inode alone: a file re-created at a copy's name just before its move, with the same inode number, would go to the trash in its place (seen once in the sweeps, not reproduced). Compare size and modification time too, as the link path does, which changes what a reprise decides.
+- An SSD-cache copy a transfer sent to the trash stays for the retention when a fault comes between its move and its purge (§19), kept rather than purged at once; and a disk lost earlier in a pass keeps its own set of the view's attributes (§21.2).
 - Raise the coverage of `cmd/atoll`'s unit tests (50.8 %, 86.5 % with the scenarios) and of the view (`fusefs` 0 %, `readonly` 13 %, `writer` 76 %), run only in qemu: count the loop-device tests too, with `GOCOVERDIR` in the guest.
 - **decision**: a copy looks for the model of a folder it makes on the source's disk alone (§14.2). When the source sits behind and the disk that holds the real folder is away, it makes the folder with no model, 0755 since 2026-11-20: a folder kept 0700 there is more open on the copy's disk. Look on the other disks first, or wait (`io-error`), as §15.12's step 3 does (DONE.md, the folder with no model).
 - A copy recorded unverified after a reprise (flaw 1's limit, DONE.md) waits for `--full` or a scrub to be read; and which two drivers' renames left the change time as it was on Linux 6.12 is to measure.
-- Update the CI's image from Go 1.27.2, whose standard library has GO-2026-6859 and GO-2026-6809 (fixed in 1.27.3 and 1.27.4, which GitHub's govulncheck and the releases use already).
 
 ## Atoll's own view, after 2026-11-19 (DONE.md)
 
