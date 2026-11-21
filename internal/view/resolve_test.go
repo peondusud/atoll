@@ -8,11 +8,13 @@ import (
 )
 
 type resolveOpVector struct {
-	Kind   string `json:"kind"`
-	Disk   string `json:"disk"`
-	Path   string `json:"path"`
-	Path2  string `json:"path2"`
-	Folder bool   `json:"folder"`
+	Kind    string `json:"kind"`
+	Disk    string `json:"disk"`
+	Path    string `json:"path"`
+	Path2   string `json:"path2"`
+	Folder  bool   `json:"folder"`
+	Disk2   string `json:"disk2"`
+	Planned bool   `json:"planned"`
 }
 
 type resolveVector struct {

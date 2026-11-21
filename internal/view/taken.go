@@ -26,6 +26,12 @@ func NodeOfStat(disk string, st *fsx.Stat, target string) *Node {
 	return n
 }
 
+// OpOf is an operation of the view's journal as Resolve reads it: a move planned whose copy is not at its name yet
+// presents the disk it leaves (specs.md §21.2).
+func OpOf(r *catalog.ViewOp) Op {
+	return Op{Kind: r.Kind, Disk: r.Disk, Path: r.Path, Path2: r.Path2, Folder: r.Folder, Disk2: r.Disk2, Planned: r.AtSource()}
+}
+
 // Look is what a pass finds on a disk at a path: nil when nothing is there, and false when it did not look, as on a
 // disk it did not walk.
 type Look func(ctx context.Context, disk, path string) (*Node, bool, error)
@@ -43,8 +49,7 @@ func TakenIn(ctx context.Context, db *sql.DB, open []catalog.ViewOp, walkedAll, 
 	}
 	ops := make([]Op, 0, len(open))
 	for i := range open {
-		r := &open[i]
-		ops = append(ops, Op{Kind: r.Kind, Disk: r.Disk, Path: r.Path, Path2: r.Path2, Folder: r.Folder})
+		ops = append(ops, OpOf(&open[i]))
 	}
 	var held []string
 	var taken []int64

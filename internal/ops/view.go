@@ -281,6 +281,52 @@ func (d *Disk) RenameUser(from, to string, isFolder bool, fileKey string, like L
 	return nil
 }
 
+// PlaceUserPart moves the part an operation create names to a logical path, after the folders missing on the way,
+// each made with the mode and owner like gives of it, and never onto anything: a new file the view moves to this disk
+// once a write ran out of space on another (specs.md §21.2). Its name, then its folder, are synced, then the folder of
+// the part. As what the view does for a user, the folder it lands in keeps the time the new name gives it. It says what
+// is at the path then. ErrPathTaken with IsExisting means that something took the name.
+func (d *Disk) PlaceUserPart(op *Op, logical string, like Like) (fsx.Stat, error) {
+	if err := d.Verify(); err != nil {
+		return fsx.Stat{}, err
+	}
+	src := d.tmpPlace(op.Path2)
+	source, err := d.open(src[:len(src)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return fsx.Stat{}, classify(err)
+	}
+	defer source.close()
+	name := src[len(src)-1]
+	if _, err := holds(source.Dir, name, byKey(op.FileKey)); err != nil {
+		return fsx.Stat{}, err
+	}
+	target, newName, err := d.userParent(logical, like)
+	if err != nil {
+		return fsx.Stat{}, err
+	}
+	defer target.close()
+	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, byKey(op.FileKey)); err != nil {
+		return fsx.Stat{}, err
+	}
+	placed, err := holds(target.Dir, newName, byKey(op.FileKey))
+	if err != nil {
+		return fsx.Stat{}, err
+	}
+	d.machine.Checkpoint("moved")
+	if err := d.durable(target.Dir, newName); err != nil {
+		return fsx.Stat{}, err
+	}
+	d.machine.Checkpoint("target-synced")
+	if err := source.Sync(); err != nil {
+		return fsx.Stat{}, lost(err)
+	}
+	d.machine.Checkpoint("source-synced")
+	return placed, nil
+}
+
 // ErrNoLink says that the driver would not give the file another name: hard links it does not make, or too many of
 // them already. Nothing was made, and a program copies instead (specs.md §21.2).
 var ErrNoLink = errors.New("the driver makes no other name for this file")

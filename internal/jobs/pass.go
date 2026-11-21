@@ -579,7 +579,7 @@ func (p *pass) viewNames(ctx context.Context) (map[string]watch.Heard, error) {
 			// A part written in parallel is in tmp/: nothing of the root to look at.
 			continue
 		}
-		op := watch.ViewOp{Kind: v.Kind, Disk: v.Disk, Path: v.Path, Path2: v.Path2, Folder: v.Folder}
+		op := watch.ViewOp{Kind: v.Kind, Disk: v.Disk, Path: v.Path, Path2: v.Path2, Folder: v.Folder, Disk2: v.Disk2}
 		if v.Folder || v.Kind == catalog.ViewRmdir {
 			for _, at := range []string{v.Path, v.Path2} {
 				if at == "" {

@@ -68,7 +68,9 @@ func TestTheJournalIsAskedByInode(t *testing.T) {
 		t.Errorf("%q", plan)
 	}
 	for _, step := range plan[1:] {
-		if !strings.HasPrefix(step, "CORRELATED SCALAR SUBQUERY") && !strings.HasPrefix(step, "SEARCH v USING COVERING INDEX view_ops_by_op") {
+		// The one row of an operation, by the unique index, whose kind says whether a move made it.
+		if !strings.HasPrefix(step, "CORRELATED SCALAR SUBQUERY") && !strings.HasPrefix(step, "SEARCH v USING COVERING INDEX view_ops_by_op") &&
+			!strings.HasPrefix(step, "SEARCH v USING INDEX view_ops_by_op (op_id=?)") {
 			t.Errorf("the view's operations are not asked through their index: %q", plan)
 		}
 	}

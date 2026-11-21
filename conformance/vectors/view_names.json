@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §15.13, §21.2",
-  "description": "What a pass looks at for the operations of Atoll's own view no pass has taken in, by disk, as for the names a watcher gives: each path an operation touched, on its disk; a folder's on every disk whose catalog holds a folder at either of its paths, as the view renamed or removed it on each; a folder walked below it; a name a deletion or a removal left, deleted; or the whole disk past max_names. A name is once on a disk, a folder or deleted when any operation says so, in byte order.",
+  "description": "What a pass looks at for the operations of Atoll's own view no pass has taken in, by disk, as for the names a watcher gives: each path an operation touched, on its disk; a folder's on every disk whose catalog holds a folder at either of its paths, as the view renamed or removed it on each; a folder walked below it; a name a deletion or a removal left, deleted; a move's name, on the disk it goes to and on the disk it leaves, neither deleted, as what the move sent to the trash is Atoll's own; or the whole disk past max_names. A name is once on a disk, a folder or deleted when any operation says so, in byte order.",
   "cases": [
     {"note": "a file the view made: its name, on its disk", "max_names": 10000,
      "ops": [{"kind": "create", "disk": "t1", "path": "Films/a.mkv"}],
@@ -42,6 +42,12 @@
      "ops": [{"kind": "create", "disk": "t1", "path": "a"}, {"kind": "create", "disk": "t1", "path": "b"}, {"kind": "create", "disk": "t1", "path": "c"},
              {"kind": "write", "disk": "t2", "path": "d"}],
      "disks": [{"disk": "t1", "whole": true}, {"disk": "t2", "names": [{"path": "d"}]}]},
+    {"note": "a new file moved to another disk once a write ran out of space: its name on the disk it goes to and on the disk it leaves, neither deleted, as the copy the move sent to the trash is Atoll's own", "max_names": 10000,
+     "ops": [{"kind": "move", "disk": "t2", "disk2": "t1", "path": "Films/a.mkv"}],
+     "disks": [{"disk": "t1", "names": [{"path": "Films/a.mkv"}]}, {"disk": "t2", "names": [{"path": "Films/a.mkv"}]}]},
+    {"note": "made on one disk, then moved to another: its name once on each", "max_names": 10000,
+     "ops": [{"kind": "create", "disk": "t1", "path": "a"}, {"kind": "move", "disk": "t2", "disk2": "t1", "path": "a"}],
+     "disks": [{"disk": "t1", "names": [{"path": "a"}]}, {"disk": "t2", "names": [{"path": "a"}]}]},
     {"note": "no operation: nothing", "max_names": 10000, "ops": [], "disks": []}
   ]
 }

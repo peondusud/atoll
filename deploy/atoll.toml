@@ -62,6 +62,7 @@ engine = "mergerfs"                     # mergerfs (phase 1) | atoll (phase 2a)
 mount  = "/srv/pool"
 # readonly_mount = "/srv/pool-ro"       # atoll mount: Atoll's own view, read only, for the media servers (§21.2)
 # omv_min_free = "same"                 # largest (the default) | same: the openmediavault plugin's one minfreespace (§21.1)
+# move_on_enospc = true                 # with atoll: a new file whose write runs out of space moves to another disk (§21.2)
 
 [read]                                  # Atoll's own view (§7, §21.2)
 policy   = "prefer-spinning"            # oldest (the default) | prefer-spinning

@@ -15,6 +15,7 @@ func TestViewNamesVectors(t *testing.T) {
 		Path2   string   `json:"path2"`
 		Folder  bool     `json:"folder"`
 		Holders []string `json:"holders"`
+		Disk2   string   `json:"disk2"`
 	}
 	type name struct {
 		Path    string `json:"path"`

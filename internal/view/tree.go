@@ -95,8 +95,7 @@ func (t *Tree) ops(ctx context.Context) ([]Op, error) {
 	}
 	out := make([]Op, 0, len(rows))
 	for i := range rows {
-		r := &rows[i]
-		out = append(out, Op{Kind: r.Kind, Disk: r.Disk, Path: r.Path, Path2: r.Path2, Folder: r.Folder})
+		out = append(out, OpOf(&rows[i]))
 	}
 	return out, nil
 }

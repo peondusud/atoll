@@ -1155,14 +1155,14 @@ func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool,
 			left[key] = true
 		}
 	}
-	// What Atoll's own view sent there is no interrupted operation of Atoll's: a user deleted it, through the view
-	// (specs.md §21.2).
+	// What Atoll's own view sent there for a deletion or a replacement is no interrupted operation of Atoll's: a user
+	// deleted it, through the view. What a move of the view sent there is Atoll's own (specs.md §21.2).
 	viewTrash := func(place string) (bool, error) {
 		id, ok := trashOpOf(place)
 		if !ok {
 			return false, nil
 		}
-		is, err := catalog.IsViewOp(ctx, db, id)
+		is, err := catalog.IsViewDeletion(ctx, db, id)
 		if err != nil {
 			return false, fmt.Errorf("catalog: %w", err)
 		}
