@@ -25,11 +25,18 @@ type Decision struct {
 	Warn         bool // what was found is not what an operation of Atoll leaves
 }
 
-// ResolveTrash decides for a copy going to the trash. changed says that the file both names lead to
-// is no longer what its row says, by size or modification time, as link moved its change time.
+// ResolveTrash decides for a copy going to the trash, from what each name holds by the copy's inode. changed says that
+// the file at the target is no longer what the copy's row says, by size or modification time, as link and the move
+// moved its change time (specs.md §17.2). With the source holding that inode too, they are one file with two names,
+// edited in place since: the name in the trash goes. Alone, it is not the copy, whatever has its inode number, as a
+// filesystem gives the inode of a file just removed to the next one made: a file that took the copy's name before the
+// move, or the copy edited then, which goes back where it was, or stays where it is when that name is taken.
 func ResolveTrash(target, source Seen, changed bool) (Decision, error) {
 	if err := knownSeen(target, source); err != nil {
 		return Decision{}, err
+	}
+	if target == SeenSame && source != SeenSame && changed {
+		target = SeenOther
 	}
 	switch {
 	case target == SeenSame && source == SeenSame && changed:

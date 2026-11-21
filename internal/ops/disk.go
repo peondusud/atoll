@@ -704,8 +704,10 @@ func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
 		return nil, err
 	}
 	// A file that took the name between the look and the move goes back: resolving the operation does
-	// that, as a reprise would (specs.md §17.1, §17.2).
-	if _, err := holds(target.Dir, newName, byKey(op.FileKey)); err != nil {
+	// that, as a reprise would (specs.md §17.1, §17.2). It is known by the inode, the size and the
+	// modification time, as the look of the link path knows it, never by its inode alone: a file made at
+	// the copy's name right after the copy was removed can take the inode number it had.
+	if _, err := holds(target.Dir, newName, linked(row)); err != nil {
 		return nil, err
 	}
 	d.machine.Checkpoint("moved")
@@ -873,7 +875,9 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, sameFileAs(row)); err != nil {
 		return nil, nil, err
 	}
-	if _, err := holds(target.Dir, newName, byKey(op.FileKey)); err != nil {
+	// Known at its new name as the look of the link path and the reprise know it, by the identity of §15.1, never by its
+	// inode alone (specs.md §17.2).
+	if _, err := holds(target.Dir, newName, sameFileAs(row)); err != nil {
 		return nil, nil, err
 	}
 	d.machine.Checkpoint("moved")
@@ -949,10 +953,11 @@ func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, m
 	default:
 		return nil, nil, nil, nil, classify(err)
 	}
-	if _, err := holds(dirB.Dir, nameB, byKey(a.FileKey)); err != nil {
+	// Each known at its new name as a rename knows it, by the identity of §15.1, never by its inode alone.
+	if _, err := holds(dirB.Dir, nameB, sameFileAs(rowA)); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	if _, err := holds(dirA.Dir, nameA, byKey(b.FileKey)); err != nil {
+	if _, err := holds(dirA.Dir, nameA, sameFileAs(rowB)); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	d.machine.Checkpoint("moved")
