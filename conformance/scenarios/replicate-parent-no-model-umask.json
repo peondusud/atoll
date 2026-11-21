@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a714.2, \u00a717.2, \u00a717.4, \u00a729.4",
-  "description": "A pass killed between the mkdir of a folder with no model and the mode it is then given leaves it as the umask made it, 0750 under the units' 0027, its operation planned, and its event holding the mode 0755. The reprise, under the same umask, finds it made and gives it 0755 from its event, and the copy then goes on.",
+  "spec": "specs.md §14.2, §15.12, §17.4",
+  "description": "A copy read from a copy behind at its old path, whose disk holds no folder at the file's new path, finds none on the other disks either: the disk the catalog says holds it is there, and no longer holds it, as no walk ran since. So no disk holds it, and it is made with no model: 0755 whatever the umask, here the units' 0027, which left it 0750 and closed to a media server running under another account. Its event mkdir holds the mode 0755 and no owner.",
   "disks": [
     {
       "id": "t1",
@@ -42,7 +42,7 @@
       ]
     }
   ],
-  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
   "steps": [
     {
       "do": "atoll",
@@ -113,41 +113,46 @@
       ]
     },
     {
-      "do": "unmount",
-      "disk": "t1"
-    },
-    {
       "do": "mount",
       "disk": "t2"
     },
     {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/new/a",
+      "to": "media/b"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/new"
+    },
+    {
       "do": "config",
-      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nreplicas = 2\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n"
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nreplicas = 2\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n"
     },
     {
       "do": "atoll",
       "args": [
-        "daemon",
-        "--until-idle"
+        "replicate",
+        "new",
+        "--now",
+        "--json"
       ],
       "umask": "0027",
-      "crash_at": "mkdir-made",
-      "exit": 137
-    },
-    {
-      "do": "expect_tree",
-      "disk": "t3",
-      "tree": [
-        {
-          "path": "media/new",
-          "kind": "dir",
-          "mode": "0750"
-        },
-        {
-          "path": "Atoll/tmp/*",
-          "size": 1024
-        }
-      ]
+      "stdout_json": {
+        "applied": true,
+        "bytes": 1024,
+        "copies": [
+          {
+            "path": "new/a",
+            "disk": "t3",
+            "source": "t2",
+            "size": 1024,
+            "outcome": "replicated"
+          }
+        ]
+      }
     },
     {
       "do": "expect_catalog",
@@ -155,35 +160,13 @@
       "rows": [
         [
           "create",
-          "planned"
+          "done"
         ],
         [
           "mkdir",
-          "planned"
+          "done"
         ]
       ]
-    },
-    {
-      "do": "expect_catalog",
-      "query": "SELECT json_extract(data, '$.disk'), json_extract(data, '$.path'), json_extract(data, '$.mode'), json_type(data, '$.uid'), json_type(data, '$.gid') FROM events WHERE kind = 'mkdir'",
-      "rows": [
-        [
-          "t3",
-          "new",
-          493,
-          null,
-          null
-        ]
-      ]
-    },
-    {
-      "do": "atoll",
-      "args": [
-        "daemon",
-        "--until-idle"
-      ],
-      "umask": "0027",
-      "exit": 4
     },
     {
       "do": "expect_tree",
@@ -207,19 +190,14 @@
     },
     {
       "do": "expect_catalog",
-      "query": "SELECT kind, state FROM ops WHERE disk_id = 't3' ORDER BY id",
+      "query": "SELECT json_extract(data, '$.disk'), json_extract(data, '$.path'), json_extract(data, '$.mode'), json_type(data, '$.uid'), json_type(data, '$.gid') FROM events WHERE kind = 'mkdir'",
       "rows": [
         [
-          "create",
-          "undone"
-        ],
-        [
-          "mkdir",
-          "done"
-        ],
-        [
-          "create",
-          "done"
+          "t3",
+          "new",
+          493,
+          null,
+          null
         ]
       ]
     },
