@@ -1,0 +1,129 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §9, §25",
+  "description": "What an earlier rebuild left at <catalog>.rebuild, with its log, is kept beside the catalog under <catalog>.rebuild-<UTC time>, never removed, as it may be the old catalog of a rebuild whose last rename failed; the new catalog is made at <catalog>.rebuild all the same. A leftover found an hour later is kept under its own time, beside the first.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "write_system",
+      "name": "catalog.db.rebuild",
+      "text": "what a rebuild left"
+    },
+    {
+      "do": "write_system",
+      "name": "catalog.db.rebuild-wal",
+      "text": "its log"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_system",
+      "files": [
+        {
+          "name": "catalog.db.rebuild-20260101T000000Z",
+          "text": "what a rebuild left"
+        },
+        {
+          "name": "catalog.db.rebuild-20260101T000000Z-wal",
+          "text": "its log"
+        }
+      ],
+      "absent": [
+        "catalog.db.rebuild",
+        "catalog.db.rebuild-wal",
+        "catalog.db.rebuild-shm",
+        "catalog.db.rebuild-20260101T000000Z-shm"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a.mkv",
+          "degraded"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1h"
+    },
+    {
+      "do": "write_system",
+      "name": "catalog.db.rebuild",
+      "text": "another"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_system",
+      "files": [
+        {
+          "name": "catalog.db.rebuild-20260101T000000Z",
+          "text": "what a rebuild left"
+        },
+        {
+          "name": "catalog.db.rebuild-20260101T000000Z-wal",
+          "text": "its log"
+        },
+        {
+          "name": "catalog.db.rebuild-20260101T010000Z",
+          "text": "another"
+        }
+      ],
+      "absent": [
+        "catalog.db.rebuild",
+        "catalog.db.rebuild-20260101T010000Z-wal"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "a.mkv",
+          "degraded"
+        ]
+      ]
+    }
+  ]
+}

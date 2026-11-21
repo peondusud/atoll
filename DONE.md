@@ -2,6 +2,23 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## What an earlier rebuild left kept under a name that holds the time, and no name a rebuild gives ever replaced, 2026-11-21 (specs.md §9, §25)
+
+The maintainer's answer of 2026-11-21 ("Garder sous un autre nom"): a rebuild's start removed `<catalog>.rebuild` and its log as what a build stopped before its end left, while after a rename that failed past the swap, or a crash between the exchange and the rename, that name holds the old catalog.
+
+- **Kept, never removed**: a rebuild now moves what it finds at `<catalog>.rebuild`, `-wal` and `-shm` to `<catalog>.rebuild-<UTC time>` beside the catalog, the log first, never replacing a name; standard error says where, the catalog first. A rename that fails puts back what went, and the rebuild exits with 1 having changed nothing (`catalog.KeepLeftover`, `fsx.RenameFileNoReplace`: `renameat2` with `RENAME_NOREPLACE`, or a link then an unlink where the filesystem lacks it).
+- **Another rebuild's catalog left alone**: with no catalog yet, nothing held a lock before that removal, so a second `atoll catalog rebuild --yes` would have removed the first one's catalog as it was made. A catalog at `<catalog>.rebuild` whose lock is held is now that rebuild's: nothing is moved, and the command exits with 1.
+- **Found on the way, fixed**: `catalog.SetAside` renamed the old catalog and its log to `<catalog>.old-<UTC time>` replacing what held that name, so a second rebuild in the same second, or with the clock set back, removed the first one's old catalog. Every rename of a set-aside now never replaces: a log's name taken leaves everything as it was; the catalog's, once the swap went through, leaves the old one at `<catalog>.rebuild`, which the message says, and which a rebuild run again keeps.
+- **Tests first**: `TestKeepLeftover`, `TestSetAsideNeverReplaces` (it failed, the earlier catalog replaced), `TestRenameFileNoReplace`, `TestKeptMessage` and the changed `TestARebuildSaysWhereEachCatalogIs`; and the scenario `catalog-rebuild-leftover`, which failed on the build before (the leftover gone at step 5). The runner gained two steps for it, `write_system` and `expect_system`, a file of the sandbox that is no disk's, as no step could put a file beside the catalog; `TestSystemFiles` checks them.
+- **The model**: §9 is pinned by `conformance/models/fingerprints.json`; `Replication.tla` models no rebuild, so it is unchanged, and §9's fingerprint is updated.
+
+Decided without the maintainer, to confirm:
+
+- The name: `<catalog>.rebuild-<UTC time>`, its log and shared memory with `-wal` and `-shm` after it, as `<catalog>.old-<UTC time>`'s are. What is kept is not told apart: a catalog not finished and an old catalog get the same name, and the message says it may be either.
+- A name taken where the leftover would go (two rebuilds in one second) stops the rebuild with exit 1, nothing moved: neither removed nor refused for good, as running it again a second later works.
+- With exactly one old catalog's log left at `<catalog>.old-<time>-wal` and no catalog there, the leftover is likely that catalog, but it is not renamed to that name: the message of the failed rebuild named both, and joining them stays the user's rename.
+- `--json` gains no field for what was kept: only standard error says it, as the answer asked, and no schema changes.
+
 ## A new file whose write runs out of space moved to another disk, with `view.move_on_enospc`, 2026-11-21 (specs.md §6.1, §9, §17, §19, §21.2, §24; invariant 2)
 
 The maintainer's decisions of 2026-11-21: opt-in, a new key `view.move_on_enospc`, `false` by default, which changes nothing while off; only a new file, one the view made and that is still open through the handle that made it, never one opened again, never one at whose path the catalog holds a file; once the file is copied and verified on the other disk, the copy left on the full disk goes to that disk's trash and is purged at once, as the SSD cache's transfer does, a second exception to invariant 2 and to §6.1's removal rules, which CLAUDE.md and §6.1 now say. Commit `7a4e2ef` on `worktree-agent-a870f152e8d217794`, on `beta`'s `ffaf060`.

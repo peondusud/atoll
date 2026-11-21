@@ -116,6 +116,15 @@ type step struct {
 	Tree       []entry           `json:"tree"`
 	Query      string            `json:"query"`
 	Rows       json.RawMessage   `json:"rows"`
+	// Files and Absent are what an expect_system step looks for in the sandbox, beside the disks.
+	Files  []systemFile `json:"files"`
+	Absent []string     `json:"absent"`
+}
+
+// systemFile is a file of the sandbox that is no disk's, as one beside the catalog, and its text.
+type systemFile struct {
+	Name string  `json:"name"`
+	Text *string `json:"text"`
 }
 
 // stepFields lists what a step may hold besides do, and reports whether the runner knows it.
@@ -151,6 +160,10 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "tree"}, true
 	case "expect_catalog":
 		return []string{"query", "rows"}, true
+	case "write_system":
+		return []string{"name", "text"}, true
+	case "expect_system":
+		return []string{"files", "absent"}, true
 	default:
 		return nil, false
 	}
@@ -206,6 +219,12 @@ func parseScenario(data []byte) (*scenario, error) {
 			err = checkOwner(st.UID, st.GID, true)
 		case st.Do == "symlink" && st.Target == "":
 			err = errors.New("no target")
+		case st.Do == "write_system" && (st.Name == nil || st.Text == nil):
+			err = errors.New("no name, or no text")
+		case st.Do == "write_system":
+			err = checkSystemName(*st.Name)
+		case st.Do == "expect_system":
+			err = checkSystemFiles(st.Files, st.Absent)
 		case st.Do == "atoll" && st.Umask != nil:
 			if _, err = parseUmask(*st.Umask); err == nil {
 				err = checkFull(s.Disks, st.Full)
@@ -527,9 +546,73 @@ func (b *sandbox) do(s *step) error {
 		return compareTree(root, s.Tree)
 	case "expect_catalog":
 		return b.compareCatalog(s)
+	case "write_system":
+		text := strings.ReplaceAll(*s.Text, sandboxToken, b.dir)
+		return os.WriteFile(filepath.Join(b.dir, *s.Name), []byte(text), 0o600)
+	case "expect_system":
+		return b.expectSystem(s)
 	default:
 		return b.fileStep(s)
 	}
+}
+
+// runnersNames are the names of the sandbox the runner itself makes, which no step of the system writes or looks at.
+var runnersNames = []string{"disks", "unmounted", "atoll.toml", "conformance.json"}
+
+// checkSystemName refuses what is not one name of the sandbox, or is one of the runner's.
+func checkSystemName(name string) error {
+	switch {
+	case name == "" || name == "." || name == ".." || strings.Contains(name, "/"):
+		return fmt.Errorf("%q is not a name", name)
+	case slices.Contains(runnersNames, name):
+		return fmt.Errorf("%q is one of the runner's names", name)
+	}
+	return nil
+}
+
+// checkSystemFiles refuses an expect_system step that would look for nothing, a file with no text, or a name
+// checkSystemName refuses.
+func checkSystemFiles(files []systemFile, absent []string) error {
+	if len(files)+len(absent) == 0 {
+		return errors.New("nothing to expect")
+	}
+	for _, f := range files {
+		if f.Text == nil {
+			return fmt.Errorf("%q: no text", f.Name)
+		}
+		if err := checkSystemName(f.Name); err != nil {
+			return err
+		}
+	}
+	for _, name := range absent {
+		if err := checkSystemName(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// expectSystem finds each file of files in the sandbox with its text, and none of absent.
+func (b *sandbox) expectSystem(s *step) error {
+	for _, f := range s.Files {
+		data, err := os.ReadFile(filepath.Join(b.dir, f.Name))
+		if err != nil {
+			return fmt.Errorf("expect_system: %w", err)
+		}
+		if want := strings.ReplaceAll(*f.Text, sandboxToken, b.dir); string(data) != want {
+			return fmt.Errorf("expect_system: %s holds %q, want %q", f.Name, data, want)
+		}
+	}
+	for _, name := range s.Absent {
+		_, err := os.Lstat(filepath.Join(b.dir, name))
+		switch {
+		case err == nil:
+			return fmt.Errorf("expect_system: %s is there", name)
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("expect_system: %s cannot be looked at: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // unmount leaves what a failed mount does: an empty folder where the disk was.

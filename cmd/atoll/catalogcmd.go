@@ -218,8 +218,9 @@ func verifyCatalog(ctx context.Context, c *config.Config, m disks.Machine) (out 
 }
 
 // catalogRebuild runs atoll catalog rebuild (specs.md §9): a new catalog from what the disks hold, every copy read
-// whole, made beside the old one, which is then set aside as <catalog>.old-<UTC time>, never removed. Without --yes it
-// says what it would do. It works when the old catalog cannot be opened: of a later version, damaged, or gone.
+// whole, made beside the old one, which is then set aside as <catalog>.old-<UTC time>, never removed, as is what an
+// earlier rebuild left, kept as <catalog>.rebuild-<UTC time>. Without --yes it says what it would do. It works when the
+// old catalog cannot be opened: of a later version, damaged, or gone.
 func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool, stdout, stderr io.Writer) int {
 	file := catalogPath(c)
 	out := catalogRebuildOutput{Catalog: file, Disks: []scanDisk{}, Conflicts: []pathItem{}}
@@ -249,10 +250,8 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 		}
 	}
 	fresh := file + ".rebuild"
-	for _, name := range []string{fresh, fresh + "-wal", fresh + "-shm"} {
-		if err := fsx.RemoveFile(name); err != nil && !fsx.IsAbsent(err) {
-			return failure(stderr, fmt.Errorf("catalog rebuild: %w", err))
-		}
+	if err := keepLeftover(fresh, m.Now(), stderr); err != nil {
+		return failure(stderr, err)
 	}
 	if _, err := catalog.Create(ctx, fresh, c.PoolID); err != nil {
 		return failure(stderr, fmt.Errorf("catalog rebuild: %w", err))
@@ -283,19 +282,54 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 	return writeRebuild(&out, flags["--json"], code, stdout, stderr)
 }
 
+// keepLeftover keeps what an earlier rebuild left at fresh, and its log, beside the catalog under a name that holds the
+// time, never removed, and says where on standard error: the old catalog, when that rebuild's last rename failed past
+// the swap or a crash came between the two, or a catalog it did not finish (specs.md §9, §25). A catalog another
+// rebuild holds the lock of is that rebuild's, still making it: nothing is moved, and the command gives up.
+func keepLeftover(fresh string, nowNS int64, stderr io.Writer) error {
+	release, err := fsx.LockFile(fresh)
+	switch {
+	case errors.Is(err, fsx.ErrBusy):
+		return fmt.Errorf(T("catalog rebuild: another rebuild is making %s: nothing is changed"), fresh)
+	case err == nil:
+		defer release()
+	case !fsx.IsAbsent(err):
+		return fmt.Errorf("catalog rebuild: %w", err)
+	}
+	moved, err := catalog.KeepLeftover(fresh, nowNS)
+	if err != nil {
+		return fmt.Errorf("catalog rebuild: %w", err)
+	}
+	if len(moved) > 0 {
+		report(stderr, keptMessage(moved))
+	}
+	return nil
+}
+
+// keptMessage says where what an earlier rebuild left went, the catalog first.
+func keptMessage(moved []catalog.Moved) string {
+	to := make([]string, 0, len(moved))
+	for _, m := range moved {
+		to = append(to, m.To)
+	}
+	return fmt.Sprintf(T("warning: what an earlier rebuild left at %s is kept beside it, never removed, at %s: the old catalog, when that rebuild could not set it aside, or a catalog it did not finish"),
+		moved[0].From, strings.Join(to, ", "))
+}
+
 // notInPlace says what a set-aside that failed left: the new catalog not yet in place, the old one where it was; or,
 // once the swap went through, the new one in place, where the old one stays, where its log went, and the rename that
-// puts them together, before a rebuild run again removes the name the old one stays at (specs.md §9, §25).
+// puts them together; a rebuild run again keeps the old one beside the catalog under a name of its own (specs.md §9,
+// §25).
 func notInPlace(fresh string, err error) error {
 	var half *catalog.OldNotSetAside
 	switch {
 	case !errors.As(err, &half):
 		return fmt.Errorf(T("catalog rebuild: the new catalog is %s, not yet in place: %w"), fresh, err)
 	case len(half.Log) == 0:
-		return fmt.Errorf(T("catalog rebuild: the new catalog is in place at %s; the old one could not be renamed to %s, and stays at %s, which a rebuild run again would remove: rename it to %s yourself: %w"),
+		return fmt.Errorf(T("catalog rebuild: the new catalog is in place at %s; the old one could not be renamed to %s, and stays at %s, which a rebuild run again keeps beside it under a name of its own: rename it to %s yourself: %w"),
 			half.File, half.Want, half.At, half.Want, half.Err)
 	default:
-		return fmt.Errorf(T("catalog rebuild: the new catalog is in place at %s; the old one could not be renamed to %s, and stays at %s, which a rebuild run again would remove, while its log went to %s: rename it to %s yourself, which puts them together: %w"),
+		return fmt.Errorf(T("catalog rebuild: the new catalog is in place at %s; the old one could not be renamed to %s, and stays at %s, which a rebuild run again keeps beside it under a name of its own, while its log went to %s: rename it to %s yourself, which puts them together: %w"),
 			half.File, half.Want, half.At, strings.Join(half.Log, ", "), half.Want, half.Err)
 	}
 }

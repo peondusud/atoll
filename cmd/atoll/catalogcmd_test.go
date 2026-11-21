@@ -11,8 +11,8 @@ import (
 )
 
 // A rebuild whose old catalog could not take its name once the swap went through says that the new catalog is in
-// place, where the old one stays, where its log went, and the rename that puts them together, before a rebuild run
-// again removes it; one whose swap failed says that the new catalog is not in place (specs.md §9, §25).
+// place, where the old one stays, where its log went, the rename that puts them together, and that a rebuild run again
+// keeps it; one whose swap failed says that the new catalog is not in place (specs.md §9, §25).
 func TestARebuildSaysWhereEachCatalogIs(t *testing.T) {
 	const (
 		file  = "/var/lib/atoll/catalog.db"
@@ -28,11 +28,11 @@ func TestARebuildSaysWhereEachCatalogIs(t *testing.T) {
 		{"its log set aside", fmt.Errorf("catalog: %w", &catalog.OldNotSetAside{File: file, At: fresh, Want: old,
 			Log: []string{old + "-wal", old + "-shm"}, Err: syscall.EIO}), syscall.EIO,
 			[]string{"in place at " + file, "stays at " + fresh, "renamed to " + old, old + "-wal, " + old + "-shm", "rename it to " + old,
-				"a rebuild run again would remove", "input/output error"},
-			[]string{"not yet in place"}},
+				"a rebuild run again keeps", "input/output error"},
+			[]string{"not yet in place", "remove"}},
 		{"with no log", fmt.Errorf("catalog: %w", &catalog.OldNotSetAside{File: file, At: fresh, Want: old, Err: syscall.ENOSPC}), syscall.ENOSPC,
-			[]string{"in place at " + file, "stays at " + fresh, "rename it to " + old, "a rebuild run again would remove", "no space left on device"},
-			[]string{"not yet in place", "-wal", "its log"}},
+			[]string{"in place at " + file, "stays at " + fresh, "rename it to " + old, "a rebuild run again keeps", "no space left on device"},
+			[]string{"not yet in place", "-wal", "its log", "remove"}},
 		{"the swap failed", fmt.Errorf("catalog: %w", syscall.EINVAL), syscall.EINVAL,
 			[]string{"the new catalog is " + fresh + ", not yet in place"}, nil},
 	} {
@@ -52,5 +52,17 @@ func TestARebuildSaysWhereEachCatalogIs(t *testing.T) {
 				t.Errorf("%q lost its cause", err)
 			}
 		})
+	}
+}
+
+// What an earlier rebuild left is said where it went, the catalog first, and that it is kept (specs.md §9, §25).
+func TestKeptMessage(t *testing.T) {
+	const fresh = "/var/lib/atoll/catalog.db.rebuild"
+	kept := fresh + "-20261121T063000Z"
+	got := keptMessage([]catalog.Moved{{From: fresh, To: kept}, {From: fresh + "-wal", To: kept + "-wal"}})
+	for _, part := range []string{"left at " + fresh + " ", "never removed", "at " + kept + ", " + kept + "-wal:", "the old catalog"} {
+		if !strings.Contains(got, part) {
+			t.Errorf("%q says nothing of %q", got, part)
+		}
 	}
 }

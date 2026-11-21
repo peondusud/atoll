@@ -494,6 +494,30 @@ func TestWriteStepExpandsTheSandbox(t *testing.T) {
 	})
 }
 
+// write_system writes a file of the sandbox that is no disk's, as one beside the catalog, and expect_system finds the
+// files it names there, with their text, and not those it says are absent.
+func TestSystemFiles(t *testing.T) {
+	body := func(expect string) string {
+		return steps(`{"do": "write_system", "name": "catalog.db.rebuild", "text": "old in ${SANDBOX}"},
+			{"do": "atoll"},
+			{"do": "expect_system", ` + expect + `}`)
+	}
+	moved := `mv catalog.db.rebuild kept`
+	checkVerdicts(t, []verdictCase{
+		{"what it wrote, moved", moved, body(`"files": [{"name": "kept", "text": "old in ${SANDBOX}"}], "absent": ["catalog.db.rebuild"]`), ""},
+		{"another text", moved, body(`"files": [{"name": "kept", "text": "new"}]`), "kept"},
+		{"a file not there", moved, body(`"files": [{"name": "catalog.db.rebuild", "text": "old in ${SANDBOX}"}]`), "catalog.db.rebuild"},
+		{"a file there that should not be", "exit 0", body(`"absent": ["catalog.db.rebuild"]`), "catalog.db.rebuild"},
+		{"nothing to expect", "exit 0", steps(`{"do": "expect_system"}`), "nothing to expect"},
+		{"a file with no text", "exit 0", steps(`{"do": "expect_system", "files": [{"name": "a"}]}`), "no text"},
+		{"a path, not a name", "exit 0", steps(`{"do": "write_system", "name": "a/b", "text": "x"}`), "not a name"},
+		{"a name of the runner's", "exit 0", steps(`{"do": "write_system", "name": "disks", "text": "x"}`), "the runner's"},
+		{"the control file", "exit 0", steps(`{"do": "expect_system", "absent": ["conformance.json"]}`), "the runner's"},
+		{"write with no text", "exit 0", steps(`{"do": "write_system", "name": "a"}`), "no text"},
+		{"a field that does not apply", "exit 0", steps(`{"do": "write_system", "name": "a", "text": "x", "disk": "d"}`), "does not apply"},
+	})
+}
+
 func TestTimeout(t *testing.T) {
 	stepTimeout = 100 * time.Millisecond
 	defer func() { stepTimeout = 2 * time.Minute }()

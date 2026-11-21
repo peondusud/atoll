@@ -112,10 +112,49 @@ func Checkpoint(ctx context.Context, file string) (err error) {
 	return nil
 }
 
+// stamp is the UTC time a name a rebuild gives holds, YYYYMMDDTHHMMSSZ.
+func stamp(nowNS int64) string {
+	return time.Unix(0, nowNS).UTC().Format("20060102T150405Z")
+}
+
+// Moved is a name KeepLeftover moved, and where to.
+type Moved struct {
+	From, To string
+}
+
+// KeepLeftover moves what an earlier rebuild left at fresh, <catalog>.rebuild, with its write-ahead log and shared
+// memory, to <catalog>.rebuild-<UTC time> beside it, never replacing a name and never removing anything: that name holds
+// the old catalog when that rebuild's last rename failed past the swap, or a crash came between the two, and otherwise
+// a catalog it did not finish; nothing tells which (specs.md §9). The log goes first, as in SetAside, so that it is
+// never left at fresh once the catalog went. A rename that fails puts back what went, and the error says so. It says
+// where each name went, the catalog first, then its log and its shared memory, without what was not there.
+func KeepLeftover(fresh string, nowNS int64) ([]Moved, error) {
+	kept := fresh + "-" + stamp(nowNS)
+	var moved []Moved
+	for _, suffix := range []string{"-wal", "-shm", ""} {
+		err := fsx.RenameFileNoReplace(fresh+suffix, kept+suffix)
+		switch {
+		case err == nil:
+			moved = append(moved, Moved{From: fresh + suffix, To: kept + suffix})
+		case !fsx.IsAbsent(err):
+			for _, m := range moved {
+				if back := fsx.RenameFileNoReplace(m.To, m.From); back != nil {
+					err = errors.Join(err, back)
+				}
+			}
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+	}
+	if n := len(moved); n > 0 && moved[n-1].From == fresh {
+		moved = append([]Moved{moved[n-1]}, moved[:n-1]...)
+	}
+	return moved, nil
+}
+
 // OldNotSetAside says that a rebuilt catalog is in place, and that the old one could not take the name it was to go to,
-// <catalog>.old-<UTC time>: it stays at the name the new one was made at, which a rebuild run again removes, while its
-// write-ahead log and shared memory, when it had them, went beside the name it was to take. Renaming it there puts
-// them together (specs.md §9).
+// <catalog>.old-<UTC time>: it stays at the name the new one was made at, which a rebuild run again keeps beside the
+// catalog under a name of its own (KeepLeftover), while its write-ahead log and shared memory, when it had them, went
+// beside the name it was to take. Renaming it there puts them together (specs.md §9).
 type OldNotSetAside struct {
 	// File is the catalog's name, where the new one is.
 	File string
@@ -147,26 +186,26 @@ func SetAside(file, fresh string, nowNS int64) (string, error) {
 		return "", fmt.Errorf("catalog %s: %w", file, err)
 	}
 	if !there {
-		if err := fsx.RenameFile(fresh, file); err != nil {
+		if err := fsx.RenameFileNoReplace(fresh, file); err != nil {
 			return "", fmt.Errorf("catalog: %w", err)
 		}
 		return "", nil
 	}
-	old := file + ".old-" + time.Unix(0, nowNS).UTC().Format("20060102T150405Z")
+	old := file + ".old-" + stamp(nowNS)
 	// The log goes first: left beside the new catalog, SQLite would play the old one's frames into it. A swap that
 	// fails puts it back: the old catalog stays at its name, and what its log holds, committed and not yet moved into
 	// it when no checkpoint could run, would be lost to it.
 	var moved []string
 	putBack := func(err error) error {
 		for _, suffix := range moved {
-			if back := fsx.RenameFile(old+suffix, file+suffix); back != nil {
+			if back := fsx.RenameFileNoReplace(old+suffix, file+suffix); back != nil {
 				err = errors.Join(err, back)
 			}
 		}
 		return fmt.Errorf("catalog: %w", err)
 	}
 	for _, suffix := range []string{"-wal", "-shm"} {
-		err := fsx.RenameFile(file+suffix, old+suffix)
+		err := fsx.RenameFileNoReplace(file+suffix, old+suffix)
 		switch {
 		case err == nil:
 			moved = append(moved, suffix)
@@ -178,9 +217,9 @@ func SetAside(file, fresh string, nowNS int64) (string, error) {
 		return "", putBack(err)
 	}
 	// The new catalog is in place from here on. The old one, at fresh now, is left where it is should it not take its
-	// name, as moving its log back beside it would leave both where a rebuild run again removes them: the error says
-	// where each is, and that renaming it puts them together.
-	if err := fsx.RenameFile(fresh, old); err != nil {
+	// name, and its log where it went: the error says where each is, and that renaming it puts them together. A
+	// rebuild run again keeps it beside the catalog under a name of its own (KeepLeftover), never removed.
+	if err := fsx.RenameFileNoReplace(fresh, old); err != nil {
 		half := &OldNotSetAside{File: file, At: fresh, Want: old, Err: err}
 		for _, suffix := range moved {
 			half.Log = append(half.Log, old+suffix)

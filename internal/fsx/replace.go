@@ -123,6 +123,22 @@ func RenameFile(from, to string) error {
 	return nil
 }
 
+// RenameFileNoReplace renames a file of the system disk, never replacing what is at the new name: renameat2 with
+// RENAME_NOREPLACE, or, where its filesystem lacks that, a link at the new name then the old name's unlink. A name
+// taken is an error that is os.ErrExist.
+func RenameFileNoReplace(from, to string) error {
+	err := unix.Renameat2(unix.AT_FDCWD, from, unix.AT_FDCWD, to, unix.RENAME_NOREPLACE)
+	if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS) {
+		if err = unix.Link(from, to); err == nil {
+			err = unix.Unlink(from)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("rename %s to %s: %w", from, to, err)
+	}
+	return nil
+}
+
 // ListNames gives the names in a folder of the system disk, in no order.
 func ListNames(path string) ([]string, error) {
 	entries, err := os.ReadDir(path)

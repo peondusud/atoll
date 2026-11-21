@@ -59,6 +59,8 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `mount` | `disk` | brings an unmounted disk back, with its tree. A step fails if something was written to the empty folder meanwhile |
 | `expect_tree` | `disk`, `tree` | compares the whole disk with `tree`: below |
 | `expect_catalog` | `query`, `rows` | runs `query` on `${SANDBOX}/catalog.db`, read-only, and compares what it returns with `rows`: below |
+| `write_system` | `name`, `text` | writes a file of `${SANDBOX}` itself, no disk's, such as one beside the catalog that an earlier command left: `name` is one name, never `disks`, `unmounted`, `atoll.toml` nor `conformance.json`, the runner's own; `${SANDBOX}` in `text` is replaced |
+| `expect_system` | `files`, `absent` | finds each of `files`, a `name` and its `text`, in `${SANDBOX}` itself with that text, and none of `absent`, a list of names; names as for `write_system`, and one of the two given |
 
 A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the top of the disk. It may be longer than `PATH_MAX`, which the kernel takes from no path given whole: the runner then makes, changes and reads it one name at a time below the top, as a command that works in a folder below would, and a scenario can hold what is past the limit of a mergerfs branch (`specs.md` §15.8). A step that fails stops the scenario, which fails. `specs.md` §29.4 also names operations through mergerfs, I/O errors and crashes: those steps arrive with what they test, and a step the runner does not know fails the scenario.
 

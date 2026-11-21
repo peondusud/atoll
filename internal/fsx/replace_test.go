@@ -187,3 +187,35 @@ func TestReplaceFileOfWhatIsNoFile(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// RenameFileNoReplace renames a file of the system disk to a free name, and refuses a name taken, leaving both files
+// as they were.
+func TestRenameFileNoReplace(t *testing.T) {
+	dir := t.TempDir()
+	from, to, taken := filepath.Join(dir, "a"), filepath.Join(dir, "b"), filepath.Join(dir, "c")
+	for name, text := range map[string]string{from: "a", taken: "c"} {
+		if err := os.WriteFile(name, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RenameFileNoReplace(from, taken); !errors.Is(err, os.ErrExist) {
+		t.Errorf("a name taken: %v", err)
+	}
+	for name, want := range map[string]string{from: "a", taken: "c"} {
+		if data, err := os.ReadFile(name); err != nil || string(data) != want {
+			t.Errorf("%s: %q, %v", name, data, err)
+		}
+	}
+	if err := RenameFileNoReplace(from, to); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(to); err != nil || string(data) != "a" {
+		t.Errorf("%q, %v", data, err)
+	}
+	if _, err := os.Stat(from); !os.IsNotExist(err) {
+		t.Errorf("%s is still there: %v", from, err)
+	}
+	if err := RenameFileNoReplace(from, filepath.Join(dir, "d")); !IsAbsent(err) {
+		t.Errorf("nothing to rename: %v", err)
+	}
+}
