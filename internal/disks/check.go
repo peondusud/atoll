@@ -135,6 +135,10 @@ type Observer interface {
 	// an NTFS disk that passed questions 1 to 10, and no other (specs.md §10). A machine that runs for long reads it once
 	// per mount.
 	Hiberfil(mount string, entry *MountEntry) HiberfilSeen
+	// LogFile answers what $LogFile, NTFS's journal, at the top of the mount says, through a handle whose mount is
+	// entry's: asked of an NTFS disk whose hiberfil.sys left it online, and no other (specs.md §10). A machine that runs
+	// for long reads it once per mount.
+	LogFile(mount string, entry *MountEntry) LogFileSeen
 }
 
 // Machine is what the rest of Atoll asks of the machine it runs on, about its disks and the time.
@@ -221,13 +225,16 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	case FolderIOError:
 		return missing(IOError, fmt.Sprintf("%q does not answer: %s", d.Root, root.Note))
 	}
-	// hiberfil.sys is the only file of the disk a check reads: once the mount is confirmed as the disk, and only when what
-	// comes before it in the second table leaves the disk online.
-	verdict := judgeWrites(e, device.Identity, root.OtherCase, d.Root, func() HiberfilSeen {
+	// hiberfil.sys, then $LogFile, are the only files of the disk a check reads: once the mount is confirmed as the disk,
+	// and only when what comes before them in the second table leaves the disk online.
+	verdict := judgeWrites(e, device.Identity, root.OtherCase, d.Root, func() Verdict {
 		if d.FS != names.NTFS {
-			return HiberfilSeen{File: HiberfilAbsent}
+			return Verdict{State: Online}
 		}
-		return observer.Hiberfil(d.Mount, e)
+		if v := judgeHiberfil(observer.Hiberfil(d.Mount, e)); v.State != Online {
+			return v
+		}
+		return judgeLogFile(observer.LogFile(d.Mount, e))
 	})
 	if verdict.State == Missing {
 		return verdict
@@ -319,9 +326,10 @@ func LinkMovesTimes(fstype string) bool {
 
 // judgeWrites decides whether Atoll may write to a disk it has identified: the second table of
 // specs.md §10, in its order. ntfs3 and the type ntfs, the two NTFS drivers of the kernel, show their options among the
-// superblock options; the type ntfs has no ads. hiberfil is asked only once what a driver's options say leaves the disk
-// online, and an error it gives may make the disk missing.
-func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string, hiberfil func() HiberfilSeen) Verdict {
+// superblock options; the type ntfs has no ads. windows, what hiberfil.sys and $LogFile say of Windows on an NTFS disk,
+// is asked only once what a driver's options say leaves the disk online, and an error it meets may make the disk
+// missing.
+func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string, windows func() Verdict) Verdict {
 	ntfs3, variant := e.FSType == "ntfs3", id.Variant
 	kernelNTFS := ntfs3 || e.FSType == "ntfs"
 	switch {
@@ -334,7 +342,7 @@ func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string, hiber
 	case e.FSType == "ntfs" && !slices.Contains(e.SuperOptions, "errors=remount-ro"):
 		return readOnly(ErrorsContinue, "ntfs without errors=remount-ro writes to a volume Windows left hibernated, or one marked dirty: remount with it")
 	}
-	if v := judgeHiberfil(hiberfil()); v.State != Online {
+	if v := windows(); v.State != Online {
 		return v
 	}
 	switch {

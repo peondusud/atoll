@@ -18,20 +18,22 @@ import (
 // NewMachine gives what the delivered binary sees, which is the machine. Taking a folder for a
 // disk takes another build (specs.md §29.4), so nothing here can skip a check.
 func NewMachine() (Machine, error) {
-	return machine{hiberfil: &hiberfilCache{}}, nil
+	return machine{hiberfil: &hiberfilCache{}, logFile: &logFileCache{}}, nil
 }
 
-// machine keeps what it read of hiberfil.sys on each mount, for as long as it runs.
+// machine keeps what it read of hiberfil.sys and of $LogFile on each mount, for as long as it runs.
 type machine struct {
 	hiberfil *hiberfilCache
+	logFile  *logFileCache
 }
 
 // Mount answers questions 1 and 2. A path at which no mount of its own is found forgets what was read of hiberfil.sys
-// there: what is mounted there next is another mount, whatever id the kernel gives it.
+// and $LogFile there: what is mounted there next is another mount, whatever id the kernel gives it.
 func (m machine) Mount(mount string) MountSeen {
 	seen := lookAtMount(mount)
 	if seen.Path != PathOK || seen.Entry == nil || seen.Entry.MountPoint != mount {
 		m.hiberfil.forget(mount)
+		m.logFile.forget(mount)
 	}
 	return seen
 }
@@ -111,6 +113,26 @@ func (m machine) Hiberfil(mount string, entry *MountEntry) HiberfilSeen {
 			return mountChanged
 		}
 		return ReadHiberfil(top)
+	})
+}
+
+// LogFile reads $LogFile once per mount, as hiberfil.sys is read (specs.md §10), through a handle on the top whose
+// mount is the one the check found at the path.
+func (m machine) LogFile(mount string, entry *MountEntry) LogFileSeen {
+	return m.logFile.answer(mount, entry, fsx.UniqueMountID, func() LogFileSeen {
+		top, err := fsx.OpenDir(mount)
+		if err != nil {
+			return logFileError(err)
+		}
+		defer func() { _ = top.Close() }()
+		info, err := top.Info()
+		switch {
+		case err != nil:
+			return logFileError(err)
+		case info.MountID != entry.ID:
+			return LogFileSeen{}.changedMount()
+		}
+		return ReadLogFile(top)
 	})
 }
 

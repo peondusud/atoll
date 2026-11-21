@@ -205,6 +205,22 @@ func (folders) Hiberfil(mount string, _ *MountEntry) HiberfilSeen {
 	return ReadHiberfil(top)
 }
 
+// LogFile reads $LogFile at the top of the real folder, at each check. A folder holds none unless a scenario puts one
+// there, and one absent reads as the journal every driver of Linux leaves, empty: what a folder holds at that name is
+// read as a volume's would be.
+func (folders) LogFile(mount string, _ *MountEntry) LogFileSeen {
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return logFileError(err)
+	}
+	defer func() { _ = top.Close() }()
+	seen := ReadLogFile(top)
+	if seen.File == LogFileAbsent {
+		return LogFileSeen{File: LogFileFile, Journal: JournalEmpty}
+	}
+	return seen
+}
+
 func (f folders) Now() int64 {
 	return f.now
 }

@@ -28,6 +28,8 @@ type fakeDisk struct {
 	id string
 	// hiberfil is what the top of the mount holds at hiberfil.sys: nothing when left empty.
 	hiberfil disks.HiberfilSeen
+	// logFile is what it holds at $LogFile: an empty journal when left empty.
+	logFile disks.LogFileSeen
 }
 
 func (f *fakeDisk) Mount(mount string) disks.MountSeen {
@@ -52,6 +54,12 @@ func (f *fakeDisk) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
 		return disks.HiberfilSeen{File: disks.HiberfilAbsent}
 	}
 	return f.hiberfil
+}
+func (f *fakeDisk) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
+	if f.logFile.File == "" {
+		return disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalEmpty}
+	}
+	return f.logFile
 }
 func (f *fakeDisk) Now() int64                         { return 0 }
 func (f *fakeDisk) Space(string) (int64, int64, error) { return 1 << 30, 1 << 29, nil }
@@ -105,6 +113,14 @@ func TestDiskAddRefusesNameRules(t *testing.T) {
 			hiberfil: disks.HiberfilSeen{File: disks.HiberfilFile, Size: 8192, Head: append([]byte("HIBR"), make([]byte, 4092)...)}}, "", "readonly"},
 		{"ntfs3 resumed", &fakeDisk{mount: mount, fsType: "ntfs3", options: []string{"rw", "iocharset=utf8"}, id: "01D9F3A2B4C5E6F7",
 			hiberfil: disks.HiberfilSeen{File: disks.HiberfilFile, Size: 8192, Head: make([]byte, 4096)}}, "", "online"},
+		// A data volume Windows had mounted when Fast Startup ran holds no hiberfil.sys: its journal says so, and it is
+		// taken read-only the same way.
+		{"ntfs3 left in use", &fakeDisk{mount: mount, fsType: "ntfs3", options: []string{"ro", "iocharset=utf8"}, id: "01D9F3A2B4C5E6F7",
+			logFile: disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalUnclean, Note: "n"}}, "", "readonly"},
+		{"ntfs-3g left in use", &fakeDisk{mount: mount, fsType: "fuseblk", options: []string{"ro", "user_id=0", "group_id=0"}, id: "01D9F3A2B4C5E6F7",
+			logFile: disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalVersion2, Note: "n"}}, "", "readonly"},
+		{"ntfs3 whose journal is clean", &fakeDisk{mount: mount, fsType: "ntfs3", options: []string{"rw", "iocharset=utf8"}, id: "01D9F3A2B4C5E6F7",
+			logFile: disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalClean}}, "", "online"},
 		{"ext4 casefold", &fakeDisk{mount: mount, fsType: "ext4", options: []string{"rw"}, variant: disks.VariantCasefold}, "casefold", ""},
 		{"xfs ascii-ci", &fakeDisk{mount: mount, fsType: "xfs", options: []string{"rw"}, variant: disks.VariantASCIICI}, "ascii-ci", ""},
 		// A name made there is not durable once its folder is synced, which every operation of Atoll's rests on.
@@ -136,8 +152,9 @@ func TestDiskAddRefusesNameRules(t *testing.T) {
 		if (a.marker != "") != (tc.state == "online") {
 			t.Errorf("%s: marker %q", tc.name, a.marker)
 		}
-		// What a hibernated volume waits for is Windows, not a mount read-write, which it has.
-		if hibernated := strings.Contains(tc.name, "hibernated"); hibernated != strings.Contains(stderr.String(), "shut down fully") ||
+		// What a hibernated volume, or one left in use, waits for is Windows, not a mount read-write, which it may have.
+		hibernated := strings.Contains(tc.name, "hibernated") || strings.Contains(tc.name, "left in use")
+		if hibernated != strings.Contains(stderr.String(), "shut down fully") ||
 			hibernated && strings.Contains(stderr.String(), "until it is mounted read-write") {
 			t.Errorf("%s: %s", tc.name, stderr.String())
 		}
