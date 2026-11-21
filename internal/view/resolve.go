@@ -19,6 +19,9 @@ const (
 	OpLink   = "link"
 	OpUnlink = "unlink"
 	OpRmdir  = "rmdir"
+	// OpMove is a new file whose write ran out of space, moved from Disk2 to Disk: what Disk2 holds at its path is
+	// presented while Planned, and what Disk holds once its copy is at its name there (specs.md §21.2).
+	OpMove = "move"
 )
 
 // Op is an operation of the view that no pass has taken in, as Resolve reads it (specs.md §21.2).
@@ -29,6 +32,10 @@ type Op struct {
 	// Path2 is the new path of a rename, a replacement or a hard link.
 	Path2  string
 	Folder bool
+	// Disk2 is, for a move, the full disk the file leaves, and Planned says that its copy is not at its name on Disk yet:
+	// the operation the move names is still its create there (specs.md §21.2).
+	Disk2   string
+	Planned bool
 }
 
 // SourceKind says where what a path presents comes from.
@@ -59,7 +66,8 @@ func at(path, p string) bool {
 
 // Resolve says what a path resolves to, the view's own operations given oldest first, the newest deciding: a path
 // made, written, given an extended attribute, renamed or hard-linked to presents what its disk holds there, the name a hard link was made from
-// staying as it was; one deleted, removed, replaced or renamed from, or below a folder removed or renamed from,
+// staying as it was; a new file moved to another disk, what the disk it leaves holds while its copy is not at its name
+// on the other yet, and what the other holds from then on; one deleted, removed, replaced or renamed from, or below a folder removed or renamed from,
 // presents nothing; any other, the catalog's rows, below a folder renamed at its old name (specs.md §21.2). A folder is
 // renamed on every disk that holds it, so a disk always holds a path at the path the view presents it at.
 func Resolve(ops []Op, path string) Source {
@@ -96,6 +104,13 @@ func Resolve(ops []Op, path string) Source {
 			if q == o.Path2 {
 				return Source{Kind: FromDisk, Disk: o.Disk}
 			}
+		case OpMove:
+			if q == o.Path {
+				if o.Planned {
+					return Source{Kind: FromDisk, Disk: o.Disk2}
+				}
+				return Source{Kind: FromDisk, Disk: o.Disk}
+			}
 		}
 	}
 	paths := []string{q}
@@ -127,7 +142,7 @@ func ListOf(ops []Op, dir string) Listing {
 	for k := range ops {
 		var target string
 		switch o := &ops[k]; o.Kind {
-		case OpCreate, OpMkdir, OpSymlink, OpWrite, OpXattr:
+		case OpCreate, OpMkdir, OpSymlink, OpWrite, OpXattr, OpMove:
 			target = o.Path
 		case OpRename, OpReplace, OpLink:
 			target = o.Path2

@@ -29,7 +29,16 @@ type machine struct {
 	// fail makes calls on a disk fail, by mount, as fsx.Fault does; a part's writer reads it as a test sets it.
 	mu   sync.Mutex
 	fail map[string]func(call, name string) error
+	// points are the crash points passed, and crash the one, counted from 1, that stops the view there, as kill -9
+	// would: a panic of crashed, which the test recovers. 0 stops nowhere.
+	points []string
+	crash  int
+	// crashAt stops the view at the first crash point of that name, "" at none.
+	crashAt string
 }
+
+// crashed is what a crash point a test asks for panics with.
+type crashed struct{ point string }
 
 func (m *machine) setFail(mount string, fail func(call, name string) error) {
 	m.mu.Lock()
@@ -63,7 +72,27 @@ func (m *machine) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
 func (m *machine) ReadPastCache(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
 	return disks.DeviceSeen{}
 }
-func (m *machine) Checkpoint(string) {}
+func (m *machine) Checkpoint(point string) {
+	m.mu.Lock()
+	m.points = append(m.points, point)
+	stop := m.crash > 0 && len(m.points) == m.crash || m.crashAt != "" && point == m.crashAt
+	if stop {
+		m.crashAt = ""
+	}
+	m.mu.Unlock()
+	if stop {
+		panic(crashed{point: point}) //nolint:forbidigo // what stands for kill -9
+	}
+}
+
+// passed gives the crash points passed so far, and forgets them.
+func (m *machine) passed() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := m.points
+	m.points = nil
+	return out
+}
 func (m *machine) Now() int64 {
 	// A part's end is written apart from the program, and asks the time too.
 	m.mu.Lock()

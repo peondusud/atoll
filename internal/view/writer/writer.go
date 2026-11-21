@@ -63,6 +63,10 @@ type Writer struct {
 	mu sync.Mutex
 	// par holds the copies written in parallel (specs.md §12.3).
 	par *parts
+	// moveOnENOSPC is view.move_on_enospc: a new file whose write runs out of space moves to another disk (specs.md
+	// §21.2). writing holds, by path, each file Create made that is still open through the handle it gave, under mu.
+	moveOnENOSPC bool
+	writing      map[string]*File
 }
 
 // New makes the writer of a view.
@@ -76,20 +80,13 @@ func New(db *sql.DB, c *config.Config, m disks.Machine, tree *view.Tree, handles
 	if err != nil {
 		return nil, fmt.Errorf("placement.min_free: %w", err)
 	}
+	moveOnENOSPC, _ := c.Effective()["view.move_on_enospc"].(bool)
 	return &Writer{db: db, config: c, machine: m, tree: tree, handles: handles, retention: retention, minFree: minFree, log: log,
-		par: &parts{files: map[string]*parallel{}, rooms: map[string]*roomOf{}}}, nil
+		par: &parts{files: map[string]*parallel{}, rooms: map[string]*roomOf{}}, moveOnENOSPC: moveOnENOSPC, writing: map[string]*File{}}, nil
 }
 
 // Tree gives what the writer looks at what the view presents through.
 func (w *Writer) Tree() *view.Tree { return w.tree }
-
-// File is a file the view opened for writing, and for a new file in immediate mode the copies written in parallel
-// that follow what is written to it (specs.md §12.3).
-type File struct {
-	fsx.WritableFile
-	Disk, Path string
-	par        *parallel
-}
 
 func (w *Writer) disk(id string) *config.Disk {
 	for i := range w.config.Disks {
@@ -204,6 +201,11 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Calle
 	file := &File{WritableFile: f, Disk: disk, Path: path}
 	if !cached {
 		file.par = w.startParallel(ctx, disk, path)
+	}
+	if w.moveOnENOSPC {
+		// A new file, open through this handle alone: a write that runs out of space may move it (specs.md §21.2).
+		file.w, file.ctx, file.who, file.movable = w, context.WithoutCancel(ctx), who, true
+		w.writing[path] = file
 	}
 	return file, view.NodeOfStat(disk, &st, ""), nil
 }
@@ -355,6 +357,12 @@ type candidate struct {
 // name with no collision and whose branch reaches it; the one that holds the most files of its group with colocate,
 // then as placement.new_files says, online before standby, then by position.
 func (w *Writer) place(ctx context.Context, path string) (string, error) {
+	return w.placeFor(ctx, path, "", 0)
+}
+
+// placeFor is place, but for the disk except, and among disks whose room past min_free exceeds need: where a new file
+// whose write ran out of space on except moves to (specs.md §21.2).
+func (w *Writer) placeFor(ctx context.Context, path, except string, need int64) (string, error) {
 	rows, err := catalog.ViewDisks(ctx, w.db)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
@@ -380,7 +388,7 @@ func (w *Writer) place(ctx context.Context, path string) (string, error) {
 	for i := range w.config.Disks {
 		d := &w.config.Disks[i]
 		r, known := state[d.ID]
-		if !known || r.Cache || d.State != "" || !w.handles.Has(d.ID) {
+		if !known || r.Cache || d.State != "" || d.ID == except || !w.handles.Has(d.ID) {
 			continue
 		}
 		if r.State != string(solver.DiskOnline) && r.State != string(solver.DiskStandby) {
@@ -402,7 +410,7 @@ func (w *Writer) place(ctx context.Context, path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("%w", err)
 		}
-		if room := free - reserved; room > 0 {
+		if room := free - reserved; room > max(need, 0) {
 			list = append(list, candidate{id: d.ID, fill: solver.Fill{Room: room, Used: capacity - free, Capacity: capacity, Position: r.Position},
 				together: together[d.ID], standby: r.State == string(solver.DiskStandby)})
 		}
@@ -463,6 +471,24 @@ func (w *Writer) refusedOn(ctx context.Context, d *config.Disk, path, except str
 func (w *Writer) Open(ctx context.Context, path string, n *view.Node, who Caller) (*File, error) {
 	if n.Kind == view.NodeDir {
 		return nil, ErrIsFolder
+	}
+	// One change of names at a time: a move of the file this opens again (specs.md §21.2) is over, or never starts.
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if f := w.writing[path]; f != nil {
+		// Opened again to be written, a new file is no longer one handle's: it never moves.
+		f.again = true
+		if f.Disk != n.Disk {
+			// It moved since the kernel looked it up: what is opened is where it is now.
+			moved, err := w.tree.Lookup(ctx, path)
+			switch {
+			case err != nil:
+				return nil, fmt.Errorf("%w", err)
+			case moved == nil:
+				return nil, ErrNotFound
+			}
+			n = moved
+		}
 	}
 	if err := w.mayOn(asking(who), n.Disk, path, n, view.AccessWrite); err != nil {
 		return nil, err
@@ -1134,8 +1160,7 @@ func (w *Writer) resolved(ctx context.Context, path string) ([]string, []view.Op
 	}
 	open := make([]view.Op, 0, len(rows))
 	for i := range rows {
-		r := &rows[i]
-		open = append(open, view.Op{Kind: r.Kind, Disk: r.Disk, Path: r.Path, Path2: r.Path2, Folder: r.Folder})
+		open = append(open, view.OpOf(&rows[i]))
 	}
 	switch s := view.Resolve(open, path); s.Kind {
 	case view.FromCatalog:

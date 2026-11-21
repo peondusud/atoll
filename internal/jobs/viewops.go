@@ -32,12 +32,14 @@ func (p *pass) readViewOps(ctx context.Context) error {
 	return nil
 }
 
-// viewPlannedOn gives the paths of the view's operations still under way on a disk.
+// viewPlannedOn gives the paths of the view's operations still under way on a disk: a move's on the disk it goes to and
+// on the disk it leaves (specs.md §21.2).
 func (p *pass) viewPlannedOn(disk string) []string {
 	var paths []string
 	for i := range p.viewOps {
 		v := &p.viewOps[i]
-		if v.State != catalog.OpPlanned || v.Disk != disk || v.Kind == catalog.ViewPart {
+		on := v.Disk == disk || v.Kind == catalog.ViewMove && v.Disk2 == disk
+		if v.State != catalog.OpPlanned || !on || v.Kind == catalog.ViewPart {
 			continue
 		}
 		paths = append(paths, v.Path)

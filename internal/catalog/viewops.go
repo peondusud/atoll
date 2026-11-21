@@ -24,6 +24,11 @@ const (
 	ViewLink   = "link"
 	ViewUnlink = "unlink"
 	ViewRmdir  = "rmdir"
+	// ViewMove is a new file the view moved to another disk once a write ran out of space: Disk the disk it goes to,
+	// Disk2 the full disk it leaves, FileKey its inode there, and OpID the operation of ops the move runs now, the create
+	// of its part on Disk, then the trash of the copy it leaves on Disk2, then the unlink that purges it (specs.md §9,
+	// §21.2).
+	ViewMove = "move"
 )
 
 // The states of an operation, of ops and of view_ops alike (specs.md §9).
@@ -44,22 +49,37 @@ type ViewOp struct {
 	Folder bool
 	// FileKey is the inode of what a rename, a replacement or a deletion moved, or a hard link gave a name, in decimal.
 	FileKey string
-	// OpID is the operation of ops that sent a copy to the trash, for a deletion or a replacement, 0 otherwise.
+	// OpID is the operation of ops that sent a copy to the trash, for a deletion or a replacement, the one a part or a
+	// move runs, 0 otherwise.
 	OpID  int64
 	State string
 	AtNS  int64
+	// Disk2 is, for a move, the full disk the file leaves; OpKind the kind of the operation of ops OpID names, as
+	// OpenViewOps reads it.
+	Disk2  string
+	OpKind string
+}
+
+// AtSource says that a move still presents the copy on the disk it leaves: planned, and the operation it names still
+// the create of its part, whose copy is not at its name on the disk it goes to yet (specs.md §21.2).
+func (v *ViewOp) AtSource() bool {
+	return v.Kind == ViewMove && v.State == OpPlanned && v.OpKind == OpCreate
 }
 
 const insertViewOpSQL = `
-	INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns)
-	VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, 0), ?, ?)`
+	INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns, disk2_id)
+	VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, 0), ?, ?, NULLIF(?, ''))`
 
 func insertViewOp(ctx context.Context, tx *sql.Tx, v *ViewOp) error {
 	var path2 any
 	if v.Kind == ViewRename || v.Kind == ViewReplace || v.Kind == ViewLink {
 		path2 = []byte(v.Path2)
 	}
-	result, err := tx.ExecContext(ctx, insertViewOpSQL, v.Kind, v.Disk, []byte(v.Path), path2, v.Folder, v.FileKey, v.OpID, v.State, v.AtNS)
+	disk2 := ""
+	if v.Kind == ViewMove {
+		disk2 = v.Disk2
+	}
+	result, err := tx.ExecContext(ctx, insertViewOpSQL, v.Kind, v.Disk, []byte(v.Path), path2, v.Folder, v.FileKey, v.OpID, v.State, v.AtNS, disk2)
 	if err != nil {
 		return fmt.Errorf("view journal: %w", err)
 	}
@@ -145,7 +165,8 @@ func (v *ViewOp) Path2OrPath() string {
 }
 
 const openViewOpsSQL = `
-	SELECT id, kind, disk_id, lpath, COALESCE(lpath2, x''), folder, COALESCE(file_key, ''), COALESCE(op_id, 0), state, at_ns
+	SELECT id, kind, disk_id, lpath, COALESCE(lpath2, x''), folder, COALESCE(file_key, ''), COALESCE(op_id, 0), state, at_ns,
+		COALESCE(disk2_id, ''), COALESCE((SELECT o.kind FROM ops o WHERE o.id = view_ops.op_id), '')
 	FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone' ORDER BY id`
 
 // OpenViewOps gives the operations of the view that no pass has taken in, planned or done, by id: what the view
@@ -160,7 +181,7 @@ func OpenViewOps(ctx context.Context, db *sql.DB) ([]ViewOp, error) {
 	for rows.Next() {
 		var v ViewOp
 		var path, path2 []byte
-		if err := rows.Scan(&v.ID, &v.Kind, &v.Disk, &path, &path2, &v.Folder, &v.FileKey, &v.OpID, &v.State, &v.AtNS); err != nil {
+		if err := rows.Scan(&v.ID, &v.Kind, &v.Disk, &path, &path2, &v.Folder, &v.FileKey, &v.OpID, &v.State, &v.AtNS, &v.Disk2, &v.OpKind); err != nil {
 			return nil, fmt.Errorf("view journal: %w", err)
 		}
 		v.Path, v.Path2 = string(path), string(path2)
@@ -254,10 +275,16 @@ func FolderDisks(ctx context.Context, db *sql.DB, path string) ([]string, error)
 	return out, nil
 }
 
-// IsViewOp says whether an operation of the journal is one of Atoll's own view's.
-func IsViewOp(ctx context.Context, db *sql.DB, opID int64) (bool, error) {
+// viewDeletionOf says that an operation of ops sent a copy to the trash for a deletion or a replacement through the
+// view, which a user made: ?1 the operation's id.
+const viewDeletionOf = "SELECT 1 FROM view_ops v WHERE v.op_id = ?1 AND v.kind IN ('unlink', 'replace')"
+
+// IsViewDeletion says whether an operation of the journal sent a copy to the trash for a deletion or a replacement a
+// user made through Atoll's own view: a user's, never Atoll's own. What a move of the view sent there is Atoll's own
+// (specs.md §15.5, §21.2).
+func IsViewDeletion(ctx context.Context, db *sql.DB, opID int64) (bool, error) {
 	var is bool
-	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM view_ops WHERE op_id = ?)", opID).Scan(&is); err != nil {
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS("+viewDeletionOf+")", opID).Scan(&is); err != nil {
 		return false, fmt.Errorf("view journal: %w", err)
 	}
 	return is, nil

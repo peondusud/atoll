@@ -2,6 +2,7 @@ package writer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/peondusud/atoll/internal/catalog"
@@ -21,7 +22,18 @@ func (w *Writer) Reprise(ctx context.Context) error {
 	}
 	for i := range open {
 		v := &open[i]
-		if v.State != catalog.OpPlanned || !w.handles.Has(v.Disk) {
+		if v.State != catalog.OpPlanned {
+			continue
+		}
+		if v.Kind == catalog.ViewMove {
+			if err := w.repriseMove(ctx, v); err != nil {
+				w.log.Warn("a file the view moved for room stays planned", "disk", v.Disk, "from", v.Disk2, "path", v.Path, "error", err)
+				continue
+			}
+			w.log.Info("a file the view moved for room resolved after a stop", "disk", v.Disk, "from", v.Disk2, "path", v.Path, "state", v.State)
+			continue
+		}
+		if !w.handles.Has(v.Disk) {
 			continue
 		}
 		var state string
@@ -106,6 +118,147 @@ func (w *Writer) resolveReplace(ctx context.Context, d *ops.Disk, v *catalog.Vie
 		return "", false, fmt.Errorf("%w", err)
 	}
 	return catalog.OpDone, false, nil
+}
+
+// errStays says that a disk a move needs cannot be written to now: the move stays planned, for the next start.
+var errStays = errors.New("a disk the move needs cannot be written to now")
+
+// repriseMove resolves a move of a file whose write ran out of space, by the operation it names (specs.md §21.2). Its
+// create planned: a part at the file's path on the disk it goes to means that the rename went through; its name in
+// tmp/ goes, where an interrupted link left one, and the copy on the full disk goes to its trash, when it holds the size
+// and the modification time the moved one took from it, but stays there, unpurged, as nothing says that it was not
+// written to since; with another, both stay, and the full disk's is presented. No part at the path means that nothing
+// moved: the part goes, and the move is undone. Its trash planned: the copy still at its path on the full disk goes
+// to the trash all the same, as the program wrote to the other disk from then on, and stays there, unpurged; the table
+// of §17.2 then says what became of it. Its unlink planned is resolved as a purge's reprise resolves one (specs.md
+// §17.2). The move is then done.
+func (w *Writer) repriseMove(ctx context.Context, v *catalog.ViewOp) error {
+	op, found, err := catalog.OpByID(ctx, w.db, v.OpID)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	state, _, err := catalog.OpStateOf(ctx, w.db, v.OpID)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	switch {
+	case !found:
+		return fmt.Errorf("the move names operation %d, which the journal does not hold", v.OpID)
+	case state != catalog.OpPlanned:
+		// Resolved before a stop that came before the move's end.
+		end := catalog.OpDone
+		if op.Kind == catalog.OpCreate && state == catalog.OpUndone {
+			end = catalog.OpUndone
+		}
+		return catalog.EndViewMove(ctx, w.db, v, "", end, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+	case op.Kind == catalog.OpCreate:
+		return w.repriseMoveCreate(ctx, v, &op)
+	}
+	if !w.handles.Has(v.Disk2) {
+		return errStays
+	}
+	err = w.handles.Use(v.Disk2, func(d *ops.Disk) error {
+		if op.Kind == catalog.OpTrash {
+			if err := w.trashLeft(ctx, d, v, &op); err != nil {
+				return err
+			}
+		}
+		_, err := d.ResolveNow(ctx, w.db, &op, w.now(), w.retention)
+		return err //nolint:wrapcheck // ops says what failed
+	})
+	if err != nil {
+		return err
+	}
+	return catalog.EndViewMove(ctx, w.db, v, "", catalog.OpDone, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+}
+
+// trashLeft goes on with a move's trash left planned, once the file is at its name on the disk it went to, where the
+// program wrote from then on: the copy it left, still at its path, goes to the trash, whatever it holds, and stays
+// there, unpurged, as nothing says it was not written to since. The table of §17.2 then says what became of it.
+func (w *Writer) trashLeft(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, op *catalog.Op) error {
+	trashed, err := w.trashed(ctx, d, op.ID)
+	if err != nil || trashed {
+		return err
+	}
+	st, found, err := d.StatRoot(v.Path)
+	switch {
+	case err != nil:
+		return err //nolint:wrapcheck // ops says what failed
+	case !found || st.Kind != fsx.KindFile || fmt.Sprintf("%d", st.Ino) != op.FileKey:
+		return nil
+	}
+	row, err := knownOf(v.Path, &st)
+	if err != nil {
+		return err
+	}
+	if _, err := d.ToTrash(op, row); err != nil && errors.Is(err, ops.ErrDiskLost) {
+		return err //nolint:wrapcheck // ops says what failed
+	}
+	return nil
+}
+
+// repriseMoveCreate resolves a move whose create was left planned.
+func (w *Writer) repriseMoveCreate(ctx context.Context, v *catalog.ViewOp, op *catalog.Op) error {
+	if !w.handles.Has(v.Disk) {
+		return errStays
+	}
+	var moved fsx.Stat
+	placed := false
+	err := w.handles.Use(v.Disk, func(d *ops.Disk) error {
+		st, found, err := d.StatRoot(v.Path)
+		if err != nil {
+			return err //nolint:wrapcheck // ops says what failed
+		}
+		placed = found && st.Kind == fsx.KindFile && op.FileKey != "" && fmt.Sprintf("%d", st.Ino) == op.FileKey
+		moved = st
+		// Not at its name, the part is no copy of anything: it goes. At its name, a second name of it in tmp/ goes.
+		return d.DropPart(op.Path2) //nolint:wrapcheck // ops says what failed
+	})
+	if err != nil {
+		return err
+	}
+	if !placed {
+		return catalog.EndViewMove(ctx, w.db, v, catalog.OpUndone, catalog.OpUndone, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+	}
+	if !w.handles.Has(v.Disk2) {
+		return errStays
+	}
+	return w.handles.Use(v.Disk2, func(d *ops.Disk) error {
+		st, found, err := d.StatRoot(v.Path)
+		switch {
+		case err != nil:
+			return err //nolint:wrapcheck // ops says what failed
+		case !found || st.Kind != fsx.KindFile || fmt.Sprintf("%d", st.Ino) != v.FileKey:
+			// Nothing of it is left on the full disk: the moved copy is the file.
+			return catalog.EndViewMove(ctx, w.db, v, catalog.OpDone, catalog.OpDone, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+		case st.Size != moved.Size || st.Mtime != moved.Mtime:
+			// Written to since the copy: both stay, and the full disk's is presented, for a pass to find them both.
+			w.log.Warn("a file moved for room differs from the copy it left: both stay", "disk", v.Disk, "from", v.Disk2, "path", v.Path)
+			return catalog.EndViewMove(ctx, w.db, v, catalog.OpDone, catalog.OpUndone, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+		}
+		row, err := knownOf(v.Path, &st)
+		if err != nil {
+			return err
+		}
+		now := w.now()
+		trashed, err := catalog.ViewMoveTrash(ctx, w.db, v, &catalog.TrashStart{
+			Disk: v.Disk2, Path: v.Path, FileKey: v.FileKey, Size: row.Size, Reason: catalog.ReasonSurplus, NowNS: now, ExpiresNS: expires(now, w.retention),
+		})
+		if err != nil {
+			return fmt.Errorf("%w", err)
+		}
+		if _, err := d.ToTrash(trashed, row); err != nil {
+			if errors.Is(err, ops.ErrDiskLost) {
+				return err //nolint:wrapcheck // ops says what failed
+			}
+			if _, rerr := d.ResolveNow(ctx, w.db, trashed, w.now(), w.retention); rerr != nil {
+				return fmt.Errorf("%w: %w", err, rerr)
+			}
+			return catalog.EndViewMove(ctx, w.db, v, "", catalog.OpDone, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+		}
+		// In the trash it stays, unpurged: when in doubt, keep.
+		return catalog.EndViewMove(ctx, w.db, v, catalog.OpDone, catalog.OpDone, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+	})
 }
 
 // trashed says whether the trash holds what an operation of ops sent there.

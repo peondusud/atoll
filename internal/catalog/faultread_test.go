@@ -430,7 +430,7 @@ func TestEveryReaderFailsWhole(t *testing.T) {
 			return pair(op, ok), err
 		}},
 		{"FolderDisks", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) { return one(FolderDisks(ctx, db, "A")) }},
-		{"IsViewOp", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) { return one(IsViewOp(ctx, db, 3)) }},
+		{"IsViewDeletion", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) { return one(IsViewDeletion(ctx, db, 3)) }},
 		{"GroupHolders", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
 			return one(GroupHolders(ctx, db, "A", true, func(string) bool { return true }))
 		}},

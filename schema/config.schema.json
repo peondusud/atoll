@@ -96,6 +96,11 @@
           "description": "The one minimum free space of the openmediavault mergerfs plugin's pool, which atoll mergerfs-config --omv gives (specs.md §21.1): largest, the largest of the branches' own among those that take new files; same, none when they differ, with exit code 4. It changes nothing else.",
           "enum": ["largest", "same"],
           "default": "largest"
+        },
+        "move_on_enospc": {
+          "description": "With view.engine = \"atoll\": a write through Atoll's own view that its disk answers with ENOSPC or EDQUOT moves the new file being written to another disk, which has room for it, and is made there, as mergerfs's moveonenospc does; the copy left on the full disk goes to that disk's trash and is purged at once (specs.md §21.2). Only a file the view made, still open through the handle that made it, at a path the catalog holds no file at. false: the write answers ENOSPC.",
+          "type": "boolean",
+          "default": false
         }
       }
     },

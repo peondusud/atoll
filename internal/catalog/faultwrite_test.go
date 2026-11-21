@@ -329,6 +329,21 @@ func TestEveryWriterFailsWhole(t *testing.T) {
 			return none(DismissViewPart(ctx, db, &ViewOp{ID: 3, Kind: ViewPart, Disk: "u2", Path: "B/c", OpID: 3, State: OpDone, AtNS: 3}, 100))
 		}},
 		{"AdoptViewParts", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) { return AdoptViewParts(ctx, db, 100) }},
+		{"BeginViewMove", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
+			return BeginViewMove(ctx, db, &ViewOp{Disk: "u2", Disk2: "u1", Path: "A/n", FileKey: "14", AtNS: 100})
+		}},
+		{"ViewMoveTrash", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
+			return ViewMoveTrash(ctx, db, &ViewOp{ID: 4, Kind: ViewMove, Disk: "u2", Disk2: "u1", Path: "B/n", FileKey: "13", OpID: 12, State: OpPlanned, AtNS: 4},
+				&TrashStart{Disk: "u1", Path: "B/n", FileKey: "13", Size: sql.NullInt64{Int64: 4, Valid: true}, Reason: ReasonSurplus, NowNS: 100, ExpiresNS: 200})
+		}},
+		{"ViewMovePurge", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
+			return ViewMovePurge(ctx, db, &ViewOp{ID: 4, Kind: ViewMove, Disk: "u1", Disk2: "u2", Path: "A/a", FileKey: "21", OpID: 2, State: OpPlanned, AtNS: 4},
+				op(2, "u2", OpTrash, "A/a", "20260101/2/A/a", "21"), 100)
+		}},
+		{"EndViewMove", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
+			return none(EndViewMove(ctx, db, &ViewOp{ID: 4, Kind: ViewMove, Disk: "u1", Disk2: "u2", Path: "A/a", FileKey: "21", OpID: 2, State: OpPlanned, AtNS: 4},
+				OpUndone, OpDone, true, 100))
+		}},
 		{"SetDiskState", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
 			return none(SetDiskState(ctx, db, "u2", "missing"))
 		}},
@@ -375,7 +390,12 @@ func TestEveryWriterFailsWhole(t *testing.T) {
 	writers = append(writers, writer{"checkMeta, keys of another version", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
 		return none(checkMeta(ctx, db, "p"))
 	}})
+	moveOfTrash := "INSERT INTO view_ops(id, kind, disk_id, disk2_id, lpath, folder, file_key, op_id, state, at_ns) VALUES (4, 'move', 'u1', 'u2', CAST('A/a' AS BLOB), 0, '21', 2, 'planned', 4)"
 	sweepWriters(t, writers, map[string]string{
+		"ViewMoveTrash": `INSERT INTO ops(id, disk_id, kind, path, path2, file_key, started_ns, state) VALUES (12, 'u2', 'create', CAST('B/n' AS BLOB), CAST('12.part' AS BLOB), '34', 12, 'planned');
+			INSERT INTO view_ops(id, kind, disk_id, disk2_id, lpath, folder, file_key, op_id, state, at_ns) VALUES (4, 'move', 'u2', 'u1', CAST('B/n' AS BLOB), 0, '13', 12, 'planned', 4)`,
+		"ViewMovePurge":   moveOfTrash,
+		"EndViewMove":     moveOfTrash,
 		"ResolveConflict": "DELETE FROM copies WHERE file_id = 4 AND disk_id = 'u2'",
 		"checkMeta, keys of another version": `UPDATE meta SET value = 'rust something' WHERE key = 'lpath_key_version';
 			UPDATE files SET lpath_key = 'stale'; UPDATE copies SET old_lpath_key = 'stale' WHERE old_lpath IS NOT NULL`,
