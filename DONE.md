@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The soak of 24 hours on 200,000 files a disk, 2026-11-21 (specs.md §26)
+
+`TestDaemonSoak` on `5a3fc74`, every branch of 2026-11-20 merged, in qemu without KVM on Debian 13's Linux 6.12.117, `SOAK=24h SOAK_FILES=200000`, from 2026-11-20 at 05:07 to 2026-11-21 at 05:13 UTC. It passed. Its log is `bin/soak5/soak.log`.
+
+- **No fault**: 1720 passes after the first, none held nor partial, no error, and two warnings, expected, as `smartctl` reads nothing of a loop device in the guest.
+- **Memory, at each of the ten tenths**: 3.3 to 3.5 MiB of heap in use from the second tenth on, 9 goroutines, 14 open files, with no growth; 38.0 to 50.8 MiB resident; a peak of 171.7 to 173.0 MiB, under the 200 MB (190.7 MiB) at every tenth, of which the Go runtime held 151.7 to 153.0 MiB, SQLite's allocator 10.2 MiB and the binary's pages 16.7 MiB, none of it in transparent huge pages. The first pass, which finds the 400,000 copies of a catalog that knows none, took 6 min 15 s and peaked at 180.4 MiB. The catalog grew from 73.1 to 151.2 MiB, about 3.3 MiB an hour, its events and its journal, as in the soaks before.
+- **The passes**: 8.9 s at the median, 4.5 hours of passes in the 24. By tenth, 8.0, 7.9, 8.8, 8.9, 9.0, 9.0, 9.0 and 9.3 s at the median, with 96 to 104 operations a pass, then 16.2 s in the ninth and 8.1 s in the last: what the catalog's growth costs a pass, if anything, is under what the machine's load moves. From 01:12 to 04:02 UTC on 2026-11-21, the passes took 14 to 20 s, 54.1 s at most at 02:24, with 130 to 150 operations a pass and 240 at most, and the ninth tenth ran 134 passes for about 175: the machine built and tested the updates of `ffaf060` from about 01:10, and from 01:38 an agent the move of a write that meets `ENOSPC`, in containers beside the soak. From 04:02 to the end, they took about 8 s again. As on 2026-11-19, a pass that takes longer gathers more of the soak's changes, so it runs more operations. That it was the load alone is not shown, as then: both times, the passes slowed while other work ran on the machine.
+
 ## The latest releases of every module and tool, the qemu guest on Linux 7.3.5, 2026-11-21 (specs.md §26, §27)
 
 The maintainer's answer of 2026-11-21 ("mets la dernière version disponible", then "Toutes, les dernières"): the releases kept as too fresh on 2026-11-20, each at its latest, the rule of 14 days waived for them this once.
