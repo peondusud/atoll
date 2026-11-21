@@ -1,0 +1,139 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14.2, §15.12, §17.2; conformance/models/README.md, flaw 2",
+  "description": "A copy left at its name by a crash, on a disk then lost, while the user deletes the file's only other copy: the file waits for its decisions while the copy's job is running, and once the disk is back and the reprise has finished the copy, the deletion reaches it too, which goes to the trash, and the file is gone. Before the remedy of flaw 2, the decision Gone dropped the file with the copy's running job, the reprise finished the copy with no job and no file and recorded nothing, and the next walk took Atoll's copy for a user's new file.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a",
+        "--now"
+      ],
+      "crash_at": "source-synced",
+      "exit": 137
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "unmount",
+      "disk": "t2"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/a"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "mount",
+      "disk": "t2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/a",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM files",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

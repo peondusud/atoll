@@ -88,6 +88,24 @@ func TestMergerfsEscapes(t *testing.T) {
 	}
 }
 
+// With Atoll's own view, the cache disks are branches too, by position: the line is what breaks the glass, and shows
+// what they hold (specs.md §19, §21.1).
+func TestMergerfsLineWithTheCache(t *testing.T) {
+	disks := disk("b", "/mnt/b", "") + disk("c", "/mnt/c", "role = \"cache\"\n") + disk("a", "/mnt/a", "")
+	c := parse(t, strings.Replace(head, "[view]\n", "[view]\nengine = \"atoll\"\n", 1)+"[placement]\nmin_free = [\"1GiB\"]\n"+disks)
+	minFree, err := c.MinFree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewMergerfs(c, minFree, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Fstab(); !strings.HasPrefix(got, "/mnt/b/media=RW,1G:/mnt/c/media=RW,1G:/mnt/a/media=RW,1G /srv/pool ") {
+		t.Errorf("got %s", got)
+	}
+}
+
 // mergerfs ends a branch at ':' and an option at ',': such a branch is refused, and so is a pool with no data disk.
 func TestMergerfsRefuses(t *testing.T) {
 	for name, disks := range map[string]string{

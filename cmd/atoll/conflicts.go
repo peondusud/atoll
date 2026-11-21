@@ -26,10 +26,12 @@ type conflictCopyOutput struct {
 	Outcome string `json:"outcome,omitempty"`
 }
 
-// conflictFileOutput is one file of api/schemas/conflicts-list.schema.json.
+// conflictFileOutput is one file of api/schemas/conflicts-list.schema.json. Corrupt says that it is corrupt too, and
+// shows so: it is resolved once repaired (specs.md §4, §16).
 type conflictFileOutput struct {
 	pathItem
-	Copies []conflictCopyOutput `json:"copies"`
+	Corrupt bool                 `json:"corrupt,omitempty"`
+	Copies  []conflictCopyOutput `json:"copies"`
 }
 
 // conflictsListOutput is the output of api/schemas/conflicts-list.schema.json.
@@ -118,7 +120,7 @@ func readConflicts(ctx context.Context, c *config.Config) (out *conflictsListOut
 		}
 		for i := range page {
 			f := &page[i]
-			file := conflictFileOutput{pathItem: pathItems([]string{f.Path})[0], Copies: make([]conflictCopyOutput, 0, len(f.Copies))}
+			file := conflictFileOutput{pathItem: pathItems([]string{f.Path})[0], Corrupt: f.ConflictHeld, Copies: make([]conflictCopyOutput, 0, len(f.Copies))}
 			for _, cp := range f.Copies {
 				file.Copies = append(file.Copies, conflictCopyOutput{Disk: cp.Disk, Size: cp.Size.Int64, MtimeNS: cp.MtimeNS.Int64})
 			}
@@ -143,7 +145,11 @@ func conflictsText(out *conflictsListOutput) string {
 		b.WriteString(T("no file in conflict\n"))
 	}
 	for _, f := range out.Files {
-		b.WriteString(pathText(f.pathItem) + "\n")
+		b.WriteString(pathText(f.pathItem))
+		if f.Corrupt {
+			b.WriteString(T(" (corrupt too: atoll repair first)"))
+		}
+		b.WriteString("\n")
 		for _, c := range f.Copies {
 			fmt.Fprintf(&b, T("  %s: %d bytes, modified %s\n"), c.Disk, c.Size, time.Unix(0, c.MtimeNS).UTC().Format(time.RFC3339Nano))
 		}
@@ -220,6 +226,8 @@ func conflictsResolve(configPath string, args []string, stdout, stderr io.Writer
 			return fmt.Errorf("conflicts resolve: %s", T("the catalog has no file at that path"))
 		case errors.Is(err, trash.ErrNotConflict):
 			return fmt.Errorf("conflicts resolve: %s", T("the file is not in conflict"))
+		case errors.Is(err, trash.ErrCorrupt):
+			return fmt.Errorf("conflicts resolve: %s", T("the file is corrupt too: repair it first"))
 		case errors.Is(err, trash.ErrNoCopy):
 			return fmt.Errorf("conflicts resolve: %s", fmt.Sprintf(T("the file has no copy on %s"), keep))
 		case err != nil:

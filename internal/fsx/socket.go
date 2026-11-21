@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -41,22 +40,4 @@ func ListenSocket(ctx context.Context, path string) (net.Listener, error) {
 		return nil, errors.Join(fmt.Errorf("%w", err), l.Close())
 	}
 	return l, nil
-}
-
-// ReadSmallFile reads a file of the system disk that holds at most limit bytes, such as a token: a larger one is an
-// error, and is not read whole.
-func ReadSmallFile(path string, limit int64) (data []byte, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
-	}
-	defer func() { err = errors.Join(err, f.Close()) }()
-	data, err = io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("read %s: more than %d bytes", path, limit)
-	}
-	return data, nil
 }

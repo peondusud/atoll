@@ -66,6 +66,11 @@ type compared struct {
 	clocks []catalog.CopyClock
 	// modes holds the mode of each copy there as its row says whose row has none (specs.md §9).
 	modes []catalog.CopyMode
+	// named is a look limited to names, nil for a walk of the whole disk (specs.md §15.13).
+	named *namedLook
+	// tooLong says that the walk left a name past the limit of the disk's mergerfs branch: a copy it did not find may
+	// have gone below it, so none is gone, but uncertain (specs.md §15.8).
+	tooLong bool
 }
 
 // openRow is a row whose copy is not where it says, until resolve says what became of it. A rename of a whole disk
@@ -75,6 +80,8 @@ type openRow struct {
 	at      *FoundFile
 	verdict solver.CopyVerdict
 	target  *FoundFile
+	// overwritten says that its name holds the file another row's copy moved to, its own file nowhere.
+	overwritten bool
 }
 
 // knownRow is a catalog.KnownCopy without the room each nullable field takes: 120 bytes instead of 168.
@@ -307,7 +314,7 @@ func (c *compared) resolve(ctx context.Context, db *sql.DB, d *config.Disk, w *W
 	// file that moved takes the name once it is free (specs.md §15.12). Any other file at its name replaced it.
 	for _, o := range c.open {
 		if o.verdict == solver.VerdictReplaced && o.at != nil && o.at.claims > 0 {
-			o.verdict = solver.VerdictGone
+			o.verdict, o.overwritten = solver.VerdictGone, true
 			gone[o.k.fileKey] = true
 		}
 	}
@@ -376,6 +383,16 @@ func (c *compared) finish(o *openRow, own map[string][]solver.FileLook) {
 	case v == solver.VerdictGone && k.GoneKind.String == string(solver.VerdictUncertain):
 		// Its names got rows of their own, and they say no more than the first look did (specs.md §15.12).
 		v = solver.VerdictUncertain
+	case v == solver.VerdictGone && c.tooLong && !o.overwritten:
+		// The walk left a name past the limit of the disk's branch, which it did not read: the copy may have gone there,
+		// by a folder above it renamed or moved, or by itself (specs.md §15.8). Its file is kept, never deleted.
+		v = solver.VerdictUncertain
+	}
+	if c.named != nil {
+		// A look limited to names saw nothing but them: a copy it no longer finds may be anywhere else (specs.md §15.13).
+		var whole bool
+		v, whole = solver.NamedVerdict(v, c.named.isDeleted(k.Path), k.GoneKind.String)
+		c.r.Whole = c.r.Whole || whole
 	}
 	seen.Verdict = v
 	switch v {
@@ -407,7 +424,7 @@ func isOwn(k *catalog.KnownCopy, own map[string][]solver.FileLook) bool {
 // moveFolders finds the folders renamed: a folder row the walk did not find, or found another folder in
 // place of, and the same folder with no row. The row and all below it stay, and the new name and all below
 // it get none, until the files below are decided (specs.md §15.12). It says which new names those are.
-func moveFolders(ctx context.Context, db *sql.DB, disk string, w *Walked, r *Report, out *catalog.Walk, notReached map[string]bool) (map[string]bool, error) {
+func moveFolders(ctx context.Context, db *sql.DB, disk string, w *Walked, r *Report, out *catalog.Walk, notReached map[string]bool, named *namedLook) (map[string]bool, error) {
 	walked := make(map[string]*FoundEntry, len(w.Entries))
 	for i := range w.Entries {
 		if e := &w.Entries[i]; e.Kind == solver.EntryDir {
@@ -418,7 +435,13 @@ func moveFolders(ctx context.Context, db *sql.DB, disk string, w *Walked, r *Rep
 	rows := make(map[string]bool, len(walked))
 	// The folders found at their own names. An inode number alone is no folder: each btrfs subvolume has its own.
 	here := make(map[folderID]bool, len(walked))
-	err := catalog.EachFolderRow(ctx, db, disk, func(e *catalog.EntryIdentity) {
+	each := func(fn func(*catalog.EntryIdentity)) error { return catalog.EachFolderRow(ctx, db, disk, fn) }
+	if named != nil {
+		each = func(fn func(*catalog.EntryIdentity)) error {
+			return catalog.EachFolderRowAt(ctx, db, disk, named.names, fn)
+		}
+	}
+	err := each(func(e *catalog.EntryIdentity) {
 		rows[e.Path] = true
 		if atOrBelow(notReached, e.Path) {
 			return
@@ -460,7 +483,16 @@ func moveFolders(ctx context.Context, db *sql.DB, disk string, w *Walked, r *Rep
 		a := &absent[i]
 		e := byKey[folderID{a.FileKey.String, a.BtimeNS.Int64}]
 		// Found at neither name, as one moved during the walk from what it had not listed to what it had read. Its row
-		// stays while a copy of that disk still sits below it: a look that finds the new name reads the rename by it.
+		// stays while a copy of that disk still sits below it: a look that finds the new name reads the rename by it. A
+		// look limited to names finds a folder at neither name when it went where no name led: unless an event said it
+		// was deleted, its row stays, and the next pass walks the disk whole (specs.md §15.13).
+		if e == nil && walked[a.Path] == nil && named != nil && !named.isDeleted(a.Path) {
+			if err := keepBelow(ctx, db, disk, a.Path, out); err != nil {
+				return nil, err
+			}
+			r.Whole = true
+			continue
+		}
 		if e == nil && walked[a.Path] == nil && a.BtimeNS.Valid {
 			copies, err := catalog.CopiesBelow(ctx, db, disk, a.Path)
 			if err != nil {

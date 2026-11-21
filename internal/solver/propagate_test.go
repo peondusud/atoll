@@ -71,10 +71,12 @@ type propVector struct {
 	Direct *string  `json:"direct"`
 	Taken  []string `json:"taken"`
 	Files  []struct {
-		Path   *string `json:"path"`
-		State  *State  `json:"state"`
-		Follow string  `json:"follow"`
-		Copies []struct {
+		Path         *string `json:"path"`
+		State        *State  `json:"state"`
+		ConflictHeld bool    `json:"conflict_held"`
+		Follow       string  `json:"follow"`
+		Running      bool    `json:"running"`
+		Copies       []struct {
 			Disk      *string      `json:"disk"`
 			Position  *int         `json:"position"`
 			Verdict   *CopyVerdict `json:"verdict"`
@@ -87,6 +89,7 @@ type propVector struct {
 			OldPath   *string      `json:"old_path"`
 			GuardHeld bool         `json:"guard_held"`
 			Size      int64        `json:"size"`
+			Through   bool         `json:"through_view"`
 		} `json:"copies"`
 	} `json:"files"`
 	Decisions *[]struct {
@@ -117,7 +120,7 @@ func propInputOf(t *testing.T, i int, v *propVector) *PropInput {
 		if f.Path == nil || f.State == nil || f.Copies == nil {
 			t.Fatalf("vector %d: a file needs path, state and copies", i)
 		}
-		file := PropFile{Path: *f.Path, State: *f.State, Follow: f.Follow}
+		file := PropFile{Path: *f.Path, State: *f.State, ConflictHeld: f.ConflictHeld, Follow: f.Follow, Running: f.Running}
 		for k := range f.Copies {
 			c := &f.Copies[k]
 			if c.Disk == nil || c.Position == nil || c.Verdict == nil || c.Due == nil || c.CreatedBy == nil || c.FirstSeen == nil || c.Verified == nil {
@@ -126,6 +129,7 @@ func propInputOf(t *testing.T, i int, v *propVector) *PropInput {
 			file.Copies = append(file.Copies, PropCopy{
 				Disk: *c.Disk, Position: *c.Position, Verdict: *c.Verdict, Target: c.Target, Due: *c.Due, GoneNS: c.GoneNS,
 				CreatedBy: *c.CreatedBy, FirstSeenNS: *c.FirstSeen, Verified: *c.Verified, OldPath: c.OldPath, GuardHeld: c.GuardHeld, Size: c.Size,
+				ThroughView: c.Through,
 			})
 		}
 		in.Files = append(in.Files, file)

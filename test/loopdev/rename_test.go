@@ -45,7 +45,7 @@ func newPassBench(t *testing.T, v *volume, at string) *passBench {
 }
 
 // benchGuards is what the bench sets of the guards: a debounce of a second, and their counts alone to trip them.
-const benchGuards = "[deletes]\ndebounce = \"1s\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n"
+const benchGuards = "[deletes]\ndebounce = \"1s\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n"
 
 // newPassBenchWith adds more to the bench's configuration, as whole tables.
 func newPassBenchWith(t *testing.T, v *volume, at, more string) *passBench {
@@ -380,7 +380,7 @@ func TestADeviceThatFailsDuringARename(t *testing.T) {
 					after := b.settle()
 					dropCaches(t)
 					source, target := filepath.Join(at, "media", "a"), filepath.Join(at, "media", filepath.FromSlash(to))
-					if tc.driver == "ntfs3" {
+					if kernelNTFS(tc.driver) {
 						skipWhereNamesDisagree(t, source, target)
 						if concludesNothing(t, b.text("SELECT COALESCE(max(state), '') FROM ops WHERE kind = 'rename'"), source, target) {
 							return
@@ -474,7 +474,7 @@ func TestADeviceThatFailsDuringAFolderRename(t *testing.T) {
 				after := b.settle()
 				dropCaches(t)
 				old, renamed := filepath.Join(at, "media", "d"), filepath.Join(at, "media", "e")
-				if tc.driver == "ntfs3" {
+				if kernelNTFS(tc.driver) {
 					skipWhereNamesDisagree(t, old, renamed, filepath.Join(renamed, "x"), filepath.Join(renamed, "y"))
 				}
 				if got := b.text("SELECT count(*) FROM ops WHERE state = 'planned'"); got != "0" {
@@ -504,18 +504,15 @@ func bringBack(t *testing.T, m *mappedVolume, driver, at string, options []strin
 		time.Sleep(time.Second)
 	}
 	m.heal(t)
-	// Dirty, ntfs3 refuses to mount without force.
-	if driver == "ntfs3" {
-		options = append(slices.Clone(options), "force")
-	}
+	options = mountableAgain(t, m.device, driver, options)
 	if err := remount(t, m.volume, driver, at, options); err != nil {
 		t.Skipf("the volume did not mount again: %v", err)
 	}
 }
 
-// skipWhereNamesDisagree: ntfs3 keeps no journal of its own, and writes lost with the device can leave a
-// name and its record that disagree, which it answers with ESTALE or EINVAL (measured). Atoll concludes
-// nothing from that, and only a repair can say more.
+// skipWhereNamesDisagree: ntfs3 keeps no journal of its own, nor does the type ntfs, and writes lost with the
+// device can leave a name and its record that disagree, which ntfs3 answers with ESTALE or EINVAL (measured).
+// Atoll concludes nothing from that, and only a repair can say more.
 func skipWhereNamesDisagree(t *testing.T, paths ...string) {
 	t.Helper()
 	for _, path := range paths {

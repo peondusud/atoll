@@ -171,6 +171,25 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+// atoll --version gives the version atoll_build_info gives, before any configuration is read; anything after it is a
+// usage error (specs.md §25).
+func TestVersion(t *testing.T) {
+	want := "atoll " + atollVersion() + "\n"
+	for _, args := range [][]string{{"--version"}, {"--config", "/nowhere", "--version"}} {
+		if code, out, errs := runHelp(args...); code != exitOK || out != want || errs != "" {
+			t.Errorf("%v: %d %q %q", args, code, out, errs)
+		}
+	}
+	for _, args := range [][]string{{"--version", "x"}, {"--version", "--json"}, {"--version", "--help"}} {
+		if code, out, errs := runHelp(args...); code != exitUsage || out != "" || !strings.Contains(errs, "--version") {
+			t.Errorf("%v: %d %q %q", args, code, out, errs)
+		}
+	}
+	if _, out, _ := runHelp("--help"); !strings.Contains(out, "atoll --version") {
+		t.Errorf("help does not name --version: %q", out)
+	}
+}
+
 // With French asked for, what the CLI writes for people is in French, and its words for scripts are not (specs.md
 // §25).
 func TestTheCLIInFrench(t *testing.T) {

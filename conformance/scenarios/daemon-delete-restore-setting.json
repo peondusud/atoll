@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a715.5, \u00a715.12",
-  "description": "With deletes.direct = restore nothing propagates until the copy pipeline exists: the file lacks a replica.",
+  "description": "With deletes.direct = restore nothing propagates: a copy deleted straight on its disk is made again in its place through the copy pipeline, which replication.enabled = false keeps from running, so that here nothing is queued and the file lacks a replica. jobs/restore_test.go makes it with replication on.",
   "disks": [
     {
       "id": "t1",

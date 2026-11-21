@@ -1,0 +1,70 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a725",
+  "description": "The command takes --json and nothing else, once; a usage error comes before the configuration is read. A configuration that does not load is exit 1.",
+  "disks": [],
+  "config": "pool_id = \"home-media\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"/mnt/disk1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "extra"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--json",
+        "--json"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--account",
+        "media"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--json"
+      ]
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"home-media\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"/mnt/disk1\"\nfs = \"ext4\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "polkit-rule",
+        "--dry-run"
+      ],
+      "exit": 2
+    }
+  ]
+}

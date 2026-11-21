@@ -28,6 +28,8 @@ type bench struct {
 	db     *sql.DB
 	config *config.Config
 	dirs   map[string]string
+	// spaces gives, by mount, the capacity and the free space a disk reports, when it is not the one every disk has.
+	spaces map[string][2]int64
 	fail   map[string]func(call, name string) error
 	// walkFail makes a call fail in a walk, which goes through its own handle.
 	walkFail map[string]func(call, name string) error
@@ -92,8 +94,14 @@ func (b *bench) ReadPastCache(_ names.Filesystem, entry *disks.MountEntry) disks
 }
 
 func (b *bench) Root(string, string) disks.RootSeen { return disks.RootSeen{Folder: disks.FolderOK} }
-func (b *bench) Now() int64                         { return b.now }
-func (b *bench) Space(string) (capacity, free int64, err error) {
+func (b *bench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
+func (b *bench) Now() int64 { return b.now }
+func (b *bench) Space(mount string) (capacity, free int64, err error) {
+	if s, ok := b.spaces[mount]; ok {
+		return s[0], s[1], nil
+	}
 	return 1 << 30, 1 << 29, nil
 }
 
@@ -145,7 +153,13 @@ func newBench(t *testing.T, ids ...string) *bench {
 // newBenchWith is newBench with more of the configuration: tables that come after the disks.
 func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 	t.Helper()
-	top := t.TempDir()
+	return benchIn(t, t.TempDir(), more, true, ids...)
+}
+
+// benchIn is newBenchWith at a folder: a new pool, or with create false the one a bench made there, as a process that
+// stands for a crash opens it again.
+func benchIn(t *testing.T, top, more string, create bool, ids ...string) *bench {
+	t.Helper()
 	var text strings.Builder
 	fmt.Fprintf(&text, "pool_id = \"p\"\ncatalog = %q\n[view]\nmount = %q\n", filepath.Join(top, "catalog.db"), filepath.Join(top, "pool"))
 	b := &bench{t: t, dirs: map[string]string{}, fail: map[string]func(string, string) error{}, walkFail: map[string]func(string, string) error{}, bare: map[string]string{}, pastCache: map[string]int{}, unread: map[string]bool{}, ro: map[string]bool{},
@@ -158,9 +172,13 @@ func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 		b.dirs[id] = dir
 		fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3%d\"\nmount = %q\nfs = \"ext4\"\n", id, i, dir)
 	}
-	// The deletion guard last: a test's more adds to its table. A test that sets the modification guard gives its own.
+	// The deletion guard last: a test's more adds to its table. A test that sets the modification guard, over its
+	// window or over its day, gives its own.
 	if !strings.Contains(more, "[modifies.mass_guard]") {
 		text.WriteString("[modifies.mass_guard]\npercent = \"100%\"\n")
+	}
+	if !strings.Contains(more, "[modifies.day_guard]") {
+		text.WriteString("[modifies.day_guard]\npercent = \"100%\"\n")
 	}
 	text.WriteString("[deletes.mass_guard]\npercent = \"100%\"\n")
 	b.base = text.String()
@@ -171,8 +189,10 @@ func newBenchWith(t *testing.T, more string, ids ...string) *bench {
 	}
 	b.config = c
 	file := filepath.Join(top, "catalog.db")
-	if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
-		t.Fatal(err)
+	if create {
+		if _, err := catalog.Create(t.Context(), file, "p"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	db, err := catalog.OpenPool(t.Context(), file, "p")
 	if err != nil {
@@ -3651,7 +3671,7 @@ func reconfigured(t *testing.T, b *bench, guard string) *config.Config {
 		d := &b.config.Disks[i]
 		fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = %q\nmount = %q\nfs = \"ext4\"\n", d.ID, d.UUID, d.Mount)
 	}
-	text.WriteString("[modifies.mass_guard]\npercent = \"100%\"\n[deletes.mass_guard]\n" + guard)
+	text.WriteString("[modifies.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n[deletes.mass_guard]\n" + guard)
 	c, err := config.Parse([]byte(text.String()))
 	if err != nil {
 		t.Fatal(err)

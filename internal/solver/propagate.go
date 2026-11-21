@@ -121,15 +121,24 @@ type PropCopy struct {
 	OldPath     *string // where it sits, when that is not its file's path
 	GuardHeld   bool    // the guard of its disk holds what is gone there
 	Size        int64
+	// ThroughView says that the copy went through Atoll's own view, to the trash: the user deleted the file, which
+	// propagates whatever deletes.direct says (specs.md §21.2).
+	ThroughView bool
 }
 
 // PropFile is one file to decide about. Follow is the new path it takes because a folder above it was
 // renamed on a disk that holds no copy of it.
 type PropFile struct {
-	Path   string
-	State  State
-	Follow string
-	Copies []PropCopy
+	Path  string
+	State State
+	// ConflictHeld says that the file, corrupt, holds a conflict (specs.md §4): what is left of it clears that, as it
+	// clears a conflict.
+	ConflictHeld bool
+	Follow       string
+	// Running says that a job of the file is running: its operation is left planned, and only a reprise can say what
+	// is at its target. Nothing is decided of the file until then, as of its modifications (specs.md §14.1, §15.12).
+	Running bool
+	Copies  []PropCopy
 }
 
 // PropInput is what the decisions need. Taken lists the paths held by file rows that are not among the
@@ -169,6 +178,7 @@ const (
 	ActDrop        PropAction = "drop"         // its row goes
 	ActKeepGone    PropAction = "keep-gone"    // gone, under a guard: its row stays, with old_lpath where it was
 	ActTrash       PropAction = "trash"        // a trash job
+	ActRestore     PropAction = "restore"      // gone, with deletes.direct = "restore": made again in its place, from Src
 )
 
 // PropCopyAction is what happens to one copy.
@@ -219,8 +229,12 @@ func goneLike(v CopyVerdict) bool {
 	return v == VerdictGone || v == VerdictUncertain || v == VerdictOwn
 }
 
-// isRenameCandidate says whether a file is about to take a new name, once its target is free.
+// isRenameCandidate says whether a file is about to take a new name, once its target is free. A file with a job running
+// holds its path: what that job makes may be at its target, under that name.
 func isRenameCandidate(f *PropFile) bool {
+	if f.Running {
+		return false
+	}
 	moved := false
 	for i := range f.Copies {
 		c := &f.Copies[i]
@@ -410,10 +424,10 @@ func everyCopy(f *PropFile, action PropAction) []PropCopyAction {
 	return out
 }
 
-// clearsConflict says that what remains of a file in conflict can no longer differ by what is known:
-// the next --full finds any difference of content again (specs.md §15.12).
+// clearsConflict says that what remains of a file in conflict, or of a corrupt one that holds a conflict, can no
+// longer differ by what is known: the next --full finds any difference of content again (specs.md §4, §15.12).
 func clearsConflict(f *PropFile, left []*PropCopy) bool {
-	if f.State != StateConflict || len(left) == len(f.Copies) || len(left) == 0 {
+	if (f.State != StateConflict && !f.ConflictHeld) || len(left) == len(f.Copies) || len(left) == 0 {
 		return false
 	}
 	return !slices.ContainsFunc(left, func(c *PropCopy) bool { return c.Size != left[0].Size })
@@ -439,7 +453,7 @@ func decideRest(f *PropFile, direct string) PropDecision {
 		return PropDecision{Path: f.Path, Kind: PropHeld, Copies: everyCopy(f, ActStay)}
 	case len(left) == 0:
 		return PropDecision{Path: f.Path, Kind: PropGone, Copies: everyCopy(f, ActDrop)}
-	case isDeletion(f, gone, left, direct):
+	case (direct == "propagate" || slices.ContainsFunc(gone, isThroughView)) && isDeletion(f, gone, left):
 		d := PropDecision{Path: f.Path, Kind: PropDeletion, Src: gone[0].Disk}
 		for i := range f.Copies {
 			action := ActTrash
@@ -451,17 +465,32 @@ func decideRest(f *PropFile, direct string) PropDecision {
 		return d
 	}
 	d := PropDecision{Path: f.Path, Kind: PropKept, ClearConflict: clearsConflict(f, left), DropHash: laterThanWhatWent(gone, left) || noneVerified(left)}
+	// With restore, what a deletion would have sent to the trash stays, and what went is made again in its place, from
+	// the first copy found there by position (specs.md §15.5).
+	if direct == "restore" && isDeletion(f, gone, left) {
+		if at := slices.IndexFunc(left, func(c *PropCopy) bool { return c.Verdict == VerdictThere }); at >= 0 {
+			d.Src = left[at].Disk
+		}
+	}
 	for i := range f.Copies {
 		action := ActStay
 		if goneLike(f.Copies[i].Verdict) {
 			action = ActDrop
+			if d.Src != "" {
+				action = ActRestore
+			}
 		}
 		d.Copies = append(d.Copies, PropCopyAction{Disk: f.Copies[i].Disk, Action: action})
 	}
 	return d
 }
 
+func isThroughView(c *PropCopy) bool { return c.ThroughView }
+
 func mustWait(f *PropFile) bool {
+	if f.Running && slices.ContainsFunc(f.Copies, func(c PropCopy) bool { return goneLike(c.Verdict) || c.Verdict == VerdictMoved }) {
+		return true
+	}
 	return slices.ContainsFunc(f.Copies, func(c PropCopy) bool { return (goneLike(c.Verdict) || c.Verdict == VerdictMoved) && !c.Due })
 }
 
@@ -471,8 +500,8 @@ func isHeldGone(c *PropCopy) bool {
 	return c.Verdict == VerdictGone && c.GuardHeld
 }
 
-func isDeletion(f *PropFile, gone, left []*PropCopy, direct string) bool {
-	if direct != "propagate" || f.State == StateConflict || f.State == StateCorrupt {
+func isDeletion(f *PropFile, gone, left []*PropCopy) bool {
+	if f.State == StateConflict || f.State == StateCorrupt {
 		return false
 	}
 	earliest := gone[0].FirstSeenNS

@@ -39,6 +39,10 @@ type ScrubOptions struct {
 	// Quarantine repairs a corrupt copy from another copy, read again first and healthy, with integrity.auto_repair,
 	// or moves it to the trash (specs.md §16, §16.1).
 	Quarantine bool
+	// Taken leaves out the corrupt copies left in the root that an earlier slice of the same stretch of
+	// integrity.window took again already: the daemon takes each once a stretch (specs.md §15.13, §16). Nil leaves out
+	// none, as atoll scrub does.
+	Taken map[catalog.CorruptCopy]bool
 }
 
 // ScrubDisk says what a scrub did on one disk. Each list holds paths in the order they were read.
@@ -51,12 +55,18 @@ type ScrubDisk struct {
 	Bytes int64
 	// Corrupt are the copies whose content no longer matches, read again past the cache, size and times unchanged.
 	Corrupt []string
-	// Repaired are those of them another copy is healthy for, with integrity.auto_repair: repaired, or to be with
-	// Quarantine.
+	// Again are the corrupt copies an earlier scrub found and left in the root, taken first by this one, as it takes
+	// one it finds corrupt (specs.md §16): each is then in Repaired, Quarantined, Kept or Conflict, never in Corrupt,
+	// which says what this scrub found.
+	Again []string
+	// Repaired are those of them, and of Again, another copy is healthy for, with integrity.auto_repair: repaired, or
+	// to be with Quarantine.
 	Repaired []string
-	// Quarantined are those of them another copy is healthy for: moved to the trash, or to be with Quarantine.
+	// Quarantined are those of them, and of Again, another copy is healthy for: moved to the trash, or to be with
+	// Quarantine.
 	Quarantined []string
-	// Kept are those of them with no healthy copy elsewhere, left where they are, or that could not be moved.
+	// Kept are those of them, and of Again, with no healthy copy elsewhere, left where they are, or that could not be
+	// moved.
 	Kept []string
 	// Changed are the copies that changed since their row, or while read: for the next pass to look at.
 	Changed []string
@@ -75,6 +85,8 @@ type ScrubOutcome struct {
 	Disks []ScrubDisk
 	// Partial says that a disk could not be read, or failed while read.
 	Partial bool
+	// Taken are the corrupt copies of each Again, for the daemon to leave out of the rest of the stretch.
+	Taken []catalog.CorruptCopy
 }
 
 type scrubber struct {
@@ -90,7 +102,9 @@ type scrubber struct {
 	// run is what the repair of a copy takes from this scrub (specs.md §16.1).
 	run *repairRun
 	// changed says that this scrub found a copy corrupt, or in conflict: a state changed.
-	changed  bool
+	changed bool
+	// taken are the corrupt copies left in the root that this scrub took again.
+	taken    []catalog.CorruptCopy
 	now      int64
 	due      int64 // a copy verified at or before it is due
 	deadline int64
@@ -103,7 +117,8 @@ var errDiskFailed = errors.New("the disk failed while read")
 // Scrub reads the copies due, one disk at a time, and checks each chunk against its hash (specs.md §16): a copy
 // that matches is verified; one that does not, read again past the cache, its size and times unchanged, is
 // corrupt, and goes to the trash when another copy is healthy. A scrub stopped by its budget resumes at the chunk it
-// reached.
+// reached. On each disk, the corrupt copies an earlier scrub left in the root come first, taken again as one found now
+// is: mergerfs may present them (invariant 14).
 func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, opts ScrubOptions) (*ScrubOutcome, error) {
 	effective := c.Effective()
 	everyText, _ := effective["integrity.scrub_every"].(string)
@@ -134,7 +149,9 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 		deadline: now + opts.Budget.Nanoseconds(), buf: make([]byte, integrity.ChunkSize)}
 	s.repair, _ = effective["integrity.auto_repair"].(bool)
 	s.mode, _ = effective["integrity.repair_mode"].(string)
-	s.run = &repairRun{db: db, config: c, machine: m, session: session, apply: true, record: true}
+	// A repair writes with Quarantine alone, and what a look at a corrupt copy that changed finds is recorded unless
+	// the scrub records nothing (specs.md §16.1).
+	s.run = &repairRun{db: db, config: c, machine: m, session: session, apply: opts.Apply && opts.Quarantine, record: opts.Apply}
 	out := &ScrubOutcome{Disks: []ScrubDisk{}}
 	spent := false
 	for i := range c.Disks {
@@ -169,9 +186,6 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 				return nil, fmt.Errorf("%w", err)
 			}
 		}
-		if err := s.run.callConflicts(ctx); err != nil {
-			return nil, err
-		}
 	}
 	session.Close()
 	// A copy repaired whole is made again at once; one that cannot be is made by the next pass (specs.md §16.1).
@@ -180,20 +194,26 @@ func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, o
 			slog.Warn("a copy repaired whole is not made again yet", "path", path, "error", err)
 		}
 	}
+	out.Taken = s.taken
 	return out, nil
 }
 
 // scrubDisk reads the copies due on a disk: first the one the last scrub stopped in, then the others, those never
-// verified first. It says whether the budget ran out.
+// verified first. Before them it takes again the corrupt copies an earlier scrub left in the root. It says whether
+// the budget ran out.
 func (s *scrubber) scrubDisk(ctx context.Context, d *config.Disk, sd *ScrubDisk) (bool, error) {
 	if !s.session.Readable(d.ID) {
 		return false, nil
+	}
+	left, err := s.leftInRoot(ctx, d.ID)
+	if err != nil {
+		return false, err
 	}
 	cursor, resume, err := catalog.ReadScrubCursor(ctx, s.db, d.ID)
 	if err != nil {
 		return false, fmt.Errorf("catalog: %w", err)
 	}
-	if !resume {
+	if !resume && len(left) == 0 {
 		// The catalog first: a disk with nothing due is not opened, which would confirm it, a read of its head past
 		// the cache that wakes it (specs.md §10, §16). The daemon scrubs by slices all night, each from the first disk on.
 		first, err := catalog.ScrubDue(ctx, s.db, d.ID, s.due, catalog.ScrubKey{VerifiedNS: -2}, 1, s.opts.Under)
@@ -210,6 +230,17 @@ func (s *scrubber) scrubDisk(ctx context.Context, d *config.Disk, sd *ScrubDisk)
 		return false, err
 	}
 	sd.Scrubbed = true
+	// The budget counts them as it counts the copies due: one that runs out leaves the others to the next scrub, and
+	// the daemon's next slice leaves out those it took (specs.md §15.13).
+	for i := range left {
+		if s.machine.Now() >= s.deadline {
+			sd.Left = true
+			return true, nil
+		}
+		if err := s.takeAgain(ctx, d, &left[i], sd); err != nil {
+			return false, err
+		}
+	}
 	if resume {
 		cp, found, err := catalog.ScrubCopyOf(ctx, s.db, d.ID, cursor.FileID)
 		if err != nil {
@@ -411,29 +442,42 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 		return nil
 	}
 	if !s.opts.Apply || !s.opts.Quarantine {
-		if s.repair {
-			sd.Repaired = append(sd.Repaired, cp.Path)
-		} else {
-			sd.Quarantined = append(sd.Quarantined, cp.Path)
-		}
+		s.toMend(cp.Path, sd)
 		return nil
 	}
 	at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == d.ID })
 	if at < 0 {
 		return nil
 	}
-	c := &f.Copies[at]
+	return s.mend(ctx, d, f, &f.Copies[at], healthy, cp.Path, cp.Chunks, sd)
+}
+
+// toMend says what a scrub told --yes would do with a corrupt copy another copy is healthy for: repair it, with
+// integrity.auto_repair, or move it to the trash.
+func (s *scrubber) toMend(path string, sd *ScrubDisk) {
 	if s.repair {
-		settled, err := s.repairOrNot(ctx, f, c, healthy, cp, sd)
+		sd.Repaired = append(sd.Repaired, path)
+	} else {
+		sd.Quarantined = append(sd.Quarantined, path)
+	}
+}
+
+// mend repairs a corrupt copy from a healthy one, read whole already, with integrity.auto_repair, or moves it to the
+// trash, and says which in sd (specs.md §16, §16.1). A copy that neither leaves is kept, and the next scrub of its disk
+// takes it again.
+func (s *scrubber) mend(ctx context.Context, d *config.Disk, f *catalog.FileRow, c *catalog.CopyRow, healthy *trash.Healthy, path string, chunks []byte,
+	sd *ScrubDisk) error {
+	if s.repair {
+		settled, err := s.repairOrNot(ctx, f, c, healthy, path, chunks, sd)
 		if err != nil || settled {
 			return err
 		}
-		if f, c, err = s.leftCorrupt(ctx, cp.FileID, d.ID, healthy); err != nil {
+		if f, c, err = s.leftCorrupt(ctx, f.ID, d.ID, healthy); err != nil {
 			return err
 		}
 		if c == nil {
-			slog.Warn("a corrupt copy a repair could not mend stays where it is", "disk", d.ID, "path", cp.Path)
-			sd.Kept = append(sd.Kept, cp.Path)
+			slog.Warn("a corrupt copy a repair could not mend stays where it is", "disk", d.ID, "path", path)
+			sd.Kept = append(sd.Kept, path)
 			return nil
 		}
 	}
@@ -442,10 +486,114 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 		return fmt.Errorf("%w", err)
 	}
 	if outcome == trash.OutcomeTrashed {
-		sd.Quarantined = append(sd.Quarantined, cp.Path)
+		sd.Quarantined = append(sd.Quarantined, path)
 	} else {
-		slog.Warn("a corrupt copy stays where it is", "disk", d.ID, "path", cp.Path, "outcome", outcome)
-		sd.Kept = append(sd.Kept, cp.Path)
+		slog.Warn("a corrupt copy stays where it is", "disk", d.ID, "path", path, "outcome", outcome)
+		sd.Kept = append(sd.Kept, path)
+	}
+	return nil
+}
+
+// leftInRoot gives the corrupt copies of a disk that an earlier scrub found and left in the root, as a disk that
+// failed or a machine that stopped then leaves them, or a scrub not told --yes, for this scrub to take again before
+// the copies due (specs.md §16): those whose disk can be written to, whose file has another copy ok on a disk that can
+// be read, and, in a scrub that writes, with no operation left planned at their name, which only a reprise resolves
+// (specs.md §17.2). A corrupt copy with nothing to mend it from stays as it is, marked and alerted, and is not taken
+// again; nor is one on a disk that may only be read, which nothing writes to. It reads the catalog alone, so that no
+// disk is opened for it.
+func (s *scrubber) leftInRoot(ctx context.Context, disk string) ([]catalog.CorruptCopy, error) {
+	if !s.session.Writable(disk) {
+		return nil, nil
+	}
+	list, err := catalog.CorruptCopies(ctx, s.db, s.opts.Under, disk)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	var left []catalog.CorruptCopy
+	for _, cc := range list {
+		if s.opts.Taken[cc] {
+			continue
+		}
+		f, err := catalog.FileByID(ctx, s.db, cc.FileID)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		if f == nil || !slices.ContainsFunc(f.Copies, func(c catalog.CopyRow) bool {
+			return c.Disk != disk && c.State == string(solver.CopyOK) && s.session.Readable(c.Disk)
+		}) {
+			continue
+		}
+		at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == disk })
+		if at < 0 {
+			continue
+		}
+		if s.opts.Apply && s.opts.Quarantine {
+			planned, err := catalog.PlannedAt(ctx, s.db, disk, f.Copies[at].Place(f))
+			if err != nil {
+				return nil, fmt.Errorf("catalog: %w", err)
+			}
+			if planned {
+				continue
+			}
+		}
+		left = append(left, cc)
+	}
+	return left, nil
+}
+
+// takeAgain takes a corrupt copy an earlier scrub left in the root as this scrub takes one it finds corrupt, with no
+// event of its own, as nothing new was found (specs.md §16): looked at first as a repair looks at it, and settled as
+// one when it changed since (specs.md §16.1); then, with another copy healthy, read whole first, repaired from it or
+// moved to the trash, or said to be without --yes. A disk lost on the way ends its scrub.
+func (s *scrubber) takeAgain(ctx context.Context, d *config.Disk, cc *catalog.CorruptCopy, sd *ScrubDisk) error {
+	f, err := catalog.FileByID(ctx, s.db, cc.FileID)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	if f == nil {
+		return nil
+	}
+	at := slices.IndexFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == d.ID && c.State == string(solver.CopyCorrupt) })
+	if at < 0 {
+		return nil
+	}
+	c := &f.Copies[at]
+	path := c.Place(f)
+	chunks, err := catalog.FileChunks(ctx, s.db, f.ID)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	sd.Again = append(sd.Again, path)
+	s.taken = append(s.taken, *cc)
+	slog.Info("a corrupt copy left in the root is taken again", "disk", d.ID, "path", path)
+	outcome, changed, err := s.run.changedCopy(ctx, f, c, chunks)
+	if err != nil {
+		return err
+	}
+	switch {
+	case changed && outcome == OutcomeConflict:
+		sd.Conflict = append(sd.Conflict, path)
+	case changed:
+		// It reads right after all, or is still being written, or could not be looked at: it stays where it is.
+		slog.Warn("a corrupt copy stays where it is", "disk", d.ID, "path", path, "outcome", outcome)
+		sd.Kept = append(sd.Kept, path)
+	default:
+		healthy, err := findHealthy(ctx, s.session, f, d.ID, chunks)
+		switch {
+		case err != nil:
+			return err
+		case healthy == nil:
+			sd.Kept = append(sd.Kept, path)
+		case !s.opts.Apply || !s.opts.Quarantine:
+			s.toMend(path, sd)
+		default:
+			if err := s.mend(ctx, d, f, c, healthy, path, chunks, sd); err != nil {
+				return err
+			}
+		}
+	}
+	if !s.session.Readable(d.ID) {
+		return fmt.Errorf("%w: %s", errDiskFailed, d.ID)
 	}
 	return nil
 }
@@ -453,19 +601,19 @@ func (s *scrubber) corrupt(ctx context.Context, d *config.Disk, cp *catalog.Scru
 // repairOrNot repairs a corrupt copy from a healthy one (specs.md §16.1), and says whether that settled it: repaired,
 // or left where it is. A repair that failed leaves it to quarantine (specs.md §16): for want of room, as a move to the
 // trash takes no room but its folders', or for anything else that stopped it.
-func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, healthy *trash.Healthy, cp *catalog.ScrubCopy, sd *ScrubDisk) (bool, error) {
+func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, healthy *trash.Healthy, path string, chunks []byte, sd *ScrubDisk) (bool, error) {
 	mode := modeFor(c, s.mode)
 	// A copy that changed since the scrub read it is read as it is now, as a repair by hand reads it.
-	outcome, changed, err := s.run.changedCopy(ctx, f, c, cp.Chunks)
+	outcome, changed, err := s.run.changedCopy(ctx, f, c, chunks)
 	if err == nil && !changed {
-		outcome, _, err = s.run.repairCopy(ctx, f, c, healthy, cp.Chunks, mode)
+		outcome, _, err = s.run.repairCopy(ctx, f, c, healthy, chunks, mode)
 	}
 	if err != nil {
 		return true, err
 	}
 	switch outcome {
 	case trash.OutcomeRepaired:
-		sd.Repaired = append(sd.Repaired, cp.Path)
+		sd.Repaired = append(sd.Repaired, path)
 		if mode == RepairFile {
 			s.remake = append(s.remake, f.Path)
 		}
@@ -474,13 +622,13 @@ func (s *scrubber) repairOrNot(ctx context.Context, f *catalog.FileRow, c *catal
 		return false, nil
 	case OutcomeConflict:
 		// Another version by now, kept with the others: neither repaired nor moved.
-		sd.Conflict = append(sd.Conflict, cp.Path)
+		sd.Conflict = append(sd.Conflict, path)
 		return true, nil
 	default:
 		// It reads right after all, or changed, which is for the next pass; or nothing can be moved either, on a disk
 		// that cannot be reached, or under a name its trash refuses.
-		slog.Warn("a corrupt copy stays where it is", "disk", c.Disk, "path", cp.Path, "outcome", outcome)
-		sd.Kept = append(sd.Kept, cp.Path)
+		slog.Warn("a corrupt copy stays where it is", "disk", c.Disk, "path", path, "outcome", outcome)
+		sd.Kept = append(sd.Kept, path)
 		return true, nil
 	}
 }

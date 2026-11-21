@@ -135,19 +135,24 @@ func TestJobChunksStopAtAGap(t *testing.T) {
 	}
 }
 
-// A copy made: its pending copy becomes ok with what was found at its name, the file takes the hash it had
-// not, the source is verified, and the job goes with its chunks (specs.md §14.2).
+// A copy made: its pending copy becomes ok with what its part was when verified, the file takes the hash it had
+// not, the source is verified, and the job goes with its chunks (specs.md §14.2). What the part was is recorded with
+// the hash, for a reprise to read back.
 func TestFinishCreate(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		known    []byte
 		verified int
 		gone     bool
+		// unverified is a copy a reprise found whose change time may be a write's: it alone is not verified.
+		unverified bool
 	}{
-		{"a file with no hash", nil, 1, false},
-		{"a file with that hash", bytes.Repeat([]byte{9}, 32), 1, false},
-		{"a file with another hash", bytes.Repeat([]byte{8}, 32), 0, false},
-		{"a pending copy gone meanwhile", nil, 1, true},
+		{"a file with no hash", nil, 1, false, false},
+		{"a file with that hash", bytes.Repeat([]byte{9}, 32), 1, false, false},
+		{"a file with another hash", bytes.Repeat([]byte{8}, 32), 0, false, false},
+		{"a pending copy gone meanwhile", nil, 1, true, false},
+		{"a copy recorded unverified, of a file with no hash", nil, 1, false, true},
+		{"a copy recorded unverified, of a file with that hash", bytes.Repeat([]byte{9}, 32), 1, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, job := newReplicateDB(t)
@@ -159,14 +164,30 @@ func TestFinishCreate(t *testing.T) {
 			if err := RecordChunks(t.Context(), b.sql(), job.ID, 0, bytes.Repeat([]byte{5}, 32)); err != nil {
 				t.Fatal(err)
 			}
-			if err := RecordVerified(t.Context(), b.sql(), job, bytes.Repeat([]byte{9}, 32)); err != nil {
+			birth := int64(3)
+			look := &PartLook{Size: 1, MtimeNS: 1, CtimeNS: 77, BtimeNS: &birth, Mode: 0o640, UID: 5, GID: 6, Nlink: 1}
+			if err := RecordVerified(t.Context(), b.sql(), job, bytes.Repeat([]byte{9}, 32), look); err != nil {
 				t.Fatal(err)
+			}
+			// What a reprise reads back: the hash, and what the part was then.
+			if back, err := JobOfPart(t.Context(), b.sql(), "u2", job.Part); err != nil || back == nil || back.Look == nil || *back.Look.BtimeNS != 3 ||
+				back.Look.CtimeNS != 77 || back.Look.UID != 5 || !bytes.Equal(back.Hash, job.Hash) || back.Placed != nil {
+				t.Fatalf("%+v, %v", back, err)
+			}
+			// The change time right after the rename, in a commit of its own: a reprise reads it back for its operation
+			// alone.
+			if err := RecordPlaced(t.Context(), b.sql(), job, op, 99); err != nil {
+				t.Fatal(err)
+			}
+			if back, err := JobOfPart(t.Context(), b.sql(), "u2", job.Part); err != nil || back == nil || back.PlacedBy(op.ID) == nil ||
+				*back.PlacedBy(op.ID) != 99 || back.PlacedBy(op.ID+1) != nil || back.Look == nil || !bytes.Equal(back.Hash, job.Hash) {
+				t.Fatalf("%+v, %v", back, err)
 			}
 			if tc.gone {
 				b.exec("DELETE FROM copies WHERE disk_id = 'u2'")
 			}
 			made := &NewCopy{Path: "a", Size: 1, MtimeNS: 1, CtimeNS: 77, FileKey: "88", Nlink: 1, Mode: 0o640}
-			if err := FinishCreate(t.Context(), b.sql(), op, job, made, 60); err != nil {
+			if err := FinishCreate(t.Context(), b.sql(), op, job, made, 60, tc.unverified); err != nil {
 				t.Fatal(err)
 			}
 			if got := b.count("SELECT count(*) FROM ops WHERE state = 'done'"); got != 1 {
@@ -175,7 +196,14 @@ func TestFinishCreate(t *testing.T) {
 			if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 'u2' AND state = 'ok' AND created_by = 'atoll' AND file_key = '88' AND ctime_ns = 77 AND first_seen_ns = 60 AND mode = 416"); got != 1 {
 				t.Errorf("%d copies made", got)
 			}
-			if got := b.count("SELECT count(*) FROM copies WHERE verified_ns = 60"); got != 2*tc.verified {
+			want := 2 * tc.verified
+			if tc.unverified {
+				want = tc.verified
+				if got := b.count("SELECT count(*) FROM copies WHERE disk_id = 'u2' AND verified_ns IS NULL"); got != 1 {
+					t.Error("the copy is verified")
+				}
+			}
+			if got := b.count("SELECT count(*) FROM copies WHERE verified_ns = 60"); got != want {
 				t.Errorf("%d verified", got)
 			}
 			if got := b.count("SELECT count(*) FROM jobs") + b.count("SELECT count(*) FROM job_chunks"); got != 0 {
@@ -191,6 +219,83 @@ func TestFinishCreate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A pending copy whose job is running, its operation left planned, is never canceled by a plan, nor taken with its file
+// when the file's last copy goes, nor by a modification; one whose job is queued is (specs.md §13.4, §14.1). The plan's
+// cancel and the file's going took the job running with them, and its reprise then finished a copy no row knew.
+func TestARunningJobKeepsItsPendingCopy(t *testing.T) {
+	running := func(t *testing.T) (*testDB, *ReplicateJob) {
+		t.Helper()
+		b, job := newReplicateDB(t)
+		b.exec("INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u3', 'u3', 'ext4', '/u3', 'media', 'Atoll', 'data', 2, '[]', 'online')")
+		if err := QueueReplicate(t.Context(), b.sql(), 10, []Queue{{FileID: 1, Src: "u1", Dst: "u3"}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BeginCreate(t.Context(), b.sql(), job, 20); err != nil {
+			t.Fatal(err)
+		}
+		return b, job
+	}
+	left := func(b *testDB) string {
+		t.Helper()
+		var copies, jobs string
+		if err := b.sql().QueryRowContext(t.Context(), `SELECT
+			(SELECT COALESCE(group_concat(disk_id || ' ' || state, ','), '') FROM (SELECT * FROM copies ORDER BY disk_id)),
+			(SELECT COALESCE(group_concat(dst_disk || ' ' || state, ','), '') FROM (SELECT * FROM jobs ORDER BY dst_disk))`).Scan(&copies, &jobs); err != nil {
+			t.Fatal(err)
+		}
+		return copies + " | " + jobs
+	}
+	t.Run("found running", func(t *testing.T) {
+		b, _ := running(t)
+		copies, err := RunningCopies(t.Context(), b.sql())
+		if err != nil || len(copies) != 1 || len(copies[1]) != 1 || copies[1][0] != "u2" {
+			t.Errorf("%v, %v", copies, err)
+		}
+		files, err := RunningFiles(t.Context(), b.sql())
+		if err != nil || len(files) != 1 || !files[1] {
+			t.Errorf("%v, %v", files, err)
+		}
+	})
+	t.Run("a plan's cancel", func(t *testing.T) {
+		b, _ := running(t)
+		err := inTransaction(t.Context(), b.sql(), func(tx *sql.Tx) error {
+			if err := cancelPlanned(t.Context(), tx, 1, "u2"); err != nil {
+				return err
+			}
+			return cancelPlanned(t.Context(), tx, 1, "u3")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := left(b); got != "u1 ok,u2 pending | u2 running" {
+			t.Errorf("%s", got)
+		}
+	})
+	t.Run("the last copy gone", func(t *testing.T) {
+		b, _ := running(t)
+		b.exec("DELETE FROM copies WHERE disk_id = 'u1'")
+		if err := inTransaction(t.Context(), b.sql(), func(tx *sql.Tx) error { return dropFileIfEmpty(t.Context(), tx, 1) }); err != nil {
+			t.Fatal(err)
+		}
+		if got := left(b); got != "u2 pending | u2 running" {
+			t.Errorf("%s", got)
+		}
+		if got := b.count("SELECT count(*) FROM files"); got != 1 {
+			t.Error("the file went with its job running")
+		}
+	})
+	t.Run("a modification", func(t *testing.T) {
+		b, _ := running(t)
+		m := &Modification{FileID: 1, Path: "a", Kind: ModModified, Changed: []ChangedCopy{{Disk: "u1", FileKey: "7", Nlink: 1, Size: 2, MtimeNS: 2, CtimeNS: 2}}}
+		if err := ApplyModification(t.Context(), b.sql(), 30, m); err != nil {
+			t.Fatal(err)
+		}
+		if got := left(b); got != "u1 ok,u2 pending | u2 running" {
+			t.Errorf("%s", got)
+		}
+	})
 }
 
 // A job that ends goes with its pending copy, and a copy found where one was pending takes its place, with

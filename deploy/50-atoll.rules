@@ -1,0 +1,15 @@
+// Atoll's polkit rule (deploy/README.md, "The remount through systemd"; specs.md §15.13), which the .deb installs in
+// /usr/share/polkit-1/rules.d/. The account atoll may ask systemd to start a mount unit, and nothing else.
+//
+// After a USB reset, the daemon mounts a disk again by starting the mount unit systemd made of the disk's /etc/fstab
+// entry, rather than by running mount itself: what the mount runs, as ntfs-3g's FUSE process, then belongs to that
+// unit, and outlives a stop or a restart of atoll.service. Any other verb (stop, restart, reload, kill, reset-failed),
+// any other unit (a service, a timer, a socket, a target) and any other action of systemd's stay what polkit's defaults
+// make them for a system account: refused. Without this rule, the daemon runs mount itself, as before 2026-11-19.
+polkit.addRule(function (action, subject) {
+	if (action.id === "org.freedesktop.systemd1.manage-units" && subject.user === "atoll" &&
+		action.lookup("verb") === "start" && /^[A-Za-z0-9:_.\\-]+\.mount$/.test(action.lookup("unit") || "")) {
+		return polkit.Result.YES;
+	}
+	return polkit.Result.NOT_HANDLED;
+});

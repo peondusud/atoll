@@ -1,0 +1,31 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §15.13",
+  "description": "The name of the mount unit systemd gives a mount point, which the remount after a USB reset starts: systemd-escape --path --suffix=mount, as systemd-fstab-generator names the unit of an /etc/fstab entry. The path loses its empty and '.' components; '/' between two components becomes '-'; every byte but an ASCII letter, a digit, ':', '_' and a '.' that is not first becomes \\x and two lowercase hexadecimal digits; '.mount' follows. The root alone is '-.mount'. Refused: a relative path, a '..' component, and a name past 255 bytes.",
+  "cases": [
+    {"path": "/mnt/disk1", "unit": "mnt-disk1.mount"},
+    {"path": "/srv/dev-disk-by-uuid-1234-ABCD", "unit": "srv-dev\\x2ddisk\\x2dby\\x2duuid\\x2d1234\\x2dABCD.mount", "note": "openmediavault's mount points: each '-' escaped"},
+    {"path": "/mnt/My Disk", "unit": "mnt-My\\x20Disk.mount", "note": "fstab writes the space \\040; the unit escapes it again"},
+    {"path": "/mnt/disk1/", "unit": "mnt-disk1.mount", "note": "a trailing slash dropped"},
+    {"path": "//mnt//disk1", "unit": "mnt-disk1.mount", "note": "empty components dropped"},
+    {"path": "/mnt/./disk1", "unit": "mnt-disk1.mount", "note": "'.' components dropped"},
+    {"path": "/mnt/disk1/.", "unit": "mnt-disk1.mount"},
+    {"path": "/mnt/../disk1", "error": true, "note": "systemd refuses a path that is not normalized"},
+    {"path": "/mnt/disk1/..", "error": true},
+    {"path": "/", "unit": "-.mount", "note": "the root alone"},
+    {"path": "/mnt/.hidden", "unit": "mnt-.hidden.mount", "note": "a '.' kept where it is not first"},
+    {"path": "/.hidden", "unit": "\\x2ehidden.mount", "note": "a unit's name never begins with '.'"},
+    {"path": "/mnt/Vidéos", "unit": "mnt-Vid\\xc3\\xa9os.mount", "note": "each byte of a character past ASCII"},
+    {"path": "/mnt/a:b_c.d", "unit": "mnt-a:b_c.d.mount", "note": "':', '_' and '.' kept"},
+    {"path": "/mnt/back\\slash", "unit": "mnt-back\\x5cslash.mount"},
+    {"path": "/mnt/tab\there", "unit": "mnt-tab\\x09here.mount"},
+    {"path": "/mnt/x-y", "unit": "mnt-x\\x2dy.mount"},
+    {"path": "/mnt/x~y@z+w", "unit": "mnt-x\\x7ey\\x40z\\x2bw.mount"},
+    {"path": "/mnt/%u", "unit": "mnt-\\x25u.mount", "note": "no specifier left for systemd to expand"},
+    {"path": "/mnt/\u0001", "unit": "mnt-\\x01.mount"},
+    {"path": "/mnt/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "unit": "mnt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mount", "note": "255 bytes, the longest name systemd keeps"},
+    {"path": "/mnt/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "error": true, "note": "256 bytes: systemd-fstab-generator hashes such a name, which Atoll does not compute"},
+    {"path": "mnt/disk1", "error": true, "note": "a mount point is an absolute path (specs.md §24)"},
+    {"path": "", "error": true}
+  ]
+}

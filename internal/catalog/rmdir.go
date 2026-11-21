@@ -25,6 +25,20 @@ func OwnFolder(ctx context.Context, db *sql.DB, disk, folder string) (fileKey st
 	return key.String, key.Valid && key.String != "", nil
 }
 
+// FolderKey gives the inode a disk's folder row records, whoever made the folder: an empty folder removed through
+// Atoll's own view goes from the other disks too (specs.md §21.2).
+func FolderKey(ctx context.Context, db *sql.DB, disk, folder string) (string, error) {
+	var key sql.NullString
+	err := db.QueryRowContext(ctx, "SELECT file_key FROM entries WHERE disk_id = ? AND lpath = ? AND kind = 'dir'", disk, []byte(folder)).Scan(&key)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("entries: %w", err)
+	}
+	return key.String, nil
+}
+
 // NothingBelow says whether the catalog holds nothing of a disk below a folder: no copy, at its file's path or behind,
 // and no entry, ignored files included.
 func NothingBelow(ctx context.Context, db *sql.DB, disk, folder string) (bool, error) {

@@ -104,13 +104,12 @@ func TestScanOnEachDriver(t *testing.T) {
 		{"xfs", names.XFS, "", nil, true},
 		{"btrfs", names.Btrfs, "", nil, true},
 		{"ntfs3", names.NTFS, "ntfs3", nil, true},
+		{"ntfs", names.NTFS, "ntfs", nil, true},
 		{"ntfs-3g", names.NTFS, "ntfs-3g", nil, true},
 		{"lowntfs-3g", names.NTFS, "lowntfs-3g", nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.driver == "ntfs3" {
-				ntfs3Type(t)
-			}
+			needDriver(t, tc.driver)
 			v := newVolume(t, tc.fs, tc.mkfs...)
 			at := mountPoint(t)
 			mountVolume(t, v, tc.driver, at, optionsFor(t, tc.driver)...)
@@ -254,12 +253,11 @@ func TestScanOfAFailingDisk(t *testing.T) {
 		{"ext4", names.Ext4, ""},
 		{"xfs", names.XFS, ""},
 		{"ntfs3", names.NTFS, "ntfs3"},
+		{"ntfs", names.NTFS, "ntfs"},
 		{"ntfs-3g", names.NTFS, "ntfs-3g"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.driver == "ntfs3" {
-				ntfs3Type(t)
-			}
+			needDriver(t, tc.driver)
 			v := newVolume(t, tc.fs)
 			sectors := must(t, "blockdev", "--getsz", v.device)
 			name := "atoll-" + strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())

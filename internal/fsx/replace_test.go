@@ -160,3 +160,30 @@ func TestReplaceFileSaysWhenTheFileIsInPlace(t *testing.T) {
 		t.Errorf("the file holds %q", got)
 	}
 }
+
+// A file that is not there, or a folder at its path, is never replaced, and nothing is left beside it; a folder that
+// is not there cannot be synced.
+func TestReplaceFileOfWhatIsNoFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "folder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("none", filepath.Join(dir, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"none", "dangling", "folder"} {
+		err := ReplaceFile(filepath.Join(dir, name), nil, []byte("new\n"))
+		if err == nil || errors.Is(err, ErrNotSynced) || errors.Is(err, ErrChangedMeanwhile) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if names, _ := os.ReadDir(dir); len(names) != 2 {
+		t.Errorf("left behind: %v", names)
+	}
+	if err := syncFolder(filepath.Join(dir, "none")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a folder that is not there: %v", err)
+	}
+	if err := syncFolder(dir); err != nil {
+		t.Error(err)
+	}
+}

@@ -1,0 +1,90 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a79, \u00a721.2",
+  "description": "A walk records, for each entry, its size and its owner beside its mode and modification time: what Atoll's own view presents of a folder, a symlink or an ignored file, without waking its disk. A folder's size is what its filesystem gives, a symlink's the length of its target, an ignored file's its length. A later walk records them again: a file that grew is its new size.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/Films/a.mkv",
+          "text": "xx"
+        },
+        {
+          "path": "media/Films/b.part",
+          "text": "partial"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"partial\"\nfilename = \"*.part\"\naction = \"ignore\"\n",
+  "steps": [
+    {
+      "do": "symlink",
+      "disk": "t1",
+      "path": "media/Films/link",
+      "target": "a.mkv"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), kind, CASE kind WHEN 'dir' THEN size > 0 ELSE size END, uid = (SELECT uid FROM copies) AND gid = (SELECT gid FROM copies) FROM entries ORDER BY lpath",
+      "rows": [
+        [
+          "Films",
+          "dir",
+          1,
+          1
+        ],
+        [
+          "Films/b.part",
+          "ignored",
+          7,
+          1
+        ],
+        [
+          "Films/link",
+          "symlink",
+          5,
+          1
+        ]
+      ]
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/Films/b.part",
+      "text": "partial, longer"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), size FROM entries WHERE kind = 'ignored'",
+      "rows": [
+        [
+          "Films/b.part",
+          15
+        ]
+      ]
+    }
+  ]
+}

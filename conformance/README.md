@@ -6,8 +6,10 @@ The language-neutral contract between the Go and Rust versions of Atoll (`specs.
 |---|---|
 | `vectors/` | Input and expected output for the pure functions: rule matching, globs and the regex subset, NFC run by run, durations, sizes, percentages and time windows, name compatibility of whole paths, NTFS collisions, path lengths, the name report, the state a file shows, original selection, creation, modification and change times, capacity formula with `min_free` and strict domains, solver plans, BLAKE3 file and chunk hashes, the configuration, the effective policy of a file, the catalog schema. Unit tests of both versions load the same files. |
 | `scenarios/` | Black-box cases: initial disk trees, a sequence of actions (CLI commands, direct file operations, operations through mergerfs, disconnections, crashes), expected trees, catalog content and `--json` outputs. |
+| `frozen/v1.json` | What the contracts held when the maintainer froze them at format version 1 (`specs.md` §29.3): the hash of each migration, the shape of each key of the configuration and of each field of each `--json` output, the paths of the local API, the exit codes and the names of the on-disk layout. A later version keeps what it pins; both versions' tests check it. It is never written again. |
 | `corpus/names/` | The name corpus of `specs.md` §15.8: single names, with the reasons each filesystem refuses them for. Unit tests of both versions load it, and the loop-device tests create its compatible names on real filesystems. See [`corpus/names/README.md`](corpus/names/README.md). |
 | `runner/` | Drives any `atoll` binary through its CLI and the filesystem only. It imports nothing from `internal/`. |
+| `models/` | A TLA+ model of copies, propagation and the trash, which TLC checks on small pools with crashes, power cuts and disks lost (`make model-check`), the black-box scenarios of the flaws it found and still open in `models/flaws/`, none now, and the fingerprints of the sections of `specs.md` it formalizes. See [`models/README.md`](models/README.md). |
 
 Every behavior change first adds or updates a vector or scenario.
 

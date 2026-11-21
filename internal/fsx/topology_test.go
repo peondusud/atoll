@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // sysTree makes folders as /sys/devices lays block devices out: a disk, its partitions inside it, each with a file
@@ -66,4 +68,70 @@ func TestDisksBelowAPartitionOfAnArray(t *testing.T) {
 			t.Errorf("%s lives on %v, %v, want %v", device, got, err, want)
 		}
 	}
+}
+
+// The kernel numbers each disk it makes, and a disk plugged again gets a new number, under the same name and device
+// numbers too: a whole disk holds its own, and a partition its disk's. A kernel that gives none gives 0 (specs.md
+// §15.13).
+func TestDiskSeqIn(t *testing.T) {
+	top := sysTree(t, []string{"pci/block/sdb", "virtual/block/loop0", "virtual/block/dm-0"}, []string{"pci/block/sdb/sdb1"}, nil)
+	for dir, seq := range map[string]string{"pci/block/sdb": "41\n", "virtual/block/dm-0": "12\n"} {
+		if err := os.WriteFile(filepath.Join(top, dir, "diskseq"), []byte(seq), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for dir, want := range map[string]uint64{
+		"pci/block/sdb":       41,
+		"pci/block/sdb/sdb1":  41,
+		"virtual/block/dm-0":  12,
+		"virtual/block/loop0": 0,
+	} {
+		if got, err := diskSeqIn(filepath.Join(top, dir)); got != want || err != nil {
+			t.Errorf("%s: %d, %v, want %d", dir, got, err, want)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(top, "virtual/block/loop0", "diskseq"), []byte("x\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := diskSeqIn(filepath.Join(top, "virtual/block/loop0")); err == nil {
+		t.Error("a sequence number that is no number read")
+	}
+}
+
+// What a device's name leads to: nothing, something that is no block device, or a block device with its numbers
+// (specs.md §15.13).
+func TestDeviceNodeOf(t *testing.T) {
+	top := t.TempDir()
+	file, link, gone := filepath.Join(top, "file"), filepath.Join(top, "by-uuid"), filepath.Join(top, "dangling")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range [][2]string{{file, link}, {filepath.Join(top, "none"), gone}} {
+		if err := os.Symlink(l[0], l[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, want := range map[string]DeviceNode{
+		filepath.Join(top, "none"): {}, gone: {}, filepath.Join(file, "below"): {},
+		file: {There: true}, link: {There: true}, "/dev/null": {There: true},
+	} {
+		if got, err := DeviceNodeOf(path); got != want || err != nil {
+			t.Errorf("%s: %+v, %v, want %+v", path, got, err, want)
+		}
+	}
+	// A block device, where the machine has one: its numbers are those stat gives.
+	entries, _ := os.ReadDir("/sys/block")
+	for _, e := range entries {
+		path := "/dev/" + e.Name()
+		var st unix.Stat_t
+		if unix.Stat(path, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFBLK {
+			continue
+		}
+		got, err := DeviceNodeOf(path)
+		if err != nil || !got.There || !got.Block || got.Major != unix.Major(st.Rdev) || got.Minor != unix.Minor(st.Rdev) {
+			t.Errorf("%s: %+v, %v", path, got, err)
+		}
+		return
+	}
+	t.Log("no block device to look at")
 }

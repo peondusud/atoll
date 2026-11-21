@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a76.1, \u00a717.2, \u00a717.5",
-  "description": "A pass killed once a folder is removed, and a file made at its name before the next run: that file is someone else's, and stays; the operation is undone, with an event.",
+  "description": "A pass killed once a folder is removed, and a file made at its name before the next run: that file is someone else's, and stays; the operation is undone, with an event. The next run looks at the folder again, as at every folder a run stopped before its end left, and finds no folder of Atoll's there: the second removal is undone too, with no event.",
   "disks": [
     {
       "id": "t1",
@@ -124,8 +124,13 @@
     },
     {
       "do": "expect_catalog",
-      "query": "SELECT kind, CAST(path AS TEXT), state FROM ops WHERE kind = 'rmdir'",
+      "query": "SELECT kind, CAST(path AS TEXT), state FROM ops WHERE kind = 'rmdir' ORDER BY id",
       "rows": [
+        [
+          "rmdir",
+          "show/s1",
+          "undone"
+        ],
         [
           "rmdir",
           "show/s1",

@@ -38,7 +38,7 @@ type WakeInput struct {
 	PassDueNS, GroupDueNS *int64
 	// RipeOrigins holds who made the groups ripe now.
 	RipeOrigins []string
-	// LastPassEndNS is when the last pass ended: nil before the first.
+	// LastPassEndNS is when the last pass that walked every disk ended: nil before the first.
 	LastPassEndNS *int64
 	RescanEveryNS int64
 	Window        value.Window
@@ -70,6 +70,10 @@ type WakeInput struct {
 	NotifyDueNS *int64
 	// BalanceDueNS is when the daemon next balances (specs.md §13.3): nil when it never does.
 	BalanceDueNS *int64
+	// OnBattery says that the UPS runs on battery (specs.md §20): nothing that reads or moves data in bulk starts, the
+	// changed copies to read, the hashes, the backup, the scrub, balancing and the rescan, and none of their times is
+	// one to wake at.
+	OnBattery bool
 }
 
 // WakeOutput says what to do now, and when to look again. Read says to read the changed copies the last pass left, once
@@ -134,14 +138,14 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 	if in.GroupDueNS != nil {
 		earliest(*in.GroupDueNS)
 	}
-	if in.LastPassEndNS != nil {
+	if in.LastPassEndNS != nil && !in.OnBattery {
 		at := *in.LastPassEndNS + in.RescanEveryNS
 		if at <= now && in.Window.Contains(time.Unix(0, now).In(in.Location)) {
 			out.Because = append(out.Because, BecauseRescan)
 		}
 		earliest(in.Window.Next(time.Unix(0, max(at, now)).In(in.Location)).UnixNano())
 	}
-	out.Read, out.Purge = in.ChangedPending, in.PurgePending
+	out.Read, out.Purge = in.ChangedPending && !in.OnBattery, in.PurgePending
 	if in.AlertRetryDueNS != nil {
 		if *in.AlertRetryDueNS <= now {
 			out.Alerts = true
@@ -163,19 +167,19 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 			earliest(*in.SmartDueNS)
 		}
 	}
-	if in.BalanceDueNS != nil {
+	if in.BalanceDueNS != nil && !in.OnBattery {
 		if *in.BalanceDueNS <= now {
 			out.Balance = true
 		} else {
 			earliest(*in.BalanceDueNS)
 		}
 	}
-	if in.HashPending {
+	if in.HashPending && !in.OnBattery {
 		nowLocal := time.Unix(0, now).In(in.Location)
 		out.Hash = in.Window.Contains(nowLocal)
 		earliest(in.Window.Next(nowLocal).UnixNano())
 	}
-	if in.BackupPending {
+	if in.BackupPending && !in.OnBattery {
 		nowLocal := time.Unix(0, now).In(in.Location)
 		if in.Window.Contains(nowLocal) {
 			out.Backup = !out.Hash
@@ -183,10 +187,10 @@ func Wake(in *WakeInput) (WakeOutput, error) {
 			earliest(in.Window.Next(nowLocal).UnixNano())
 		}
 	}
-	if in.ScrubPending {
-		if in.ScrubBudgetNS <= 0 {
-			return WakeOutput{}, fmt.Errorf("wake: the scrub's budget must be positive, not %d", in.ScrubBudgetNS)
-		}
+	if in.ScrubPending && in.ScrubBudgetNS <= 0 {
+		return WakeOutput{}, fmt.Errorf("wake: the scrub's budget must be positive, not %d", in.ScrubBudgetNS)
+	}
+	if in.ScrubPending && !in.OnBattery {
 		nowLocal := time.Unix(0, now).In(in.Location)
 		opened := in.ScrubWindow.Opened(nowLocal)
 		switch {

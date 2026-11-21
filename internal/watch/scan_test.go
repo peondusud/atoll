@@ -70,6 +70,10 @@ func (b *bench) Root(string, string) disks.RootSeen {
 	return disks.RootSeen{Folder: disks.FolderOK}
 }
 
+func (b *bench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
+
 func (b *bench) Now() int64 { return b.now }
 
 func (b *bench) OpenTop(mount string) (fsx.Dir, error) {
@@ -109,6 +113,12 @@ func (b *bench) OpenRoot(mount, root string) (fsx.Dir, error) {
 
 func newBench(t *testing.T, ids ...string) *bench {
 	t.Helper()
+	return newBenchWith(t, "", ids...)
+}
+
+// newBenchWith is newBench, with more of the configuration after its disks.
+func newBenchWith(t *testing.T, extra string, ids ...string) *bench {
+	t.Helper()
 	top := t.TempDir()
 	var text strings.Builder
 	file := filepath.Join(top, "catalog.db")
@@ -122,6 +132,7 @@ func newBench(t *testing.T, ids ...string) *bench {
 		}
 		fmt.Fprintf(&text, "[[disk]]\nid = %q\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3%d\"\nmount = %q\nfs = \"ext4\"\n", id, i, mount)
 	}
+	text.WriteString(extra)
 	c, err := config.Parse([]byte(text.String()))
 	if err != nil {
 		t.Fatal(err)

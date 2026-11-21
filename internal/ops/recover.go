@@ -29,6 +29,8 @@ type Recovered struct {
 	// Trashed holds the operations it finished that sent a copy to the trash: those entries could
 	// not be seen until now, so the command that finished them must not purge them too.
 	Trashed []int64
+	// Disagree counts the operations it left planned as a name and its file's record disagree.
+	Disagree int
 }
 
 // RestoredPath is a restore a reprise finished.
@@ -56,6 +58,9 @@ func (d *Disk) Recover(ctx context.Context, db *sql.DB, list []Op, nowNS int64, 
 			}
 			slog.Warn("an operation stays planned", "disk", d.ID, "op", list[i].ID, "error", err)
 			stayed = errors.Join(stayed, err)
+			if errors.Is(err, ErrNamesDisagree) {
+				out.Disagree++
+			}
 		}
 	}
 	return out, stayed
@@ -97,6 +102,8 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 		return d.recoverUtimens(ctx, db, op, nowNS)
 	case catalog.OpChmod:
 		return d.recoverChmod(ctx, db, op, nowNS)
+	case catalog.OpXattr:
+		return d.recoverXattrs(ctx, db, op, nowNS)
 	case catalog.OpChown:
 		return d.recoverChown(ctx, db, op, nowNS)
 	case catalog.OpRepair:
@@ -318,7 +325,7 @@ func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if err := d.finishNames(part, dst, inTmp == SeenSame, op.FileKey); err != nil {
 		return err
 	}
-	// Looked at again: what is there now is what gets recorded.
+	// Looked at again, once its names are durable.
 	atTarget, st, err := d.seen(dst, op)
 	if err != nil {
 		return err
@@ -341,13 +348,37 @@ func (d *Disk) recoverCreate(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if restore {
 		err = catalog.FinishRestoreTo(ctx, db, op, nowNS, NewCopyOf(&found), linksOf(&st))
 	} else {
-		err = catalog.FinishCreate(ctx, db, op, job, NewCopyOf(&found), nowNS)
+		made, unverified, rowErr := createdByReprise(job, op, target, &st, &found)
+		if rowErr != nil {
+			return rowErr
+		}
+		if unverified {
+			slog.Warn("a copy found after a crash or a disk lost is recorded unverified, as its change time may be a write's",
+				"disk", op.Disk, "path", target, "op", op.ID)
+		}
+		err = catalog.FinishCreate(ctx, db, op, job, made, nowNS, unverified)
 	}
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
 	out.Finished = true
 	return nil
+}
+
+// createdByReprise says what the row of a copy a reprise finds at its name records, as the commit would have, and
+// whether it is unverified: what its part was when verified, as its job recorded it, never what is there now, but for
+// the change time, compared with the one the job recorded right after the rename, however long Atoll was down
+// (specs.md §14.2, RecoveredRow). With no job, it is what is found, which FinishCreate records unverified.
+func createdByReprise(job *catalog.ReplicateJob, op *Op, target string, st *fsx.Stat, found *watch.FoundFile) (*catalog.NewCopy, bool, error) {
+	if job == nil {
+		return NewCopyOf(found), false, nil
+	}
+	now, err := LookOf(st)
+	if err != nil {
+		return nil, false, fmt.Errorf("reprise: %w", err)
+	}
+	row, unverified := RecoveredRow(job.Look, job.PlacedBy(op.ID), &now)
+	return NewCopyFrom(target, found.FileKey, &row), unverified, nil
 }
 
 // recoverRename resolves a rename left planned, as §17.2 does a restore: the target is a logical path,
@@ -446,7 +477,8 @@ func (d *Disk) moveBack(from, to []string) error {
 	defer target.close()
 	name := to[len(to)-1]
 	if err := source.Rename(from[len(from)-1], target.Dir, name); err != nil {
-		if !fsx.IsFlagRefused(err) {
+		// On the type ntfs, EINVAL is the name's, and a link would leave the file both names (specs.md §17.1).
+		if !fsx.IsFlagRefused(err) || d.renameTells(err) {
 			return classify(err)
 		}
 		if err := source.Link(from[len(from)-1], target.Dir, name); err != nil {
@@ -631,12 +663,21 @@ func (d *Disk) recoverMkdir(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	}
 	// Made, and stopped before it was given the mode and owner of the folder it stands for: its event holds them, and
 	// it takes them now, while it holds nothing. Finished as it was found, a private folder of someone's came back the
-	// daemon's own, closed to them on this disk (specs.md §17.4).
+	// daemon's own, closed to them on this disk (specs.md §17.4). One that stands for none takes the mode its event
+	// holds, 0755, as the umask of the process that made it may have left it closed to a media server.
 	like, err := catalog.MkdirLikeOf(ctx, db, op.ID)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
-	if like != nil && (int64(st.Mode) != like.Mode || int64(st.Uid) != like.UID || int64(st.Gid) != like.GID) {
+	switch {
+	case like == nil:
+	case like.UID == nil:
+		if int64(st.Mode&0o777) != like.Mode&0o777 {
+			if st, err = d.openUpAt(path, uint32(like.Mode)); err != nil { //nolint:gosec // a mode, journaled
+				return err
+			}
+		}
+	case int64(st.Mode) != like.Mode || int64(st.Uid) != *like.UID || int64(st.Gid) != *like.GID:
 		if st, err = d.adoptAt(path, like); err != nil {
 			return err
 		}
@@ -647,25 +688,38 @@ func (d *Disk) recoverMkdir(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	return d.FinishMkdir(ctx, db, op, &st)
 }
 
-// LikeOf gives what a folder's operation journals of the folder it stands for, and nil with none.
+// LikeOf gives what a folder's operation journals of what the folder is to take: the mode and owner of the folder it
+// stands for, or with none the mode FolderMode alone, as it keeps the owner mkdir gives it (specs.md §17.4).
 func LikeOf(st *fsx.Stat) *catalog.MkdirLike {
 	if st == nil {
-		return nil
+		return &catalog.MkdirLike{Mode: FolderMode}
 	}
-	return &catalog.MkdirLike{Mode: int64(st.Mode), UID: int64(st.Uid), GID: int64(st.Gid)}
+	uid, gid := int64(st.Uid), int64(st.Gid)
+	return &catalog.MkdirLike{Mode: int64(st.Mode), UID: &uid, GID: &gid}
 }
 
 // adoptAt gives a folder below the top the mode and owner its operation journaled, where the driver allows it, and
 // says what it is then.
 func (d *Disk) adoptAt(path []string, like *catalog.MkdirLike) (fsx.Stat, error) {
+	want := fsx.Stat{Kind: fsx.KindDir, Mode: uint32(like.Mode), Uid: uint32(*like.UID), Gid: uint32(*like.GID)} //nolint:gosec // what a stat gave, journaled
+	return d.madeFolderAt(path, func(parent fsx.Dir, name string) error { return adopt(parent, name, &want) })
+}
+
+// openUpAt gives a folder below the top that stands for none the mode its operation journaled, as openUp does, and
+// says what it is then.
+func (d *Disk) openUpAt(path []string, mode uint32) (fsx.Stat, error) {
+	return d.madeFolderAt(path, func(parent fsx.Dir, name string) error { return openUp(parent, name, mode) })
+}
+
+// madeFolderAt gives a folder below the top what give gives it, and says what it is then.
+func (d *Disk) madeFolderAt(path []string, give func(parent fsx.Dir, name string) error) (fsx.Stat, error) {
 	parent, err := d.open(path[:len(path)-1])
 	if err != nil {
 		return fsx.Stat{}, classify(err)
 	}
 	defer parent.close()
 	name := path[len(path)-1]
-	want := fsx.Stat{Kind: fsx.KindDir, Mode: uint32(like.Mode), Uid: uint32(like.UID), Gid: uint32(like.GID)} //nolint:gosec // what a stat gave, journaled
-	if err := adopt(parent, name, &want); err != nil {
+	if err := give(parent, name); err != nil {
 		return fsx.Stat{}, err
 	}
 	st, err := parent.Stat(name)
@@ -683,7 +737,7 @@ func (d *Disk) FinishMkdir(ctx context.Context, db *sql.DB, op *Op, st *fsx.Stat
 	}
 	// Its identity from the start: a rename of it before the next look is a folder renamed like any other.
 	key := strconv.FormatUint(st.Ino, 10)
-	row := catalog.EntryRow{Path: op.Path, Mode: int64(st.Mode), MtimeNS: mtime, FileKey: &key}
+	row := catalog.EntryRow{Path: op.Path, Mode: int64(st.Mode), MtimeNS: mtime, FileKey: &key, Size: st.Size, UID: st.Uid, GID: st.Gid}
 	if st.HasBirth {
 		birth, ok, err := solver.CreationTimeNS(st.Birth.Sec, st.Birth.Nsec)
 		if err != nil {

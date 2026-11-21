@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §25, §29.3",
+  "description": "atoll --version says the version of the build and exits with 0, before any configuration is read; anything after it is a usage error.",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "--version"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--config",
+        "x",
+        "--version"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--version",
+        "x"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "--version",
+        "--json"
+      ],
+      "exit": 2
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/metrics"
 )
 
 // apiPool writes a configuration with one disk that is not mounted, and makes its catalog.
@@ -51,7 +54,11 @@ func newTestAPI(t *testing.T, c *config.Config) *apiServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newAPIServer(c, m, slog.New(slog.DiscardHandler))
+	rec := metrics.NewRecorder("v0.1.0")
+	rec.Update(func(s *metrics.Snapshot) {
+		s.Configure([]metrics.Disk{{ID: "t1", FS: "ext4", Role: "data", Mount: "/mnt/t1", State: "online"}})
+	})
+	return newAPIServer(c, m, slog.New(slog.DiscardHandler), rec)
 }
 
 func ask(h http.Handler, method, path, token string) *httptest.ResponseRecorder {
@@ -266,7 +273,7 @@ func TestTheAPIReadsTheCatalogOneAnswerAtATime(t *testing.T) {
 		entered <- struct{}{}
 		<-release
 		return http.StatusOK, nil
-	}))
+	}), jsonType)
 	codes := make(chan int, 3)
 	for range 3 {
 		go func() { codes <- serve(t.Context(), slow, "/v1/status") }()
@@ -296,8 +303,265 @@ func TestTheAPIReadsTheCatalogOneAnswerAtATime(t *testing.T) {
 // open for good holds a descriptor of the daemon, which needs them for its disks.
 func TestTheAPIServerLimits(t *testing.T) {
 	s := httpServer(nil)
-	if s.ReadHeaderTimeout != 10*time.Second || s.WriteTimeout != time.Minute || s.IdleTimeout != time.Minute || s.MaxHeaderBytes != 16<<10 {
-		t.Errorf("headers %v, answer %v, idle %v, %d bytes of headers", s.ReadHeaderTimeout, s.WriteTimeout, s.IdleTimeout, s.MaxHeaderBytes)
+	if s.ReadHeaderTimeout != 10*time.Second || s.ReadTimeout != 15*time.Second || s.WriteTimeout != time.Minute || s.IdleTimeout != time.Minute ||
+		s.MaxHeaderBytes != 16<<10 {
+		t.Errorf("headers %v, request %v, answer %v, idle %v, %d bytes of headers", s.ReadHeaderTimeout, s.ReadTimeout, s.WriteTimeout, s.IdleTimeout,
+			s.MaxHeaderBytes)
+	}
+	if apiMaxConns != 32 {
+		t.Errorf("%d connections at once", apiMaxConns)
+	}
+}
+
+// A client that sends its body slowly is cut off once the request's time is over, rather than holding its handler,
+// and its connection, for as long as it likes: the API's server has a time for the whole request, its body included,
+// shortened here (specs.md §25.1).
+func TestASlowClientTimesOut(t *testing.T) {
+	_, c := apiPool(t, "")
+	a := newTestAPI(t, c)
+	a.onCatalog, a.apply = directly(c), true
+	s := httpServer(a.routes())
+	s.ReadTimeout = 300 * time.Millisecond
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = s.Serve(l) }()
+	defer func() { _ = s.Close() }()
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	// The headers, then a byte of a body of 20, and nothing more.
+	if _, err := conn.Write([]byte("POST /v1/guards/t1 HTTP/1.1\r\nHost: atoll\r\nContent-Type: application/json\r\nContent-Length: 20\r\n\r\n{")); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := conn.SetReadDeadline(start.Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	answer, _ := io.ReadAll(conn)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the slow client held its request %v", took)
+	}
+	if len(answer) > 0 && !bytes.HasPrefix(answer, []byte("HTTP/1.1 400")) {
+		t.Errorf("%q", answer)
+	}
+}
+
+// Each listener of the API holds so many connections at once, and no more: past them, a connection waits, unaccepted,
+// until one of them closes. A connection closed twice frees its place once, and a listener closed while one waits
+// gives up the wait (specs.md §25.1).
+func TestTheConnectionsAreCapped(t *testing.T) {
+	inner, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := capConns(inner, 2)
+	defer func() { _ = l.Close() }()
+	accepted := make(chan net.Conn, 8)
+	failed := make(chan error, 1)
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				failed <- err
+				return
+			}
+			accepted <- conn
+		}
+	}()
+	for range 4 {
+		conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", inner.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close() }()
+	}
+	next := func() net.Conn {
+		select {
+		case conn := <-accepted:
+			return conn
+		case <-time.After(5 * time.Second):
+			t.Fatal("no connection taken")
+			return nil
+		}
+	}
+	none := func(why string) {
+		select {
+		case conn := <-accepted:
+			t.Errorf("%s: a connection past the cap was taken: %v", why, conn.RemoteAddr())
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	first, _ := next(), next()
+	none("two held")
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Close()
+	third := next()
+	none("a place freed once, though its connection closed twice")
+	_ = third.Close()
+	next()
+	none("four taken")
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-failed:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Errorf("a wait given up: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait was not given up")
+	}
+}
+
+// The API's servers take the cap: once every place of the socket is held, a request waits until one closes, then is
+// answered (specs.md §25.1).
+func TestTheAPIWaitsPastItsConnections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "atoll.sock")
+	_, c := apiPool(t, "[api]\nsocket = "+strconv.Quote(path)+"\n")
+	stop := newTestAPI(t, c).start(t.Context(), c)
+	defer stop()
+	var idle []net.Conn
+	for range apiMaxConns {
+		conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idle = append(idle, conn)
+	}
+	defer func() {
+		for _, conn := range idle {
+			_ = conn.Close()
+		}
+	}()
+	codes := make(chan int, 1)
+	go func() { codes <- getHealth(t, socketClient(path), "http://atoll/v1/health", "") }()
+	select {
+	case code := <-codes:
+		t.Fatalf("answered past the cap: %d", code)
+	case <-time.After(300 * time.Millisecond):
+	}
+	_ = idle[0].Close()
+	select {
+	case code := <-codes:
+		if code != http.StatusOK {
+			t.Errorf("%d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a place freed, and the request still waits")
+	}
+}
+
+// clockMachine is a machine whose clock the test sets.
+type clockMachine struct {
+	disks.Machine
+	now atomic.Int64
+}
+
+func (m *clockMachine) Now() int64 { return m.now.Load() }
+
+// A token file that cannot be read refuses every request over TCP, and the log says so once a minute at most, with the
+// requests refused since: a client with no token could fill it otherwise (specs.md §25.1).
+func TestAnUnreadableTokenIsLoggedOnceAMinute(t *testing.T) {
+	_, c := apiPool(t, "[api]\nlisten = \"127.0.0.1:7341\"\ntoken_file = "+strconv.Quote(filepath.Join(t.TempDir(), "none"))+"\n")
+	a := newTestAPI(t, c)
+	m := &clockMachine{Machine: a.machine}
+	m.now.Store(time.Hour.Nanoseconds())
+	a.machine = m
+	var log syncLog
+	a.log = slog.New(slog.NewTextHandler(&log, nil))
+	h := a.withToken(a.routes())
+	for range 50 {
+		if w := ask(h, http.MethodGet, "/v1/health", "Bearer x"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("%d", w.Code)
+		}
+	}
+	if n := strings.Count(log.String(), "token cannot be read"); n != 1 || !strings.Contains(log.String(), "refused=1") {
+		t.Errorf("%d lines:\n%s", n, log.String())
+	}
+	m.now.Add(time.Minute.Nanoseconds() - 1)
+	ask(h, http.MethodGet, "/v1/health", "Bearer x")
+	if n := strings.Count(log.String(), "token cannot be read"); n != 1 {
+		t.Errorf("before the minute: %d lines", n)
+	}
+	m.now.Add(1)
+	ask(h, http.MethodGet, "/v1/health", "Bearer x")
+	if n := strings.Count(log.String(), "token cannot be read"); n != 2 || !strings.Contains(log.String(), "refused=51") {
+		t.Errorf("a minute on: %d lines:\n%s", n, log.String())
+	}
+}
+
+// syncLog is a log that requests write at once.
+type syncLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// slowMounts is a machine whose mount checks wait to be let go, and count how many run at once.
+type slowMounts struct {
+	disks.Machine
+	running, most atomic.Int32
+	entered       chan struct{}
+	release       chan struct{}
+}
+
+func (m *slowMounts) Mount(mount string) disks.MountSeen {
+	n := m.running.Add(1)
+	defer m.running.Add(-1)
+	for {
+		most := m.most.Load()
+		if n <= most || m.most.CompareAndSwap(most, n) {
+			break
+		}
+	}
+	m.entered <- struct{}{}
+	<-m.release
+	return m.Machine.Mount(mount)
+}
+
+// The answers that check the disks' mounts, /v1/disks and /v1/disks/{id}, check them one at a time: each reads the
+// mount table and every disk's device, and a client that asks again and again adds no checks at once (specs.md §25.1).
+func TestTheAPIChecksTheMountsOneAnswerAtATime(t *testing.T) {
+	_, c := apiPool(t, "")
+	a := newTestAPI(t, c)
+	m := &slowMounts{Machine: a.machine, entered: make(chan struct{}, 64), release: make(chan struct{})}
+	a.machine = m
+	h := a.routes()
+	codes := make(chan int, 4)
+	for _, path := range []string{"/v1/disks", "/v1/disks", "/v1/disks/t1", "/v1/disks"} {
+		go func() { codes <- serve(t.Context(), h, path) }()
+	}
+	<-m.entered
+	select {
+	case <-m.entered:
+		t.Error("two mount checks at once")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(m.release)
+	for range 4 {
+		if code := <-codes; code != http.StatusOK {
+			t.Errorf("%d", code)
+		}
+	}
+	if most := m.most.Load(); most != 1 {
+		t.Errorf("%d mount checks at once", most)
 	}
 }
 
@@ -313,6 +577,122 @@ func TestTheUnitClosesTheCatalogsFolder(t *testing.T) {
 		if !slices.Contains(lines, want) {
 			t.Errorf("deploy/atoll.service has no line %q", want)
 		}
+	}
+}
+
+// No unit of deploy/ gives its service a mount namespace of its own: in one, what the service mounts stays its own,
+// and the host never sees it, whatever MountFlags says (systemd.exec(5)). The daemon's remount after a USB reset then
+// mounted the disk again for Atoll alone, mergerfs and the media servers keeping the dead mount, and atoll view's
+// mount would reach no one (specs.md §15.13, §21.2). Each of these settings makes such a namespace. ProtectClock and
+// ProtectHostname make none, nor a device policy: measured with systemd 252 and 257, and in qemu, where
+// test/loopdev/units_test.go checks the mount namespace of each unit's process.
+func TestNoUnitKeepsItsMountsToItself(t *testing.T) {
+	units, err := filepath.Glob(filepath.Join("..", "..", "deploy", "*.service"))
+	if err != nil || len(units) == 0 {
+		t.Fatalf("units %v, %v", units, err)
+	}
+	namespacing := []string{"PrivateTmp", "PrivateMounts", "PrivateDevices", "ProtectHome", "ProtectSystem", "ProtectKernelTunables",
+		"ProtectKernelModules", "ProtectKernelLogs", "ProtectControlGroups", "ProtectProc", "ProcSubset", "ReadOnlyPaths",
+		"ReadWritePaths", "InaccessiblePaths", "ExecPaths", "NoExecPaths", "TemporaryFileSystem", "BindPaths", "BindReadOnlyPaths",
+		"RootDirectory", "RootImage", "MountFlags", "MountAPIVFS", "PrivateNetwork", "PrivateIPC", "PrivateUsers", "NetworkNamespacePath"}
+	for _, unit := range units {
+		data, err := os.ReadFile(unit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			key, _, ok := strings.Cut(strings.TrimSpace(line), "=")
+			if ok && slices.Contains(namespacing, key) {
+				t.Errorf("%s: %q gives the service a mount namespace of its own", filepath.Base(unit), line)
+			}
+		}
+	}
+}
+
+// Each unit of deploy/ keeps the hardening measured in qemu, where test/loopdev/units_test.go starts them as they are
+// (docs/threat-model.md, G18): its filter of calls, its sockets, its namespaces and its mask. Neither gives its account
+// a supplementary group, which the capabilities make useless, nor refuses setuid and setgid, which a copy, and a
+// folder made 2775, take with the rest of their mode (specs.md §14), nor sets a device policy, which would refuse a disk
+// that comes back under another number.
+func TestTheUnitsAreHardened(t *testing.T) {
+	units, err := filepath.Glob(filepath.Join("..", "..", "deploy", "*.service"))
+	if err != nil || len(units) == 0 {
+		t.Fatalf("units %v, %v", units, err)
+	}
+	want := []string{"NoNewPrivileges=yes", "SystemCallArchitectures=native", "SystemCallErrorNumber=EPERM",
+		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK", "RestrictNamespaces=yes", "LockPersonality=yes",
+		"MemoryDenyWriteExecute=yes", "RestrictRealtime=yes", "ProtectClock=yes", "ProtectHostname=yes", "UMask=0027"}
+	refused := []string{"SupplementaryGroups", "RestrictSUIDSGID", "DevicePolicy", "DeviceAllow"}
+	for _, unit := range units {
+		data, err := os.ReadFile(unit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range want {
+			if !slices.Contains(lines, line) {
+				t.Errorf("%s has no line %q", filepath.Base(unit), line)
+			}
+		}
+		filters := 0
+		for _, line := range lines {
+			key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+			switch {
+			case !ok:
+			case slices.Contains(refused, key):
+				t.Errorf("%s: %q", filepath.Base(unit), line)
+			case key == "SystemCallFilter":
+				filters++
+				if !strings.HasPrefix(value, "@system-service @mount") {
+					t.Errorf("%s: %q, want systemd's set for services and @mount first", filepath.Base(unit), line)
+				}
+			}
+		}
+		if filters != 1 {
+			t.Errorf("%s has %d lines SystemCallFilter=, want 1", filepath.Base(unit), filters)
+		}
+	}
+}
+
+// deploy/50-atoll.rules lets the account atoll start a mount unit, and nothing else: one action, one account, the verb
+// start alone, a unit whose name ends in .mount (specs.md §15.13). The .deb installs it where polkitd reads it, and the
+// archive holds it. Measured with polkitd 122 (Debian 12) and 126 (Debian 13) through pkcheck, and in qemu by the
+// daemon's own remount (test/loopdev/units_test.go, TestTheRemountUnderSystemd).
+func TestThePolkitRuleLetsAtollStartAMountUnitAlone(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "deploy", "50-atoll.rules"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := string(data)
+	var code []string
+	for _, line := range strings.Split(rule, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+			code = append(code, line)
+		}
+	}
+	program := strings.Join(code, "\n")
+	for _, want := range []string{`action.id === "org.freedesktop.systemd1.manage-units"`, `subject.user === "atoll"`,
+		`action.lookup("verb") === "start"`, `\.mount$/.test(action.lookup("unit") || "")`, "return polkit.Result.YES;",
+		"return polkit.Result.NOT_HANDLED;"} {
+		if !strings.Contains(program, want) {
+			t.Errorf("deploy/50-atoll.rules has no %s", want)
+		}
+	}
+	if n := strings.Count(program, "polkit.Result.YES"); n != 1 {
+		t.Errorf("deploy/50-atoll.rules says yes %d times", n)
+	}
+	if n := strings.Count(program, "action.lookup(\"verb\")"); n != 1 {
+		t.Errorf("deploy/50-atoll.rules reads the verb %d times", n)
+	}
+	release, err := os.ReadFile(filepath.Join("..", "..", ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(release), "      - src: deploy/50-atoll.rules\n        dst: /usr/share/polkit-1/rules.d/50-atoll.rules\n") {
+		t.Error(".goreleaser.yaml does not install deploy/50-atoll.rules in /usr/share/polkit-1/rules.d/")
+	}
+	if strings.Count(string(release), "- src: deploy/50-atoll.rules\n") != 2 {
+		t.Error(".goreleaser.yaml does not put deploy/50-atoll.rules in both the archive and the package")
 	}
 }
 
@@ -342,9 +722,89 @@ func TestTheOpenAPIDocument(t *testing.T) {
 		}
 	}
 	_, c := apiPool(t, "")
-	served := slices.Sorted(maps.Keys(newTestAPI(t, c).answers()))
+	// /metrics is no command's: it is what the daemon recorded (specs.md §23.1).
+	a := newTestAPI(t, c)
+	served := slices.Sorted(maps.Keys(a.answers()))
+	served = append(served, slices.Collect(maps.Keys(a.writes()))...)
+	served = append(served, "/metrics")
+	slices.Sort(served)
 	slices.Sort(listed)
 	if !slices.Equal(listed, served) {
 		t.Errorf("openapi.yaml lists %v, the server answers %v", listed, served)
+	}
+}
+
+// /metrics gives what the daemon recorded, as Prometheus reads it, on the socket with no token and over TCP with it,
+// GET alone (specs.md §23.1).
+func TestTheAPIGivesTheMetrics(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "api.token")
+	if err := os.WriteFile(token, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, c := apiPool(t, "[api]\nlisten = \"127.0.0.1:7341\"\ntoken_file = "+strconv.Quote(token)+"\n")
+	a := newTestAPI(t, c)
+	a.metrics.Update(func(s *metrics.Snapshot) { s.Passes = 3 })
+	want, err := a.metrics.Text()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(want), "atoll_passes_total 3\n") || !strings.Contains(string(want), `atoll_disk_state{disk="t1",state="online"} 1`) {
+		t.Fatalf("the recorder gives\n%s", want)
+	}
+	socket, tcp := a.routes(), a.withToken(a.routes())
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"the socket": ask(socket, http.MethodGet, "/metrics", ""), "TCP with the token": ask(tcp, http.MethodGet, "/metrics", "Bearer s3cret"),
+	} {
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "text/plain; version=0.0.4; charset=utf-8" || w.Body.String() != string(want) {
+			t.Errorf("%s: %d %q\n%s", name, w.Code, w.Header().Get("Content-Type"), w.Body.String())
+		}
+	}
+	if w := ask(tcp, http.MethodGet, "/metrics", ""); w.Code != http.StatusUnauthorized || w.Body.Len() != 0 {
+		t.Errorf("TCP with no token: %d %q", w.Code, w.Body.String())
+	}
+	if w := ask(socket, http.MethodPost, "/metrics", ""); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != http.MethodGet {
+		t.Errorf("POST: %d", w.Code)
+	}
+	// What the daemon records next is in the next answer.
+	a.metrics.Update(func(s *metrics.Snapshot) { s.Passes = 4 })
+	if w := ask(socket, http.MethodGet, "/metrics", ""); !strings.Contains(w.Body.String(), "atoll_passes_total 4\n") {
+		t.Errorf("after another pass:\n%s", w.Body.String())
+	}
+}
+
+// metrics.listen gives /metrics with no token, and nothing else: no answer of /v1 goes out with no token (specs.md
+// §23.1).
+func TestMetricsListenGivesTheMetricsAlone(t *testing.T) {
+	ports := make([]string, 2)
+	for i := range ports {
+		free, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ports[i] = strconv.Itoa(free.Addr().(*net.TCPAddr).Port)
+		_ = free.Close()
+	}
+	token := filepath.Join(t.TempDir(), "api.token")
+	if err := os.WriteFile(token, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, open := "127.0.0.1:"+ports[0], "127.0.0.1:"+ports[1]
+	_, c := apiPool(t, "[api]\nsocket = \"\"\nlisten = "+strconv.Quote(api)+"\ntoken_file = "+strconv.Quote(token)+"\n[metrics]\nlisten = "+strconv.Quote(open)+"\n")
+	stop := newTestAPI(t, c).start(t.Context(), c)
+	defer stop()
+	client := &http.Client{}
+	for _, tc := range []struct {
+		url, token string
+		code       int
+	}{
+		{"http://" + open + "/metrics", "", http.StatusOK},
+		{"http://" + open + "/v1/health", "", http.StatusNotFound},
+		{"http://" + open + "/v1/status", "s3cret", http.StatusNotFound},
+		{"http://" + api + "/metrics", "", http.StatusUnauthorized},
+		{"http://" + api + "/metrics", "s3cret", http.StatusOK},
+	} {
+		if code := getHealth(t, client, tc.url, tc.token); code != tc.code {
+			t.Errorf("%s with token %q: %d, want %d", tc.url, tc.token, code, tc.code)
+		}
 	}
 }

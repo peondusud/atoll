@@ -17,6 +17,7 @@ func TestGuardReadsUseAnIndex(t *testing.T) {
 	for name, query := range map[string]string{
 		"guard answer": guardAnswerQuery, "guard end": guardEndQuery, "guard since": guardSinceQuery, "copies gone": copiesGoneQuery,
 		"modify answer": modifyAnswerQuery, "modify guard since": modifyGuardSinceQuery, "modified count": modifiedCountQuery,
+		"modify day answer": modifyDayAnswerQuery,
 	} {
 		plan := planOf(t, b.sql(), name, query)
 		searched := false
@@ -61,8 +62,17 @@ func TestTheTrashIsReadThroughItsIndexes(t *testing.T) {
 // over the whole journal, which holds an operation for each copy ever made (specs.md §9).
 func TestTheJournalIsAskedByInode(t *testing.T) {
 	b := openForOps(t)
-	if plan := planOf(t, b.sql(), "places", placesOfSQL); len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INDEX ops_by_key (disk_id=? AND file_key=?)") {
+	// What Atoll's own view sent to the trash is left out through view_ops's index of its operations (specs.md §21.2).
+	plan := planOf(t, b.sql(), "places", placesOfSQL)
+	if len(plan) == 0 || !strings.HasPrefix(plan[0], "SEARCH ops USING INDEX ops_by_key (disk_id=? AND file_key=?)") {
 		t.Errorf("%q", plan)
+	}
+	for _, step := range plan[1:] {
+		// The one row of an operation, by the unique index, whose kind says whether a move made it.
+		if !strings.HasPrefix(step, "CORRELATED SCALAR SUBQUERY") && !strings.HasPrefix(step, "SEARCH v USING COVERING INDEX view_ops_by_op") &&
+			!strings.HasPrefix(step, "SEARCH v USING INDEX view_ops_by_op (op_id=?)") {
+			t.Errorf("the view's operations are not asked through their index: %q", plan)
+		}
 	}
 	if plan := planOf(t, b.sql(), "on disk", opOnDiskSQL); !slices.ContainsFunc(plan, func(step string) bool {
 		return strings.HasPrefix(step, "SEARCH ops USING INTEGER PRIMARY KEY (rowid=?)")
@@ -84,6 +94,14 @@ func TestPartStatesReadFromTheirID(t *testing.T) {
 func TestRepairStatesReadFromTheirID(t *testing.T) {
 	plan := planOf(t, openForOps(t).sql(), "repair states", repairStateQuery)
 	if len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INTEGER PRIMARY KEY (rowid=?)") {
+		t.Errorf("%q", plan)
+	}
+}
+
+// What earlier runs left is read by the range of the journal's ids, never over all of it.
+func TestLeftSinceReadsItsRange(t *testing.T) {
+	plan := planOf(t, openForOps(t).sql(), "left since", leftSinceQuery)
+	if len(plan) != 1 || !strings.HasPrefix(plan[0], "SEARCH ops USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)") {
 		t.Errorf("%q", plan)
 	}
 }
@@ -140,4 +158,19 @@ func planOf(t *testing.T, db *sql.DB, name, query string) []string {
 		t.Fatalf("%s: %v", name, err)
 	}
 	return plan
+}
+
+// The disks a light pass must walk for their gone copies are read through the partial index of those copies, which
+// holds them alone, at each pass (specs.md §15.13): never over every copy of the pool.
+func TestTheDisksWithGoneCopiesAreReadThroughTheirIndex(t *testing.T) {
+	b := openForOps(t)
+	plan := planOf(t, b.sql(), "gone", disksWithGoneSQL)
+	if len(plan) == 0 || !slices.ContainsFunc(plan, func(step string) bool { return strings.Contains(step, "INDEX copies_gone") }) {
+		t.Errorf("%q", plan)
+	}
+	for _, step := range plan {
+		if strings.Contains(step, "TEMP B-TREE") || step == "SCAN copies" {
+			t.Errorf("the copies are read or sorted whole: %q", plan)
+		}
+	}
 }

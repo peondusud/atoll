@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §15.13",
+  "description": "What a look limited to the names the watcher gave makes of the verdict a whole walk would give a copy: a copy it no longer finds is gone only when an event said its name, or a folder above it, was deleted, or when its row already says it went; otherwise nothing is concluded of it, and the next pass walks the disk whole.",
+  "cases": [
+    {"note": "deleted, as the event said: gone", "verdict": "gone", "deleted": true, "row_kind": "", "next": "gone"},
+    {"note": "no longer at its name, and no event said deleted: only moved-from explains it, and it may be anywhere the look did not go", "verdict": "gone", "row_kind": "", "next": "unknown", "whole": true},
+    {"note": "its row says it went already, as a look found before: still gone", "verdict": "gone", "row_kind": "gone", "next": "gone"},
+    {"note": "its row says it moved, and the look no longer finds it at its new name: the new name may be anywhere", "verdict": "gone", "row_kind": "moved", "next": "unknown", "whole": true},
+    {"note": "its row says uncertain: nothing more is known than before", "verdict": "gone", "row_kind": "uncertain", "next": "unknown", "whole": true},
+    {"note": "found at a name the look read, by its inode: moved, whatever an event said", "verdict": "moved", "deleted": true, "row_kind": "", "next": "moved"},
+    {"note": "found at its name as its row says", "verdict": "there", "row_kind": "", "next": "there"},
+    {"note": "edited in place", "verdict": "edited", "row_kind": "", "next": "edited"},
+    {"note": "replaced by another file at its name", "verdict": "replaced", "row_kind": "gone", "next": "replaced"},
+    {"note": "in Atoll's own trash or tmp: Atoll's own operation", "verdict": "own", "row_kind": "", "next": "own"},
+    {"note": "two rows claim one name: uncertain, as a whole walk says", "verdict": "uncertain", "row_kind": "", "next": "uncertain"},
+    {"note": "below a name the look could not reach: nothing is known", "verdict": "unknown", "deleted": true, "row_kind": "gone", "next": "unknown"}
+  ]
+}

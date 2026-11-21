@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a76.1, \u00a717.2, \u00a717.5",
-  "description": "A pass killed once the removal of a folder is journaled: the next run finds the folder there, and the operation undone. That run did not empty it, so the folder stays.",
+  "description": "A pass killed once the removal of a folder is journaled: the next run finds the folder there, and the operation undone. It then looks at the folders that the operations done since the last look left, as the journal says, and the folder, still Atoll's and empty, goes: a run stopped before its end leaves its folders to the next.",
   "disks": [
     {
       "id": "t1",
@@ -118,12 +118,17 @@
     },
     {
       "do": "expect_catalog",
-      "query": "SELECT kind, CAST(path AS TEXT), state FROM ops WHERE kind = 'rmdir'",
+      "query": "SELECT kind, CAST(path AS TEXT), state FROM ops WHERE kind = 'rmdir' ORDER BY id",
       "rows": [
         [
           "rmdir",
           "show/s1",
           "undone"
+        ],
+        [
+          "rmdir",
+          "show/s1",
+          "done"
         ]
       ]
     },
@@ -142,10 +147,6 @@
       "tree": [
         {
           "path": "media/show/notes",
-          "kind": "dir"
-        },
-        {
-          "path": "media/show/s1",
           "kind": "dir"
         },
         {

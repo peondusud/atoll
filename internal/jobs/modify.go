@@ -114,7 +114,7 @@ func (p *pass) modInput(ctx context.Context, finder *catalog.FileFinder, f *cata
 		s := p.verdictOf(f, c)
 		mc := solver.ModCopy{
 			Disk: c.Disk, Position: positions[c.Disk], Verdict: s.Verdict, State: solver.CopyState(c.State), Size: c.Size.Int64,
-			Readable: p.walked[c.Disk] && p.session.Readable(c.Disk),
+			Readable: p.looked(c.Disk) && p.session.Readable(c.Disk),
 		}
 		// A row that says it moved, which this look could not get to, is decided nothing of yet.
 		if p.isMovedOutOfReach(c, s.Verdict) {

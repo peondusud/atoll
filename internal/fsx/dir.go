@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -104,6 +105,9 @@ type Dir interface {
 	Rmdir(name string) error
 	// Sync makes what was done to the names of this folder durable.
 	Sync() error
+	// SyncFS writes out what the whole filesystem of this folder holds in memory, syncfs(2): what any process wrote
+	// there and the kernel has not written yet, as the daemon asks before the UPS's battery runs out (specs.md §20).
+	SyncFS() error
 	// SyncEntry makes durable what the file or folder a name leads to records of itself, its own names
 	// included: on NTFS each keeps them in its own record, which ntfs3 does not write when only the folder
 	// is synced, so that a device failing then leaves neither name (measured). A name it cannot open gives
@@ -117,6 +121,20 @@ type Dir interface {
 	// SetMtime sets the modification time of the folder itself, and SetMode its permission bits, as fchmod does.
 	SetMtime(t Time) error
 	SetMode(mode uint32) error
+	// SetOwner sets the owner of the folder itself, as fchown does: a change Atoll's own view makes on a user's
+	// behalf (specs.md §21.2).
+	SetOwner(uid, gid uint32) error
+	// Symlink makes a symbolic link with that target, and fails on a name that exists; Lchown gives a name the
+	// owner, the symbolic link itself and not what it leads to. Only Atoll's own view makes one, on a user's behalf.
+	Symlink(target, name string) error
+	Lchown(name string, uid, gid uint32) error
+	// Xattrs gives the extended attributes of a name itself, a symbolic link's included, whose names begin with
+	// namespace, with their values: none where its filesystem holds none. SetXattr sets one, with the flags of
+	// setxattr(2), and RemoveXattr removes one, as lsetxattr and lremovexattr do: what Atoll's own view writes on a
+	// user's behalf (specs.md §21.2).
+	Xattrs(name, namespace string) (map[string][]byte, error)
+	SetXattr(name, attr string, value []byte, flags int) error
+	RemoveXattr(name, attr string) error
 	Close() error
 }
 
@@ -136,6 +154,11 @@ type File interface {
 	// DropCache asks the kernel to forget the file's clean pages, so that the next read comes from the disk: the
 	// scrub's second read of a chunk that did not match (specs.md §16).
 	DropCache() error
+	// Xattrs, SetXattr and RemoveXattr are the extended attributes of the file, as those of a folder's name are: the
+	// user. attributes the copy pipeline reads from a source, and a pass gives a copy (specs.md §14, §21.2).
+	Xattrs(namespace string) (map[string][]byte, error)
+	SetXattr(attr string, value []byte, flags int) error
+	RemoveXattr(attr string) error
 	Close() error
 }
 
@@ -157,11 +180,19 @@ type WritableFile interface {
 	// DropCache asks the kernel to forget the file's pages, so that the next read comes from the disk,
 	// as a verification needs (specs.md §14, step 5). Only clean pages go: sync first.
 	DropCache() error
+	// Xattrs, SetXattr and RemoveXattr are the extended attributes of the file: those a copy in progress takes from
+	// its source (specs.md §14, step 4).
+	Xattrs(namespace string) (map[string][]byte, error)
+	SetXattr(attr string, value []byte, flags int) error
+	RemoveXattr(attr string) error
 	Close() error
 }
 
 type realDir struct {
 	file *os.File
+	// listing keeps two Names of one handle from reading the folder at once: each starts it from its start, and a
+	// handle may be shared, as a disk's top is by copies at once.
+	listing sync.Mutex
 }
 
 // OpenDir opens a folder given by a path whose last component is no symlink.
@@ -178,7 +209,13 @@ func (d *realDir) fd() int {
 }
 
 func (d *realDir) Names() ([]string, error) {
-	// Not the file's own position: a folder is read once, and from its start.
+	d.listing.Lock()
+	defer d.listing.Unlock()
+	// From the start of the folder each time, never from where a listing before this one left the handle: a second
+	// listing would give nothing. Seek also lets go of what the one before kept of the folder.
+	if _, err := d.file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("list %q: %w", d.file.Name(), err)
+	}
 	names, err := d.file.Readdirnames(-1)
 	if err != nil {
 		return nil, fmt.Errorf("list %q: %w", d.file.Name(), err)
@@ -187,7 +224,7 @@ func (d *realDir) Names() ([]string, error) {
 }
 
 func (d *realDir) Info() (Stat, error) {
-	return statx(d.fd(), "", unix.AT_EMPTY_PATH)
+	return statxBirth(d.fd(), d.file.Name())
 }
 
 func (d *realDir) Stat(name string) (Stat, error) {
@@ -221,6 +258,30 @@ func (d *realDir) readCreationXattr(name string, st *Stat) error {
 	}
 	st.Birth, st.HasBirth = FileTime(binary.LittleEndian.Uint64(raw[:])), true
 	return nil
+}
+
+// statxBirth looks at what a handle leads to, as a look by its name does: where statx gives no creation time, as on
+// ntfs-3g and lowntfs-3g, the attribute that holds it (specs.md §7). A handle and a name must give one creation time,
+// or a copy's row taken from its part's handle would differ from every later look at its name (found on ntfs-3g by the
+// CI's qemu job, 2026-11-19). It goes through /proc, following the descriptor's link to the file, as a handle opened
+// with O_PATH takes no call on its attributes.
+func statxBirth(fd int, name string) (Stat, error) {
+	st, err := statx(fd, "", unix.AT_EMPTY_PATH)
+	if err != nil || st.HasBirth || st.Kind == KindSymlink {
+		return st, err
+	}
+	var raw [8]byte
+	n, err := unix.Getxattr("/proc/self/fd/"+strconv.Itoa(fd), "system.ntfs_crtime", raw[:])
+	switch {
+	case errors.Is(err, unix.ENODATA), errors.Is(err, unix.ENOTSUP):
+		return st, nil
+	case err != nil:
+		return Stat{}, fmt.Errorf("creation time of %q: %w", name, err)
+	case n != len(raw):
+		return st, nil
+	}
+	st.Birth, st.HasBirth = FileTime(binary.LittleEndian.Uint64(raw[:])), true
+	return st, nil
 }
 
 // FileTime turns an NTFS FILETIME, 100 ns units since 1601-01-01 UTC, into a time since the Unix
@@ -379,6 +440,13 @@ func (d *realDir) Sync() error {
 	return nil
 }
 
+func (d *realDir) SyncFS() error {
+	if err := unix.Syncfs(d.fd()); err != nil {
+		return fmt.Errorf("syncfs %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
 func (d *realDir) SetMode(mode uint32) error {
 	if err := unix.Fchmod(d.fd(), mode); err != nil {
 		return fmt.Errorf("chmod %q: %w", d.file.Name(), err)
@@ -442,6 +510,27 @@ func (d *realDir) OpenWritable(name string) (WritableFile, error) {
 	return f, nil
 }
 
+func (d *realDir) SetOwner(uid, gid uint32) error {
+	if err := unix.Fchown(d.fd(), int(uid), int(gid)); err != nil {
+		return fmt.Errorf("chown %q: %w", d.file.Name(), err)
+	}
+	return nil
+}
+
+func (d *realDir) Symlink(target, name string) error {
+	if err := unix.Symlinkat(target, d.fd(), name); err != nil {
+		return fmt.Errorf("symlink %q: %w", name, err)
+	}
+	return nil
+}
+
+func (d *realDir) Lchown(name string, uid, gid uint32) error {
+	if err := unix.Fchownat(d.fd(), name, int(uid), int(gid), unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return fmt.Errorf("chown %q: %w", name, err)
+	}
+	return nil
+}
+
 func (d *realDir) SetMtime(t Time) error {
 	times := []unix.Timespec{{Nsec: unix.UTIME_OMIT}, {Sec: t.Sec, Nsec: t.Nsec}}
 	if err := unix.UtimesNanoAt(d.fd(), ".", times, 0); err != nil {
@@ -495,7 +584,7 @@ func (f *realFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *realFile) Info() (Stat, error) {
-	return statx(int(f.file.Fd()), "", unix.AT_EMPTY_PATH)
+	return statxBirth(int(f.file.Fd()), f.file.Name())
 }
 
 // SetTimes goes through /proc, as a writable file's does: the file is open for reading only.
@@ -565,7 +654,7 @@ func (f *realWritable) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *realWritable) Info() (Stat, error) {
-	return statx(f.fd(), "", unix.AT_EMPTY_PATH)
+	return statxBirth(f.fd(), f.file.Name())
 }
 
 func (f *realWritable) Truncate(size int64) error {
@@ -664,14 +753,13 @@ func statx(fd int, name string, flags int) (Stat, error) {
 }
 
 // OpenFileAt opens a regular file given by its path below a folder, one component at a time, so
-// that no symlink is followed on the way.
+// that no symlink is followed on the way. It holds one folder at a time, however deep the path.
 func OpenFileAt(root Dir, path string) (File, error) {
 	folders, name := splitPath(path)
 	dir := root
-	var opened []Dir
 	defer func() {
-		for _, d := range opened {
-			_ = d.Close()
+		if dir != root {
+			_ = dir.Close()
 		}
 	}()
 	for _, folder := range folders {
@@ -679,7 +767,9 @@ func OpenFileAt(root Dir, path string) (File, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open %q: %w", path, err)
 		}
-		opened = append(opened, next)
+		if dir != root {
+			_ = dir.Close()
+		}
 		dir = next
 	}
 	f, err := dir.OpenFile(name)
@@ -687,6 +777,48 @@ func OpenFileAt(root Dir, path string) (File, error) {
 		return nil, fmt.Errorf("open %q: %w", path, err)
 	}
 	return f, nil
+}
+
+// ReadStart reads up to n bytes from the start of a regular file of a folder, and gives its size: what reads a file of a
+// disk that must write nothing there, as the mount check's look at hiberfil.sys (specs.md §10). No symlink is followed,
+// and the file is opened without changing its access time where the process may, O_NOATIME, which takes the file's
+// owner or CAP_FOWNER; elsewhere the read may change it, as any read does. A file that ends first gives fewer bytes.
+// Through Fault, the call is named readstart.
+func ReadStart(d Dir, name string, n int) (size int64, start []byte, err error) {
+	if f, ok := d.(*faultDir); ok {
+		if err := f.fail("readstart", name); err != nil {
+			return 0, nil, err
+		}
+		return ReadStart(f.Dir, name, n)
+	}
+	r, err := realOf(d)
+	if err != nil {
+		return 0, nil, err
+	}
+	// O_NONBLOCK: a name that has become a FIFO must not hang this.
+	const flags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
+	fd, err := unix.Openat(r.fd(), name, flags|unix.O_NOATIME, 0)
+	if errors.Is(err, unix.EPERM) {
+		fd, err = unix.Openat(r.fd(), name, flags, 0)
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("open %q: %w", name, err)
+	}
+	f := &realFile{file: os.NewFile(uintptr(fd), name)}
+	defer func() { _ = f.Close() }()
+	st, err := f.Info()
+	if err != nil {
+		return 0, nil, err
+	}
+	if st.Kind != KindFile {
+		return 0, nil, fmt.Errorf("open %q: %w", name, ErrNotARegularFile)
+	}
+	buf := make([]byte, n)
+	got, err := io.ReadFull(io.NewSectionReader(f, 0, int64(n)), buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, nil, fmt.Errorf("read %q: %w", name, err)
+	}
+	return st.Size, buf[:got], nil
 }
 
 func splitPath(path string) (folders []string, name string) {
@@ -822,6 +954,20 @@ func Space(path string) (capacity, free int64, err error) {
 // Exists says whether a path exists, and fails when it cannot be told.
 func Exists(path string) (bool, error) {
 	_, err := os.Lstat(path)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, fmt.Errorf("stat: %w", err)
+	}
+}
+
+// Reachable says whether a path leads somewhere, through its symbolic links, as a device's name under /dev/disk/ does
+// once udev made it: a link whose target is gone leads nowhere. It fails when that cannot be told.
+func Reachable(path string) (bool, error) {
+	_, err := os.Stat(path)
 	switch {
 	case err == nil:
 		return true, nil

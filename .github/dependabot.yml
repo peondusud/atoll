@@ -1,0 +1,14 @@
+# Updates of the actions the workflows pin by commit, and of the Go modules, proposed once a week as pull requests to
+# beta, where the work happens; the CI runs on each.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: beta
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /
+    target-branch: beta
+    schedule:
+      interval: weekly

@@ -209,6 +209,14 @@ type Disk struct {
 	// SmartJSON is the disk's last reading of SMART, as smart_json holds it: empty when none was recorded (specs.md
 	// §23). Disks gives it; SyncDisks keeps what is there.
 	SmartJSON string
+	// NamesDisagree counts the operations the last reprise on the disk left planned as a name and its file's record
+	// disagree there (specs.md §17.2).
+	NamesDisagree int
+	// LinksUnnamed counts the links of the guard whose data nothing names, as the guard's last run found them (§17).
+	LinksUnnamed int
+	// Device holds the physical disks it lives on, as the last start found them, joined by a comma: empty until one
+	// did (R-06).
+	Device string
 }
 
 // SyncDisks rewrites the disks from the configuration, which wins (specs.md §9). A disk it no longer
@@ -301,7 +309,7 @@ func syncOne(ctx context.Context, tx *sql.Tx, d *Disk) error {
 			position = excluded.position, domain = excluded.domain, tags = excluded.tags,
 			capacity_bytes = COALESCE(excluded.capacity_bytes, capacity_bytes),
 			free_bytes = COALESCE(excluded.free_bytes, free_bytes),
-			state = excluded.state,
+			state = CASE WHEN excluded.state = 'online' AND state = 'standby' THEN state ELSE excluded.state END,
 			last_seen_ns = COALESCE(excluded.last_seen_ns, last_seen_ns),
 			time_precision_ns = COALESCE(excluded.time_precision_ns, time_precision_ns)`,
 		d.ID, d.UUID, d.FS, d.Mount, d.Root, d.Workdir, d.Role, d.Position, domain, string(tagsJSON), capacity, free, d.State, lastSeen, precision)
@@ -385,6 +393,26 @@ func SetDiskState(ctx context.Context, db *sql.DB, id, state string) error {
 	return nil
 }
 
+// SetSpin records whether a disk the mount check finds online is in standby, as the daemon's check tells (specs.md
+// §10). It says false when the catalog holds the disk in no state of the two: missing, readonly, draining or failed,
+// which the passes write, or not at all. A sync of the disks keeps standby where its own check finds the disk mounted,
+// as no command's check can tell a disk asleep.
+func SetSpin(ctx context.Context, db *sql.DB, id string, standby bool) (bool, error) {
+	state := "online"
+	if standby {
+		state = "standby"
+	}
+	res, err := db.ExecContext(ctx, "UPDATE disks SET state = ? WHERE id = ? AND state IN ('online', 'standby')", state, id)
+	if err != nil {
+		return false, fmt.Errorf("disk %q: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("disk %q: %w", id, err)
+	}
+	return n == 1, nil
+}
+
 // inTransaction commits what fn did, or nothing.
 func inTransaction(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
@@ -397,6 +425,15 @@ func inTransaction(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) e
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// SetNamesDisagree records what a reprise on a disk found of names and records that disagree: the operations it left
+// planned for that, 0 once it resolved them all (specs.md §17.2).
+func SetNamesDisagree(ctx context.Context, db *sql.DB, disk string, ops int) error {
+	if _, err := db.ExecContext(ctx, "UPDATE disks SET names_disagree = ? WHERE id = ? AND names_disagree <> ?", ops, disk, ops); err != nil {
+		return fmt.Errorf("disk %s: %w", disk, err)
 	}
 	return nil
 }

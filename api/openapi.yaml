@@ -3,9 +3,10 @@ info:
   title: Atoll local API
   version: "1"
   description: >-
-    What the daemon that runs for good answers about the pool (specs.md §25.1). It only answers: a command that moves
-    or deletes goes through the CLI. Each answer is what the command named in its description gives with --json, with
-    that command's schema, made whole before it is sent.
+    What the daemon that runs for good answers about the pool (specs.md §25.1), and the one thing it takes: an answer
+    to a guard, POST /v1/guards/{id}, which atoll guard confirm or reject would give, by the same code. Any other
+    command that moves or deletes goes through the CLI. Each answer is what the command named in its description gives
+    with --json, with that command's schema, made whole before it is sent.
   license:
     name: GPL-3.0-or-later
 servers:
@@ -16,7 +17,8 @@ servers:
   - url: "http://{listen}"
     description: >-
       HTTP over TCP on api.listen, a loopback address or one of the Tailscale network (specs.md §29.5). Every request
-      carries the Bearer token api.token_file holds.
+      carries the Bearer token api.token_file holds, and an answer to a guard takes one that other accounts of the
+      machine can neither read nor set.
     variables:
       listen:
         default: 127.0.0.1:7341
@@ -113,6 +115,103 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "503": { $ref: "#/components/responses/Unavailable" }
+  /v1/guards/{id}:
+    post:
+      operationId: guardAnswer
+      summary: What atoll guard confirm or reject --disk <id> --json gives (specs.md §15.6), the one write of the API.
+      description: >-
+        Answers a guard of a disk, or with dry_run says what the answer would be about, by the code of atoll guard
+        confirm and reject: under the catalog's lock, which the daemon's loop takes between two steps as it does for a
+        pass, with the events they write, and then tells the loop as SIGHUP would, so that its next pass takes the
+        answer. As every command that lets a deletion go, it does nothing without "yes": true, and "dry_run": true
+        says what it would do (invariant 17). Nothing is answered unless the answer is 200 with done true, and an answer
+        given twice answers once: the second finds nothing to answer.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The disk's id in the configuration.
+          schema: { type: string, minLength: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GuardAnswerRequest" }
+      responses:
+        "200":
+          description: >-
+            The answer, as atoll guard confirm or reject --json gives it, done false when no guard of that kind stood;
+            or its dry run, as --dry-run --json gives it.
+          content:
+            application/json:
+              schema: { $ref: "schemas/guard-answer.schema.json" }
+        "400":
+          description: >-
+            A body that is not one answer: not one JSON object of the fields below, each once and as written there; an
+            answer or a kind of another name; up_to written otherwise; neither yes nor dry_run true, or both. Nothing is
+            read or written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: >-
+            Over TCP, an answer with yes when another account of the machine could read or set the token: api.token_file
+            belongs to neither root nor the account the daemon runs as, its group or other accounts may write it, other
+            accounts may read it, or a folder that holds its name, or the name of a link on the way to it, belongs to
+            another account, or other accounts, or a group neither root's nor the daemon's, may write it. The error
+            says each reason. A dry run is answered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405":
+          description: Any method but POST. The Allow header says POST.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: >-
+            Nothing was answered: up_to names another guard than the one that stands, or, with yes, the daemon runs with
+            --dry-run, and records no answer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: A body of more than 4 KiB. Nothing is read or written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "415":
+          description: A body that is not application/json, which a browser cannot send to another site unasked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: >-
+            The answer could not be given, and was not: the catalog cannot be used, the daemon is parked as the UPS's
+            battery runs low, or it did not take the answer within the request's 60 s, as a pass or a command held the
+            catalog. Asking again is safe.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /metrics:
+    get:
+      operationId: metrics
+      summary: Prometheus metrics (specs.md §23.1).
+      description: >-
+        What the daemon recorded, in the Prometheus text format 0.0.4: each metric api/metrics.json lists that has a
+        sample, in that file's order. Made from memory alone: the counts of the catalog are those the last pass left. Also
+        given with no token, and with no other path, on metrics.listen when it is set.
+      responses:
+        "200":
+          description: The metrics.
+          content:
+            text/plain; version=0.0.4; charset=utf-8:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "503": { $ref: "#/components/responses/Unavailable" }
 components:
   securitySchemes:
     token:
@@ -126,11 +225,39 @@ components:
       required: [error]
       properties:
         error: { type: string, minLength: 1 }
+    GuardAnswerRequest:
+      description: >-
+        An answer to a guard, as atoll guard confirm or reject is given it: exactly one of dry_run and yes is true, as
+        --dry-run with --yes is a usage error. Each field at most once, named as here.
+      type: object
+      additionalProperties: false
+      required: [answer]
+      properties:
+        answer: { enum: [confirm, reject] }
+        kind:
+          description: The guard, as --kind gives it; deletions when left out.
+          enum: [deletions, modifications]
+          default: deletions
+        dry_run:
+          description: Say what the answer would be about, and write nothing, as --dry-run.
+          type: boolean
+          default: false
+        yes:
+          description: Answer. Without it, or dry_run, nothing is answered.
+          type: boolean
+          default: false
+        up_to:
+          description: >-
+            The time of the guard the answer is for, as a dry run gives it in up_to: a guard that stands since another
+            time is not answered (409), so that an answer never covers what tripped after it was shown. Left out or
+            null, the answer is for the guard that stands.
+          type: ["string", "null"]
+          pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{9}Z$"
   responses:
     Unauthorized:
       description: Over TCP, a request without the token, or with another. Nothing more is said.
     MethodNotAllowed:
-      description: Any method but GET. The Allow header says GET.
+      description: Any method but GET, on a path that only answers. The Allow header says GET.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -140,7 +267,9 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     Unavailable:
-      description: An answer that could not be made, as when the catalog cannot be used.
+      description: >-
+        An answer that could not be made, as when the catalog cannot be used, or whose turn did not come within its 60 s:
+        the answers that read the catalog are made one at a time, and so are those that check the disks' mounts.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

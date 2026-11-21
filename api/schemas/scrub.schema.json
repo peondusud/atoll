@@ -48,19 +48,19 @@
         },
         "bytes_read": { "type": "integer", "minimum": 0 },
         "corrupt": {
-          "description": "The copies whose content no longer matches, read again past the cache, their size and times unchanged.",
+          "description": "The copies whose content no longer matches, read again past the cache, their size and times unchanged: those this scrub found. A corrupt copy an earlier scrub found and left in the root, which this one takes first, is not listed here again (specs.md §16).",
           "$ref": "#/$defs/paths"
         },
         "repaired": {
-          "description": "Of those, the ones another copy, read again first, is healthy for, with integrity.auto_repair: repaired from it with --yes, and to be repaired without it (specs.md §16.1).",
+          "description": "Of those, and of the corrupt copies an earlier scrub left in the root, the ones another copy, read again first, is healthy for, with integrity.auto_repair: repaired from it with --yes, and to be repaired without it (specs.md §16.1).",
           "$ref": "#/$defs/paths"
         },
         "quarantined": {
-          "description": "Of those, the ones another copy, read again first, is healthy for, without integrity.auto_repair or when a repair found no room: moved to the trash with --yes, and to be moved without it.",
+          "description": "Of those, and of the corrupt copies an earlier scrub left in the root, the ones another copy, read again first, is healthy for, without integrity.auto_repair or when a repair found no room: moved to the trash with --yes, and to be moved without it.",
           "$ref": "#/$defs/paths"
         },
         "kept": {
-          "description": "Of those, the ones left where they are: no healthy copy elsewhere, or a repair or a move that did not happen.",
+          "description": "Of those, and of the corrupt copies an earlier scrub left in the root, the ones left where they are: no healthy copy elsewhere, or a repair or a move that did not happen.",
           "$ref": "#/$defs/paths"
         },
         "changed": {

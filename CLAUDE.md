@@ -25,27 +25,40 @@ Go now (phases 1–2, Linux only). A Rust rewrite follows as a drop-in replaceme
 - `ops`: journal of Atoll's own filesystem operations, written before each operation.
 - `watch`: fanotify (with process attribution) or inotify, scans and rescans, grouping of events per path.
 - `integrity`: BLAKE3 whole-file and 4 MiB chunk hashes, scrub, repair, quarantine, duplicates.
-- `view`: mergerfs configuration and runtime branch changes (phase 1), FUSE view through cgofuse (phase 2a).
+- `view`: mergerfs configuration and runtime branch changes (phase 1), FUSE view through go-fuse (phase 2a).
 - `trash` (with the optional link guard), `notify` (Plex, Emby, Jellyfin), `alerts`, `cache` (phase 2b).
+- `metrics` (Prometheus `/metrics`) and `telemetry`: the log of every process in OpenTelemetry's log data model, and the optional export of the metrics and the log over OTLP/HTTP (specs.md §23).
 - `cmd/atoll`: CLI and `daemon`, in one binary.
 
 ## Stack and commands
 - Go, latest stable release; Linux amd64 and arm64.
 - SQLite: `modernc.org/sqlite` (no cgo). TOML: `github.com/pelletier/go-toml/v2`, read as a generic tree, never decoded straight into a struct (specs.md §24.3). Regex: `regexp`, limited to the subset in specs.md §29.5. Globs: in-house matcher, no third-party glob library. NFC and NFD: `golang.org/x/text/unicode/norm` (v0.43.0 or later), only through `internal/names`, run by run on invalid UTF-8. System calls (`statx`, `renameat2`, `openat`, fanotify): `golang.org/x/sys/unix`.
 - BLAKE3: `github.com/zeebo/blake3`, pinned to a commit of its main branch for its arm64 backends (`docs/research/blake3.md`).
-- cgo and libfuse3 only for the FUSE view (phase 2a).
+- FUSE view: `github.com/hanwen/go-fuse/v2`, which speaks the kernel's protocol itself: no cgo and no libfuse (`docs/research/fuse-library.md`).
+- Model checking: TLC of `tla2tools.jar` 1.7.4 (MIT), a build tool that runs only in the container `eclipse-temurin:21.0.13_9-jre-noble`, never on the host, its SHA-256 checked by `test/tla/run.sh`; never committed, never shipped.
+- Log: `log/slog`, through `internal/telemetry`'s handler alone: JSON lines of OpenTelemetry's log data model by default (specs.md §23.2).
+- OTLP export: the official OpenTelemetry SDK, `go.opentelemetry.io/otel` v1.47.0 (`otel/sdk`, `otel/sdk/metric`, `otel/sdk/log`, `otel/log` at the same version), and its OTLP/HTTP exporters with protobuf, `otlpmetrichttp` v1.47.0 and `otlploghttp` v0.23.0, only through `internal/telemetry`: metrics and log, no traces. They bring gRPC and protobuf into the binary (specs.md §26).
+- GitHub Actions: `.github/workflows/ci.yml` calls the `make` targets `test/ci/run.sh` calls, in its image, on each push to `beta` and `main` and each pull request; `mediaservers.yml` weekly; `release.yml` on a tag `v*`, which the maintainer alone pushes: GoReleaser (`.goreleaser.yaml`) drafts the release, he publishes it (specs.md §26, §27). Every third-party action pinned by commit SHA, `permissions` minimal, no secret but `GITHUB_TOKEN`.
+- Testing tools, run in CI and never dependencies of the module: gremlins v0.6.0 for mutation testing (`test/ci/mutation.sh`), through `go install` at that version.
+- Property-based tests: `pgregory.net/rapid` v1.3.0 (MPL-2.0), in tests only, through `checkRapid` (`internal/solver/rapid_test.go`): fixed seeds and checks in `go test`, a new seed each night (`fuzz.yml`); a failure prints the `-rapid.seed` that reproduces it. Fuzzing: Go's own, `func FuzzX(f *testing.F)`, seeded from `conformance/vectors/`.
 
 ```bash
 make build              # go build -o bin/atoll ./cmd/atoll
 go test ./...           # unit and property tests, including conformance/vectors; no root
 go test -race ./...     # mandatory before any commit touching jobs, ops, watch, integrity or catalog
 make conformance        # black-box runner: conformance/scenarios against a conformance build
+make model-check        # the TLA+ model of conformance/models/ by TLC, 2 workers, with only Docker (test/tla/run.sh)
 make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
 make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
-test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint and qemu on a commit, all at once; --report posts each to its pull request
+make test-mediaservers  # the notifications on real Plex, Jellyfin and Emby, each in a container, with only Docker (test/mediaservers/run.sh)
+make cover              # the coverage of the unit tests, of the scenarios (a conformance build with -cover) and of either, by package and in all (bin/cover/); the CI's cover job
+make fuzz FUZZTIME=10s  # every fuzz target in turn, or PKG=./internal/value TARGET=FuzzSize; each night for 5 minutes in fuzz.yml
+make mutation PKG=./internal/glob  # mutation testing (gremlins) of one package, of the pure core without PKG; each night in mutation.yml
+test/ci/run.sh [REV]    # the CI, with only git and Docker: race, integration, conformance, lint, qemu and tla on a commit, all at once; --report posts each to its pull request
+make release-snapshot   # a release as a tag makes one (.goreleaser.yaml), into dist/, with only Docker: nothing uploaded; from a clone, not a worktree
 golangci-lint run ./...
-./bin/atoll --config ./dev/atoll.toml daemon --foreground
+./bin/atoll --config <atoll.toml> daemon --foreground   # a test pool's configuration; deploy/atoll.toml is the sample
 ```
 
 ## Repository layout
@@ -68,18 +81,21 @@ internal/integrity/    hashing (pure), scrub, repair, quarantine, duplicates
 internal/view/         mergerfs configuration and runtime branches, FUSE view
 internal/fsx/          disk I/O abstraction (real, and with fault injection)
 internal/vectors/      loads conformance/vectors/ for unit tests
-internal/trash/  internal/notify/  internal/alerts/  internal/cache/
-api/                   openapi.yaml, schemas/ for --json outputs
+internal/metrics/      Prometheus metrics: the text of a snapshot (pure), their OpenTelemetry names, and the daemon's recorder
+internal/telemetry/    the log's handler (OpenTelemetry's data model as JSON, or text), the OTLP export of metrics and log
+internal/trash/  internal/notify/  internal/alerts/  internal/cache/  internal/ups/
+api/                   openapi.yaml, schemas/ for --json outputs, metrics.json for /metrics
 schema/                migrations/NNNN_name.sql, config.schema.json
-conformance/           vectors/, scenarios/, corpus/names/, runner/ (language-neutral)
+conformance/           vectors/, scenarios/, corpus/names/, runner/, models/ (TLA+) (language-neutral)
 test/                  integration, faults, break glass, loopdev, qemu to run loopdev anywhere, and ci to run every check of a commit
-deploy/                systemd units, sample configuration
+deploy/                systemd units, sample configuration, the .deb's scripts in deb/
+.github/               workflows (CI, release, media servers), dependabot
 docs/research/         research reports behind open design decisions (not contracts)
 ```
 
 ## Non-negotiable invariants
 1. Never delete or overwrite the last verified copy of a file. Whatever a refresh or a repair overwrites goes to the trash first.
-2. Under `<disk>/<root>/`, perform only the writes listed in specs.md §6.1, each journaled in `ops` before it runs. Never remove the last user copy of a file; removing any user copy needs an explicit command.
+2. Under `<disk>/<root>/`, perform only the writes listed in specs.md §6.1, each journaled in `ops` before it runs. Never remove the last user copy of a file; removing any user copy needs an explicit command, but for the SSD cache's transfer, whose copy on the cache first hands its part to a copy on a data disk, and the view's move of a new file that ran out of space, whose copy on the full disk goes, through its trash or, when the trash has no room for it, at its path, once the same bytes are verified at its path on another (specs.md §6.1, §19, §21.2).
 3. Write to a disk only after confirming, in the current session, that its mount path is a mount point of the expected filesystem. Do all I/O through a handle on the verified root (`openat`-style calls) and re-check the device id before each job. Never create a disk's `<root>/` folder.
 4. EIO, ENOTCONN and ENODEV mean "disk unknown", never "file absent". An empty mount point is a missing disk, never a mass deletion. A missing disk is never considered empty. A read that fails on a disk the mount check confirms right after is the chunk's fault, never the file's absence: the copy is `corrupt` (specs.md §16).
 5. No hidden files or folders. Nothing written outside pool disks except the catalog and the configuration.
@@ -98,6 +114,7 @@ docs/research/         research reports behind open design decisions (not contra
 18. Only the `solver` decides placement. No other module moves files on its own initiative.
 
 ## Rust-rewrite readiness
+- The contracts are frozen at format version 1 (specs.md §29.3): `conformance/frozen/v1.json` pins them and `TestContractsKeepFormatVersion1` checks it. Never write that file again, never edit migrations 0001–0019; a change that does not keep version 1 is format version 2, the maintainer's decision.
 - Persisted and exchanged formats follow specs.md §29.3: SQL migration files, TOML configuration with a JSON Schema, OpenAPI for the local API, JSON schemas for `--json`, documented exit codes. Never `gob` or any other language-specific encoding.
 - Paths are BLOBs in SQLite; times are integer Unix nanoseconds UTC; in JSON, `path` or `path_b64`.
 - Pure core packages (`config`, `rules`, `glob`, `names`, `solver`, `value`, hashing in `integrity`) have no I/O and no global state, and load their test cases from `conformance/vectors/`.
@@ -105,11 +122,12 @@ docs/research/         research reports behind open design decisions (not contra
 - Sort every output explicitly; never depend on map iteration order or random seeds.
 - Reject regexes outside the grammar of specs.md §29.5, the common Go/Rust subset, when the configuration loads; Atoll checks it itself before the engine compiles.
 - The conformance runner talks to the binary only through the CLI and the filesystem; it imports nothing from `internal/`.
+- A change to a section of specs.md that the TLA+ model formalizes (`conformance/models/fingerprints.json`) updates `conformance/models/Replication.tla`, or confirms it unchanged, and that section's fingerprint, in the same commit; `make model-check` passes.
 
 ## Cross-platform rules (Linux now, Windows in the Rust version)
 - Logical key: the exact relative path, `/` separator; bytes on Linux, WTF-8 on Windows (keeps unpaired UTF-16 surrogates).
 - `ignore_case` uses Unicode simple case folding, exactly as regex `(?i)` (data from `unicode.SimpleFold`); the NTFS upcase table serves `lpath_key` only (specs.md §11.3, §15.8). Never `strings.EqualFold`, `strings.ToLower` or `x/text/cases` on names.
-- ext4, XFS, btrfs: 255 bytes per path component. Every NTFS disk follows the Windows rules, checked as a fixed table in both versions (specs.md §15.8): valid UTF-8, at most 255 bytes and 255 UTF-16 code units; characters 1–31 and `" * : < > ? \ |` forbidden; no trailing dot or space; reserved names as Windows 10 reads them (the part before the first dot, every trailing space removed: CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1–9, COM¹–³, LPT1–9, LPT¹–³). Every component is checked, folders included. NTFS names are case-insensitive. ext4 `casefold`, XFS `ascii-ci`, ntfs3 `nocase`, ntfs3 `ads` and lowntfs-3g `ignore_case` are refused at `disk add`.
+- ext4, XFS, btrfs: 255 bytes per path component. Every NTFS disk follows the Windows rules, checked as a fixed table in both versions (specs.md §15.8): valid UTF-8, at most 255 bytes and 255 UTF-16 code units; characters 1–31 and `" * : < > ? \ |` forbidden; no trailing dot or space; reserved names as Windows 10 reads them (the part before the first dot, every trailing space removed: CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1–9, COM¹–³, LPT1–9, LPT¹–³). Every component is checked, folders included. NTFS names are case-insensitive. ext4 `casefold`, XFS `ascii-ci`, ntfs3 and `ntfs` `nocase`, ntfs3 `ads` and lowntfs-3g `ignore_case` are refused at `disk add`.
 - Deep trees: relative operations (`openat`) on Linux; `\\?\` prefix on Windows.
 - `rename` is atomic only within one filesystem: always go through `<workdir>/tmp/` on the target disk.
 - Creation time: `statx` birth time on Linux (ntfs-3g: `system.ntfs_crtime` attribute); `first_seen` when unavailable. On Windows, set it explicitly after the final rename (NTFS tunneling), and open files with `FILE_SHARE_DELETE`.

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 )
 
 // KnownCopy is what the catalog holds about one copy, to compare with a walk. Path is where it sits,
@@ -137,6 +139,9 @@ type EntryRow struct {
 	Target  *string
 	FileKey *string
 	BtimeNS *int64
+	// Size and the owner are what Atoll's own view presents of it, without waking its disk (specs.md §21.2).
+	Size     int64
+	UID, GID uint32
 }
 
 // CopyClock is what a look says of a copy's clock: Kind empty means found, which clears it.
@@ -161,6 +166,9 @@ type Walk struct {
 	Clocks  []CopyClock
 	Modes   []CopyMode
 	Kept    map[string]bool
+	// Names are those a look limited to the names the watcher gave read (specs.md §15.13), nil for a walk of the whole
+	// disk: only an entry at or below one of them that the look did not find is gone.
+	Names []string
 }
 
 // WriteWalk writes what the walk of one disk found, in one transaction, so a walk is written whole
@@ -177,13 +185,37 @@ func WriteWalk(ctx context.Context, db *sql.DB, disk string, nowNS int64, w *Wal
 		if err := writeModes(ctx, tx, disk, w.Modes); err != nil {
 			return err
 		}
-		return writeEntries(ctx, tx, disk, w.Entries, w.Kept)
+		return writeEntries(ctx, tx, disk, w.Entries, w.Kept, w.Names)
 	})
 	if err != nil {
 		return fmt.Errorf("walk of %q: %w", disk, err)
 	}
 	return nil
 }
+
+// DisksWithGoneCopies gives the disks holding a copy whose row says it went or moved, by id: the clock of each runs
+// out only as walks find it again (specs.md §15.12, §15.13). It reads the index copies_gone.
+func DisksWithGoneCopies(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, disksWithGoneSQL)
+	if err != nil {
+		return nil, fmt.Errorf("disks with gone copies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("disks with gone copies: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("disks with gone copies: %w", err)
+	}
+	return out, nil
+}
+
+const disksWithGoneSQL = `SELECT DISTINCT disk_id FROM copies WHERE gone_ns IS NOT NULL ORDER BY disk_id`
 
 // writeClocks starts or keeps the clock of what a name no longer holds, and clears the others.
 func writeClocks(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, clocks []CopyClock) error {
@@ -243,8 +275,8 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 		return fmt.Errorf("prepare: %w", err)
 	}
 	defer func() { _ = find.Close() }()
-	// corrupt comes first in the order of specs.md §4, and only the state remembers it.
-	conflict, err := tx.PrepareContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'")
+	// corrupt comes first in the order of specs.md §4, and holds the conflict.
+	conflict, err := tx.PrepareContext(ctx, setConflictSQL)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
@@ -314,7 +346,7 @@ func writeCopies(ctx context.Context, tx *sql.Tx, disk string, nowNS int64, copi
 
 // writeEntries makes the entries of a disk match a walk. A folder Atoll created stays its own, as
 // only it may remove it (specs.md §6.1).
-func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryRow, kept map[string]bool) error {
+func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryRow, kept map[string]bool, names []string) error {
 	seen := make(map[string]bool, len(entries)+len(kept))
 	for p := range kept {
 		seen[p] = true
@@ -327,33 +359,32 @@ func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryR
 			target = []byte(*e.Target)
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, ?)
+			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns, size, uid, gid)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?, ?, ?)
 			ON CONFLICT(lpath, disk_id) DO UPDATE SET
 				kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, target = excluded.target,
-				file_key = excluded.file_key, btime_ns = excluded.btime_ns`,
-			[]byte(e.Path), keyOf(e.Path), disk, e.Kind, e.Mode, e.MtimeNS, target, e.FileKey, e.BtimeNS)
+				file_key = excluded.file_key, btime_ns = excluded.btime_ns, size = excluded.size, uid = excluded.uid, gid = excluded.gid`,
+			[]byte(e.Path), keyOf(e.Path), disk, e.Kind, e.Mode, e.MtimeNS, target, e.FileKey, e.BtimeNS, e.Size, e.UID, e.GID)
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", e.Path, err)
 		}
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT lpath FROM entries WHERE disk_id = ?", disk)
-	if err != nil {
-		return fmt.Errorf("entries: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
 	var gone [][]byte
-	for rows.Next() {
-		var p []byte
-		if err := rows.Scan(&p); err != nil {
-			return fmt.Errorf("entries: %w", err)
-		}
-		if !seen[string(p)] {
-			gone = append(gone, p)
+	if names == nil {
+		var err error
+		if gone, err = entriesNotSeen(ctx, tx, seen, "SELECT lpath FROM entries WHERE disk_id = ?", disk); err != nil {
+			return err
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("entries: %w", err)
+	for _, name := range TopNames(names) {
+		err := atOrBelow("SELECT lpath FROM entries WHERE disk_id = ?1 AND <cond>", "lpath", 2, name, []any{disk}, func(query string, args []any) error {
+			below, err := entriesNotSeen(ctx, tx, seen, query, args...)
+			gone = append(gone, below...)
+			return err
+		})
+		if err != nil {
+			return err
+		}
 	}
 	for _, p := range gone {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM entries WHERE lpath = ? AND disk_id = ?", p, disk); err != nil {
@@ -361,6 +392,29 @@ func writeEntries(ctx context.Context, tx *sql.Tx, disk string, entries []EntryR
 		}
 	}
 	return nil
+}
+
+// entriesNotSeen gives the entries a query names that a walk did not see.
+func entriesNotSeen(ctx context.Context, tx *sql.Tx, seen map[string]bool, query string, args ...any) ([][]byte, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("entries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var gone [][]byte
+	for rows.Next() {
+		var p []byte
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("entries: %w", err)
+		}
+		if !seen[string(p)] {
+			gone = append(gone, p)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("entries: %w", err)
+	}
+	return gone, nil
 }
 
 // CopyRow is one copy of a file. OldPath, when it has one, is where it sits, as it has not followed
@@ -407,7 +461,10 @@ type FileRow struct {
 	State          string
 	Original       sql.NullString
 	FirstSeenNS    int64
-	Copies         []CopyRow
+	// ConflictHeld says that the copies of a file corrupt were also found to differ: it is a conflict once no copy of
+	// it is corrupt (specs.md §4, §16).
+	ConflictHeld bool
+	Copies       []CopyRow
 }
 
 // filePageSize is how many files FileReader reads at a time.
@@ -455,7 +512,7 @@ func (r *FileReader) NextUnhashed(ctx context.Context) ([]FileRow, error) {
 }
 
 // fileColumns are what readFiles scans.
-const fileColumns = `f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns,
+const fileColumns = `f.id, f.lpath, f.size, f.mtime_ns, f.blake3, f.replicas_target, f.rule, f.mode, f.state, f.original_disk, f.first_seen_ns, f.conflict_held,
 	c.disk_id, c.size, c.mtime_ns, c.ctime_ns, c.btime_ns, c.created_by, c.first_seen_ns, c.verified_ns, c.state, c.file_key,
 	c.nlink, c.old_lpath, c.gone_ns, c.gone_kind, c.mode, c.uid, c.gid`
 
@@ -484,7 +541,7 @@ func (r *FileReader) readFiles(rows *sql.Rows) ([]FileRow, error) {
 		var c CopyRow
 		var firstSeen sql.NullInt64
 		var old []byte
-		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original, &f.FirstSeenNS,
+		err := rows.Scan(&f.ID, &p, &f.Size, &f.MtimeNS, &f.Hash, &f.ReplicasTarget, &rule, &mode, &state, &original, &f.FirstSeenNS, &f.ConflictHeld,
 			&disk, &c.Size, &c.MtimeNS, &c.CtimeNS, &c.BtimeNS, &createdBy, &firstSeen, &c.VerifiedNS, &copyState, &c.FileKey,
 			&c.Nlink, &old, &c.GoneNS, &c.GoneKind, &c.Mode, &c.UID, &c.GID)
 		if err != nil {
@@ -511,6 +568,32 @@ func (r *FileReader) readFiles(rows *sql.Rows) ([]FileRow, error) {
 		return nil, fmt.Errorf("files: %w", err)
 	}
 	return files, nil
+}
+
+// RuleSubjects gives each file a rule may reach (specs.md §11.3, §25): every file of the catalog with its size, and
+// every file a rule ignores, which an entry records without one. Each path once, in no order.
+func RuleSubjects(ctx context.Context, db *sql.DB, each func(path string, size *int64)) error {
+	rows, err := db.QueryContext(ctx, "SELECT lpath, size FROM files UNION ALL SELECT lpath, NULL FROM entries WHERE kind = 'ignored' GROUP BY lpath")
+	if err != nil {
+		return fmt.Errorf("files: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var path []byte
+	var size sql.NullInt64
+	for rows.Next() {
+		if err := rows.Scan(&path, &size); err != nil {
+			return fmt.Errorf("files: %w", err)
+		}
+		if size.Valid {
+			each(string(path), &size.Int64)
+		} else {
+			each(string(path), nil)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("files: %w", err)
+	}
+	return nil
 }
 
 // EntryKey says what an entry is, for the plan.
@@ -547,7 +630,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, fs_uuid, fs_type, mount_path, root, workdir, role, position, COALESCE(domain, ''), tags,
 			capacity_bytes IS NOT NULL, COALESCE(capacity_bytes, 0), COALESCE(free_bytes, 0), state, COALESCE(last_seen_ns, 0),
-			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, '')
+			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, ''), names_disagree, links_unnamed, COALESCE(device, '')
 		FROM disks ORDER BY position`)
 	if err != nil {
 		return nil, fmt.Errorf("disks: %w", err)
@@ -557,7 +640,7 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	for rows.Next() {
 		var d Disk
 		var tags string
-		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON); err != nil {
+		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON, &d.NamesDisagree, &d.LinksUnnamed, &d.Device); err != nil {
 			return nil, fmt.Errorf("disks: %w", err)
 		}
 		if err := json.Unmarshal([]byte(tags), &d.Tags); err != nil {
@@ -633,9 +716,11 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate
 		return nil
 	}
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		// A conflict held goes with corrupt: it is then the state, or was resolved (specs.md §4).
 		update, err := tx.PrepareContext(ctx, `
-			UPDATE files SET size = ?, mtime_ns = ?, replicas_target = ?, rule = ?, mode = ?, state = ?, original_disk = ?, updated_ns = ?
-			WHERE id = ?`)
+			UPDATE files SET size = ?1, mtime_ns = ?2, replicas_target = ?3, rule = ?4, mode = ?5, state = ?6, original_disk = ?7, updated_ns = ?8,
+				conflict_held = conflict_held AND ?6 = 'corrupt'
+			WHERE id = ?9`)
 		if err != nil {
 			return fmt.Errorf("prepare: %w", err)
 		}
@@ -645,7 +730,7 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate
 				return fmt.Errorf("file %d: %w", f.ID, err)
 			}
 		}
-		state, err := tx.PrepareContext(ctx, "UPDATE files SET state = ?, updated_ns = ? WHERE id = ?")
+		state, err := tx.PrepareContext(ctx, "UPDATE files SET state = ?1, updated_ns = ?2, conflict_held = conflict_held AND ?1 = 'corrupt' WHERE id = ?3")
 		if err != nil {
 			return fmt.Errorf("prepare: %w", err)
 		}
@@ -662,7 +747,7 @@ func ApplyPlan(ctx context.Context, db *sql.DB, nowNS int64, files []*FileUpdate
 		defer func() { _ = mark.Close() }()
 		for _, m := range marks {
 			if m.State == MarkCanceled {
-				if err := cancelPending(ctx, tx, m.FileID, m.Disk); err != nil {
+				if err := cancelPlanned(ctx, tx, m.FileID, m.Disk); err != nil {
 					return err
 				}
 				continue
@@ -736,7 +821,7 @@ func writeHashes(ctx context.Context, tx *sql.Tx, nowNS int64, w *HashWrite) err
 		}
 	}
 	if w.Conflict {
-		if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'", nowNS, w.FileID); err != nil {
+		if _, err := tx.ExecContext(ctx, setConflictSQL, nowNS, w.FileID); err != nil {
 			return fmt.Errorf("conflict: %w", err)
 		}
 	}
@@ -766,4 +851,79 @@ func ConflictPaths(ctx context.Context, db *sql.DB) ([]string, error) {
 
 func isNoRows(err error) bool {
 	return err == sql.ErrNoRows //nolint:errorlint // database/sql returns it as is, from Scan
+}
+
+// SetLinksUnnamed records how many links of the guard a run found on a disk whose data nothing names (specs.md §17).
+func SetLinksUnnamed(ctx context.Context, db *sql.DB, disk string, links int) error {
+	if _, err := db.ExecContext(ctx, "UPDATE disks SET links_unnamed = ? WHERE id = ? AND links_unnamed <> ?", links, disk, links); err != nil {
+		return fmt.Errorf("disk %s: %w", disk, err)
+	}
+	return nil
+}
+
+// SetDevice records the physical disks a disk lives on, as a start found them, by name in byte order and joined by a
+// comma (specs.md §10, R-06).
+func SetDevice(ctx context.Context, db *sql.DB, disk string, physical []string) error {
+	text := JoinDevice(physical)
+	if _, err := db.ExecContext(ctx, "UPDATE disks SET device = NULLIF(?, '') WHERE id = ?", text, disk); err != nil {
+		return fmt.Errorf("disk %s: %w", disk, err)
+	}
+	return nil
+}
+
+// JoinDevice gives physical disks as disks.device holds them: joined by a comma, empty for none.
+func JoinDevice(physical []string) string {
+	return strings.Join(physical, ",")
+}
+
+// SharedDevices groups the disks a start found on one physical disk (R-06): each disk that shares one with another
+// gets the id of the first of its group by position, and the others get none. Two disks share when their physical
+// disks meet, and a group holds every disk that meets another of it. A retired disk holds nothing, and is no part of it.
+func SharedDevices(list []Disk) map[string]string {
+	physical := make([][]string, len(list))
+	for i := range list {
+		if list[i].Device != "" && list[i].State != "retired" {
+			physical[i] = strings.Split(list[i].Device, ",")
+		}
+	}
+	// Each disk leads its own group at first; two groups that meet join under the first disk by position.
+	lead := make([]int, len(list))
+	for i := range lead {
+		lead[i] = i
+	}
+	top := func(i int) int {
+		for lead[i] != i {
+			i = lead[i]
+		}
+		return i
+	}
+	first := func(a, b int) bool {
+		return list[a].Position < list[b].Position || list[a].Position == list[b].Position && list[a].ID < list[b].ID
+	}
+	for i := range list {
+		for j := i + 1; j < len(list); j++ {
+			if !slices.ContainsFunc(physical[i], func(name string) bool { return slices.Contains(physical[j], name) }) {
+				continue
+			}
+			a, b := top(i), top(j)
+			if a == b {
+				continue
+			}
+			if first(b, a) {
+				a, b = b, a
+			}
+			lead[b] = a
+		}
+	}
+	size := make([]int, len(list))
+	for i := range list {
+		size[top(i)]++
+	}
+	out := map[string]string{}
+	for i := range list {
+		if t := top(i); size[t] > 1 {
+			out[list[i].ID] = list[t].ID
+		}
+	}
+	return out
 }

@@ -191,16 +191,26 @@ func TestForeignWorkdir(t *testing.T) {
 	}
 }
 
-// onDisk is a machine with nothing but disks to open, each call of which a test may make fail.
+// onDisk is a machine with nothing but disks to open, each call of which a test may make fail. driver is the type
+// the mount table gives each, and with none it has no entry.
 type onDisk struct {
-	fail func(call, name string) error
+	fail   func(call, name string) error
+	driver string
 }
 
-func (m *onDisk) Mount(string) disks.MountSeen { return disks.MountSeen{} }
+func (m *onDisk) Mount(mount string) disks.MountSeen {
+	if m.driver == "" {
+		return disks.MountSeen{}
+	}
+	return disks.MountSeen{Path: disks.PathOK, Entry: &disks.MountEntry{MountPoint: mount, Root: "/", FSType: m.driver}}
+}
 func (m *onDisk) Device(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
 	return disks.DeviceSeen{}
 }
 func (m *onDisk) Root(string, string) disks.RootSeen { return disks.RootSeen{} }
+func (m *onDisk) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
+	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
+}
 func (m *onDisk) Now() int64                         { return 0 }
 func (m *onDisk) Space(string) (int64, int64, error) { return 0, 0, nil }
 func (m *onDisk) Checkpoint(string)                  {}

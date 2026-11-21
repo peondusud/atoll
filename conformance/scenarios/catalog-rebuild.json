@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a79, \u00a725",
-  "description": "catalog rebuild makes a new catalog from what the disks hold, every copy read whole, and sets the old one aside, never removing it; without --yes it says so and exits with 3, and with --dry-run with 0. Copies with different hashes at one path are a conflict, whatever else they share. The new catalog's operations start past the highest id the disks' trash and tmp/ name, and what those folders hold is left as it is.",
+  "description": "catalog rebuild makes a new catalog from what the disks hold, every copy read whole, and sets the old one aside, never removing it; without --yes it says so and exits with 3, and with --dry-run with 0. Copies with different hashes at one path are a conflict, whatever else they share. The new catalog's operations start past the highest id the disks' trash and tmp/ name, and what those folders hold is left as it is; the entry of t2's trash is listed again.",
   "disks": [
     {
       "id": "t1",
@@ -58,6 +58,7 @@
         "catalog": "${SANDBOX}/catalog.db",
         "set_aside": null,
         "ops_after": 0,
+        "trash_listed": 0,
         "disks": [],
         "conflicts": [],
         "done": false
@@ -75,6 +76,7 @@
         "catalog": "${SANDBOX}/catalog.db",
         "set_aside": null,
         "ops_after": 0,
+        "trash_listed": 0,
         "disks": [],
         "conflicts": [],
         "done": false
@@ -114,6 +116,7 @@
         "catalog": "${SANDBOX}/catalog.db",
         "set_aside": "${SANDBOX}/catalog.db.old-20260101T000000Z",
         "ops_after": 9,
+        "trash_listed": 1,
         "disks": [
           {
             "id": "t1",

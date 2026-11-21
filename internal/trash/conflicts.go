@@ -21,6 +21,9 @@ var (
 	ErrNoFile      = errors.New("the catalog has no file at that path")
 	ErrNotConflict = errors.New("the file is not in conflict")
 	ErrNoCopy      = errors.New("the file has no copy on that disk")
+	// ErrCorrupt says that the file holds a conflict while a copy of it is corrupt: a repair comes first, as no version
+	// is told from rot until then (specs.md §4, §16).
+	ErrCorrupt = errors.New("the file is corrupt too")
 )
 
 // The outcomes of a resolution, besides those of a move to the trash.
@@ -64,6 +67,8 @@ func (s *Session) Resolve(ctx context.Context, path, keep string, each func(*Res
 		return nil, fmt.Errorf("catalog: %w", err)
 	case f == nil:
 		return nil, ErrNoFile
+	case f.ConflictHeld:
+		return nil, ErrCorrupt
 	case f.State != string(solver.StateConflict):
 		return nil, ErrNotConflict
 	case !slices.ContainsFunc(f.Copies, func(c catalog.CopyRow) bool { return c.Disk == keep }):

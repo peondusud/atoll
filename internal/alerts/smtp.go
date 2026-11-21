@@ -51,6 +51,8 @@ func (b *bounded) Read(p []byte) (int, error) {
 type SMTP struct {
 	URL          string
 	PasswordFile string
+	// RequireTLS is alerts.smtp_require_tls: a mail goes only over TLS, smtps or STARTTLS, even with no user.
+	RequireTLS bool
 	// TLS is what a TLS connection trusts: the system's roots when nil. A test gives its own.
 	TLS *tls.Config
 }
@@ -148,8 +150,8 @@ func mailOf(t *smtpTarget, m *Message, now time.Time) ([]byte, error) {
 }
 
 // Send mails the alert from from to each to. smtps speaks TLS from the first byte; smtp takes STARTTLS when the
-// server offers it, and must when a user is given, as a password never goes in clear. The password is read at each
-// send. A refusal by the server is its answer.
+// server offers it, and must when a user is given, as a password never goes in clear, or with RequireTLS, as the
+// network can strip the offer. The password is read at each send. A refusal by the server is its answer.
 func (s *SMTP) Send(ctx context.Context, m *Message) error {
 	t, err := parseSMTP(s.URL)
 	if err != nil {
@@ -198,6 +200,9 @@ func (s *SMTP) Send(ctx context.Context, m *Message) error {
 			}
 		case t.user != "":
 			return errors.New("smtp: the server offers no STARTTLS, and a password never goes in clear")
+		case s.RequireTLS:
+			return errors.New("smtp: the server offers no STARTTLS, and alerts.smtp_require_tls sends a mail only over TLS: " +
+				"nothing was sent")
 		}
 	}
 	if t.user != "" {

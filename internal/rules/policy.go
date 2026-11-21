@@ -115,6 +115,11 @@ func (r *Rule) matches(s Subject, size *int64) bool {
 			return false
 		}
 	}
+	return r.conditionsHold(s)
+}
+
+// conditionsHold says whether every condition of the rule but its size holds for a file.
+func (r *Rule) conditionsHold(s Subject) bool {
 	for _, c := range []*Condition{r.Path, r.Filename, r.Ext} {
 		if c != nil && !c.Match(s) {
 			return false

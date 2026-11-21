@@ -28,9 +28,10 @@ const (
 )
 
 // DueFiles reads the files that have a copy whose name no longer holds it, by path as they stand, a
-// page at a time: a file decided leaves the list, as its clock is cleared.
+// page at a time: a file decided leaves the list, as its clock is cleared. The copies are found through the index
+// copies_gone, which holds those alone: a test of each file would read every file of the pool at each pass.
 func DueFiles(ctx context.Context, r *FileReader) ([]FileRow, error) {
-	return r.page(ctx, `SELECT * FROM files WHERE lpath > ? AND EXISTS(SELECT 1 FROM copies c WHERE c.file_id = files.id AND c.gone_ns IS NOT NULL) ORDER BY lpath LIMIT ?`)
+	return r.page(ctx, `SELECT * FROM files WHERE lpath > ? AND id IN (SELECT file_id FROM copies WHERE gone_ns IS NOT NULL) ORDER BY lpath LIMIT ?`)
 }
 
 // FileAt gives the file at a path, with its copies, and nil when there is none.
@@ -168,6 +169,8 @@ type eventRow struct {
 	UpTo *int64 `json:"up_to,omitempty"`
 	// Answered says that a confirm of the mass-modification guard answered a modified: it counts for nothing.
 	Answered bool `json:"answered,omitempty"`
+	// Window is, for a modify-guard event and the answer to it, WindowDay when the day's count tripped the guard.
+	Window string `json:"window,omitempty"`
 }
 
 func (e *eventRow) setPath(p string) {
@@ -306,8 +309,10 @@ func applyFile(ctx context.Context, tx *sql.Tx, nowNS int64, c *FileChange) erro
 		}
 	}
 	if c.ClearConflict {
-		// What comes next gives it its state, as a file in conflict keeps that one otherwise.
-		if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'pending', updated_ns = ? WHERE id = ? AND state = 'conflict'", nowNS, c.ID); err != nil {
+		// What comes next gives it its state, as a file in conflict keeps that one otherwise; a corrupt file lets go of
+		// the conflict it holds, and stays corrupt (specs.md §4).
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET state = CASE state WHEN 'conflict' THEN 'pending' ELSE state END, conflict_held = 0, updated_ns = ?
+			WHERE id = ? AND (state = 'conflict' OR conflict_held)`, nowNS, c.ID); err != nil {
 			return fmt.Errorf("state: %w", err)
 		}
 	}
@@ -629,7 +634,8 @@ func rewriteEntries(ctx context.Context, tx *sql.Tx, disk, from, to string) erro
 			continue
 		}
 		next := to + strings.TrimPrefix(p, from)
-		_, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns) SELECT ?, ?, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns FROM entries WHERE disk_id = ? AND lpath = ?",
+		_, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns, size, uid, gid)
+			SELECT ?, ?, disk_id, kind, mode, mtime_ns, target, created_by, file_key, btime_ns, size, uid, gid FROM entries WHERE disk_id = ? AND lpath = ?`,
 			[]byte(next), keyOf(next), disk, []byte(p))
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", p, err)
@@ -746,9 +752,14 @@ func CatchUp(ctx context.Context, db *sql.DB, disk string, fileID int64, done *R
 	return nil
 }
 
+// setConflictSQL says that the copies of file ?2 differ, every version kept. A file corrupt stays so, as it shows
+// corrupt first, and holds the conflict, which is its state once no copy of it is corrupt (specs.md §4, §16).
+const setConflictSQL = `UPDATE files SET state = CASE state WHEN 'corrupt' THEN state ELSE 'conflict' END,
+	conflict_held = (state = 'corrupt'), updated_ns = ?1 WHERE id = ?2`
+
 // SetConflict says that the copies of a file differ, every version kept.
 func SetConflict(ctx context.Context, db *sql.DB, fileID, nowNS int64) error {
-	if _, err := db.ExecContext(ctx, "UPDATE files SET state = 'conflict', updated_ns = ? WHERE id = ? AND state <> 'corrupt'", nowNS, fileID); err != nil {
+	if _, err := db.ExecContext(ctx, setConflictSQL, nowNS, fileID); err != nil {
 		return fmt.Errorf("file %d: %w", fileID, err)
 	}
 	return nil

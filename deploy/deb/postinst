@@ -1,0 +1,21 @@
+#!/bin/sh
+# The .deb's postinst (specs.md §26, .goreleaser.yaml): makes the account the units run as, once, and nothing else.
+# It enables and starts no unit, and writes no configuration: installing changes nothing until atoll init, and a unit
+# started (break glass). An account made before, by hand or by an earlier install, is kept as it is.
+set -e
+
+if [ "$1" = configure ]; then
+	if ! getent group atoll >/dev/null; then
+		groupadd --system atoll
+	fi
+	if ! getent passwd atoll >/dev/null; then
+		useradd --system --gid atoll --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin \
+			--comment "Atoll" atoll
+	fi
+	# systemd reads the units again, so that the next start takes the new ones; a unit that runs goes on as it is.
+	if [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+	fi
+fi
+
+exit 0

@@ -42,7 +42,7 @@ type verdictCase struct {
 func checkVerdicts(t *testing.T, cases []verdictCase) {
 	t.Helper()
 	for _, c := range cases {
-		err := runFile(fakeBinary(t, c.script), scenarioFile(t, c.body))
+		err := runFile(fakeBinary(t, c.script), scenarioFile(t, c.body), nil)
 		switch {
 		case c.fails == "" && err != nil:
 			t.Errorf("%s: %v", c.note, err)
@@ -120,6 +120,10 @@ func TestRunningTheBinary(t *testing.T) {
 		{"the control file in the environment", `[ "$ATOLL_CONFORMANCE" = "$PWD/conformance.json" ]`, steps(`{"do": "atoll"}`), ""},
 		{"a set time zone", `[ "$TZ" = "UTC" ]`, steps(`{"do": "atoll"}`), ""},
 		{"nothing on standard input", `[ "$(cat)" = "" ]`, steps(`{"do": "atoll"}`), ""},
+		{"a umask", `[ "$(umask)" = 0027 ]`, steps(`{"do": "atoll", "umask": "0027"}`), ""},
+		{"a umask: the arguments as they are", `[ $# -eq 1 ] && [ "$1" = "a b" ] && [ "$(umask)" = 0077 ]`, steps(`{"do": "atoll", "umask": "0077", "args": ["a b"]}`), ""},
+		{"a umask: the binary's exit code", "exit 137", steps(`{"do": "atoll", "umask": "0027", "exit": 137}`), ""},
+		{"a umask: the binary in the sandbox", `[ -f conformance.json ] && [ "$ATOLL_CONFORMANCE" = "$PWD/conformance.json" ]`, steps(`{"do": "atoll", "umask": "0027"}`), ""},
 		{"it runs in the sandbox", `[ -f conformance.json ]`, steps(`{"do": "atoll"}`), ""},
 		{"the default clock", `grep -q 2026-01-01T00:00:00Z "$ATOLL_CONFORMANCE"`, steps(`{"do": "atoll"}`), ""},
 		{"advance moves the clock", `grep -q 2026-10-26T01:10:00Z "$ATOLL_CONFORMANCE"`, `{"format_version": 1, "clock": "2026-10-26T01:00:00Z", "steps": [{"do": "advance", "by": "10m"}, {"do": "atoll"}]}`, ""},
@@ -174,7 +178,12 @@ func TestRefusingAScenario(t *testing.T) {
 		{"a folder with a size", "exit 0", steps(file + `{"path": "a", "kind": "dir", "size": 1}]}`), "only a path"},
 		{"a folder with a target", "exit 0", steps(file + `{"path": "a", "kind": "dir", "target": "x"}]}`), "only a path"},
 		{"a folder with a time", "exit 0", steps(file + `{"path": "a", "kind": "dir", "mtime_ns": 1}]}`), "only a path"},
-		{"a folder with a mode", "exit 0", steps(file + `{"path": "a", "kind": "dir", "mode": "0755"}]}`), "only a path"},
+		{"a folder with an owner", "exit 0", steps(file + `{"path": "a", "kind": "dir", "uid": 1, "gid": 1}]}`), "only a path"},
+		{"a folder with a bad mode", "exit 0", steps(file + `{"path": "a", "kind": "dir", "mode": "755"}]}`), "octal digits"},
+		{"a umask in decimal", "exit 0", steps(`{"do": "atoll", "umask": "23"}`), "octal digits"},
+		{"a umask past 0777", "exit 0", steps(`{"do": "atoll", "umask": "01777"}`), "octal digits"},
+		{"a umask with an 8", "exit 0", steps(`{"do": "atoll", "umask": "0028"}`), "octal digits"},
+		{"a umask on the wrong step", "exit 0", steps(`{"do": "advance", "by": "1m", "umask": "0027"}`), "does not apply"},
 		{"a symlink with a mode", "exit 0", steps(file + `{"path": "a", "kind": "symlink", "target": "b", "mode": "0777"}]}`), "only a path and a target"},
 		{"a symlink with content", "exit 0", steps(file + `{"path": "a", "kind": "symlink", "target": "b", "text": "x"}]}`), "only a path and a target"},
 		{"a symlink with a size", "exit 0", steps(file + `{"path": "a", "kind": "symlink", "target": "b", "size": 1}]}`), "only a path and a target"},
@@ -185,6 +194,10 @@ func TestRefusingAScenario(t *testing.T) {
 		{"full: a disk it does not have", "exit 0", steps(`{"do": "atoll", "full": ["x"]}`), "full"},
 		{"full: a disk twice", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": []}], "steps": [{"do": "atoll", "full": ["d", "d"]}]}`, "twice"},
 		{"full on the wrong step", "exit 0", steps(`{"do": "advance", "by": "1m", "full": ["d"]}`), "does not apply"},
+		{"a driver it does not know", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "capacity": 10, "tree": [], "driver": "ntfs-3g"}], "steps": [{"do": "atoll"}]}`, "ntfs3 or ntfs"},
+		{"a driver of NTFS on ext4", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": [], "driver": "ntfs"}], "steps": [{"do": "atoll"}]}`, "only on ntfs"},
+		{"driver ntfs without RENAME_NOREPLACE", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "capacity": 10, "tree": [], "driver": "ntfs", "renameat2": false}], "steps": [{"do": "atoll"}]}`, "renameat2"},
+		{"driver ntfs3", "exit 0", `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "capacity": 10, "tree": [], "driver": "ntfs3", "renameat2": false}], "steps": [{"do": "atoll"}]}`, ""},
 	})
 }
 
@@ -239,6 +252,11 @@ func TestComparingATree(t *testing.T) {
 		{"setgid counts", "exit 0", onDisk(`{"do": "chmod", "disk": "d", "path": "media/a", "mode": "02640"}, ` + expect(`{"path": "media/a", "text": "x", "mode": "0640"}`)), "mode 2640"},
 		{"a mode in a disk's tree", `[ "$(stat -c %a "$PWD/disks/d/media/a")" = 600 ]`, `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": [{"path": "media/a", "text": "x", "mode": "0600"}]}], "steps": [{"do": "atoll"}]}`, ""},
 		{"a mode left out is not compared", "exit 0", onDisk(`{"do": "chmod", "disk": "d", "path": "media/a", "mode": "0600"}, ` + expect(`{"path": "media/a", "text": "x"}`)), ""},
+		{"a folder's mode", "exit 0", onDisk(`{"do": "chmod", "disk": "d", "path": "media", "mode": "0750"}, ` + expect(a+`{"path": "media", "kind": "dir", "mode": "0750"}`)), ""},
+		{"a folder's other mode", "exit 0", onDisk(`{"do": "chmod", "disk": "d", "path": "media", "mode": "0750"}, ` + expect(a+`{"path": "media", "kind": "dir", "mode": "0755"}`)), "mode 0750, want 0755"},
+		{"a folder's setgid counts", "exit 0", onDisk(`{"do": "chmod", "disk": "d", "path": "media", "mode": "02755"}, ` + expect(a+`{"path": "media", "kind": "dir", "mode": "0755"}`)), "mode 2755"},
+		{"a folder's mode left out is not compared", "exit 0", onDisk(`{"do": "chmod", "disk": "d", "path": "media", "mode": "0700"}, ` + expect(a+`{"path": "media", "kind": "dir"}`)), ""},
+		{"a folder's mode in a disk's tree", `[ "$(stat -c %a "$PWD/disks/d/media/e")" = 2750 ]`, `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": [{"path": "media/e", "kind": "dir", "mode": "02750"}]}], "steps": [{"do": "atoll"}]}`, ""},
 		{"a path outside the disk", "exit 0", onDisk(`{"do": "delete", "disk": "d", "path": "../x"}`), "clean path"},
 		{"an absolute path", "exit 0", onDisk(`{"do": "delete", "disk": "d", "path": "/etc/x"}`), "clean path"},
 		{"a path that is not clean", "exit 0", onDisk(`{"do": "delete", "disk": "d", "path": "media//a"}`), "clean path"},
@@ -250,6 +268,31 @@ func TestComparingATree(t *testing.T) {
 		{"a name that is not UTF-8", "exit 0", onDisk(`{"do": "write", "disk": "d", "path_b64": "bWVkaWEvYf8=", "text": "n"}, ` + expect(a+`{"path_b64": "bWVkaWEvYf8=", "text": "n"}`)), ""},
 		{"a hidden file is listed like any other", "exit 0", onDisk(`{"do": "write", "disk": "d", "path": "media/.n", "text": "n"}, ` + expect(`{"path": "media/a", "text": "x"}`)), "not expected"},
 		{"a fifo on the disk", `mkfifo "$PWD/disks/d/media/f"`, onDisk(`{"do": "atoll"}`), "neither a file"},
+	})
+}
+
+// A tree deeper than PATH_MAX, which no path given whole reaches, is made, changed and compared as any other: a
+// scenario can hold what is past the limit of a mergerfs branch (specs.md §15.8).
+func TestATreePastPathMax(t *testing.T) {
+	deep := "media/" + strings.TrimSuffix(strings.Repeat(strings.Repeat("d", 200)+"/", 21), "/")
+	file, moved := deep+"/f", deep+"/g"
+	onDisk := func(list string) string {
+		return `{"format_version": 1, "disks": [{"id": "d", "uuid": "u", "fs": "ext4", "capacity": 10, "tree": [{"path": "` + file + `", "text": "x", "mtime_ns": 1000000000}]}], "steps": [` + list + `]}`
+	}
+	expect := func(tree string) string { return `{"do": "expect_tree", "disk": "d", "tree": [` + tree + `]}` }
+	checkVerdicts(t, []verdictCase{
+		{"it is made and read", "exit 0", onDisk(expect(`{"path": "` + file + `", "text": "x", "mtime_ns": 1000000000}`)), ""},
+		{"it is compared", "exit 0", onDisk(expect(`{"path": "` + file + `", "text": "y"}`)), "other content"},
+		{"renamed, touched, its mode set", "exit 0", onDisk(`{"do": "rename", "disk": "d", "path": "` + file + `", "to": "` + moved + `"}, ` +
+			`{"do": "touch", "disk": "d", "path": "` + moved + `", "mtime_ns": 2000000000}, {"do": "chmod", "disk": "d", "path": "` + moved + `", "mode": "0600"}, ` +
+			expect(`{"path": "`+moved+`", "text": "x", "mtime_ns": 2000000000, "mode": "0600"}`)), ""},
+		{"linked, written, deleted", "exit 0", onDisk(`{"do": "link", "disk": "d", "path": "` + file + `", "to": "media/near"}, ` +
+			`{"do": "write", "disk": "d", "path": "` + moved + `", "text": "w"}, {"do": "delete", "disk": "d", "path": "` + file + `"}, ` +
+			expect(`{"path": "media/near", "text": "x"}, {"path": "`+moved+`", "text": "w"}`)), ""},
+		{"an empty folder there", "exit 0", onDisk(`{"do": "mkdir", "disk": "d", "path": "` + deep + `/e"}, ` +
+			expect(`{"path": "`+file+`", "text": "x"}, {"path": "`+deep+`/e", "kind": "dir"}`)), ""},
+		{"a symlink there", "exit 0", onDisk(`{"do": "symlink", "disk": "d", "path": "` + deep + `/l", "target": "f"}, ` +
+			expect(`{"path": "`+file+`", "text": "x"}, {"path": "`+deep+`/l", "kind": "symlink", "target": "f"}`)), ""},
 	})
 }
 
@@ -287,8 +330,9 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 	bin := fakeBinary(t, `cat "$ATOLL_CONFORMANCE" >>`+file)
 	err := runFile(bin, scenarioFile(t, `{"format_version": 1, "spec": "x", "description": "x",
 		"disks": [{"id": "t1", "uuid": "u", "fs": "ext4", "capacity": 1, "tree": [], "renameat2": false, "refuses": ["a"]},
-		          {"id": "t2", "uuid": "v", "fs": "ext4", "capacity": 1, "tree": []}],
-		"steps": [{"do": "atoll", "crash_at": "moved", "full": ["t2"]}, {"do": "atoll"}]}`))
+		          {"id": "t2", "uuid": "v", "fs": "ext4", "capacity": 1, "tree": []},
+		          {"id": "t3", "uuid": "w", "fs": "ntfs", "capacity": 1, "tree": [], "driver": "ntfs"}],
+		"steps": [{"do": "atoll", "crash_at": "moved", "full": ["t2"]}, {"do": "atoll"}]}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,6 +370,12 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 	if _, there := second["refuses"]; there {
 		t.Errorf("second disk: %v", second)
 	}
+	if third, _ := disks[2].(map[string]any); third["driver"] != "ntfs" {
+		t.Errorf("third disk: %v", third)
+	}
+	if _, there := second["driver"]; there {
+		t.Errorf("second disk: %v", second)
+	}
 	if _, there := first["full"]; there || second["full"] != true {
 		t.Errorf("full in the first run: %v, %v", first, second)
 	}
@@ -338,7 +388,7 @@ func TestCrashAtAndDiskFields(t *testing.T) {
 
 func TestControlFile(t *testing.T) {
 	body := `{"format_version": 1, "clock": "2026-10-26T01:00:00+02:00", "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "capacity": 10, "tree": []}], "steps": [{"do": "atoll", "stdout_json": {"now": "2026-10-26T01:00:00+02:00", "disks": [{"id": "d", "uuid": "u", "fs": "ntfs", "path": "${SANDBOX}/disks/d", "capacity": 10}]}}]}`
-	if err := runFile(fakeBinary(t, `cat "$ATOLL_CONFORMANCE"`), scenarioFile(t, body)); err != nil {
+	if err := runFile(fakeBinary(t, `cat "$ATOLL_CONFORMANCE"`), scenarioFile(t, body), nil); err != nil {
 		t.Error(err)
 	}
 }
@@ -448,7 +498,7 @@ func TestTimeout(t *testing.T) {
 	stepTimeout = 100 * time.Millisecond
 	defer func() { stepTimeout = 2 * time.Minute }()
 	start := time.Now()
-	err := runFile(fakeBinary(t, `echo started; sleep 30`), scenarioFile(t, steps(`{"do": "atoll"}`)))
+	err := runFile(fakeBinary(t, `echo started; sleep 30`), scenarioFile(t, steps(`{"do": "atoll"}`)), nil)
 	if err == nil || !strings.Contains(err.Error(), "no end within") || !strings.Contains(err.Error(), "started") {
 		t.Errorf("a binary that never ends: %v", err)
 	}
@@ -485,11 +535,11 @@ func TestRunFolder(t *testing.T) {
 	}
 	write("README.md", "not a scenario, and not refused")
 	write("a.json", steps(`{"do": "atoll"}`))
-	if err := run(ok, folder); err != nil {
+	if err := run(ok, folder, nil); err != nil {
 		t.Errorf("a good folder: %v", err)
 	}
 	write("b.json", steps(`{"do": "atoll", "exit": 9}`))
-	err := run(ok, folder)
+	err := run(ok, folder, nil)
 	if err == nil || !strings.Contains(err.Error(), "1 of 2") || !strings.Contains(err.Error(), "b.json") {
 		t.Errorf("one failure in two: %v", err)
 	}
@@ -497,17 +547,65 @@ func TestRunFolder(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(other, "notes.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(ok, other); err == nil {
+	if err := run(ok, other, nil); err == nil {
 		t.Error("a file that is no scenario was skipped")
 	}
-	if err := run(filepath.Join(t.TempDir(), "absent"), folder); err == nil {
+	if err := run(filepath.Join(t.TempDir(), "absent"), folder, nil); err == nil {
 		t.Error("a binary that does not exist was accepted")
 	}
-	if err := run(ok, filepath.Join(t.TempDir(), "absent")); err == nil {
+	if err := run(ok, filepath.Join(t.TempDir(), "absent"), nil); err == nil {
 		t.Error("a folder that does not exist was accepted")
 	}
-	if err := run(ok, t.TempDir()); err == nil {
+	if err := run(ok, t.TempDir(), nil); err == nil {
 		t.Error("a folder with no scenario was accepted")
+	}
+}
+
+// With --cover-dir, each run of the binary gets GOCOVERDIR, absolute though the flag was not, as the binary runs in its
+// scenario's folder, over one the runner's environment had, and a folder there; what else it sees does not change.
+// Without the flag, it sees the runner's environment as it is (make cover, specs.md §27).
+func TestCoverDir(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("GOCOVERDIR", "inherited")
+	if env, err := coverEnv(""); err != nil || env != nil {
+		t.Errorf("no cover dir: %q, %v", env, err)
+	}
+	inherited := fakeBinary(t, `[ "$GOCOVERDIR" = inherited ]`)
+	if err := runFile(inherited, scenarioFile(t, steps(`{"do": "atoll"}`)), nil); err != nil {
+		t.Errorf("without the flag, the runner's GOCOVERDIR: %v", err)
+	}
+
+	env, err := coverEnv("bin/cover/scenarios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counters, err := filepath.Abs("bin/cover/scenarios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"GOCOVERDIR=" + counters}; !reflect.DeepEqual(env, want) {
+		t.Errorf("env %q, want %q", env, want)
+	}
+	// A run writes its counters there, a file each, and the rest is as without the flag: the checks of every step
+	// would fail on a file left in the sandbox.
+	bin := fakeBinary(t, `[ "$GOCOVERDIR" = "`+counters+`" ] && [ "$TZ" = UTC ] && [ "$ATOLL_CONFORMANCE" = "$PWD/conformance.json" ] &&
+		touch "$GOCOVERDIR/covcounters.$$"`)
+	folder := t.TempDir()
+	if err := os.WriteFile(filepath.Join(folder, "a.json"), []byte(steps(`{"do": "atoll"}, {"do": "atoll"}`)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(bin, folder, env); err != nil {
+		t.Errorf("with the flag: %v", err)
+	}
+	if runs, err := os.ReadDir(counters); err != nil || len(runs) != 2 {
+		t.Errorf("counters of two runs: %v, %v", runs, err)
+	}
+
+	if err := os.WriteFile("taken", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coverEnv("taken/scenarios"); err == nil {
+		t.Error("a cover dir that cannot be made was accepted")
 	}
 }
 

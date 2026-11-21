@@ -1,0 +1,249 @@
+# The checks of every change (specs.md §27), on GitHub's hosted runners. They call the make targets test/ci/run.sh
+# calls on the maintainer's machine, in the same image, so that both stay in step: race, integration, conformance and
+# lint as there, govulncheck, test/loopdev in qemu on both kernels, the TLA+ model by TLC, and on arm64 the unit
+# tests. The throughput of the hashing goes to the run's summary, on arm64 and amd64.
+name: CI
+
+on:
+  push:
+    branches: [beta, main]
+  # beta's pull requests are Dependabot's (.github/dependabot.yml).
+  pull_request:
+    branches: [main, beta]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# In a container job the checkout belongs to another account than root, which runs the jobs, and git refuses such a
+# repository ("dubious ownership"): go build then cannot read the commit it stamps the version from. Git takes this
+# setting from the environment as from its command line.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+# A newer push to the same branch, or to the same pull request, cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  race:
+    runs-on: ubuntu-latest
+    # The image of test/ci/run.sh: its golangci-lint, and root, as the local CI runs the tests. Its GOTOOLCHAIN is auto:
+    # its go fetches go.mod's version of Go when newer than its own, checked against sum.golang.org, and kept in the cache.
+    container: golangci/golangci-lint:v2.15.0
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-race-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-race-${{ runner.arch }}-
+      - run: make test-race
+
+  # The coverage of the unit tests and of the scenarios (make cover): the share of statements each runs, and either, by
+  # package and in all, with how long each took, to the run's summary; the profiles with their HTML as an artifact. A
+  # measure, never a gate, which test/ci/run.sh leaves out; a failing test or scenario fails it, as in its own job.
+  cover:
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint:v2.15.0
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-cover-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-cover-${{ runner.arch }}-
+      - run: make cover
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: |
+            bin/cover/cover.out
+            bin/cover/cover.html
+            bin/cover/scenarios.out
+            bin/cover/merged.out
+            bin/cover/merged.html
+          if-no-files-found: ignore
+          retention-days: 30
+
+  integration:
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint:v2.15.0
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-integration-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-integration-${{ runner.arch }}-
+      - run: make test-integration
+
+  conformance:
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint:v2.15.0
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-conformance-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-conformance-${{ runner.arch }}-
+      - run: make conformance
+
+  lint:
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint:v2.15.0
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-lint-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-lint-${{ runner.arch }}-
+      # As test/ci/run.sh's lint job: the delivered build and the conformance build, then the loopdev and mediaservers tests.
+      - run: make lint
+      - run: golangci-lint run --build-tags loopdev ./test/loopdev/...
+      - run: golangci-lint run --build-tags mediaservers ./test/mediaservers/...
+
+  # The TLA+ model of conformance/models/, each instance against what it expects (specs.md §27), by TLC in the image of
+  # test/tla/run.sh, which runs it there with --inside: 2 workers, the jar's SHA-256 checked, the jar kept in the cache.
+  tla:
+    runs-on: ubuntu-latest
+    container: eclipse-temurin:21.0.13_9-jre-noble
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: bin/tla/tla2tools-*.jar
+          key: tla2tools-${{ hashFiles('test/tla/run.sh') }}
+          restore-keys: tla2tools-
+      - run: bash test/tla/run.sh --inside
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Go a release is built with: the latest patch of go.mod's version, whose standard library is checked too.
+      - id: go
+        run: echo "version=$(sed -n 's/^go \([0-9]*\.[0-9]*\).*/\1/p' go.mod).x" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          check-latest: true
+          cache-dependency-path: go.sum
+      - run: go version
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+
+  qemu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # make qemu-build compiles the tests on the runner, with go.mod's version of Go.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: KVM
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "/dev/kvm is there: the guests run with KVM"
+            ls -l /dev/kvm
+          else
+            echo "no /dev/kvm: qemu emulates the processor, about 20 minutes for both kernels"
+          fi
+      # What test/qemu/run.sh downloads, Debian's packages and the mainline kernel, kept from a run to the next: make
+      # test-qemu reads QEMU_CACHE. A new key each month keeps newer packages; apt drops those it can no longer download.
+      - id: cache
+        run: |
+          echo "QEMU_CACHE=$HOME/.cache/atoll-qemu" >>"$GITHUB_ENV"
+          echo "month=$(date -u +%Y-%m)" >>"$GITHUB_OUTPUT"
+          mkdir -p "$HOME/.cache/atoll-qemu"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/atoll-qemu
+          key: qemu-${{ hashFiles('test/qemu/run.sh') }}-${{ steps.cache.outputs.month }}
+          restore-keys: |
+            qemu-${{ hashFiles('test/qemu/run.sh') }}-
+            qemu-
+      - run: make test-qemu
+      # The container wrote the cache as root, and apt closes its partial/ to other accounts: the cache's own step,
+      # after this one, reads it as the runner's account.
+      - if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$QEMU_CACHE"
+
+  # The unit tests and the conformance vectors on arm64, BLAKE3's NEON and SVE2 code included, and its throughput there.
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    container: golangci/golangci-lint:v2.15.0
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-test-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-test-${{ runner.arch }}-
+      - run: go test ./...
+      # What the CPU has, whether SVE2, the code zeebo/blake3 takes on it, and its throughput, to the log and the summary.
+      - run: bash test/ci/blake3.sh
+
+  # The throughput of the hashing on amd64, and whether the CPU has AVX-512, which zeebo/blake3 then takes.
+  blake3-amd64:
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint:v2.15.0
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-bench-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-bench-${{ runner.arch }}-
+      - run: bash test/ci/blake3.sh

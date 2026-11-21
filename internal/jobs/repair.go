@@ -75,9 +75,6 @@ type repairRun struct {
 	session *trash.Session
 	// apply repairs, and record records what is found: what apply does, and what a run that may not write still may.
 	apply, record bool
-	// conflicts holds the files a copy of which holds another content, and that are corrupt still, by another copy:
-	// they are a conflict once the run has worked the states out, when none is corrupt any more.
-	conflicts []int64
 }
 
 // Repair repairs the corrupt copies of the files at a path, each from a healthy copy, by chunk or whole, and says
@@ -144,9 +141,6 @@ func Repair(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, 
 			return nil, fmt.Errorf("%w", err)
 		}
 	}
-	if err := r.callConflicts(ctx); err != nil {
-		return nil, err
-	}
 	sum.Partial = session.Lost()
 	session.Close()
 	// A copy repaired whole is made again at once, as atoll replicate --now makes it; one that cannot be is made by
@@ -157,19 +151,6 @@ func Repair(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, 
 		}
 	}
 	return sum, nil
-}
-
-// callConflicts makes a conflict of each file a copy of which was found to hold another content while another copy
-// was corrupt still, once the states are worked out: a file is corrupt while a copy of it is, and a file still
-// corrupt stays so, the scrub finding the conflict again from the copy never verified (specs.md §16).
-func (r *repairRun) callConflicts(ctx context.Context) error {
-	for _, id := range r.conflicts {
-		if err := catalog.SetConflict(ctx, r.db, id, r.machine.Now()); err != nil {
-			return fmt.Errorf("catalog: %w", err)
-		}
-	}
-	r.conflicts = nil
-	return nil
 }
 
 // repairOne repairs one corrupt copy, or says what a repair would do. It gives nil for a copy no longer corrupt.
@@ -319,12 +300,10 @@ func (r *repairRun) changedCopy(ctx context.Context, f *catalog.FileRow, c *cata
 		if found.BtimeNS != nil {
 			look.BtimeNS = sql.NullInt64{Int64: *found.BtimeNS, Valid: true}
 		}
-		conflict, err := catalog.SettleChanged(ctx, r.db, f.ID, &look, holds, now)
-		if err != nil {
+		// Beside another copy still corrupt, the file holds the conflict, which the states worked out at the end of
+		// the run, or by a later one, make its state once none is (specs.md §4, §16).
+		if err := catalog.SettleChanged(ctx, r.db, f.ID, &look, holds, now); err != nil {
 			return "", true, fmt.Errorf("catalog: %w", err)
-		}
-		if !holds && !conflict {
-			r.conflicts = append(r.conflicts, f.ID)
 		}
 		r.session.MarkChanged()
 	}

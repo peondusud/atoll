@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a710",
+  "description": "Whether a disk is in standby, from the whole disks below its mount, without waking any of them. A whole disk with no spindle spins; so does one that completed I/O since the last check, or has requests under way, by its counters (block_stat.json), and nothing is sent to it. Any other is asked its power mode (power_mode.json), unless it gave no answer before, which leaves it unknown, as does no answer now. Unknown counts as spinning. The disk is in standby when one of its whole disks answers standby.",
+  "cases": [
+    {"note": "an SSD has no spindle: it spins, and is asked nothing", "disks": [{"name": "nvme0n1", "rotational": false, "before": 5, "now": 5, "busy": false, "refused": false, "answer": "standby"}], "asked": [], "standby": false},
+    {"note": "I/O since the last check: it spins, and is asked nothing", "disks": [{"name": "sda", "rotational": true, "before": 5, "now": 9, "busy": false, "refused": false, "answer": "standby"}], "asked": [], "standby": false},
+    {"note": "requests under way: it spins", "disks": [{"name": "sda", "rotational": true, "before": 5, "now": 5, "busy": true, "refused": false, "answer": "standby"}], "asked": [], "standby": false},
+    {"note": "no I/O since the last check: asked, and asleep", "disks": [{"name": "sda", "rotational": true, "before": 5, "now": 5, "busy": false, "refused": false, "answer": "standby"}], "asked": ["sda"], "standby": true},
+    {"note": "no I/O since the last check: asked, and spinning", "disks": [{"name": "sda", "rotational": true, "before": 5, "now": 5, "busy": false, "refused": false, "answer": "spinning"}], "asked": ["sda"], "standby": false},
+    {"note": "the first check has no earlier count: asked", "disks": [{"name": "sda", "rotational": true, "before": null, "now": 5, "busy": false, "refused": false, "answer": "standby"}], "asked": ["sda"], "standby": true},
+    {"note": "counters that cannot be read: asked", "disks": [{"name": "sda", "rotational": true, "before": 5, "now": null, "busy": false, "refused": false, "answer": "standby"}], "asked": ["sda"], "standby": true},
+    {"note": "whether it has a spindle cannot be read: it counts as one that has", "disks": [{"name": "sda", "rotational": null, "before": 5, "now": 5, "busy": false, "refused": false, "answer": "standby"}], "asked": ["sda"], "standby": true},
+    {"note": "no answer: unknown, which counts as spinning", "disks": [{"name": "sdb", "rotational": true, "before": 5, "now": 5, "busy": false, "refused": false, "answer": null}], "asked": ["sdb"], "standby": false},
+    {"note": "a disk that gave no answer once is asked no more", "disks": [{"name": "sdb", "rotational": true, "before": 5, "now": 5, "busy": false, "refused": true, "answer": "standby"}], "asked": [], "standby": false},
+    {"note": "two disks below one mount: one asleep is enough, as a read may need it", "disks": [{"name": "sdc", "rotational": true, "before": 1, "now": 2, "busy": false, "refused": false, "answer": "spinning"}, {"name": "sdd", "rotational": true, "before": 5, "now": 5, "busy": false, "refused": false, "answer": "standby"}], "asked": ["sdd"], "standby": true},
+    {"note": "two disks below one mount, both spinning", "disks": [{"name": "sdc", "rotational": true, "before": 5, "now": 5, "busy": false, "refused": false, "answer": "spinning"}, {"name": "sdd", "rotational": true, "before": 5, "now": 5, "busy": false, "refused": false, "answer": "spinning"}], "asked": ["sdc", "sdd"], "standby": false}
+  ]
+}

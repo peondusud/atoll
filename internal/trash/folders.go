@@ -27,12 +27,35 @@ func (s *Session) Left(disk, logical string) {
 	s.emptied[disk][folder] = true
 }
 
-// RemoveEmptied removes the folders Atoll made that its own operations of this run left empty, then each folder above
-// one it removed that this left empty, the deepest first (specs.md §17.5). A folder that holds anything, or that is
-// not the one Atoll made, stays, and so do those above it. A run that may not write removes nothing.
+// leftByEarlierRuns takes in the folders that the operations done since the last look left, which a run stopped
+// before its end could not look at, as the journal says (specs.md §17.5).
+func (s *Session) leftByEarlierRuns(ctx context.Context) error {
+	from, err := catalog.FoldersTidiedThrough(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	upTo, err := catalog.HighestOp(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	if err := catalog.LeftSince(ctx, s.db, from, upTo, s.Left); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	s.tidying = true
+	return nil
+}
+
+// RemoveEmptied removes the folders Atoll made that its own operations of this run, or of a run stopped before its
+// end, left empty, then each folder above one it removed that this left empty, the deepest first (specs.md §17.5). A
+// folder that holds anything, or that is not the one Atoll made, stays, and so do those above it. A run that may not
+// write removes nothing. Once every folder was looked at, on disks that could be written to, the journal records it.
 func (s *Session) RemoveEmptied(ctx context.Context) error {
-	if !s.apply || len(s.emptied) == 0 {
+	if !s.apply {
 		return nil
+	}
+	through, err := catalog.HighestOp(ctx, s.db)
+	if err != nil {
+		return fmt.Errorf("catalog: %w", err)
 	}
 	emptied := s.emptied
 	s.emptied = map[string]map[string]bool{}
@@ -50,10 +73,11 @@ func (s *Session) RemoveEmptied(ctx context.Context) error {
 		}
 		for depth := deepest; depth >= 0; depth-- {
 			for _, folder := range slices.Sorted(maps.Keys(byDepth[depth])) {
-				removed, err := s.removeFolder(ctx, id, folder)
+				removed, looked, err := s.removeFolder(ctx, id, folder)
 				if err != nil {
 					return err
 				}
+				s.untidy = s.untidy || !looked
 				if parent := path.Dir(folder); removed && depth > 0 {
 					if byDepth[depth-1] == nil {
 						byDepth[depth-1] = map[string]bool{}
@@ -63,52 +87,83 @@ func (s *Session) RemoveEmptied(ctx context.Context) error {
 			}
 		}
 	}
+	// A folder of a disk that could not be written to, or lost meanwhile, is for the next run to look at.
+	if s.tidying && !s.untidy {
+		if err := catalog.SetFoldersTidiedThrough(ctx, s.db, through); err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+	}
 	return nil
 }
 
-// removeFolder removes one folder, when its row says Atoll made it and the catalog holds nothing of its disk below
-// it, and says whether it went.
-func (s *Session) removeFolder(ctx context.Context, id, folder string) (bool, error) {
-	if !s.writable(id) {
-		return false, nil
+// RemoveUserFolder removes from a disk an empty folder that a user removed through Atoll's own view where it was empty
+// then, once the catalog holds nothing of that disk below it (specs.md §21.2). One that still holds something stays, for
+// a later pass.
+func (s *Session) RemoveUserFolder(ctx context.Context, id, folder string) error {
+	if !s.apply || !s.writable(id) {
+		return nil
 	}
-	key, own, err := catalog.OwnFolder(ctx, s.db, id, folder)
-	if err != nil || !own {
-		return false, wrapCatalog(err)
+	key, err := catalog.FolderKey(ctx, s.db, id, folder)
+	if err != nil || key == "" {
+		return wrapCatalog(err)
 	}
 	empty, err := catalog.NothingBelow(ctx, s.db, id, folder)
 	if err != nil || !empty {
-		return false, wrapCatalog(err)
+		return wrapCatalog(err)
 	}
+	_, _, err = s.removeKnownFolder(ctx, id, folder, key)
+	return err
+}
+
+// removeFolder removes one folder, when its row says Atoll made it and the catalog holds nothing of its disk below
+// it, and says whether it went, and whether it was looked at: a folder of a disk that cannot be written to, or that
+// is lost, was not.
+func (s *Session) removeFolder(ctx context.Context, id, folder string) (removed, looked bool, err error) {
+	if !s.writable(id) {
+		return false, false, nil
+	}
+	key, own, err := catalog.OwnFolder(ctx, s.db, id, folder)
+	if err != nil || !own {
+		return false, true, wrapCatalog(err)
+	}
+	empty, err := catalog.NothingBelow(ctx, s.db, id, folder)
+	if err != nil || !empty {
+		return false, true, wrapCatalog(err)
+	}
+	return s.removeKnownFolder(ctx, id, folder, key)
+}
+
+// removeKnownFolder removes a folder whose row records that inode, as an operation of its own.
+func (s *Session) removeKnownFolder(ctx context.Context, id, folder, key string) (removed, looked bool, err error) {
 	handle, err := s.open(ctx, id)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if handle == nil || !s.writable(id) {
-		return false, nil
+		return false, false, nil
 	}
 	op, err := catalog.BeginRmdir(ctx, s.db, id, folder, key, s.now)
 	if err != nil {
-		return false, fmt.Errorf("catalog: %w", err)
+		return false, false, fmt.Errorf("catalog: %w", err)
 	}
 	s.machine.Checkpoint("rmdir-journaled")
 	err = handle.RemoveFolder(op)
 	switch {
 	case err == nil:
 		if err := catalog.FinishRmdir(ctx, s.db, op); err != nil {
-			return false, fmt.Errorf("catalog: %w", err)
+			return false, false, fmt.Errorf("catalog: %w", err)
 		}
-		return true, nil
+		return true, true, nil
 	case errors.Is(err, ops.ErrDiskLost):
 		// The operation stays planned, for the reprise to look at.
-		return false, s.lose(ctx, id, err)
+		return false, false, s.lose(ctx, id, err)
 	case !errors.Is(err, ops.ErrNotEmpty) && !errors.Is(err, ops.ErrGone):
 		slog.Warn("a folder Atoll made stays", "disk", id, "path", folder, "error", err)
 	}
 	if err := catalog.Undo(ctx, s.db, op, false, s.now); err != nil {
-		return false, fmt.Errorf("catalog: %w", err)
+		return false, false, fmt.Errorf("catalog: %w", err)
 	}
-	return false, nil
+	return false, true, nil
 }
 
 func wrapCatalog(err error) error {

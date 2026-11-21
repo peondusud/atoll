@@ -16,7 +16,7 @@
         "required": ["id", "state", "reason", "message", "walked"],
         "allOf": [
           { "if": { "properties": { "state": { "const": "online" } } }, "then": { "properties": { "reason": { "type": "null" }, "message": { "type": "null" } } } },
-          { "if": { "properties": { "state": { "const": "readonly" } } }, "then": { "properties": { "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "casefold", "ascii-ci", "no-journal", "ignore-case", "read-only-mount"] }, "message": { "type": "string" } } } },
+          { "if": { "properties": { "state": { "const": "readonly" } } }, "then": { "properties": { "reason": { "enum": ["unsupported-driver", "ads", "nocase", "iocharset", "errors-continue", "hibernated", "casefold", "ascii-ci", "no-journal", "ignore-case", "read-only-mount", "other-marker"] }, "message": { "type": "string" } } } },
           { "if": { "properties": { "state": { "const": "missing" } } }, "then": { "properties": { "reason": { "enum": ["not-mounted", "io-error", "partial-mount", "wrong-filesystem", "device-gone", "device-unreadable", "wrong-identifier", "no-root"] }, "message": { "type": "string" } } } }
         ],
         "properties": {
@@ -100,6 +100,15 @@
             }
           },
           {
+            "if": { "properties": { "kind": { "const": "xattr" } } },
+            "then": {
+              "description": "The user. extended attributes Atoll's own view changed on one copy, given to another (specs.md §21.2): disk is the copy given, source the disk of the copy changed; kept when its filesystem refuses one, disk-unavailable when its disk cannot be written now.",
+              "required": ["source"],
+              "properties": { "outcome": { "enum": ["applied", "kept", "changed", "io-error", "disk-unavailable"] } },
+              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["reason"] }] }
+            }
+          },
+          {
             "if": { "properties": { "kind": { "const": "replicate" } } },
             "then": {
               "description": "A copy (specs.md §14.1): disk is its target.",
@@ -107,11 +116,19 @@
               "properties": { "outcome": { "enum": ["replicated", "to-replicate", "changed", "conflict", "path-taken", "name-refused", "no-room", "io-error", "disk-unavailable"] } },
               "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["reason"] }] }
             }
+          },
+          {
+            "if": { "properties": { "kind": { "const": "transfer" } } },
+            "then": {
+              "description": "A file's copy on the SSD cache removed, as the data disks hold it (specs.md §19): disk is its cache disk.",
+              "properties": { "outcome": { "enum": ["transferred", "to-transfer", "changed", "io-error", "disk-unavailable"] } },
+              "not": { "anyOf": [{ "required": ["to"] }, { "required": ["to_b64"] }, { "required": ["reason"] }, { "required": ["source"] }] }
+            }
           }
         ],
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
-          "kind": { "enum": ["chown", "chmod", "utimens", "rename", "folder", "trash", "replicate"] },
+          "kind": { "enum": ["chown", "chmod", "utimens", "xattr", "rename", "folder", "trash", "replicate", "transfer"] },
           "path": { "type": "string" },
           "path_b64": { "type": "string" },
           "to": { "type": "string" },
@@ -129,10 +146,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["disk", "kind", "count"],
+        "dependentSchemas": { "window": { "properties": { "kind": { "const": "modifications" } } } },
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
           "kind": { "enum": ["deletions", "modifications"] },
-          "count": { "type": "integer", "minimum": 0 }
+          "count": { "description": "What the window that tripped it counted: the guard's own, or with window the day's.", "type": "integer", "minimum": 0 },
+          "window": { "description": "Only for a mass-modification guard tripped on what its day counted, modifies.day_guard (specs.md §15.6); left out when its own window tripped it.", "enum": ["day"] }
         }
       }
     },

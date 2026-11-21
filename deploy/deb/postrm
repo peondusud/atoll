@@ -1,0 +1,13 @@
+#!/bin/sh
+# The .deb's postrm (specs.md §26, .goreleaser.yaml). Removed or purged, the package leaves the account atoll, which
+# may own each disk's work folder, the configuration in /etc/atoll, the catalog in /var/lib/atoll, and a unit that
+# runs, as they are: systemd only forgets the units it no longer finds.
+set -e
+
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+	if [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+	fi
+fi
+
+exit 0

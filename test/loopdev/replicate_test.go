@@ -281,7 +281,7 @@ func TestAPassAppliesATimeOnEachDriver(t *testing.T) {
 func TestADeviceThatFailsDuringACopy(t *testing.T) {
 	needRoot(t)
 	for _, tc := range failingDrivers {
-		for _, point := range []string{"journaled", "copied", "verified", "moved", "target-synced", "source-synced"} {
+		for _, point := range []string{"journaled", "copied", "verified", "moved", "placed", "target-synced", "source-synced"} {
 			t.Run(tc.name+"/"+point, func(t *testing.T) {
 				options := driverOptions(t, tc.driver)
 				m := newMapped(t, tc.fs)
@@ -301,7 +301,7 @@ func TestADeviceThatFailsDuringACopy(t *testing.T) {
 				after := b.replicate("big")
 				dropCaches(t)
 				target := filepath.Join(at, "media", "big")
-				if tc.driver == "ntfs3" {
+				if kernelNTFS(tc.driver) {
 					part := filepath.Join(at, "Atoll", "tmp", b.text("SELECT COALESCE(max(CAST(path2 AS TEXT)), '') FROM ops WHERE kind = 'create'"))
 					skipWhereNamesDisagree(t, target, part)
 					// Both names lead to the copy: nothing is concluded, and the job waits with it (§17.2).

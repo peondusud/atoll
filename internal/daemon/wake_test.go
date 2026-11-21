@@ -43,6 +43,7 @@ func TestWakeVectors(t *testing.T) {
 		NotifyDueNS   *int64   `json:"notify_due_ns"`
 		Notify        bool     `json:"notify"`
 		BalanceDueNS  *int64   `json:"balance_due_ns"`
+		OnBattery     bool     `json:"on_battery"`
 		Balance       bool     `json:"balance"`
 		Backup        bool     `json:"backup"`
 		ReadHashes    bool     `json:"read_hashes"`
@@ -72,6 +73,7 @@ func TestWakeVectors(t *testing.T) {
 				Window: w, Location: loc, HashPending: v.HashPending, ScrubPending: v.ScrubPending, ScrubWindow: scrubWindow,
 				ScrubBudgetNS: v.ScrubBudgetNS, ScrubSpentNS: v.ScrubSpentNS, ScrubSpentOpenedNS: v.ScrubSpentAt, BackupPending: v.BackupPend,
 				SmartDueNS: v.SmartDueNS, NotifyDueNS: v.NotifyDueNS, BalanceDueNS: v.BalanceDueNS, ChangedPending: v.ChangedPend, PurgePending: v.PurgePending, AlertRetryDueNS: v.AlertRetryNS,
+				OnBattery: v.OnBattery,
 			})
 		}
 		switch {

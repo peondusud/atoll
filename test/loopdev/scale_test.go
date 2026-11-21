@@ -55,13 +55,15 @@ func TestScale(t *testing.T) {
 		debug.FreeOSMemory()
 		resetPeak(t)
 		mem.take()
+		mem.takePeak()
 		began := time.Now()
 		do()
 		took := time.Since(began).Round(time.Millisecond)
 		live, held := mem.take()
+		peak := mem.takePeak()
 		s := sampleMemory(t, start, b.catalog)
-		t.Logf("%s: %v; heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, catalog %.1f MiB",
-			what, took, float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(held)/(1<<20), float64(live)/(1<<20), float64(s.catalog)/(1<<20))
+		t.Logf("%s: %v; heap in use %.1f MiB, resident %.1f MiB, at most %.1f MiB, of which the runtime held at most %.1f MiB and the heap %.1f MiB live, catalog %.1f MiB; %v",
+			what, took, float64(s.heap)/(1<<20), float64(s.rss)/(1<<20), float64(s.hwm)/(1<<20), float64(held)/(1<<20), float64(live)/(1<<20), float64(s.catalog)/(1<<20), peak)
 	}
 	measure("the first pass, which finds every copy", func() { b.pass() })
 	measure("a scan with every copy known", func() { b.scan(false) })

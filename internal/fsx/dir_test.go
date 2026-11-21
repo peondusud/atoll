@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -145,6 +147,56 @@ func TestDirNeverFollowsASymlink(t *testing.T) {
 
 // TestStatSaysWhatStatxSays: each field, against what the os package reads. A wrong one would be
 // compared with itself on every later scan, and nothing else would show it.
+// Names gives every name of a folder each time it is asked, as the Dir interface says, never what is left past the
+// handle's position: a handle listed twice lists the folder whole twice, what came since included, and so do callers
+// that list one handle at once, as copies at once share a disk's top. The fault layer passes the call on, and keeps
+// that. The folder holds more names than one read of the kernel gives.
+func TestNamesGivesEveryNameEachTime(t *testing.T) {
+	top := t.TempDir()
+	var want []string
+	for i := range 1000 {
+		name := "file-with-a-long-name-" + strconv.Itoa(i)
+		if err := os.WriteFile(filepath.Join(top, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, name)
+	}
+	slices.Sort(want)
+	listed := func(t *testing.T, dir Dir, want []string) {
+		t.Helper()
+		names, err := dir.Names()
+		slices.Sort(names)
+		if err != nil || !slices.Equal(names, want) {
+			t.Errorf("%d names of %d, %v", len(names), len(want), err)
+		}
+	}
+	for _, layer := range []string{"real", "fault"} {
+		t.Run(layer, func(t *testing.T) {
+			dir, err := OpenDir(top)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = dir.Close() }()
+			if layer == "fault" {
+				dir = Fault(dir, func(string, string) error { return nil })
+			}
+			listed(t, dir, want)
+			listed(t, dir, want)
+			more := slices.Concat(want, []string{"zz-" + layer})
+			if err := os.WriteFile(filepath.Join(top, "zz-"+layer), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Remove(filepath.Join(top, "zz-"+layer)) }()
+			listed(t, dir, more)
+			var wg sync.WaitGroup
+			for range 8 {
+				wg.Go(func() { listed(t, dir, more) })
+			}
+			wg.Wait()
+		})
+	}
+}
+
 func TestStatSaysWhatStatxSays(t *testing.T) {
 	top := t.TempDir()
 	full := filepath.Join(top, "file")
@@ -430,6 +482,26 @@ func TestWriteNewNeverReplaces(t *testing.T) {
 	}
 }
 
+// A device's name under /dev/disk/ is a link: it leads somewhere while its device is there, and nowhere once the
+// device went and the link stayed.
+func TestReachableFollowsLinks(t *testing.T) {
+	top := t.TempDir()
+	device, link, gone := filepath.Join(top, "sdb1"), filepath.Join(top, "by-uuid"), filepath.Join(top, "dangling")
+	if err := os.WriteFile(device, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range [][2]string{{device, link}, {filepath.Join(top, "sdc1"), gone}} {
+		if err := os.Symlink(l[0], l[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, want := range map[string]bool{device: true, link: true, gone: false, filepath.Join(top, "none"): false} {
+		if got, err := Reachable(path); got != want || err != nil {
+			t.Errorf("%s: %v, %v, want %v", filepath.Base(path), got, err, want)
+		}
+	}
+}
+
 func TestSumSizes(t *testing.T) {
 	top := t.TempDir()
 	for name, size := range map[string]int{"a": 3, "sub/b": 5, "sub/deep/c": 7} {
@@ -473,5 +545,93 @@ func TestWriteNewIsClosedToOtherAccounts(t *testing.T) {
 		if got := info.Mode().Perm(); got != 0o640 {
 			t.Errorf("with the mask %03o, the file is %03o, want 640", mask, got)
 		}
+	}
+}
+
+// SyncFS writes out the folder's whole filesystem, and the fault layer can make it fail (specs.md §20).
+func TestSyncFS(t *testing.T) {
+	dir, err := OpenDir(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	if err := dir.SyncFS(); err != nil {
+		t.Fatal(err)
+	}
+	faulty := Fault(dir, func(call, _ string) error {
+		if call == "syncfs" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	if err := faulty.SyncFS(); !errors.Is(err, syscall.EIO) {
+		t.Errorf("%v", err)
+	}
+}
+
+// ReadStart reads the start of a regular file and its size, follows no symlink, waits on no FIFO, and is a call of
+// its own to the fault layer (specs.md §10).
+func TestReadStart(t *testing.T) {
+	top := t.TempDir()
+	if err := os.WriteFile(filepath.Join(top, "long"), []byte("0123456789"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("long", filepath.Join(top, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(top, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := OpenDir(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	if size, start, err := ReadStart(dir, "long", 4); err != nil || size != 10 || string(start) != "0123" {
+		t.Errorf("%d %q %v", size, start, err)
+	}
+	if size, start, err := ReadStart(dir, "long", 64); err != nil || size != 10 || string(start) != "0123456789" {
+		t.Errorf("past its end: %d %q %v", size, start, err)
+	}
+	if _, _, err := ReadStart(dir, "link", 4); !IsUnreadableName(err) {
+		t.Errorf("a symlink: %v", err)
+	}
+	if _, _, err := ReadStart(dir, "pipe", 4); !errors.Is(err, ErrNotARegularFile) {
+		t.Errorf("a FIFO: %v", err)
+	}
+	if _, _, err := ReadStart(dir, "none", 4); !IsAbsent(err) {
+		t.Errorf("absent: %v", err)
+	}
+	faulty := Fault(dir, func(call, name string) error {
+		if call == "readstart" && name == "long" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	if _, _, err := ReadStart(faulty, "long", 4); !errors.Is(err, syscall.EIO) {
+		t.Errorf("through the fault layer: %v", err)
+	}
+}
+
+// UniqueMountID gives the same id for two paths of one mount, where the kernel has it (Linux 6.8), and an error for a
+// path that is not there.
+func TestUniqueMountID(t *testing.T) {
+	top := t.TempDir()
+	sub := filepath.Join(top, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a, ok, err := UniqueMountID(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Skip("this kernel gives no unique mount id")
+	}
+	if b, ok, err := UniqueMountID(sub); err != nil || !ok || b != a {
+		t.Errorf("%d, then %d %v %v", a, b, ok, err)
+	}
+	if _, _, err := UniqueMountID(filepath.Join(top, "none")); !IsAbsent(err) {
+		t.Errorf("absent: %v", err)
 	}
 }

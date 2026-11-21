@@ -1,20 +1,75 @@
 package value
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
+// durationVector is a case of conformance/vectors/duration.json.
+type durationVector struct {
+	Input       string `json:"input"`
+	Nanoseconds *int64 `json:"nanoseconds"`
+	Error       bool   `json:"error"`
+	Note        string `json:"note"`
+}
+
+// listenVector is a case of conformance/vectors/listen.json.
+type listenVector struct {
+	Input   string  `json:"input"`
+	Address *string `json:"address"`
+	Port    *uint16 `json:"port"`
+	Error   bool    `json:"error"`
+	Note    string  `json:"note"`
+}
+
+// nutVector is a case of conformance/vectors/ups_address.json.
+type nutVector struct {
+	NUT   string  `json:"nut"`
+	UPS   *string `json:"ups"`
+	Host  *string `json:"host"`
+	Port  *int    `json:"port"`
+	Error bool    `json:"error"`
+	Note  string  `json:"note"`
+}
+
+// sizeVector is a case of conformance/vectors/size.json.
+type sizeVector struct {
+	Input string `json:"input"`
+	Bytes *int64 `json:"bytes"`
+	Error bool   `json:"error"`
+	Note  string `json:"note"`
+}
+
+// percentVector is a case of conformance/vectors/percent.json.
+type percentVector struct {
+	Input    string `json:"input"`
+	Of       *int64 `json:"of"`
+	Result   *int64 `json:"result"`
+	Count    *int64 `json:"count"`
+	Below    *bool  `json:"below"`
+	Exceeded *bool  `json:"exceeded"`
+	Error    bool   `json:"error"`
+	Note     string `json:"note"`
+}
+
+// windowVector is a case of conformance/vectors/window.json.
+type windowVector struct {
+	Input  string  `json:"input"`
+	Zone   *string `json:"zone"`
+	At     *string `json:"at"`
+	Inside *bool   `json:"inside"`
+	Next   *string `json:"next"`
+	Opened *string `json:"opened"`
+	Error  bool    `json:"error"`
+	Note   string  `json:"note"`
+}
+
 func TestDurationVectors(t *testing.T) {
-	type vector struct {
-		Input       string `json:"input"`
-		Nanoseconds *int64 `json:"nanoseconds"`
-		Error       bool   `json:"error"`
-		Note        string `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "duration.json") {
+	for _, v := range vectors.Load[durationVector](t, "duration.json") {
 		got, err := ParseDuration(v.Input)
 		switch {
 		case v.Error == (v.Nanoseconds != nil):
@@ -30,14 +85,7 @@ func TestDurationVectors(t *testing.T) {
 }
 
 func TestListenVectors(t *testing.T) {
-	type vector struct {
-		Input   string  `json:"input"`
-		Address *string `json:"address"`
-		Port    *uint16 `json:"port"`
-		Error   bool    `json:"error"`
-		Note    string  `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "listen.json") {
+	for _, v := range vectors.Load[listenVector](t, "listen.json") {
 		got, err := ParseListen(v.Input)
 		switch {
 		case v.Error == (v.Address != nil) || (v.Address == nil) != (v.Port == nil):
@@ -48,6 +96,34 @@ func TestListenVectors(t *testing.T) {
 			t.Errorf("ParseListen(%q): %v", v.Input, err)
 		case !v.Error && (got.Address() != *v.Address || got.Port != *v.Port):
 			t.Errorf("ParseListen(%q) = %v, want %s port %d", v.Input, got, *v.Address, *v.Port)
+		case !v.Error:
+			// String is what the daemon listens on (cmd/atoll/api.go): the canonical address, in brackets for IPv6,
+			// then the port; ParseListen takes it back as it was.
+			want := *v.Address + ":" + strconv.Itoa(int(*v.Port))
+			if strings.Contains(*v.Address, ":") {
+				want = "[" + *v.Address + "]:" + strconv.Itoa(int(*v.Port))
+			}
+			if s := got.String(); s != want {
+				t.Errorf("ParseListen(%q).String() = %q, want %q", v.Input, s, want)
+			} else if again, err := ParseListen(s); err != nil || again != got {
+				t.Errorf("ParseListen(%q) = %v, %v, want %v", s, again, err, got)
+			}
+		}
+	}
+}
+
+func TestNUTVectors(t *testing.T) {
+	for _, v := range vectors.Load[nutVector](t, "ups_address.json") {
+		got, err := ParseNUT(v.NUT)
+		switch {
+		case v.Error == (v.UPS != nil) || (v.UPS == nil) != (v.Host == nil) || (v.UPS == nil) != (v.Port == nil):
+			t.Errorf("vector %q: want a name, a host and a port, or an error", v.NUT)
+		case v.Error && err == nil:
+			t.Errorf("ParseNUT(%q) = %+v, want an error (%s)", v.NUT, got, v.Note)
+		case !v.Error && err != nil:
+			t.Errorf("ParseNUT(%q): %v", v.NUT, err)
+		case !v.Error && (got.UPS != *v.UPS || got.Host != *v.Host || got.Port != *v.Port):
+			t.Errorf("ParseNUT(%q) = %+v, want %s at %s port %d (%s)", v.NUT, got, *v.UPS, *v.Host, *v.Port, v.Note)
 		}
 	}
 }
@@ -69,13 +145,7 @@ func TestFormatDuration(t *testing.T) {
 }
 
 func TestSizeVectors(t *testing.T) {
-	type vector struct {
-		Input string `json:"input"`
-		Bytes *int64 `json:"bytes"`
-		Error bool   `json:"error"`
-		Note  string `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "size.json") {
+	for _, v := range vectors.Load[sizeVector](t, "size.json") {
 		got, err := ParseSize(v.Input)
 		switch {
 		case v.Error == (v.Bytes != nil):
@@ -91,18 +161,9 @@ func TestSizeVectors(t *testing.T) {
 }
 
 func TestPercentVectors(t *testing.T) {
-	type vector struct {
-		Input  string `json:"input"`
-		Of     *int64 `json:"of"`
-		Result *int64 `json:"result"`
-		Count  *int64 `json:"count"`
-		Below  *bool  `json:"below"`
-		Error  bool   `json:"error"`
-		Note   string `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "percent.json") {
-		if (v.Count == nil) != (v.Below == nil) {
-			t.Errorf("vector %q: want count and below together", v.Input)
+	for _, v := range vectors.Load[percentVector](t, "percent.json") {
+		if (v.Count == nil) != (v.Below == nil) || (v.Count == nil) != (v.Exceeded == nil) {
+			t.Errorf("vector %q: want count, below and exceeded together", v.Input)
 		}
 		p, err := ParsePercent(v.Input)
 		switch {
@@ -119,6 +180,9 @@ func TestPercentVectors(t *testing.T) {
 			if v.Count != nil && p.Below(*v.Count, *v.Of) != *v.Below {
 				t.Errorf("ParsePercent(%q).Below(%d, %d): want %v (%s)", v.Input, *v.Count, *v.Of, *v.Below, v.Note)
 			}
+			if v.Exceeded != nil && p.Exceeded(*v.Count, *v.Of) != *v.Exceeded {
+				t.Errorf("ParsePercent(%q).Exceeded(%d, %d): want %v (%s)", v.Input, *v.Count, *v.Of, *v.Exceeded, v.Note)
+			}
 			if p.String() != v.Input {
 				t.Errorf("ParsePercent(%q).String() = %q", v.Input, p.String())
 			}
@@ -127,17 +191,7 @@ func TestPercentVectors(t *testing.T) {
 }
 
 func TestWindowVectors(t *testing.T) {
-	type vector struct {
-		Input  string  `json:"input"`
-		Zone   *string `json:"zone"`
-		At     *string `json:"at"`
-		Inside *bool   `json:"inside"`
-		Next   *string `json:"next"`
-		Opened *string `json:"opened"`
-		Error  bool    `json:"error"`
-		Note   string  `json:"note"`
-	}
-	for _, v := range vectors.Load[vector](t, "window.json") {
+	for _, v := range vectors.Load[windowVector](t, "window.json") {
 		w, err := ParseWindow(v.Input)
 		switch {
 		case v.Error == (v.Inside != nil) || (v.At == nil) != (v.Inside == nil):
@@ -235,5 +289,12 @@ func TestPercentZeroValue(t *testing.T) {
 	}
 	if got := p.String(); got != "0%" {
 		t.Errorf("Percent{}.String() = %q, want 0%%", got)
+	}
+	// As 0 %: no count is below it, and any above nothing exceeds it.
+	if p.Below(0, 1000) {
+		t.Error("Percent{}.Below(0, 1000) = true, want false")
+	}
+	if p.Exceeded(0, 1000) || !p.Exceeded(1, 1000) {
+		t.Errorf("Percent{}.Exceeded(0, 1000), Exceeded(1, 1000) = %v, %v, want false, true", p.Exceeded(0, 1000), p.Exceeded(1, 1000))
 	}
 }

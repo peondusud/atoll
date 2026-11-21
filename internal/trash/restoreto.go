@@ -173,7 +173,8 @@ func (s *Session) copyFromTrash(ctx context.Context, dst, src *ops.Disk, op *cat
 			return s.copyFailed(ctx, dst, op, true, err)
 		}
 	}
-	moved, err := dst.PlacePart(op, e.Path)
+	// A restored copy is a user copy, unverified: no change time is recorded for its reprise (specs.md §17.4).
+	moved, err := dst.PlacePart(op, e.Path, nil)
 	switch {
 	case errors.Is(err, ops.ErrPathTaken):
 		return s.copyEnded(ctx, dst, op, OutcomePathTaken, false)

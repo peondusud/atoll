@@ -228,8 +228,8 @@ func TestMigrationsLeaveAValidCatalog(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if tables != 13 {
-		t.Errorf("%d tables, want 13", tables)
+	if tables != 14 {
+		t.Errorf("%d tables, want 14", tables)
 	}
 }
 

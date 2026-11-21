@@ -259,6 +259,10 @@ func checkDiskAdd(ctx context.Context, c *config.Config, m disks.Machine, text [
 	case verdict.State == disks.Readonly && verdict.Reason == disks.NoJournal:
 		// What every operation of Atoll's rests on, a name durable once its folder is synced, does not hold there.
 		return nil, fmt.Errorf(T("%s: Atoll cannot make what it writes there durable: %s (%s)"), mount, verdict.Message, verdict.Reason)
+	case verdict.State == disks.Readonly && verdict.Reason == disks.Hibernated:
+		// It is mounted read-write: what it waits for is Windows (specs.md §22).
+		a.warn(warnReadonly, fmt.Sprintf(T("%s is read-only, %s (%s): Atoll makes no copy on it until Windows has shut down fully and it is mounted again"),
+			mount, verdict.Message, verdict.Reason))
 	case verdict.State == disks.Readonly:
 		a.warn(warnReadonly, fmt.Sprintf(T("%s is read-only, %s (%s): Atoll makes no copy on it until it is mounted read-write"), mount, verdict.Message, verdict.Reason))
 	}

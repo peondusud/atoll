@@ -35,6 +35,7 @@ func TestTheTimePrecisionOfEachFilesystem(t *testing.T) {
 		{"xfs", "", names.XFS, nil, 1, ""},
 		{"btrfs", "", names.Btrfs, nil, 1, ""},
 		{"ntfs3", "ntfs3", names.NTFS, nil, 100, ""},
+		{"ntfs", "ntfs", names.NTFS, nil, 100, ""},
 		{"ntfs-3g", "ntfs-3g", names.NTFS, nil, 100, ""},
 		{"lowntfs-3g", "lowntfs-3g", names.NTFS, nil, 100, ""},
 	} {

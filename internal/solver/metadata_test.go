@@ -23,6 +23,7 @@ type metaVector struct {
 		LookMode  *int64     `json:"look_mode"`
 		RowOwner  *Owner     `json:"row_owner"`
 		LookOwner *Owner     `json:"look_owner"`
+		Mount     bool       `json:"mount_owner"`
 	} `json:"copies"`
 	Plan *struct {
 		Mtime     *int64   `json:"mtime"`
@@ -49,7 +50,7 @@ func TestMetadataVectors(t *testing.T) {
 			if c.Disk == nil || c.Position == nil || c.State == nil || c.RowMtime == nil || c.Changed != (c.Mtime != nil) || c.Changed != (c.Ctime != nil) || (!c.Changed && (c.LookMode != nil || c.LookOwner != nil)) {
 				t.Fatalf("vector %d: a copy needs a disk, a position, a state and its row's time, and a changed one, and only that, its look's", i)
 			}
-			mc := MetaCopy{Disk: *c.Disk, Position: *c.Position, Changed: c.Changed, State: *c.State, RowMtime: *c.RowMtime, Reachable: c.Reachable, PrecisionNS: c.Precision}
+			mc := MetaCopy{Disk: *c.Disk, Position: *c.Position, Changed: c.Changed, State: *c.State, RowMtime: *c.RowMtime, Reachable: c.Reachable, PrecisionNS: c.Precision, MountOwner: c.Mount}
 			if c.Changed {
 				mc.Mtime, mc.Ctime = *c.Mtime, *c.Ctime
 			}

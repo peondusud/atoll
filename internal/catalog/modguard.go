@@ -15,8 +15,13 @@ const (
 	EventModifyGuardReject  = "modify-guard-reject"
 )
 
+// WindowDay is the window of the mass-modification guard whose count tripped a hold, in the data of its modify-guard
+// event and of the answer to it, when it is the day's, modifies.day_guard (specs.md §9, §15.6). A hold its own window
+// tripped, modifies.mass_guard.window, says none.
+const WindowDay = "day"
+
 // ModifyGuardRead is what the mass-modification guard of a disk reads, from events only, so that no crash can lose a
-// hold (specs.md §15.6).
+// hold, and no restart a count (specs.md §15.6).
 type ModifyGuardRead struct {
 	Answer   string        // the kind of the last answer, EventModifyGuardConfirm or EventModifyGuardReject, "" with none
 	UpTo     sql.NullInt64 // of that answer
@@ -25,7 +30,13 @@ type ModifyGuardRead struct {
 	Lapsed  bool
 	Stands  bool  // a modify-guard event since then
 	GuardNS int64 // the time of that event
-	Count   int64 // modified events of the disk within the window, later than the answer, not answered
+	// Window is the window whose count tripped the hold that stands: WindowDay for the day's, "" for the guard's own.
+	Window string
+	Count  int64 // modified events of the disk within the window, later than the answer, not answered
+	// DayAnswerID is the event of the last answer to a hold the day tripped, 0 with none: the day counts after it, so
+	// that an answer to a hold the window tripped, which spoke of the window's files, leaves the day's count as it was.
+	DayAnswerID int64
+	DayCount    int64 // modified events of the disk within the day, later than DayAnswerID, not answered
 }
 
 // Answers says whether the last answer covers a copy changed at that change time, and so decides it: one given
@@ -41,13 +52,18 @@ const (
 	modifyAnswerQuery = `SELECT id, kind, json_extract(data, '$.up_to'), ts_ns FROM events
 		WHERE kind IN (?1, ?2) AND json_extract(data, '$.disk') = ?3
 		ORDER BY id DESC LIMIT 1`
-	modifyGuardSinceQuery = "SELECT ts_ns FROM events WHERE kind = ? AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1"
-	modifiedCountQuery    = `SELECT count(*) FROM events
+	modifyDayAnswerQuery = `SELECT id FROM events
+		WHERE kind IN (?1, ?2) AND json_extract(data, '$.disk') = ?3 AND json_extract(data, '$.window') = ?4
+		ORDER BY id DESC LIMIT 1`
+	modifyGuardSinceQuery = `SELECT ts_ns, COALESCE(json_extract(data, '$.window'), '') FROM events
+		WHERE kind = ? AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1`
+	modifiedCountQuery = `SELECT count(*) FROM events
 		WHERE kind = ?1 AND ts_ns > ?2 AND id > ?3 AND json_extract(data, '$.disk') = ?4 AND json_extract(data, '$.answered') IS NULL`
 )
 
-// ReadModifyGuard reads what the mass-modification guard of a disk looks at.
-func ReadModifyGuard(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS int64) (*ModifyGuardRead, error) {
+// ReadModifyGuard reads what the mass-modification guard of a disk looks at: over its window, windowNS, and over its
+// day, dayNS (specs.md §15.6).
+func ReadModifyGuard(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS, dayNS int64) (*ModifyGuardRead, error) {
 	g := &ModifyGuardRead{}
 	var givenNS int64
 	err := db.QueryRowContext(ctx, modifyAnswerQuery, EventModifyGuardConfirm, EventModifyGuardReject, disk).Scan(&g.AnswerID, &g.Answer, &g.UpTo, &givenNS)
@@ -57,7 +73,7 @@ func ReadModifyGuard(ctx context.Context, db *sql.DB, disk string, nowNS, window
 	case !isNoRows(err):
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
-	err = db.QueryRowContext(ctx, modifyGuardSinceQuery, EventModifyGuard, g.AnswerID, disk).Scan(&g.GuardNS)
+	err = db.QueryRowContext(ctx, modifyGuardSinceQuery, EventModifyGuard, g.AnswerID, disk).Scan(&g.GuardNS, &g.Window)
 	switch {
 	case err == nil:
 		g.Stands = true
@@ -65,6 +81,14 @@ func ReadModifyGuard(ctx context.Context, db *sql.DB, disk string, nowNS, window
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
 	err = db.QueryRowContext(ctx, modifiedCountQuery, EventModified, nowNS-windowNS, g.AnswerID, disk).Scan(&g.Count)
+	if err != nil {
+		return nil, fmt.Errorf("guard of %q: %w", disk, err)
+	}
+	err = db.QueryRowContext(ctx, modifyDayAnswerQuery, EventModifyGuardConfirm, EventModifyGuardReject, disk, WindowDay).Scan(&g.DayAnswerID)
+	if err != nil && !isNoRows(err) {
+		return nil, fmt.Errorf("guard of %q: %w", disk, err)
+	}
+	err = db.QueryRowContext(ctx, modifiedCountQuery, EventModified, nowNS-dayNS, g.DayAnswerID, disk).Scan(&g.DayCount)
 	if err != nil {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
@@ -104,15 +128,17 @@ func ModifiedPaths(ctx context.Context, db *sql.DB, disk string, nowNS, windowNS
 	return slices.Compact(list), nil
 }
 
-// WriteModifyGuardEvent records that the mass-modification guard of a disk tripped.
-func WriteModifyGuardEvent(ctx context.Context, db *sql.DB, disk string, nowNS int64) error {
+// WriteModifyGuardEvent records that the mass-modification guard of a disk tripped, on the count of a window: WindowDay,
+// or "" for the guard's own.
+func WriteModifyGuardEvent(ctx context.Context, db *sql.DB, disk, window string, nowNS int64) error {
 	return inTransaction(ctx, db, func(tx *sql.Tx) error {
-		return insertEvent(ctx, tx, nowNS, "warning", EventModifyGuard, &eventRow{Disk: disk})
+		return insertEvent(ctx, tx, nowNS, "warning", EventModifyGuard, &eventRow{Disk: disk, Window: window})
 	})
 }
 
 // AnswerModifyGuard answers the mass-modification guard of a disk, with a confirm or a reject event whose up_to is the
-// time of the modify-guard event that stands. It says nothing was valid when none stands.
+// time of the modify-guard event that stands, and whose window is that event's. It says nothing was valid when none
+// stands.
 func AnswerModifyGuard(ctx context.Context, db *sql.DB, disk, kind string, nowNS int64) (sql.NullInt64, error) {
 	var upTo sql.NullInt64
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
@@ -123,7 +149,8 @@ func AnswerModifyGuard(ctx context.Context, db *sql.DB, disk, kind string, nowNS
 			return fmt.Errorf("read: %w", err)
 		}
 		var at int64
-		err = tx.QueryRowContext(ctx, modifyGuardSinceQuery, EventModifyGuard, last, disk).Scan(&at)
+		var window string
+		err = tx.QueryRowContext(ctx, modifyGuardSinceQuery, EventModifyGuard, last, disk).Scan(&at, &window)
 		switch {
 		case isNoRows(err):
 			return nil
@@ -131,7 +158,7 @@ func AnswerModifyGuard(ctx context.Context, db *sql.DB, disk, kind string, nowNS
 			return fmt.Errorf("read: %w", err)
 		}
 		upTo = sql.NullInt64{Int64: at, Valid: true}
-		return insertEvent(ctx, tx, nowNS, "info", kind, &eventRow{Disk: disk, UpTo: &at})
+		return insertEvent(ctx, tx, nowNS, "info", kind, &eventRow{Disk: disk, UpTo: &at, Window: window})
 	})
 	if err != nil {
 		return upTo, fmt.Errorf("guard of %q: %w", disk, err)

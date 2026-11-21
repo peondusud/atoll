@@ -29,6 +29,9 @@
       "query": "SELECT key FROM meta ORDER BY key",
       "rows": [
         [
+          "folders_tidied_op"
+        ],
+        [
           "lpath_key_version"
         ],
         [

@@ -7,10 +7,10 @@ import (
 	"fmt"
 )
 
-// ConflictFiles reads the files in conflict, with their copies, by path in byte order, a page at a time (specs.md
-// §15.7).
+// ConflictFiles reads the files in conflict, and the corrupt ones that hold a conflict, with their copies, by path in
+// byte order, a page at a time (specs.md §4, §15.7).
 func ConflictFiles(ctx context.Context, r *FileReader) ([]FileRow, error) {
-	return r.page(ctx, `SELECT * FROM files WHERE lpath > ? AND state = 'conflict' ORDER BY lpath LIMIT ?`)
+	return r.page(ctx, `SELECT * FROM files WHERE lpath > ? AND (state = 'conflict' OR conflict_held) ORDER BY lpath LIMIT ?`)
 }
 
 // BeginResolve writes the conflict-resolve event of a file, before any of its copies moves: atoll conflicts resolve

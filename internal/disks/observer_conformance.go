@@ -36,10 +36,11 @@ type controlDisk struct {
 	FS       names.Filesystem `json:"fs"`
 	Path     string           `json:"path"`
 	Capacity int64            `json:"capacity"`
-	// Renameat2 and Refuses are said of a disk by a scenario, so that a folder can behave as a
+	// Renameat2, Refuses and Driver are said of a disk by a scenario, so that a folder can behave as a
 	// driver does: see conformance/scenarios/README.md.
 	Renameat2 *bool    `json:"renameat2"`
 	Refuses   []string `json:"refuses"`
+	Driver    string   `json:"driver"`
 	// Device names the whole disk the folder stands for, its id when left out; Immutable says that the folder
 	// under its mount point has the immutable flag (specs.md §10).
 	Device    string `json:"device"`
@@ -95,11 +96,34 @@ func (f folders) Mount(mount string) MountSeen {
 		return MountSeen{Path: PathOK}
 	}
 	entry := MountEntry{Root: "/", MountPoint: mount, FSType: string(d.FS), MountOptions: []string{"rw"}, SuperOptions: []string{"rw"}}
-	if d.FS == names.NTFS {
+	switch {
+	case d.FS == names.NTFS && d.Driver == "ntfs":
+		entry.FSType = "ntfs"
+		entry.SuperOptions = append(entry.SuperOptions, "iocharset=utf8", "errors=remount-ro")
+	case d.FS == names.NTFS:
 		entry.FSType = "ntfs3"
 		entry.SuperOptions = append(entry.SuperOptions, "iocharset=utf8")
 	}
 	return MountSeen{Path: PathOK, Entry: &entry}
+}
+
+// refused says whether a driver refuses a call with a name of refuses, which is the name the call makes, or for unlink
+// and rmdir the one it removes. The type ntfs applies windows_names to unlink and rmdir, and not to link (measured,
+// docs/research/ntfs-driver.md); the others refuse the name of a move, a link or a folder made.
+func (d *controlDisk) refused(call, name string) bool {
+	if !slices.Contains(d.Refuses, name) {
+		return false
+	}
+	switch call {
+	case "rename", "plainrename", "mkdir":
+		return true
+	case "link":
+		return d.Driver != "ntfs"
+	case "unlink", "rmdir":
+		return d.Driver == "ntfs"
+	default:
+		return false
+	}
 }
 
 // Device has no head to read either: a folder holds a time as finely as a disk of its kind would.
@@ -156,7 +180,7 @@ func (f folders) OpenTop(mount string) (fsx.Dir, error) {
 		switch {
 		case (call == "rename" || call == "exchange") && d.Renameat2 != nil && !*d.Renameat2:
 			return unix.EINVAL
-		case (call == "rename" || call == "plainrename" || call == "link" || call == "mkdir") && slices.Contains(d.Refuses, name):
+		case d.refused(call, name):
 			return unix.EINVAL
 		case (call == "mkdir" || call == "create") && d.Full:
 			return unix.ENOSPC
@@ -168,6 +192,17 @@ func (f folders) OpenTop(mount string) (fsx.Dir, error) {
 
 func (folders) Root(mount, root string) RootSeen {
 	return lookAtRoot(mount, root)
+}
+
+// Hiberfil reads hiberfil.sys at the top of the real folder, at each check: a folder is no mount, so there is no mount
+// to read it once for.
+func (folders) Hiberfil(mount string, _ *MountEntry) HiberfilSeen {
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return hiberfilError(err)
+	}
+	defer func() { _ = top.Close() }()
+	return ReadHiberfil(top)
 }
 
 func (f folders) Now() int64 {
