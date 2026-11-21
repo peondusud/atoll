@@ -61,7 +61,6 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 ## GitHub Actions and releases (DONE.md, 2026-11-19)
 
 - The first release, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven and after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
-- x/sys v0.50.0 once 14 days old (2026-11-20 19:57 UTC) and the qemu guest's mainline kernel at 7.3.2 or later (14 days old at 17:24 UTC that day); GoReleaser v2.20.2 or later once two weeks old (2026-11-26); x/text v0.44.0, sqlite v1.62.0 with its libc, govulncheck v1.10.0 and the other releases DONE.md lists as too fresh on 2026-11-20, each once 14 days old; the qemu guest's mainline kernel past 7.3.1.
 
 ## After the two flaws TLC found, fixed on 2026-11-19 (DONE.md)
 

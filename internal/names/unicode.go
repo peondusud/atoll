@@ -13,7 +13,7 @@ const UnicodeVersion = norm.Version
 
 // normRelease is the release of golang.org/x/text that go.mod requires. A
 // test checks it against the build.
-const normRelease = "v0.43.0"
+const normRelease = "v0.44.0"
 
 // CollisionKeyVersion names what computes CollisionKey: the language, the
 // normalization library, its release and its Unicode version. The catalog

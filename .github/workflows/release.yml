@@ -31,7 +31,7 @@ jobs:
       # The latest patch of go.mod's version of Go, which the binary records (go version -m).
       - id: go
         run: echo "version=$(sed -n 's/^go \([0-9]*\.[0-9]*\).*/\1/p' go.mod).x" >>"$GITHUB_OUTPUT"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: ${{ steps.go.outputs.version }}
           check-latest: true
@@ -39,11 +39,11 @@ jobs:
       # syft, which writes each archive's SBOM.
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
-          syft-version: v1.57.0
+          syft-version: v1.57.2
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: v2.20.0
+          version: v2.20.3
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

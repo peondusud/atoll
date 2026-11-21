@@ -104,7 +104,7 @@ lint:
 # folder the container does not have. What the container writes goes back to whoever runs make. The image's
 # GOTOOLCHAIN is local: auto lets its go fetch go.mod's version when the image holds an older one, so the build
 # takes the Go a release takes.
-GORELEASER_IMAGE := goreleaser/goreleaser:v2.20.0
+GORELEASER_IMAGE := goreleaser/goreleaser:v2.20.3
 release-snapshot:
 	docker run --rm -v "$(CURDIR):/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
 		-e GIT_CONFIG_VALUE_0=/src -e GOTOOLCHAIN=auto --entrypoint sh $(GORELEASER_IMAGE) -c \

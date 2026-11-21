@@ -2,6 +2,17 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The latest releases of every module and tool, the qemu guest on Linux 7.3.5, 2026-11-21 (specs.md §26, §27)
+
+The maintainer's answer of 2026-11-21 ("mets la dernière version disponible", then "Toutes, les dernières"): the releases kept as too fresh on 2026-11-20, each at its latest, the rule of 14 days waived for them this once.
+
+- **Modules**: `golang.org/x/sys` v0.49.0 → v0.50.0, `golang.org/x/text` v0.43.0 → v0.44.0, `modernc.org/sqlite` v1.61.1 → v1.62.0 with `modernc.org/libc` v1.79.0 → v1.80.1, the version that release of sqlite requires: libc v1.82.6 is out, but modernc's sqlite runs only on the libc its `go.mod` names. Indirect, through OpenTelemetry's exporters: `golang.org/x/net` v0.62.0 → v0.63.0, `grpc-gateway/v2` v2.33.0 → v2.34.0, and the two `genproto` modules they bring. `go mod verify` passes.
+- **x/text and the collision keys**: `names.normRelease` follows the module, v0.44.0, so `CollisionKeyVersion` is `go golang.org/x/text v0.44.0 17.0.0`: a catalog made before recomputes every `lpath_key` when it opens, as §15.8 says of keys another version computed, never comparing them. The Unicode version stays 17.0.0.
+- **Tools**: govulncheck v1.9.0 → v1.10.0 (`ci.yml`), GoReleaser v2.20.0 → v2.20.3 (`release.yml`, and the image of `make release-snapshot`), syft v1.57.0 → v1.57.2, `actions/setup-go` v7.0.0 → v7.1.0, pinned by its commit `d8cbb80`.
+- **The qemu guest**: mainline v7.3.1 → v7.3.5, the latest stable release of Linux 7.3 (2026-11-17), from kernel.ubuntu.com as before (`test/qemu/run.sh`, `MAINLINE`). Debian 13's kernel is the one its archive gives.
+- **Verified** before the push: `go build ./...`, `go vet` and `go test` of `names` and `catalog`, while the soak of 24 hours ran, which keeps the machine quiet; the whole by the CI on GitHub, qemu on 7.3.5 included, then the full check once the soak ended.
+- **Decided without the maintainer, to confirm**: libc kept at the version sqlite requires rather than its latest; x/net, grpc-gateway, syft and setup-go taken too, as "la dernière version disponible" reads, though the question named only the others.
+
 ## Mutation tests that run the tests, the pure core measured for real, and tests for rules, integrity and names, 2026-11-20 (specs.md §27)
 
 Raising the mutator coverage of `rules`, `integrity` and `names` to the gate proposed (95 % efficacy, 85 % mutator coverage a pure package) found the measure void. Commits `3625ac2`, `eaadc64`, `900355c`, `1d4a503`, `9aecc5d`, `a850975`, `f6ad110` and `1cb7f38`, merged by `16ed29c`.

@@ -14,7 +14,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 built=${BUILT:-/qemu}
 kernels=${KERNELS:-debian mainline}
-mainline=${MAINLINE:-v7.3.1}
+mainline=${MAINLINE:-v7.3.5}
 cache=${CACHE:-}
 
 if [ ! -x "$built/loopdev.test" ] || [ ! -f "$built/repo/go.mod" ]; then
