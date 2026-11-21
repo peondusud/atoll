@@ -199,9 +199,9 @@ func TestWhatNeverMovesForRoom(t *testing.T) {
 				b.t.Fatal(err)
 			}
 		}},
-		{name: "written without a place", do: func(_ *bench, f *File) {
+		{name: "written without a place", do: func(b *bench, f *File) {
 			if _, err := f.Write(nil); err != nil {
-				panic(err)
+				b.t.Fatal(err)
 			}
 		}},
 		{name: "no data disk but a cache", bench: func(t *testing.T) *bench {
@@ -389,7 +389,7 @@ func (b *bench) stopAt(point string, write func()) bool {
 		defer func() {
 			if r := recover(); r != nil {
 				if _, ok := r.(crashed); !ok {
-					panic(r)
+					panic(r) //nolint:forbidigo // not a stop the test asked for: as it came
 				}
 				stopped = true
 			}
@@ -466,7 +466,7 @@ func TestAMoveStoppedAtEachStep(t *testing.T) {
 				defer func() {
 					if r := recover(); r != nil {
 						if _, ok := r.(crashed); !ok {
-							panic(r)
+							panic(r) //nolint:forbidigo // not a stop the test asked for: as it came
 						}
 						stopped = true
 					}

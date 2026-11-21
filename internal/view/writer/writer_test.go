@@ -81,7 +81,7 @@ func (m *machine) Checkpoint(point string) {
 	}
 	m.mu.Unlock()
 	if stop {
-		panic(crashed{point: point})
+		panic(crashed{point: point}) //nolint:forbidigo // what stands for kill -9
 	}
 }
 
