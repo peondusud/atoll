@@ -54,6 +54,46 @@
       "note": "the address in its canonical form"
     },
     {
+      "input": "[fd7a:115c:a1e0:0:0:0:0:0]:80",
+      "address": "fd7a:115c:a1e0::",
+      "port": 80,
+      "note": "the zero groups at the end written as ::"
+    },
+    {
+      "input": "[fd7a:115c:a1e0:0:0:1:0:0]:80",
+      "address": "fd7a:115c:a1e0::1:0:0",
+      "port": 80,
+      "note": "of two runs of zero groups as long, the first written as :: (RFC 5952)"
+    },
+    {
+      "input": "[fd7a:115c:a1e0:1:0:0:0:1]:80",
+      "address": "fd7a:115c:a1e0:1::1",
+      "port": 80
+    },
+    {
+      "input": "[fd7a:115c:a1e0:0:1:0:0:1]:80",
+      "address": "fd7a:115c:a1e0:0:1::1",
+      "port": 80,
+      "note": "of two runs of zero groups, the longer written as ::, though it comes second"
+    },
+    {
+      "input": "[fd7a:115c:a1e0:1:0:0:1:1]:80",
+      "address": "fd7a:115c:a1e0:1::1:1",
+      "port": 80,
+      "note": "two zero groups are a run"
+    },
+    {
+      "input": "[fd7a:115c:a1e0:0:1:1:1:1]:80",
+      "address": "fd7a:115c:a1e0:0:1:1:1:1",
+      "port": 80,
+      "note": "one zero group is not: never written as ::"
+    },
+    {
+      "input": "[fd7a:115c:a1e0::0]:80",
+      "address": "fd7a:115c:a1e0::",
+      "port": 80
+    },
+    {
       "input": "",
       "error": true,
       "note": "empty: the configuration writes none as an empty string, which is no address"
@@ -152,6 +192,41 @@
       "input": "127.0.0.1.1:80",
       "error": true,
       "note": "five parts"
+    },
+    {
+      "input": "127.0..1:80",
+      "error": true,
+      "note": "an empty part"
+    },
+    {
+      "input": "127.0.0.:80",
+      "error": true,
+      "note": "an empty last part"
+    },
+    {
+      "input": "[fd7a:115c:a1e0::00001]:80",
+      "error": true,
+      "note": "a group of five hex digits, though its value fits in four"
+    },
+    {
+      "input": "[fd7a:115c:a1e0::g]:80",
+      "error": true,
+      "note": "a group that is not hex, after the ::"
+    },
+    {
+      "input": "[g::1]:80",
+      "error": true,
+      "note": "a group that is not hex, before the ::"
+    },
+    {
+      "input": "[fd7a:115c:a1e0:::1]:80",
+      "error": true,
+      "note": "an empty group next to the ::"
+    },
+    {
+      "input": "[fd7a:115c:a1e0::1::2]:80",
+      "error": true,
+      "note": "two ::"
     },
     {
       "input": "::1:7341",
