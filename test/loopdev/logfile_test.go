@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf16"
 
 	"golang.org/x/sys/unix"
@@ -239,6 +240,24 @@ func readOnlyMount(e *disks.MountEntry) bool {
 	return slices.Contains(e.MountOptions, "ro") || slices.Contains(e.SuperOptions, "ro")
 }
 
+// quiet waits until a device has no request under way and its count of reads holds still for 200 ms.
+func quiet(t *testing.T, device string) {
+	t.Helper()
+	inflight := filepath.Join("/sys/block", filepath.Base(device), "inflight")
+	last := readsOf(t, device)
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		time.Sleep(200 * time.Millisecond)
+		data, err := os.ReadFile(inflight)
+		mustDo(t, err)
+		now := readsOf(t, device)
+		if now == last && slices.Equal(strings.Fields(string(data)), []string{"0", "0"}) {
+			return
+		}
+		last = now
+	}
+	t.Fatalf("%s was not quiet within 10 s", device)
+}
+
 // TestALogFileIsReadOncePerMount: the daemon's machine reads $LogFile once for each mount, as hiberfil.sys, so that its
 // check every 30 s reads nothing of it again; a machine of its own reads it at once; mounted anew, read-only once its
 // journal is unclean, it is read again (specs.md §10).
@@ -255,7 +274,10 @@ func TestALogFileIsReadOncePerMount(t *testing.T) {
 	mustDo(t, err)
 	want(t, disks.Check(daemon, d), disks.Online, "")
 
+	// The read of its first 128 KiB set the kernel's readahead going past them, which may end after the check: what is
+	// counted is what the next check reads once the device is quiet.
 	logFile := filepath.Join(at, disks.LogFileName)
+	quiet(t, v.device)
 	dropPages(t, logFile)
 	reads := readsOf(t, v.device)
 	want(t, disks.Check(daemon, d), disks.Online, "")
