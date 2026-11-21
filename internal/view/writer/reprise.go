@@ -130,8 +130,9 @@ var errStays = errors.New("a disk the move needs cannot be written to now")
 // written to since; with another, both stay, and the full disk's is presented. No part at the path means that nothing
 // moved: the part goes, and the move is undone. Its trash planned: the copy still at its path on the full disk goes
 // to the trash all the same, as the program wrote to the other disk from then on, and stays there, unpurged; the table
-// of §17.2 then says what became of it. Its unlink planned is resolved as a purge's reprise resolves one (specs.md
-// §17.2). The move is then done.
+// of §17.2 then says what became of it. A trash with no room for it leaves the copy at its path, never removed there by
+// a reprise, and the move planned, for the next start. Its unlink planned is resolved as a purge's reprise resolves
+// one (specs.md §17.2), at the path for one that removes the copy there. The move is then done.
 func (w *Writer) repriseMove(ctx context.Context, v *catalog.ViewOp) error {
 	op, found, err := catalog.OpByID(ctx, w.db, v.OpID)
 	if err != nil {
@@ -157,6 +158,9 @@ func (w *Writer) repriseMove(ctx context.Context, v *catalog.ViewOp) error {
 	if !w.handles.Has(v.Disk2) {
 		return errStays
 	}
+	if op.Kind == catalog.OpUnlink && op.Path2 == "" {
+		return w.repriseRemoveHere(ctx, v, &op)
+	}
 	err = w.handles.Use(v.Disk2, func(d *ops.Disk) error {
 		if op.Kind == catalog.OpTrash {
 			if err := w.trashLeft(ctx, d, v, &op); err != nil {
@@ -170,6 +174,50 @@ func (w *Writer) repriseMove(ctx context.Context, v *catalog.ViewOp) error {
 		return err
 	}
 	return catalog.EndViewMove(ctx, w.db, v, "", catalog.OpDone, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+}
+
+// repriseRemoveHere resolves the removal at its path of the copy a move left on a full disk, left planned, as a
+// purge's reprise resolves one (specs.md §17.2), the path in place of the trash: nothing there, once its folder is
+// synced, it finished; the copy still there, nothing happened, and it stays, beside the moved one, as nothing says it is
+// still what the move compared it with; another file there, nothing happened either, with an op-undone event. The move
+// is then done.
+func (w *Writer) repriseRemoveHere(ctx context.Context, v *catalog.ViewOp, op *catalog.Op) error {
+	var gone, other bool
+	err := w.handles.Use(v.Disk2, func(d *ops.Disk) error {
+		var err error
+		gone, other, err = d.LeftAt(op)
+		return err //nolint:wrapcheck // ops says what failed
+	})
+	if err != nil {
+		return err
+	}
+	if !gone {
+		w.log.Warn("the copy a moved file left stays at its path, beside the moved one", "disk", v.Disk2, "path", v.Path)
+	}
+	return catalog.EndViewMove(ctx, w.db, v, doneIf(gone), catalog.OpDone, other, w.now()) //nolint:wrapcheck // the catalog says what failed
+}
+
+// errNoRoomStays says that the full disk's trash has no room for the copy a move left: in a reprise, where only its size
+// and modification time say that it is the moved one's, it is never removed at its path, and the move stays planned,
+// for the next start to try again.
+var errNoRoomStays = errors.New("the trash of the full disk has no room for the copy left: the move stays planned")
+
+// noRoomStays says whether a trash that failed for want of room moved nothing: then it stays planned, the copy at its
+// path (errNoRoomStays), and the folders it made before it ran out of room go.
+func (w *Writer) noRoomStays(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, op *catalog.Op, why error) error {
+	if !noRoom(why) {
+		return nil
+	}
+	left, err := holdsAt(d, v.Path, op.FileKey, false)
+	if err != nil {
+		return err
+	}
+	inTrash, err := w.trashed(ctx, d, op.ID)
+	if err != nil || !left || inTrash {
+		return err
+	}
+	d.CleanTrash(op.Path2)
+	return fmt.Errorf("%w: %w", errNoRoomStays, why)
 }
 
 // trashLeft goes on with a move's trash left planned, once the file is at its name on the disk it went to, where the
@@ -191,8 +239,11 @@ func (w *Writer) trashLeft(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, 
 	if err != nil {
 		return err
 	}
-	if _, err := d.ToTrash(op, row); err != nil && errors.Is(err, ops.ErrDiskLost) {
-		return err //nolint:wrapcheck // ops says what failed
+	if _, err := d.ToTrash(op, row); err != nil {
+		if errors.Is(err, ops.ErrDiskLost) {
+			return err //nolint:wrapcheck // ops says what failed
+		}
+		return w.noRoomStays(ctx, d, v, op, err)
 	}
 	return nil
 }
@@ -250,6 +301,9 @@ func (w *Writer) repriseMoveCreate(ctx context.Context, v *catalog.ViewOp, op *c
 		if _, err := d.ToTrash(trashed, row); err != nil {
 			if errors.Is(err, ops.ErrDiskLost) {
 				return err //nolint:wrapcheck // ops says what failed
+			}
+			if err := w.noRoomStays(ctx, d, v, trashed, err); err != nil {
+				return err
 			}
 			if _, rerr := d.ResolveNow(ctx, w.db, trashed, w.now(), w.retention); rerr != nil {
 				return fmt.Errorf("%w: %w", err, rerr)

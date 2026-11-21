@@ -486,6 +486,10 @@ func noEffect(tree map[string]any, set map[string]any) []Problem {
 				out = append(out, Problem{Key: key, Message: needsOwnView})
 			}
 		}
+		// Only Atoll's own view moves a file whose write runs out of space; mergerfs's moveonenospc stays off (§21.1, §21.2).
+		if set["view.move_on_enospc"] == true {
+			out = append(out, Problem{Key: "view.move_on_enospc", Message: `no effect with view.engine = "mergerfs": only Atoll's own view moves a file whose write runs out of space`})
+		}
 	}
 	// An endpoint with neither signal sends nothing (specs.md §23.2).
 	if t := table(tree, "telemetry"); text(t, "otlp_endpoint") != "" && t["otlp_metrics"] != true && t["otlp_logs"] != true {

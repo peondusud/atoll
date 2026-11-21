@@ -104,6 +104,38 @@ func ViewMovePurge(ctx context.Context, db *sql.DB, v *ViewOp, trashed *Op, nowN
 	return op, nil
 }
 
+// ViewMoveRemoveHere journals the removal at its path of the copy a move left on the full disk, once its trash failed
+// for want of room with nothing moved (the maintainer, 2026-11-21): the trash undone, its trash row gone, the operation
+// unlink with no path in the trash, its purge event, and op_id pointing at it, in one transaction (specs.md §9, §21.2).
+func ViewMoveRemoveHere(ctx context.Context, db *sql.DB, v *ViewOp, trashed *Op, nowNS int64) (*Op, error) {
+	op := &Op{Disk: trashed.Disk, Kind: OpUnlink, Path: trashed.Path, FileKey: trashed.FileKey}
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		if err := markOp(ctx, tx, trashed.ID, OpUndone); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, undoTrashSQL, []byte(trashed.Path), trashed.ID); err != nil {
+			return fmt.Errorf("trash: %w", err)
+		}
+		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, file_key, started_ns, state) VALUES (?, 'unlink', ?, ?, ?, 'planned')",
+			op.Disk, []byte(op.Path), op.FileKey, nowNS)
+		if err != nil {
+			return fmt.Errorf("journal: %w", err)
+		}
+		if op.ID, err = result.LastInsertId(); err != nil {
+			return fmt.Errorf("journal: %w", err)
+		}
+		if err := writeEvent(ctx, tx, nowNS, "info", "purge", op, ""); err != nil {
+			return err
+		}
+		return pointViewMove(ctx, tx, v, op.ID)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%q: %w", v.Path, err)
+	}
+	v.OpID, v.OpKind = op.ID, OpUnlink
+	return op, nil
+}
+
 func pointViewMove(ctx context.Context, tx *sql.Tx, v *ViewOp, opID int64) error {
 	if _, err := tx.ExecContext(ctx, "UPDATE view_ops SET op_id = ? WHERE id = ? AND kind = 'move'", opID, v.ID); err != nil {
 		return fmt.Errorf("view journal: %w", err)
@@ -146,6 +178,11 @@ func EndViewMove(ctx context.Context, db *sql.DB, v *ViewOp, opState, viewState 
 		case op.Kind == OpTrash && opState == OpUndone:
 			if _, err := tx.ExecContext(ctx, undoTrashSQL, []byte(op.Path), op.ID); err != nil {
 				return fmt.Errorf("trash: %w", err)
+			}
+		case op.Kind == OpUnlink && opState == OpDone && op.Path2 == "":
+			// Removed at its path: the copy's row goes, as a trash done drops it.
+			if err := finishCopy(ctx, tx, op.Op); err != nil {
+				return err
 			}
 		case op.Kind == OpUnlink && opState == OpDone:
 			if err := dropTrashRow(ctx, tx, op.Op); err != nil {

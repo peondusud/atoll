@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
 )
 
@@ -325,6 +326,70 @@ func (d *Disk) PlaceUserPart(op *Op, logical string, like Like) (fsx.Stat, error
 	}
 	d.machine.Checkpoint("source-synced")
 	return placed, nil
+}
+
+// RemoveLeft removes, at its path, the copy a move of Atoll's own view left on a disk whose trash had no room for it
+// (specs.md §21.2): an operation unlink with no path in the trash. The name must still hold that copy as row says, its
+// inode, size, modification time and change time, looked at right before, as a move to the trash compares a copy
+// (§17.1, step 4); ErrGone says that it does not, and it stays. The folder it leaves gets its time back, as Atoll's own
+// operations give it, and is synced.
+func (d *Disk) RemoveLeft(op *Op, row *catalog.KnownCopy) error {
+	if err := d.Verify(); err != nil {
+		return err
+	}
+	path := d.rootPlace(op.Path)
+	parent, err := d.open(path[:len(path)-1])
+	switch {
+	case fsx.IsAbsent(err), errors.Is(err, ErrOtherMount):
+		return fmt.Errorf("%w: %w", ErrGone, err)
+	case err != nil:
+		return classify(err)
+	}
+	defer parent.close()
+	name := path[len(path)-1]
+	before, err := parent.Info()
+	if err != nil {
+		return classify(err)
+	}
+	if _, err := holds(parent.Dir, name, func(st *fsx.Stat) bool { return keyOf(st) == op.FileKey && untouched(row)(st) }); err != nil {
+		return err
+	}
+	if err := parent.Unlink(name); err != nil {
+		if fsx.IsAbsent(err) {
+			return fmt.Errorf("%w: %w", ErrGone, err)
+		}
+		return classify(err)
+	}
+	d.machine.Checkpoint("unlinked")
+	if err := restoreTime(parent.Dir, before.Mtime); err != nil {
+		return err
+	}
+	if err := parent.Sync(); err != nil {
+		return lost(err)
+	}
+	d.machine.Checkpoint("source-synced")
+	return nil
+}
+
+// LeftAt says, for the reprise of an operation RemoveLeft runs, whether the copy it removes is gone from its path, once
+// the folder of that path is synced, as a purge's reprise asks of the trash (specs.md §17.2): gone, it finished; the
+// same inode, nothing happened; another file, nothing happened either, and what is there is not what it expected.
+func (d *Disk) LeftAt(op *Op) (gone, other bool, err error) {
+	if err := d.Verify(); err != nil {
+		return false, false, err
+	}
+	path := d.rootPlace(op.Path)
+	if err := d.syncFolder(path[:len(path)-1]); err != nil {
+		return false, false, err
+	}
+	st, there, err := d.stat(path)
+	switch {
+	case err != nil:
+		return false, false, err
+	case !there:
+		return true, false, nil
+	}
+	return false, st.Kind != fsx.KindFile || keyOf(&st) != op.FileKey, nil
 }
 
 // ErrNoLink says that the driver would not give the file another name: hard links it does not make, or too many of

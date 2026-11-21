@@ -344,6 +344,10 @@ func TestEveryWriterFailsWhole(t *testing.T) {
 			return none(EndViewMove(ctx, db, &ViewOp{ID: 4, Kind: ViewMove, Disk: "u1", Disk2: "u2", Path: "A/a", FileKey: "21", OpID: 2, State: OpPlanned, AtNS: 4},
 				OpUndone, OpDone, true, 100))
 		}},
+		{"ViewMoveRemoveHere", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
+			return ViewMoveRemoveHere(ctx, db, &ViewOp{ID: 4, Kind: ViewMove, Disk: "u1", Disk2: "u2", Path: "A/a", FileKey: "21", OpID: 2, State: OpPlanned, AtNS: 4},
+				op(2, "u2", OpTrash, "A/a", "20260101/2/A/a", "21"), 100)
+		}},
 		{"SetDiskState", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
 			return none(SetDiskState(ctx, db, "u2", "missing"))
 		}},
@@ -394,9 +398,10 @@ func TestEveryWriterFailsWhole(t *testing.T) {
 	sweepWriters(t, writers, map[string]string{
 		"ViewMoveTrash": `INSERT INTO ops(id, disk_id, kind, path, path2, file_key, started_ns, state) VALUES (12, 'u2', 'create', CAST('B/n' AS BLOB), CAST('12.part' AS BLOB), '34', 12, 'planned');
 			INSERT INTO view_ops(id, kind, disk_id, disk2_id, lpath, folder, file_key, op_id, state, at_ns) VALUES (4, 'move', 'u2', 'u1', CAST('B/n' AS BLOB), 0, '13', 12, 'planned', 4)`,
-		"ViewMovePurge":   moveOfTrash,
-		"EndViewMove":     moveOfTrash,
-		"ResolveConflict": "DELETE FROM copies WHERE file_id = 4 AND disk_id = 'u2'",
+		"ViewMovePurge":      moveOfTrash,
+		"EndViewMove":        moveOfTrash,
+		"ViewMoveRemoveHere": moveOfTrash,
+		"ResolveConflict":    "DELETE FROM copies WHERE file_id = 4 AND disk_id = 'u2'",
 		"checkMeta, keys of another version": `UPDATE meta SET value = 'rust something' WHERE key = 'lpath_key_version';
 			UPDATE files SET lpath_key = 'stale'; UPDATE copies SET old_lpath_key = 'stale' WHERE old_lpath IS NOT NULL`,
 	})

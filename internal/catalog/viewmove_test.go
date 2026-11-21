@@ -143,6 +143,50 @@ func TestAViewMoveUndone(t *testing.T) {
 	}
 }
 
+// A trash with no room for the copy a move left: in one transaction its operation undone, its trash row gone, and an
+// unlink at the copy's path, with no place in the trash, journaled with its purge event and named by the move; done,
+// it takes with it a row the catalog held of that copy, as a trash done does (specs.md §9, §21.2).
+func TestAViewMoveRemovesTheCopyLeftAtItsPath(t *testing.T) {
+	b := openForOps(t)
+	ctx := t.Context()
+	b.exec(`INSERT INTO disks(id, fs_uuid, fs_type, mount_path, root, workdir, role, position, tags, state) VALUES ('u1', 'a', 'ext4', '/a', 'media', 'Atoll', 'data', 0, '[]', 'online')`)
+	b.exec("INSERT INTO files(id, lpath, size, mtime_ns, replicas_target, mode, state, first_seen_ns, updated_ns) VALUES (1, ?, 1, 1, 1, 'deferred', 'ok', 1, 1)", []byte("F/new.mkv"))
+	b.exec("INSERT INTO copies(file_id, disk_id, file_key, nlink, size, mtime_ns, ctime_ns, created_by, first_seen_ns, state) VALUES (1, 'u1', '17', 1, 1, 1, 1, 'user', 1, 'ok')")
+	v := &ViewOp{Disk: "u2", Disk2: "u1", Path: "F/new.mkv", FileKey: "17", AtNS: 10}
+	if _, err := BeginViewMove(ctx, b.sql(), v); err != nil {
+		t.Fatal(err)
+	}
+	trashed, err := ViewMoveTrash(ctx, b.sql(), v, &TrashStart{Disk: "u1", Path: "F/new.mkv", FileKey: "17", Reason: ReasonSurplus, NowNS: 11, ExpiresNS: 99})
+	if err != nil {
+		t.Fatal(err)
+	}
+	here, err := ViewMoveRemoveHere(ctx, b.sql(), v, trashed, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.opState(trashed.ID) != OpUndone || b.opState(here.ID) != OpPlanned || v.OpID != here.ID || here.Kind != OpUnlink || here.Path2 != "" || here.FileKey != "17" {
+		t.Errorf("the trash %s, the unlink %+v, the move names %d", b.opState(trashed.ID), here, v.OpID)
+	}
+	var path2Null bool
+	if err := b.db.QueryRowContext(ctx, "SELECT path2 IS NULL FROM ops WHERE id = ?", here.ID).Scan(&path2Null); err != nil || !path2Null {
+		t.Errorf("the unlink has a place in the trash: %v, %v", path2Null, err)
+	}
+	var rows, purges int
+	if err := b.db.QueryRowContext(ctx, "SELECT (SELECT count(*) FROM trash), (SELECT count(*) FROM events WHERE kind = 'purge')").Scan(&rows, &purges); err != nil || rows != 0 || purges != 1 {
+		t.Errorf("trash rows %d, purge events %d, %v", rows, purges, err)
+	}
+	if planned, err := PlannedOps(ctx, b.sql()); err != nil || len(planned) != 0 {
+		t.Errorf("a command's reprise would resolve the unlink: %+v, %v", planned, err)
+	}
+	if err := EndViewMove(ctx, b.sql(), v, OpDone, OpDone, false, 13); err != nil {
+		t.Fatal(err)
+	}
+	var copies int
+	if err := b.db.QueryRowContext(ctx, "SELECT count(*) FROM copies WHERE disk_id = 'u1'").Scan(&copies); err != nil || copies != 0 || b.opState(here.ID) != OpDone {
+		t.Errorf("the copy removed keeps its row: %d, %v; the unlink %s", copies, err, b.opState(here.ID))
+	}
+}
+
 func (b *testDB) opState(id int64) string {
 	b.t.Helper()
 	var state string

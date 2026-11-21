@@ -332,13 +332,21 @@ func (w *Writer) dropMove(ctx context.Context, f *File, m *moving, why error) {
 }
 
 // leave sends the copy a move left on the full disk to its trash, then purges it from there at once, each journaled,
-// and says the move done (specs.md §21.2, steps 8 and 9). What stops on a disk that cannot be relied on stays planned,
-// for the view's reprise; a copy its trash refuses stays at its path, beside the moved one.
+// and says the move done (specs.md §21.2, steps 8 and 9). A trash with no room for it, its folders or its rename
+// answered ENOSPC or EDQUOT, nothing moved, has it removed at its path instead (the maintainer, 2026-11-21). What stops
+// on a disk that cannot be relied on stays planned, for the view's reprise; a copy its trash refuses stays at its path,
+// beside the moved one.
 func (w *Writer) leave(ctx context.Context, v *catalog.ViewOp, trashed *catalog.Op, row *catalog.KnownCopy) {
 	err := w.handles.Use(v.Disk2, func(d *ops.Disk) error {
 		if _, err := d.ToTrash(trashed, row); err != nil {
 			if errors.Is(err, ops.ErrDiskLost) {
 				return err //nolint:wrapcheck // ops says what failed
+			}
+			if noRoom(err) {
+				done, rerr := w.removeHere(ctx, d, v, trashed, row, err)
+				if done || rerr != nil {
+					return rerr
+				}
 			}
 			// Looked at as a reprise looks at it, by the table of §17.2.
 			finished, rerr := d.ResolveNow(ctx, w.db, trashed, w.now(), w.retention)
@@ -355,6 +363,40 @@ func (w *Writer) leave(ctx context.Context, v *catalog.ViewOp, trashed *catalog.
 	})
 	if err != nil {
 		w.log.Warn("a file moved for room stays planned, its copy left on the full disk to the reprise", "disk", v.Disk2, "path", v.Path, "error", err)
+	}
+}
+
+// removeHere removes at its path the copy a move left on a full disk whose trash had no room for it, why the error that
+// said so (specs.md §21.2): only once a look finds that nothing moved, the copy at its path and none in the trash; then
+// the trash undone and the unlink journaled with its purge event, in one transaction, and the copy removed after the
+// checks the trash makes, against what the move copied. It says whether it ended the move: false leaves it to the table
+// of §17.2, as something moved after all.
+func (w *Writer) removeHere(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, trashed *catalog.Op, row *catalog.KnownCopy, why error) (bool, error) {
+	left, err := holdsAt(d, v.Path, trashed.FileKey, false)
+	if err != nil {
+		return false, err
+	}
+	inTrash, err := w.trashed(ctx, d, trashed.ID)
+	if err != nil || !left || inTrash {
+		return false, err
+	}
+	// The folders the trash made before it ran out of room hold nothing.
+	d.CleanTrash(trashed.Path2)
+	here, err := catalog.ViewMoveRemoveHere(ctx, w.db, v, trashed, w.now())
+	if err != nil {
+		return true, fmt.Errorf("%w", err)
+	}
+	w.machine.Checkpoint("move-unlink-journaled")
+	switch err := d.RemoveLeft(here, row); {
+	case err == nil:
+		w.log.Info("the copy a moved file left is removed at its path: its trash had no room for it", "disk", v.Disk2, "path", v.Path, "reason", why)
+		return true, catalog.EndViewMove(ctx, w.db, v, catalog.OpDone, catalog.OpDone, false, w.now()) //nolint:wrapcheck // the catalog says what failed
+	case errors.Is(err, ops.ErrDiskLost):
+		return true, err //nolint:wrapcheck // ops says what failed
+	default:
+		// Changed since it was copied, or gone: what is there stays, beside the moved copy.
+		w.log.Warn("the copy a moved file left stays at its path", "disk", v.Disk2, "path", v.Path, "error", err)
+		return true, catalog.EndViewMove(ctx, w.db, v, catalog.OpUndone, catalog.OpDone, errors.Is(err, ops.ErrGone), w.now()) //nolint:wrapcheck // the catalog says what failed
 	}
 }
 
