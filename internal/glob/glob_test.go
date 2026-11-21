@@ -2,6 +2,7 @@ package glob
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -62,6 +63,55 @@ func TestSyntaxError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "at byte 6") {
 		t.Errorf("Error() = %q, want the offset", err.Error())
+	}
+}
+
+// Each error says where it is, or that it has no single place: the offset and
+// the words are Go's own, never part of the vectors' contract.
+func TestSyntaxErrorOffsets(t *testing.T) {
+	tooMany := "x" + strings.Repeat("{a,b}", 11)
+	for _, c := range []struct {
+		pattern string
+		offset  int
+		msg     string
+	}{
+		{"", -1, "empty pattern"},
+		{"a\xffb", -1, "not valid UTF-8"},
+		{"\\*", 0, "the backslash is reserved"},
+		{"a\\b", 1, "the backslash is reserved"},
+		{"{a{b,c}", 2, "braces do not nest"},
+		{"{a,b", 0, "{ without }"},
+		{"x{a,b", 1, "{ without }"},
+		{"a}", 1, "} without {"},
+		{"{a}", 0, "at least two alternatives"},
+		{"{a,}", 3, "empty alternative"},
+		{"{,a}", 1, "empty alternative"},
+		{"[a", 0, "[ without ]"},
+		{"x[]", 1, "empty class"},
+		{"[^a]", 1, "[^ is reserved"},
+		{"[a/b]", 2, "a class never holds /"},
+		{"[a-/]", 3, "a class never holds /"},
+		{"[é-\\]", 4, "the backslash is reserved"},
+		{"[z-a]", 1, "reversed range"},
+		{"[a-c-e]", 4, "a - inside a class"},
+		{tooMany, -1, "braces expand to more than 1024 patterns"},
+		{"Films/", -1, "empty path component"},
+		{"a**", -1, "** must be a whole path component"},
+	} {
+		_, err := Compile(c.pattern)
+		var se *SyntaxError
+		if !errors.As(err, &se) {
+			t.Errorf("Compile(%q) = %v, want a *SyntaxError", c.pattern, err)
+			continue
+		}
+		if se.Offset != c.offset || !strings.Contains(se.Msg, c.msg) {
+			t.Errorf("Compile(%q): offset %d, %q; want offset %d, %q", c.pattern, se.Offset, se.Msg, c.offset, c.msg)
+		}
+		got := err.Error()
+		said := strings.Contains(got, ", at byte ")
+		if said != (c.offset >= 0) || said && !strings.HasSuffix(got, ", at byte "+strconv.Itoa(c.offset)) {
+			t.Errorf("Compile(%q).Error() = %q, want the offset %d only when it has one", c.pattern, got, c.offset)
+		}
 	}
 }
 

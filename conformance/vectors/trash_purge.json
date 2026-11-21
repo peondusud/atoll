@@ -1149,6 +1149,75 @@
       "entries": [],
       "error": true,
       "note": "one disk twice"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 0
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 1,
+          "deleted_ns": 0,
+          "expires_ns": 1000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "a capacity of 0 is one: any byte in its trash is past max_size"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "deleted",
+          "size": 0,
+          "deleted_ns": 0,
+          "expires_ns": 1000,
+          "held": false
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "deleted",
+          "size": 0,
+          "deleted_ns": 0,
+          "expires_ns": 1001,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "expired"
+        }
+      ],
+      "full": [],
+      "note": "an entry of 0 bytes, an empty file, goes when it expires"
     }
   ]
 }

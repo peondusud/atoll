@@ -49,8 +49,9 @@ jobs:
       - run: make test-race
 
   # The coverage of the unit tests and of the scenarios (make cover): the share of statements each runs, and either, by
-  # package and in all, with how long each took, to the run's summary; the profiles with their HTML as an artifact. A
-  # measure, never a gate, which test/ci/run.sh leaves out; a failing test or scenario fails it, as in its own job.
+  # package and in all, with how long each took, to the run's summary; the profiles with their HTML as an artifact.
+  # Then its floor (test/ci/gates.txt): a total of the unit tests, or a merged one, under it fails the job, as a failing
+  # test or scenario does. test/ci/run.sh leaves it out.
   cover:
     runs-on: ubuntu-latest
     container: golangci/golangci-lint:v2.15.0

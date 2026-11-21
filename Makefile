@@ -76,14 +76,16 @@ test-mediaservers:
 # The coverage of the unit tests and of the conformance scenarios (test/ci/cover.sh), into bin/cover/: one profile of
 # the whole module by the unit tests, each package's tests counting toward every package they reach; one by the
 # scenarios, run against a conformance build made with -cover; then the share of statements each runs, and either, by
-# package and in all, the time each took, and the profiles as HTML. A measure, never a gate; the CI's cover job runs it.
+# package and in all, the time each took, and the profiles as HTML; then the floor of test/ci/gates.txt, which the total
+# of the unit tests and the merged one must each meet. The CI's cover job runs it.
 .PHONY: cover
 cover:
 	GO="$(GO)" bash test/ci/cover.sh
 
 # Mutation testing with gremlins (test/ci/mutation.sh) of one package, PKG=./internal/glob, or of the whole pure core
 # without PKG, as .github/workflows/mutation.yml runs it each night. The log and gremlins' JSON go to bin/mutation/;
-# WORKERS mutants at once, the CPUs by default.
+# WORKERS mutants at once, the CPUs by default. A package of test/ci/gates.txt under its gate fails it, the mutants
+# test/ci/mutation-equivalents.txt names left out (test/ci/mutation-gate.sh).
 .PHONY: mutation
 mutation:
 	bash test/ci/mutation.sh $(PKG)

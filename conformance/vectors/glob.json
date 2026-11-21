@@ -55,6 +55,8 @@
     { "pattern": "[a-z]*", "path": "1x", "match": false },
     { "pattern": "[a-cx-z]", "path": "y", "match": true },
     { "pattern": "[a-cx-z]", "path": "m", "match": false },
+    { "pattern": "[a-a]", "path": "a", "match": true, "note": "a range may start and end on one character" },
+    { "pattern": "[a-a]", "path": "b", "match": false },
     { "pattern": "[à-ÿ]", "path": "é", "match": true, "note": "ranges compare code points" },
     { "pattern": "[à-ÿ]", "path": "e", "match": false },
     { "pattern": "[!a]*", "path": "b", "match": true },
@@ -144,6 +146,7 @@
     { "pattern": "x{*,}*", "error": true, "note": "an empty alternative" },
     { "pattern": "x{*,y}*", "error": true, "note": "the expansion x** has ** inside a component" },
     { "pattern": "[a", "error": true, "note": "unterminated class" },
+    { "pattern": "[a-", "error": true, "note": "unterminated class that ends in a -" },
     { "pattern": "[]", "error": true, "note": "empty class" },
     { "pattern": "[]a]", "error": true, "note": "empty class: a class ends at its first ]" },
     { "pattern": "[!]", "error": true, "note": "empty class" },
@@ -155,6 +158,7 @@
     { "pattern": "{a,b", "error": true, "note": "unterminated braces" },
     { "pattern": "a}", "error": true, "note": "unmatched }" },
     { "pattern": "{a,{b,c}}", "error": true, "note": "braces do not nest" },
+    { "pattern": "{a{b,c}", "error": true, "note": "braces do not nest, though the inner group closes and the outer one never does" },
     { "pattern": "{a}", "error": true, "note": "braces hold at least two alternatives" },
     { "pattern": "{}", "error": true, "note": "braces hold at least two alternatives" },
     { "pattern": "{a,}", "error": true, "note": "an empty alternative" },
@@ -164,6 +168,7 @@
     { "pattern": "a\\b", "error": true, "note": "the backslash is reserved for a future escape syntax" },
     { "pattern": "[\\]", "error": true, "note": "the backslash is reserved, inside classes too" },
     { "pattern": "{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}", "error": true, "note": "2048 expansions: more than 1024" },
+    { "pattern": "x{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}", "error": true, "note": "2048 expansions after a literal: the text outside braces counts for one" },
     { "pattern": "{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}{a,a}", "error": true, "note": "the limit counts the product of the numbers of alternatives (2048), not the distinct expansions (1)" }
   ]
 }

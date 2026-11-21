@@ -252,6 +252,10 @@ func TestPlanVectors(t *testing.T) {
 		if want := wantResults(t, v.Results); !reflect.DeepEqual(plan.Results, want) && (len(plan.Results) > 0 || len(want) > 0) {
 			t.Errorf("vector %d (%s): results\n%s, want\n%s", i, v.Note, show(plan.Results), show(want))
 		}
+		// A plan with nothing to say of any file holds no list of results at all, which its caller would keep.
+		if plan.Results != nil && len(plan.Results) == 0 {
+			t.Errorf("vector %d (%s): an empty list of results, want none", i, v.Note)
+		}
 		for _, r := range plan.Results {
 			if _, err := ShownState(r.States); err != nil {
 				t.Errorf("vector %d (%s): %v", i, v.Note, err)
@@ -959,6 +963,29 @@ func TestSubtractStops(t *testing.T) {
 	} {
 		if got := subtract(c.room, c.size); got != c.want {
 			t.Errorf("subtract(%d, %d) = %d, want %d", c.room, c.size, got, c.want)
+		}
+	}
+}
+
+// percent compares shares of room exactly, a disk with no capacity, or with a room below zero, holding none, as the
+// view's own placement asks of disks past their min_free (specs.md §12.4, §21.2).
+func TestCompareNewByShare(t *testing.T) {
+	for _, c := range []struct {
+		a, b Fill
+		want int
+	}{
+		{Fill{Room: 50, Capacity: 100}, Fill{Room: 40, Capacity: 50}, 1},
+		{Fill{Room: 10, Capacity: 100, Position: 0}, Fill{Room: 1, Capacity: 10, Position: 1}, 0},
+		{Fill{Room: 5, Capacity: 0}, Fill{Room: 1, Capacity: 10}, 1},
+		{Fill{Room: 0, Capacity: 0}, Fill{Room: 0, Capacity: 10}, 0},
+		{Fill{Room: -5, Capacity: 10}, Fill{Room: 0, Capacity: 10}, 0},
+		{Fill{Room: -5, Capacity: 10}, Fill{Room: 1, Capacity: 10}, 1},
+	} {
+		if got := CompareNew(NewPercent, value.Percent{}, 0, c.a, c.b); got != c.want {
+			t.Errorf("CompareNew(percent, %+v, %+v) = %d, want %d", c.a, c.b, got, c.want)
+		}
+		if got := CompareNew(NewPercent, value.Percent{}, 0, c.b, c.a); got != -c.want {
+			t.Errorf("CompareNew(percent, %+v, %+v) = %d, want %d", c.b, c.a, got, -c.want)
 		}
 	}
 }

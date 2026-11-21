@@ -318,8 +318,8 @@ func TestLaterPhaseWarnings(t *testing.T) {
 			}
 		case !w.LaterPhase:
 			t.Errorf("the example names something no disk carries: %v", w)
-		case !strings.Contains(w.Message, "phase"):
-			t.Errorf("%v does not name the phase", w)
+		case w.Message != "arrives in phase 4: no effect yet":
+			t.Errorf("%v does not name the phase and its effect", w)
 		}
 	}
 	want := []string{
@@ -578,6 +578,64 @@ func TestSecretFiles(t *testing.T) {
 	}
 	if got := c.SecretFiles(); !slices.Equal(got, want) {
 		t.Errorf("%v, want %v", got, want)
+	}
+}
+
+// The words of a problem are Go's own, never the vectors' (config.json names keys alone): these pin a few that the
+// vectors cannot tell apart, as two checks of one key that would each refuse it.
+func TestProblemWords(t *testing.T) {
+	const base = "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n"
+	for _, c := range []struct {
+		name, toml, key, words string
+		warning                bool
+	}{
+		// The schema's minItems speaks first; min_free's own grammar would refuse the empty list too.
+		{"an empty min_free", base + "[placement]\nmin_free = []\n", "placement.min_free", "want at least 1 items", false},
+		{"a secret and a user in clear", base + "[notify.plex]\nurl = \"http://me:pw@nas.lan:32400\"\ntoken_file = \"/etc/atoll/plex.token\"\n",
+			"notify.plex.url", "the secret of notify.plex.token_file and the user and the password of its address go in clear", true},
+		{"a user in clear", base + "[notify.plex]\nurl = \"http://me:pw@nas.lan:32400\"\n",
+			"notify.plex.url", "the user and the password of its address go in clear", true},
+		{"a secret in clear", base + "[notify.plex]\nurl = \"http://nas.lan:32400\"\ntoken_file = \"/etc/atoll/plex.token\"\n",
+			"notify.plex.url", "the secret of notify.plex.token_file go in clear", true},
+	} {
+		cfg, err := Parse([]byte(c.toml))
+		var list []Problem
+		if c.warning {
+			if err != nil {
+				t.Errorf("%s: %v", c.name, err)
+				continue
+			}
+			list = cfg.Warnings
+		} else {
+			var cerr *Error
+			if !errors.As(err, &cerr) {
+				t.Errorf("%s: %v, want an *Error", c.name, err)
+				continue
+			}
+			list = cerr.Problems
+		}
+		if len(list) != 1 || list[0].Key != c.key || !strings.HasPrefix(list[0].Message, c.words) {
+			t.Errorf("%s: %+v, want one problem at %s starting %q", c.name, list, c.key, c.words)
+		}
+	}
+}
+
+// A format the code does not apply to a list is a mistake in the schema, as is a format on a value of another kind.
+func TestFormatOnTheWrongKind(t *testing.T) {
+	if err := checkFormat("atoll-min-free", []any{"5%", "1GiB"}); err != nil {
+		t.Errorf("min_free: %v", err)
+	}
+	for _, c := range []struct {
+		format string
+		v      any
+	}{
+		{"atoll-size", []any{"1GiB"}},
+		{"atoll-duration", []any{"1s"}},
+		{"atoll-size", int64(1)},
+	} {
+		if err := checkFormat(c.format, c.v); err == nil || !strings.HasPrefix(err.Error(), "configuration schema:") {
+			t.Errorf("checkFormat(%s, %#v) = %v, want a mistake in the schema", c.format, c.v, err)
+		}
 	}
 }
 

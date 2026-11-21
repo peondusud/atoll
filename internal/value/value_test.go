@@ -271,6 +271,59 @@ func TestWindowVectorsDaylightSaving(t *testing.T) {
 	}
 }
 
+// hoppingZone is a zone of no real place, made from TZif data: UTC until 2030-01-02, when the clock jumps from 02:00
+// to 03:00, and again the next night, from 02:00 to 03:00, then UTC+2 for good.
+func hoppingZone(t *testing.T) *time.Location {
+	t.Helper()
+	be32 := func(b []byte, v int64) []byte { return append(b, byte(v>>24), byte(v>>16), byte(v>>8), byte(v)) }
+	// The magic, version 1 and 15 bytes unused; then the counts of UTC and standard indicators, leap seconds,
+	// transitions, types and characters of abbreviations.
+	data := append([]byte("TZif"), make([]byte, 16)...)
+	for _, n := range []int64{0, 0, 0, 2, 3, 6} {
+		data = be32(data, n)
+	}
+	// The transitions, at 02:00 of UTC+0 and at 02:00 of UTC+1, and the type each begins.
+	data = be32(data, time.Date(2030, 1, 2, 2, 0, 0, 0, time.UTC).Unix())
+	data = be32(data, time.Date(2030, 1, 3, 2, 0, 0, 0, time.FixedZone("", 3600)).Unix())
+	data = append(data, 1, 2)
+	// Each type: its offset, not daylight saving time, its abbreviation.
+	for i, offset := range []int64{0, 3600, 7200} {
+		data = append(be32(data, offset), 0, byte(2*i))
+	}
+	data = append(data, "A\x00B\x00C\x00"...)
+	loc, err := time.LoadLocationFromTZData("Hop", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loc
+}
+
+// Next looks for a start over three days, today's and the two after; a window whose start none of them holds, as a
+// clock that jumps over it two nights in a row, gives t back.
+func TestWindowNextLooksThreeDaysAhead(t *testing.T) {
+	hop := hoppingZone(t)
+	w, err := ParseWindow("02:00-02:30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The zone as built: the start does not exist on either night.
+	for _, day := range []int{2, 3} {
+		if h, m, _ := time.Date(2030, 1, day, 2, 0, 0, 0, hop).Clock(); h == 2 && m == 0 {
+			t.Fatalf("02:00 exists on 2030-01-0%d in the hopping zone", day)
+		}
+	}
+	at := time.Date(2030, 1, 1, 12, 0, 0, 0, hop)
+	if got := w.Next(at); !got.Equal(at) {
+		t.Errorf("Next(%s) = %s, want it back: no start in three days", at, got)
+	}
+	// A day later, the start of the third day is in reach.
+	at = time.Date(2030, 1, 2, 12, 0, 0, 0, hop)
+	want := time.Date(2030, 1, 4, 2, 0, 0, 0, hop)
+	if got := w.Next(at); !got.Equal(want) {
+		t.Errorf("Next(%s) = %s, want %s", at, got, want)
+	}
+}
+
 func TestWindowZeroValue(t *testing.T) {
 	var w Window
 	at := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)

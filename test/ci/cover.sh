@@ -1,8 +1,10 @@
 #!/bin/bash
 # The coverage of the code (specs.md §27): what share of each package's statements the unit tests run, what share the
 # conformance scenarios run, and what share either of them runs. For a CI's log and, on GitHub Actions, the job's
-# summary: a row per package, sorted by its path, then the total, and how long each part took. A measure, never a gate.
-# Run from the root of the repository, with Go, as make cover does (GO names the go command, go by default):
+# summary: a row per package, sorted by its path, then the total, and how long each part took. Then the floor: the
+# total share of the unit tests and the merged one, as the table prints them, each at least its gate in
+# test/ci/gates.txt ("cover unit" and "cover merged"). Run from the root of the repository, with Go, as make cover does
+# (GO names the go command, go by default):
 #
 #   bash test/ci/cover.sh
 #
@@ -22,7 +24,8 @@
 # unit tests ran, as no scenario can reach it. A block two test binaries both list counts once, run when either ran it,
 # as go tool cover counts it. A package the conformance build does not hold has no scenarios' share ("–").
 #
-# The exit code is 0 when the unit tests and the scenarios all passed, 1 otherwise, after the table of what ran.
+# The exit code is 0 when the unit tests and the scenarios all passed and both totals meet their floor, 1 otherwise,
+# after the table of what ran.
 set -u
 
 go=${GO:-go}
@@ -125,8 +128,31 @@ if [ "$left" -gt 0 ]; then
 	echo "Left out: $left statements only the conformance build holds, in $left_files."
 fi
 echo "The unit tests took $(duration "$unit_time"), the scenarios $(duration "$scenarios_time"), their build included."
+
+# The floor, each total as the table prints it, to a tenth of a percent.
+floors=()
+under=()
+for part in unit merged; do
+	gate=$(awk -v part="$part" '$1 == "cover" && $2 == part { print $3 }' "$(dirname "$0")/gates.txt")
+	if [ "$part" = unit ]; then hit=$unit; else hit=$either; fi
+	got=$(share "$all" "$hit")
+	if [ -z "$gate" ]; then
+		under+=("no floor for the $part share in test/ci/gates.txt")
+	elif awk -v got="${got%\%}" -v gate="$gate" 'BEGIN { exit !(got + 0 >= gate + 0) }'; then
+		floors+=("the $part share $got, its floor $gate%: passes")
+	else
+		floors+=("the $part share $got, its floor $gate%: FAILS")
+		under+=("the $part share, $got, under its floor of $gate%")
+	fi
+done
+for f in "${floors[@]}"; do
+	echo "Floor: $f."
+done
 for part in "${failed[@]}"; do
 	echo "FAILED: $part; the table counts what ran." >&2
+done
+for part in "${under[@]}"; do
+	echo "FAILED: $part." >&2
 done
 
 "$go" tool cover -html="$out/cover.out" -o "$out/cover.html" || exit 1
@@ -157,7 +183,16 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 		done <<<"$table"
 		read -r all unit held ran either <<<"$total"
 		echo "| **Total** | **$all** | **$(share "$all" "$unit")** | **$(held_share "$all" "$ran" "$held")** | **$(share "$all" "$either")** |"
+		echo
+		echo "The floor (\`test/ci/gates.txt\`), each total as the table prints it:"
+		echo
+		for f in "${floors[@]}"; do
+			echo "- $f"
+		done
+		for part in "${under[@]}"; do
+			echo "- **Failed: $part**"
+		done
 	} >>"$GITHUB_STEP_SUMMARY"
 fi
 
-[ ${#failed[@]} -eq 0 ]
+[ ${#failed[@]} -eq 0 ] && [ ${#under[@]} -eq 0 ]
