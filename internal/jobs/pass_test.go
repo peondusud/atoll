@@ -97,6 +97,9 @@ func (b *bench) Root(string, string) disks.RootSeen { return disks.RootSeen{Fold
 func (b *bench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
 	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
 }
+func (b *bench) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
+	return disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalEmpty}
+}
 func (b *bench) Now() int64 { return b.now }
 func (b *bench) Space(mount string) (capacity, free int64, err error) {
 	if s, ok := b.spaces[mount]; ok {

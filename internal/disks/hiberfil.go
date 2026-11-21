@@ -120,28 +120,46 @@ type mountKey struct {
 	unique       uint64
 }
 
-// hiberfilCache keeps what a machine that runs for long read of hiberfil.sys, once per mount, so that the daemon's
-// check, every 30 s, wakes no disk for it (specs.md §10). It is read again once the disk is mounted anew, and an
-// error is never kept: the next check asks again.
-type hiberfilCache struct {
-	mu   sync.Mutex
-	seen map[string]keptHiberfil
+// reading is what a machine that runs for long reads once per mount at the top of an NTFS disk, hiberfil.sys or
+// $LogFile: whether it is a reading to keep, and what it gives when the mount at a path cannot be told, or changed.
+type reading[T any] interface {
+	settled() bool
+	withError(err error) T
+	changedMount() T
 }
 
-type keptHiberfil struct {
-	key  mountKey
-	seen HiberfilSeen
+// onceAMount keeps what a machine that runs for long read of one file at the top of each mount, so that the daemon's
+// check, every 30 s, wakes no disk for it (specs.md §10). It is read again once the disk is mounted anew, and an error
+// is never kept: the next check asks again.
+type onceAMount[T reading[T]] struct {
+	mu   sync.Mutex
+	seen map[string]keptReading[T]
 }
+
+type keptReading[T any] struct {
+	key  mountKey
+	seen T
+}
+
+// hiberfilCache keeps what was read of hiberfil.sys, and logFileCache what was read of $LogFile.
+type (
+	hiberfilCache = onceAMount[HiberfilSeen]
+	logFileCache  = onceAMount[LogFileSeen]
+)
 
 // mountChanged says that the mount at a path changed while hiberfil.sys was read there: nothing can be told of it.
 var mountChanged = HiberfilSeen{File: HiberfilUnreadable, Note: "the mount changed while it was looked at"}
 
-// answer gives what hiberfil.sys holds on the mount that entry names at mount: what was kept of that same mount, or what
+func (HiberfilSeen) withError(err error) HiberfilSeen { return hiberfilError(err) }
+
+func (HiberfilSeen) changedMount() HiberfilSeen { return mountChanged }
+
+// answer gives what the file holds on the mount that entry names at mount: what was kept of that same mount, or what
 // read gives, kept when it is a reading. unique gives the unique id of the mount at a path, false where the kernel has
-// none. read reads through a handle whose mount is entry's, and gives mountChanged otherwise; the unique id must still be
-// the same once it answered, or nothing is kept.
-func (c *hiberfilCache) answer(mount string, entry *MountEntry, unique func(string) (uint64, bool, error),
-	read func() HiberfilSeen) HiberfilSeen {
+// none. read reads through a handle whose mount is entry's, and gives changedMount otherwise; the unique id must still
+// be the same once it answered, or nothing is kept.
+func (c *onceAMount[T]) answer(mount string, entry *MountEntry, unique func(string) (uint64, bool, error), read func() T) T {
+	var none T
 	uniqueOf := func() (uint64, error) {
 		id, ok, err := unique(mount)
 		if !ok {
@@ -152,7 +170,7 @@ func (c *hiberfilCache) answer(mount string, entry *MountEntry, unique func(stri
 	key := mountKey{id: entry.ID, major: entry.Major, minor: entry.Minor}
 	var err error
 	if key.unique, err = uniqueOf(); err != nil {
-		return hiberfilError(err)
+		return none.withError(err)
 	}
 	c.mu.Lock()
 	kept, found := c.seen[mount]
@@ -165,20 +183,20 @@ func (c *hiberfilCache) answer(mount string, entry *MountEntry, unique func(stri
 		return seen
 	}
 	if after, err := uniqueOf(); err != nil || after != key.unique {
-		return mountChanged
+		return none.changedMount()
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.seen == nil {
-		c.seen = map[string]keptHiberfil{}
+		c.seen = map[string]keptReading[T]{}
 	}
-	c.seen[mount] = keptHiberfil{key: key, seen: seen}
+	c.seen[mount] = keptReading[T]{key: key, seen: seen}
 	return seen
 }
 
 // forget drops what was kept of the mount at a path, once a check found nothing mounted there: whatever is mounted there
 // next is another mount, even where the kernel gives it the same id.
-func (c *hiberfilCache) forget(mount string) {
+func (c *onceAMount[T]) forget(mount string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.seen, mount)

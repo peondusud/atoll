@@ -99,6 +99,9 @@ func (b *bench) Root(string, string) disks.RootSeen { return disks.RootSeen{Fold
 func (b *bench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
 	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
 }
+func (b *bench) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
+	return disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalEmpty}
+}
 func (b *bench) Now() int64 { return 1767225600000000000 + b.elapsed }
 func (b *bench) Space(string) (capacity, free int64, err error) {
 	if b.capacity > 0 {

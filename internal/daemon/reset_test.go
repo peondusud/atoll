@@ -45,6 +45,10 @@ func (m *unpluggedBench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen 
 	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
 }
 
+func (m *unpluggedBench) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
+	return disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalEmpty}
+}
+
 func (m *unpluggedBench) Now() int64 { return time.Now().UnixNano() }
 
 func (m *unpluggedBench) DeviceNode(path string) (fsx.DeviceNode, error) {

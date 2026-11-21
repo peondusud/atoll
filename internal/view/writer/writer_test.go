@@ -69,6 +69,9 @@ func (m *machine) Root(string, string) disks.RootSeen { return disks.RootSeen{} 
 func (m *machine) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
 	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
 }
+func (m *machine) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
+	return disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalEmpty}
+}
 func (m *machine) ReadPastCache(names.Filesystem, *disks.MountEntry) disks.DeviceSeen {
 	return disks.DeviceSeen{}
 }

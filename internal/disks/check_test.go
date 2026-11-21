@@ -190,15 +190,18 @@ type checkCase struct {
 	OtherCase  bool        `json:"other_case"`
 	// Hiberfil is what the top of the mount holds at hiberfil.sys; a file has its size, the bytes of its content that are
 	// not zero, and how many of its first bytes a read gave.
-	Hiberfil      *string         `json:"hiberfil"`
-	HiberfilSize  int64           `json:"hiberfil_size"`
-	HiberfilBytes []bytesAt       `json:"hiberfil_bytes"`
-	HiberfilRead  *int            `json:"hiberfil_read"`
-	Marker        json.RawMessage `json:"marker"`
-	State         string          `json:"state"`
-	Reason        string          `json:"reason"`
-	MountOwner    bool            `json:"mount_owner"`
-	Note          string          `json:"note"`
+	Hiberfil      *string   `json:"hiberfil"`
+	HiberfilSize  int64     `json:"hiberfil_size"`
+	HiberfilBytes []bytesAt `json:"hiberfil_bytes"`
+	HiberfilRead  *int      `json:"hiberfil_read"`
+	// LogFile is what the top of the mount holds at $LogFile, and Journal what that file says.
+	LogFile    *string         `json:"logfile"`
+	Journal    *string         `json:"journal"`
+	Marker     json.RawMessage `json:"marker"`
+	State      string          `json:"state"`
+	Reason     string          `json:"reason"`
+	MountOwner bool            `json:"mount_owner"`
+	Note       string          `json:"note"`
 }
 
 func or[T any](p *T, fallback T) T {
@@ -220,6 +223,7 @@ type answers struct {
 	device   DeviceSeen
 	root     RootSeen
 	hiberfil HiberfilSeen
+	logFile  LogFileSeen
 	asked    []string
 }
 
@@ -241,6 +245,26 @@ func (a *answers) Root(string, string) RootSeen {
 func (a *answers) Hiberfil(string, *MountEntry) HiberfilSeen {
 	a.asked = append(a.asked, "hiberfil")
 	return a.hiberfil
+}
+
+func (a *answers) LogFile(string, *MountEntry) LogFileSeen {
+	a.asked = append(a.asked, "logfile")
+	return a.logFile
+}
+
+// logFileOf gives what a case says the top holds at $LogFile: a file whose journal is empty when it says nothing.
+func logFileOf(c *checkCase) LogFileSeen {
+	seen := LogFileSeen{File: LogFileAnswer(or(c.LogFile, "file"))}
+	switch {
+	case seen.File == LogFileFile:
+		seen.Journal = Journal(or(c.Journal, "empty"))
+		if seen.Journal != JournalEmpty && seen.Journal != JournalClean {
+			seen.Note = "what the case says"
+		}
+	case seen.File != LogFileAbsent:
+		seen.Note = "what the case says"
+	}
+	return seen
 }
 
 // hiberfilOf gives what a case says the top holds at hiberfil.sys: a file's content is zeros but for its bytes, and a
@@ -301,6 +325,7 @@ func answersFor(t *testing.T, c *checkCase) (*config.Disk, *answers) {
 	}
 	a.root = RootSeen{Folder: FolderAnswer(or(c.RootFolder, "ok")), OtherCase: c.OtherCase}
 	a.hiberfil = hiberfilOf(t, c)
+	a.logFile = logFileOf(c)
 	return d, a
 }
 
@@ -377,17 +402,23 @@ func TestCheckStopsAtTheFirstFailure(t *testing.T) {
 		{"no magic", checkCase{NoMagic: true}, []string{"mount", "device"}},
 		{"another disk", checkCase{ID: text("x")}, []string{"mount", "device"}},
 		{"shut down", checkCase{Entry: &checkEntry{SuperOptions: &[]string{"rw", "shutdown"}}}, []string{"mount", "device"}},
-		// hiberfil.sys is the only file of a disk a check reads: on an NTFS disk alone, once questions 1 to 10 passed, and
-		// only when a driver's options leave the disk online (specs.md §10).
-		{"healthy ntfs", checkCase{FS: text("ntfs")}, []string{"mount", "device", "root", "hiberfil"}},
+		// hiberfil.sys, then $LogFile, are the only files of a disk a check reads: on an NTFS disk alone, once questions 1
+		// to 10 passed, and only when a driver's options leave the disk online; $LogFile once hiberfil.sys did (specs.md
+		// §10).
+		{"healthy ntfs", checkCase{FS: text("ntfs")}, []string{"mount", "device", "root", "hiberfil", "logfile"}},
+		{"ntfs hibernated", checkCase{FS: text("ntfs"), Hiberfil: text("not-a-file")}, []string{"mount", "device", "root", "hiberfil"}},
+		{"ntfs whose hiberfil.sys cannot be read", checkCase{FS: text("ntfs"), Hiberfil: text("io-error")},
+			[]string{"mount", "device", "root", "hiberfil"}},
+		{"ntfs with an unclean journal", checkCase{FS: text("ntfs"), Journal: text("unclean")},
+			[]string{"mount", "device", "root", "hiberfil", "logfile"}},
 		{"ntfs without its root", checkCase{FS: text("ntfs"), RootFolder: text("absent")}, []string{"mount", "device", "root"}},
 		{"ntfs gone", checkCase{FS: text("ntfs"), Device: text("gone")}, []string{"mount", "device"}},
 		{"ntfs3 ads", checkCase{FS: text("ntfs"), Entry: &checkEntry{SuperOptions: &[]string{"rw", "iocharset=utf8", "ads"}}}, []string{"mount", "device", "root"}},
 		{"ntfs errors=continue", checkCase{FS: text("ntfs"), Entry: &checkEntry{FSType: text("ntfs"), SuperOptions: &[]string{"rw", "iocharset=utf8"}}},
 			[]string{"mount", "device", "root"}},
 		{"ntfs-3g read-only", checkCase{FS: text("ntfs"), Entry: &checkEntry{FSType: text("fuseblk"), MountOptions: &[]string{"ro"}, SuperOptions: &[]string{"ro"}}},
-			[]string{"mount", "device", "root", "hiberfil"}},
-		{"ntfs3 ignoring case", checkCase{FS: text("ntfs"), OtherCase: true}, []string{"mount", "device", "root", "hiberfil"}},
+			[]string{"mount", "device", "root", "hiberfil", "logfile"}},
+		{"ntfs3 ignoring case", checkCase{FS: text("ntfs"), OtherCase: true}, []string{"mount", "device", "root", "hiberfil", "logfile"}},
 	} {
 		d, a := answersFor(t, &tc.c)
 		Check(a, d)

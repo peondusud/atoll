@@ -74,6 +74,10 @@ func (b *bench) Hiberfil(string, *disks.MountEntry) disks.HiberfilSeen {
 	return disks.HiberfilSeen{File: disks.HiberfilAbsent}
 }
 
+func (b *bench) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
+	return disks.LogFileSeen{File: disks.LogFileFile, Journal: disks.JournalEmpty}
+}
+
 func (b *bench) Now() int64 { return b.now }
 
 func (b *bench) OpenTop(mount string) (fsx.Dir, error) {
