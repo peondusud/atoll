@@ -287,24 +287,45 @@ PassStart ==
    resolved in two steps: what it does on the disk, then the commit, so that a crash may come between. *)
 
 (* §17.2: a move to the trash: the target is the entry in the trash, the source the logical path. First what both
-   names lead to is synced (specs.md §17.2, "First, before it looks at either name"). *)
-RepTrash(d, p) ==
+   names lead to is synced (specs.md §17.2, "First, before it looks at either name"). A look knows an object by its
+   inode, its size and its modification time (gen), never by its inode alone (the maintainer, 2026-11-21): the
+   trash's name alone holding the copy's object is the copy only with the size and modification time its row says, and
+   with others it is "other", as a file that took the copy's name with its inode number would be; a row of no such
+   object says nothing, and the inode is all there is. Both names leading to it are one file, edited in place since or
+   not. *)
+TrashLook(d, p) ==
     LET f == ops[p].f
         key == ops[p].key
-        tg == Seen(d, X(p), key)
         sr == Seen(d, M(f), key)
         row == crow[f][d]
         edited == row.obj # key \/ objs[key].gen # row.gen     \* both names lead to it, edited in place since
+        tg0 == Seen(d, X(p), key)
+        tg == IF tg0 = "same" /\ sr # "same" /\ row.obj = key /\ objs[key].gen # row.gen THEN "other" ELSE tg0
+    IN [tg |-> tg, sr |-> sr, edited |-> edited]
+
+(* What the table of §17.2 makes the two names hold, and whether the operation is done or undone. *)
+TrashNames(d, p) ==
+    LET f == ops[p].f
+        s == TrashLook(d, p)
         v0 == vol[d]
-        out == IF tg = "same" /\ ~(sr = "same" /\ edited) THEN "done" ELSE "undone"
-        v1 == CASE tg = "same" /\ sr = "same" /\ edited -> [v0 EXCEPT ![X(p)] = 0]
-                [] tg = "same" /\ sr = "same" -> [v0 EXCEPT ![M(f)] = 0]
-                [] tg = "other" /\ sr = "absent" -> [v0 EXCEPT ![M(f)] = v0[X(p)], ![X(p)] = 0]
-                [] OTHER -> v0
+    IN CASE s.tg = "same" /\ s.sr = "same" /\ s.edited -> [v0 EXCEPT ![X(p)] = 0]
+         [] s.tg = "same" /\ s.sr = "same" -> [v0 EXCEPT ![M(f)] = 0]
+         [] s.tg = "other" /\ s.sr = "absent" -> [v0 EXCEPT ![M(f)] = v0[X(p)], ![X(p)] = 0]
+         [] OTHER -> v0
+TrashOut(d, p) ==
+    LET s == TrashLook(d, p) IN IF s.tg = "same" /\ ~(s.sr = "same" /\ s.edited) THEN "done" ELSE "undone"
+
+(* What resolving it does on the disk: the names as the table says, each made durable. *)
+TrashResolveNames(d, p) ==
+    LET f == ops[p].f
+        v1 == TrashNames(d, p)
     IN /\ vol' = [vol EXCEPT ![d] = v1]
        /\ dur' = [dur EXCEPT ![d][M(f)] = v1[M(f)], ![d][X(p)] = v1[X(p)]]
        /\ objs' = SyncObjs(objs, {v1[M(f)], v1[X(p)]} \ {0})
-       /\ pc' = [ph |-> "repcommit", d |-> d, p |-> p, out |-> out, keep |-> FALSE]
+
+RepTrash(d, p) ==
+    /\ TrashResolveNames(d, p)
+    /\ pc' = [ph |-> "repcommit", d |-> d, p |-> p, out |-> TrashOut(d, p), keep |-> FALSE]
 
 (* §14.2 Reprise: a copy: the target is the file's path, the source the part, both compared with file_key. *)
 RepCreate(d, p) ==
@@ -745,23 +766,55 @@ TrashUnlink ==
            linked == vol[d][M(f)] = key /\ objs[key].gen = crow[f][d].gen
            replacing == ops[p].reason = "deleted" /\ objs[key].ver = ghost.latest[f] /\ ghost.latest[f] \notin ghost.udel
        IN /\ Ok(d)
-          /\ IF vol[d][M(f)] = 0
+          /\ IF vol[d][M(f)] = 0 /\ crow[f][d].obj = key /\ objs[key].gen # crow[f][d].gen
+             THEN \* the source's name went by itself, but the link no longer holds what the copy's row says: edited
+                  \* through the source's name before it went. The look after the move (§17.1, step 4) finds it is not
+                  \* the copy, and the move is resolved at once, as a reprise would (TrashResolve).
+                  /\ pc' = [pc EXCEPT !.s = "resolve"]
+                  /\ UNCHANGED <<objs, vol, dur, ops, tjob, ghost>>
+             ELSE IF vol[d][M(f)] = 0
              THEN \* the source's name went by itself: the link is the file's name now, the move is done
                   /\ pc' = [pc EXCEPT !.s = "moved"]
-                  /\ UNCHANGED <<objs, vol, ops, tjob, ghost>>
+                  /\ UNCHANGED <<objs, vol, dur, ops, tjob, ghost>>
              ELSE IF ~linked
              THEN \* an edit or a replacement since the look: the link goes, the outcome is changed, undone
                   /\ vol' = [vol EXCEPT ![d][X(p)] = 0]
                   /\ ops' = [ops EXCEPT ![p].st = "undone"]
                   /\ tjob' = [tjob EXCEPT ![f][d] = NoTJob]
                   /\ pc' = [ph |-> "trash", i |-> pc.i + 1]
-                  /\ UNCHANGED <<objs, ghost>>
+                  /\ UNCHANGED <<objs, dur, ghost>>
              ELSE /\ vol' = [vol EXCEPT ![d][M(f)] = 0]
                   /\ ghost' = Flag(Flag(ghost, "inv10-replacement", replacing),
                                    "inv10-unchanged", objs[key].ver # crow[f][d].gver)
                   /\ pc' = [pc EXCEPT !.s = "moved"]
-                  /\ UNCHANGED <<objs, ops, tjob>>
-    /\ UNCHANGED <<dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tick, sess, look, cnt, nver>>
+                  /\ UNCHANGED <<objs, dur, ops, tjob>>
+    /\ UNCHANGED <<dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tick, sess, look, cnt, nver>>
+
+(* §17.1, step 4, and §17.2: a move whose look after it found that what moved is not the copy is resolved at once, as a
+   reprise would, from what both names hold then: first the names, as the table says, each made durable; then the
+   commit, a step of its own, so that a crash may come between. Undone, its job goes, as when nothing moved. *)
+TrashResolve ==
+    /\ pc.ph = "tstep" /\ pc.s = "resolve"
+    /\ LET p == pc.p
+           d == ops[p].d
+       IN /\ Ok(d)
+          /\ TrashResolveNames(d, p)
+          /\ pc' = [ph |-> "tstep", i |-> pc.i, p |-> p, s |-> "resolved", out |-> TrashOut(d, p)]
+    /\ UNCHANGED <<dstat, mgen, cat, sess, look, cnt, nver, ghost>>
+
+TrashResolved ==
+    /\ pc.ph = "tstep" /\ pc.s = "resolved"
+    /\ LET p == pc.p
+           f == ops[p].f
+           d == ops[p].d
+       IN IF pc.out = "done"
+          THEN /\ TrashFinish(d, p)
+               /\ ghost' = Flag(ghost, "inv7", ~Durable(d, X(p), ops[p].key))
+          ELSE /\ ops' = [ops EXCEPT ![p].st = "undone"]
+               /\ tjob' = [tjob EXCEPT ![f][d] = NoTJob]
+               /\ UNCHANGED <<cfile, crow, rjob, ghost>>
+    /\ pc' = [ph |-> "trash", i |-> pc.i + 1]
+    /\ UNCHANGED <<phys, cdisk, nextOp, tick, sess, look, cnt, nver>>
 
 (* §17.1 step 5: fsync of the file at its new name, then of the target folder (target-synced); the time of the
    source's folder restored, then its fsync (source-synced). *)
@@ -1066,7 +1119,8 @@ Atoll ==
     \/ WalkStart \/ WalkEnd \/ WalkDone
     \/ DecideFile \/ DecideSkip \/ DecideDone
     \/ ModifyFile \/ ModifySkip \/ ModifyDone
-    \/ TrashPick \/ TrashMove \/ TrashLinkSync \/ TrashUnlink \/ TrashSync \/ TrashCommit \/ TrashLost
+    \/ TrashPick \/ TrashMove \/ TrashLinkSync \/ TrashUnlink \/ TrashResolve \/ TrashResolved \/ TrashSync \/ TrashCommit
+    \/ TrashLost
     \/ PlanStep
     \/ CopyPick \/ CopyPart \/ CopyKey \/ CopySourceLost \/ CopyData \/ CopyRecheck \/ CopyVerify
     \/ CopyRename \/ CopyUnlink \/ CopyRecord \/ CopySync \/ CopyCommit \/ CopyLost

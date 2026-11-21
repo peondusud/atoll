@@ -363,7 +363,7 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 |---|---|---|
 | `kind` | string | `trash`, `restore`, `rename`, `unlink` for a purge, `mkdir`, or `rmdir` |
 | `source`, `target` | string | `absent`, `same` or `other`, compared with `ops.file_key`, and for `mkdir` with being a folder. An `unlink` or an `rmdir` has no target, and a `mkdir` no source |
-| `changed` | boolean | optional: for `trash`, whether the file is no longer what its row says |
+| `changed` | boolean | optional: for `trash`, whether the file at the target, by its inode, is no longer what the copy's row says, by its size or its modification time: with the source holding that inode too, one file with two names, edited in place since; alone, not the copy, whatever has its inode number, so `other` (§17.2). With no row of that inode, true when both names lead to the file, as nothing says it is as it was, and false when the target alone does, whose inode is then all there is to go by; never for a link of the guard, which has no row |
 | `action` | string | `finish` or `undo` |
 | `remove_source`, `remove_target` | boolean | which name must go |
 | `move_back` | boolean | whether the file at the target goes back to the source |

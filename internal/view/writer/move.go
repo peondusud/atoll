@@ -348,8 +348,9 @@ func (w *Writer) leave(ctx context.Context, v *catalog.ViewOp, trashed *catalog.
 					return rerr
 				}
 			}
-			// Looked at as a reprise looks at it, by the table of §17.2.
-			finished, rerr := d.ResolveNow(ctx, w.db, trashed, w.now(), w.retention)
+			// Looked at as a reprise looks at it, by the table of §17.2, against what the move copied, as no row of the
+			// catalog records the copy: a file that took its name with its inode number is not it, and goes back.
+			finished, rerr := d.ResolveTrashNow(ctx, w.db, trashed, row, w.now(), w.retention)
 			if rerr != nil {
 				return fmt.Errorf("%w: %w", err, rerr)
 			}

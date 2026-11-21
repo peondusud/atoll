@@ -163,8 +163,14 @@ func (w *Writer) repriseMove(ctx context.Context, v *catalog.ViewOp) error {
 	}
 	err = w.handles.Use(v.Disk2, func(d *ops.Disk) error {
 		if op.Kind == catalog.OpTrash {
-			if err := w.trashLeft(ctx, d, v, &op); err != nil {
+			row, err := w.trashLeft(ctx, d, v, &op)
+			if err != nil {
 				return err
+			}
+			if row != nil {
+				// Against what the look right before the move found, as no row of the catalog records the copy.
+				_, err := d.ResolveTrashNow(ctx, w.db, &op, row, w.now(), w.retention)
+				return err //nolint:wrapcheck // ops says what failed
 			}
 		}
 		_, err := d.ResolveNow(ctx, w.db, &op, w.now(), w.retention)
@@ -222,30 +228,32 @@ func (w *Writer) noRoomStays(ctx context.Context, d *ops.Disk, v *catalog.ViewOp
 
 // trashLeft goes on with a move's trash left planned, once the file is at its name on the disk it went to, where the
 // program wrote from then on: the copy it left, still at its path, goes to the trash, whatever it holds, and stays
-// there, unpurged, as nothing says it was not written to since. The table of §17.2 then says what became of it.
-func (w *Writer) trashLeft(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, op *catalog.Op) error {
+// there, unpurged, as nothing says it was not written to since. The table of §17.2 then says what became of it, against
+// the look right before the move, which it gives when it made one: a file that took the copy's name with its inode
+// number in that moment is not the copy (§17.1, step 4).
+func (w *Writer) trashLeft(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, op *catalog.Op) (*catalog.KnownCopy, error) {
 	trashed, err := w.trashed(ctx, d, op.ID)
 	if err != nil || trashed {
-		return err
+		return nil, err
 	}
 	st, found, err := d.StatRoot(v.Path)
 	switch {
 	case err != nil:
-		return err //nolint:wrapcheck // ops says what failed
+		return nil, err //nolint:wrapcheck // ops says what failed
 	case !found || st.Kind != fsx.KindFile || fmt.Sprintf("%d", st.Ino) != op.FileKey:
-		return nil
+		return nil, nil //nolint:nilnil // no look before a move is an answer
 	}
 	row, err := knownOf(v.Path, &st)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := d.ToTrash(op, row); err != nil {
 		if errors.Is(err, ops.ErrDiskLost) {
-			return err //nolint:wrapcheck // ops says what failed
+			return nil, err //nolint:wrapcheck // ops says what failed
 		}
-		return w.noRoomStays(ctx, d, v, op, err)
+		return row, w.noRoomStays(ctx, d, v, op, err)
 	}
-	return nil
+	return row, nil
 }
 
 // repriseMoveCreate resolves a move whose create was left planned.
@@ -305,7 +313,7 @@ func (w *Writer) repriseMoveCreate(ctx context.Context, v *catalog.ViewOp, op *c
 			if err := w.noRoomStays(ctx, d, v, trashed, err); err != nil {
 				return err
 			}
-			if _, rerr := d.ResolveNow(ctx, w.db, trashed, w.now(), w.retention); rerr != nil {
+			if _, rerr := d.ResolveTrashNow(ctx, w.db, trashed, row, w.now(), w.retention); rerr != nil {
 				return fmt.Errorf("%w: %w", err, rerr)
 			}
 			return catalog.EndViewMove(ctx, w.db, v, "", catalog.OpDone, false, w.now()) //nolint:wrapcheck // the catalog says what failed

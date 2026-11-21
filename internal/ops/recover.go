@@ -74,13 +74,29 @@ func (d *Disk) ResolveNow(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 	return out.Finished, err
 }
 
+// ResolveTrashNow is ResolveNow for a move to the trash of a copy that no row of the catalog records, as the copy a move
+// of Atoll's own view leaves on a full disk (specs.md §21.2): row is what the move compared the copy with right before
+// it, which the file at the target is compared with as a reprise compares it with a copy's row (§17.2). A copy that a
+// row records is resolved by ResolveNow, with that row.
+func (d *Disk) ResolveTrashNow(ctx context.Context, db *sql.DB, op *Op, row *catalog.KnownCopy, nowNS int64, retention time.Duration) (bool, error) {
+	if op.Kind != catalog.OpTrash || op.Link != 0 {
+		return false, fmt.Errorf("reprise: operation %d is no move of a copy to the trash", op.ID)
+	}
+	if err := d.Verify(); err != nil {
+		return false, err
+	}
+	out := &Recovered{}
+	err := d.recoverTrash(ctx, db, op, row, nowNS, retention, out)
+	return out.Finished, err
+}
+
 func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, retention time.Duration, out *Recovered) error {
 	if err := d.Verify(); err != nil {
 		return err
 	}
 	switch op.Kind {
 	case catalog.OpTrash:
-		return d.recoverTrash(ctx, db, op, nowNS, retention, out)
+		return d.recoverTrash(ctx, db, op, nil, nowNS, retention, out)
 	case catalog.OpRestore:
 		return d.recoverRestore(ctx, db, op, nowNS, out)
 	case catalog.OpUnlink:
@@ -128,7 +144,9 @@ func (d *Disk) seen(path []string, op *Op) (Seen, fsx.Stat, error) {
 	}
 }
 
-func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64, retention time.Duration, out *Recovered) error {
+// recoverTrash resolves a move to the trash left planned, by the table of specs.md §17.2. known is what the move compared
+// the copy with, for a copy that no row of the catalog records; nil takes the copy's row.
+func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, known *catalog.KnownCopy, nowNS int64, retention time.Duration, out *Recovered) error {
 	src, dst := d.rootPlace(op.Path), d.trashPlace(op.Path2)
 	if op.Link != 0 {
 		// The link guard's link went there, not the copy at the path (specs.md §17).
@@ -138,24 +156,30 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	if err := d.syncWay(dst); err != nil {
 		return err
 	}
-	source, sourceStat, err := d.seen(src, op)
-	if err != nil {
-		return err
-	}
-	target, _, err := d.seen(dst, op)
-	if err != nil {
-		return err
-	}
-	changed := false
-	// A link has no row to be edited from: whatever its data holds now is what goes.
-	if source == SeenSame && target == SeenSame && op.Link == 0 {
-		row, err := catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey)
-		if err != nil {
+	// What the copy's row says of it, read before the looks, so that nothing long comes between them and what they
+	// decide. A link has no row to be edited from: whatever its data holds now is what goes.
+	var row catalog.KnownCopy
+	switch {
+	case op.Link != 0:
+	case known != nil:
+		row = *known
+	default:
+		var err error
+		if row, err = catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey); err != nil {
 			return fmt.Errorf("catalog: %w", err)
 		}
-		if changed, err = editedInPlace(&row, &sourceStat); err != nil {
-			return err
-		}
+	}
+	source, _, err := d.seen(src, op)
+	if err != nil {
+		return err
+	}
+	target, targetStat, err := d.seen(dst, op)
+	if err != nil {
+		return err
+	}
+	changed, err := trashChanged(op, &row, target, source, &targetStat)
+	if err != nil {
+		return err
 	}
 	decision, err := ResolveTrash(target, source, changed)
 	if err != nil {
@@ -192,6 +216,24 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	out.Finished = true
 	out.Trashed = append(out.Trashed, op.ID)
 	return nil
+}
+
+// trashChanged says whether the file at the target of a move to the trash, by the copy's inode, is no longer what the
+// copy's row says, by its size or its modification time (specs.md §17.2): the move, or link, moved its change time, so
+// only those can tell, as the look of the link path compares them (§17.1, step 4). With the source holding that inode
+// too, both names lead to one file, as no other file can have its inode while a name holds it, and changed says that it
+// was edited in place since. The target's alone may be another file that took the copy's name before the move with the
+// inode number of the copy just removed, and changed says that it is not the copy. No row of that inode says what the
+// copy is: one file with two names may have been edited, so changed; the target's alone, as for a copy no pass recorded
+// (§21.2), has its inode alone to go by. A link of the guard has no row, and whatever its data holds now is what goes.
+func trashChanged(op *Op, row *catalog.KnownCopy, target, source Seen, st *fsx.Stat) (bool, error) {
+	if op.Link != 0 || target != SeenSame {
+		return false, nil
+	}
+	if !row.FileKey.Valid || row.FileKey.String != op.FileKey {
+		return source == SeenSame, nil
+	}
+	return editedInPlace(row, st)
 }
 
 // editedInPlace says whether a file both names lead to is no longer what its row says. Link moved its
