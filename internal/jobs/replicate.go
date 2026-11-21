@@ -251,7 +251,8 @@ func (r *replicator) runOn(ctx context.Context, job *catalog.ReplicateJob, dst, 
 	}
 	// What visibly stands in the way ends the job before anything is copied; what comes after the look is
 	// found at the rename.
-	switch target, _, err := dst.LookAtTarget(job.Path); {
+	target, missing, err := dst.LookAtTarget(job.Path)
+	switch {
 	case errors.Is(err, ops.ErrDiskLost):
 		if err := r.on.Lose(ctx, job.Dst, err); err != nil {
 			return "", fmt.Errorf("%w", err)
@@ -271,6 +272,9 @@ func (r *replicator) runOn(ctx context.Context, job *catalog.ReplicateJob, dst, 
 			return outcome, err
 		}
 	}
+	if outcome, err := r.lookForModels(ctx, job, file, src, row, missing); err != nil || outcome != "" {
+		return outcome, err
+	}
 	// A copy beside it lost one of its disks since it started: it is journaled nothing, as one that starts now would not
 	// run.
 	if lostSrc, lostDst := r.halted(job); lostSrc || lostDst {
@@ -281,7 +285,7 @@ func (r *replicator) runOn(ctx context.Context, job *catalog.ReplicateJob, dst, 
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	r.machine.Checkpoint("journaled")
-	c := &copier{r: r, job: job, op: op, dst: dst, src: src, row: row, hash: file.Hash}
+	c := &copier{r: r, job: job, op: op, dst: dst, src: src, row: row, file: file, hash: file.Hash}
 	if !r.force {
 		restore, err := fsx.LowIOPriority()
 		if err != nil {
@@ -331,16 +335,168 @@ func (r *replicator) lookAtSource(ctx context.Context, job *catalog.ReplicateJob
 		}
 		return trash.OutcomeChanged, nil
 	}
-	if fsx.IsDiskLost(err) || errors.Is(err, ops.ErrDiskLost) {
-		if err := r.on.Lose(ctx, job.Src, err); err != nil {
+	return r.sourceUnread(ctx, job, row, err)
+}
+
+// sourceUnread ends, as io-error with nothing journaled or made, the run of a copy whose source could not be looked at:
+// its disk is lost when it cannot be relied on, and the job waits for the next run, its part kept.
+func (r *replicator) sourceUnread(ctx context.Context, job *catalog.ReplicateJob, row *catalog.KnownCopy, cause error) (string, error) {
+	if fsx.IsDiskLost(cause) || errors.Is(cause, ops.ErrDiskLost) {
+		if err := r.on.Lose(ctx, job.Src, cause); err != nil {
 			return "", fmt.Errorf("%w", err)
 		}
 	}
-	slog.Warn("a source cannot be read", "disk", job.Src, "path", row.Path, "error", err)
+	slog.Warn("a source cannot be read", "disk", job.Src, "path", row.Path, "error", cause)
+	return r.waitAgain(ctx, job)
+}
+
+// waitAgain puts a job back in the queue for the next run, one attempt more and its part kept, and ends this one as
+// io-error.
+func (r *replicator) waitAgain(ctx context.Context, job *catalog.ReplicateJob) (string, error) {
 	if err := catalog.RetryJob(ctx, r.db, job, sql.NullInt64{}, true); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	return trash.OutcomeIOError, nil
+}
+
+// errModelAway says that a disk away holds, as the catalog says, the folder a parent of a copy is to be made like.
+var errModelAway = errors.New("the disk is away, and the catalog says it holds the folder")
+
+// model is what a parent a copy makes is to be like (specs.md §14.2).
+type model struct {
+	// like is the folder it is made like, nil for none: then it is made 0755.
+	like *fsx.Stat
+	// waitFor names the disk the copy is to wait for, with why: a look there failed, or it is away and the catalog says
+	// it holds the folder.
+	waitFor string
+	why     error
+}
+
+// lookForModels looks for the model of each parent a copy is to make, before anything is copied or journaled: a copy
+// that is to wait for a disk ends its run as io-error, as one whose source cannot be read does, so that a disk away for
+// days costs a look at each run, never a copy read again. The look is made again at the rename, under the lock of the
+// target's names, as what it finds may change meanwhile (specs.md §14.2). An empty outcome says that the copy may begin.
+func (r *replicator) lookForModels(ctx context.Context, job *catalog.ReplicateJob, file *catalog.FileRow, src *ops.Disk, row *catalog.KnownCopy, missing []string) (string, error) {
+	for _, folder := range missing {
+		m, err := r.folderModel(ctx, job, file, src, folder)
+		switch {
+		case errors.Is(err, errCatalog):
+			return "", err
+		case err != nil:
+			return r.sourceUnread(ctx, job, row, err)
+		case m.waitFor != "":
+			warnWaits(job, folder, &m)
+			return r.waitAgain(ctx, job)
+		}
+	}
+	return "", nil
+}
+
+func warnWaits(job *catalog.ReplicateJob, folder string, m *model) {
+	slog.Warn("a copy waits for the disk that may hold the model of a folder it makes", "disk", job.Dst, "path", job.Path,
+		"folder", folder, "for", m.waitFor, "error", m.why)
+}
+
+// folderModel finds the folder a parent a copy makes is to be like (specs.md §14.2): the same folder on the source's disk;
+// when that disk holds none, as a copy behind at its old path does not, on the first other disk present by position whose
+// copy of the file is at its path, the folder the file sits in, as §15.12's step 3 prefers it, then on any other disk
+// present by position. When none holds it and the catalog says a disk away does, the copy waits for that disk, as a folder
+// made with no model would stay open for good; so it does when a look at another disk fails, as nothing can be said then
+// of the mode the folder should have. Only when no disk holds it is it made with no model (the maintainer, 2026-11-21). An
+// error is the source's, or wraps errCatalog.
+func (r *replicator) folderModel(ctx context.Context, job *catalog.ReplicateJob, file *catalog.FileRow, src *ops.Disk, folder string) (model, error) {
+	like, err := src.FolderInfo(folder)
+	if err != nil || like != nil {
+		return model{like: like}, err //nolint:wrapcheck // the source's own, which its caller tells apart
+	}
+	for _, id := range r.modelDisks(job, file) {
+		if !r.on.Readable(id) {
+			continue
+		}
+		m, err := r.modelOn(ctx, id, folder)
+		if err != nil || m.like != nil || m.waitFor != "" {
+			return m, err
+		}
+	}
+	held, err := catalog.FolderDisks(ctx, r.db, folder)
+	if err != nil {
+		return model{}, fmt.Errorf("%w: %w", errCatalog, err)
+	}
+	for _, id := range held {
+		if id != job.Src && id != job.Dst && r.away(id) {
+			return model{waitFor: id, why: errModelAway}, nil
+		}
+	}
+	return model{}, nil
+}
+
+// modelDisks gives the disks a copy looks at for the model of a folder once its source's holds none, by position: those
+// whose copy of the file is at its path first, then the others, the source and the target left out.
+func (r *replicator) modelDisks(job *catalog.ReplicateJob, file *catalog.FileRow) []string {
+	sits := map[string]bool{}
+	if file != nil {
+		for i := range file.Copies {
+			if c := &file.Copies[i]; c.OldPath == nil && c.State != "pending" {
+				sits[c.Disk] = true
+			}
+		}
+	}
+	var first, then []string
+	for i := range r.config.Disks {
+		switch id := r.config.Disks[i].ID; {
+		case id == job.Src || id == job.Dst:
+		case sits[id]:
+			first = append(first, id)
+		default:
+			then = append(then, id)
+		}
+	}
+	return append(first, then...)
+}
+
+// modelOn looks at a folder on a disk the copy neither reads nor writes, which counts as in use meanwhile, so that its
+// handle is not closed under the look by a copy beside this one that loses it. A look that fails, or a disk that cannot
+// be reached, is one the copy waits for, the disk lost when it cannot be relied on (invariant 4). An error is the
+// catalog's.
+func (r *replicator) modelOn(ctx context.Context, id, folder string) (model, error) {
+	r.on.use(id)
+	m, err := r.lookAtModel(ctx, id, folder)
+	if released := r.on.release(ctx, id); released != nil && err == nil {
+		err = fmt.Errorf("%w: %w", errCatalog, released)
+	}
+	return m, err
+}
+
+func (r *replicator) lookAtModel(ctx context.Context, id, folder string) (model, error) {
+	handle, err := r.on.Handle(ctx, id)
+	switch {
+	case err != nil:
+		return model{}, fmt.Errorf("%w: %w", errCatalog, err)
+	case handle == nil:
+		return model{waitFor: id, why: errors.New("the disk cannot be reached")}, nil
+	}
+	like, err := handle.FolderInfo(folder)
+	switch {
+	case err == nil:
+		return model{like: like}, nil
+	case errors.Is(err, ops.ErrDiskLost):
+		if lost := r.on.Lose(ctx, id, err); lost != nil {
+			return model{}, fmt.Errorf("%w: %w", errCatalog, lost)
+		}
+	}
+	return model{waitFor: id, why: err}, nil
+}
+
+// away says that a disk is away: one of the configuration, not failed, that this run cannot read, as one missing or lost
+// since the run began. A failed disk is never read again, and one the configuration no longer lists is retired: neither
+// comes back of itself, and a copy that waited for one would leave its file a copy short for good.
+func (r *replicator) away(id string) bool {
+	for i := range r.config.Disks {
+		if d := &r.config.Disks[i]; d.ID == id {
+			return d.State != config.DiskFailed && !r.on.Readable(id)
+		}
+	}
+	return false
 }
 
 // handles opens the target and the source, or says why a job cannot run in this run.
@@ -441,6 +597,7 @@ type copier struct {
 	dst  *ops.Disk
 	src  *ops.Disk
 	row  *catalog.KnownCopy
+	file *catalog.FileRow
 	hash []byte
 	// refused holds the extended attributes of the source the target's filesystem refused, in byte order.
 	refused []string
@@ -766,7 +923,7 @@ func (c *copier) verify(ctx context.Context, part *ops.Part, size int64) ([]byte
 }
 
 // place resolves the target and moves the part there: each missing parent made as an operation mkdir of
-// its own, with the mode and owner of the same folder on the source disk (specs.md §14.2).
+// its own, like the same folder on the source disk, or on another disk when that one holds none (specs.md §14.2).
 func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 	names := c.r.on.namesOf(c.op.Disk)
 	names.Lock()
@@ -781,13 +938,24 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 	if target != ops.TargetFree {
 		return nil, c.drop(ctx, obstacleOutcome(target), false)
 	}
-	for _, folder := range missing {
-		// The source's folder: an error there is the source's, as one while it was read, never the target's, which
-		// would be lost in its place with every job left for it.
-		like, err := c.src.FolderInfo(folder)
-		if err != nil {
+	// Every parent's model first, so that none is made when the copy is to wait for another's.
+	likes := make([]*fsx.Stat, len(missing))
+	for i, folder := range missing {
+		m, err := c.r.folderModel(ctx, c.job, c.file, c.src, folder)
+		switch {
+		case errors.Is(err, errCatalog):
+			return nil, err
+		case err != nil:
+			// The source's folder: an error there is the source's, as one while it was read, never the target's, which
+			// would be lost in its place with every job left for it.
 			return nil, c.sourceFailed(ctx, err)
+		case m.waitFor != "":
+			return nil, c.waitForModel(ctx, folder, &m)
 		}
+		likes[i] = m.like
+	}
+	for i, folder := range missing {
+		like := likes[i]
 		op, err := catalog.BeginMkdir(ctx, c.r.db, c.op.Disk, folder, ops.LikeOf(like), c.r.now)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errCatalog, err)
@@ -897,6 +1065,18 @@ func (c *copier) sourceFailed(ctx context.Context, cause error) error {
 		}
 	}
 	slog.Warn("a source cannot be read", "disk", c.job.Src, "path", c.row.Path, "error", cause)
+	return c.waitAgain(ctx)
+}
+
+// waitForModel leaves a copy to wait for the disk that may hold the model of one of its parents (specs.md §14.2), as a
+// source that cannot be read does: its operation undone, and its part kept for the job to resume.
+func (c *copier) waitForModel(ctx context.Context, folder string, m *model) error {
+	warnWaits(c.job, folder, m)
+	return c.waitAgain(ctx)
+}
+
+// waitAgain undoes the operation of a copy that stops for now, and puts its job back in the queue, its part kept.
+func (c *copier) waitAgain(ctx context.Context) error {
 	if err := c.dst.Undo(ctx, c.r.db, c.op, false, c.r.now); err != nil {
 		return fmt.Errorf("%w: %w", errCatalog, err)
 	}

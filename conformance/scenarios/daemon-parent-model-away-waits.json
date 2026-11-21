@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md §14.2, §15.12, §17.4",
-  "description": "A copy read from a copy behind at its old path, whose disk holds no folder at the file's new path, makes that folder with no model: 0755 whatever the umask, here the units' 0027, which left it 0750 and closed to a media server running under another account. Its event mkdir holds the mode 0755 and no owner.",
+  "spec": "specs.md §14.2, §15.12",
+  "description": "The daemon's copy read from a copy behind at its old path waits, io-error, while the disk that holds the folder at the file's new path, kept 0700, is away, as the catalog says, and makes nothing on its target meanwhile; the rename of the copy behind waits for that disk too (§15.12, step 3). That disk back, the copy behind is renamed into a folder made like the one there, and the copy made from it takes that folder's mode, 0700, where it was made 0755.",
   "disks": [
     {
       "id": "t1",
@@ -67,6 +67,12 @@
       "path": "media/new"
     },
     {
+      "do": "chmod",
+      "disk": "t1",
+      "path": "media/new",
+      "mode": "0700"
+    },
+    {
       "do": "rename",
       "disk": "t1",
       "path": "media/a",
@@ -130,8 +136,65 @@
         "daemon",
         "--until-idle"
       ],
-      "umask": "0027",
       "exit": 4
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops WHERE disk_id = 't3'",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT src_disk, dst_disk, state, attempts FROM jobs",
+      "rows": [
+        [
+          "t2",
+          "t3",
+          "queued",
+          1
+        ]
+      ]
+    },
+    {
+      "do": "mount",
+      "disk": "t1"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/new",
+          "kind": "dir",
+          "mode": "0700"
+        },
+        {
+          "path": "media/new/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
     },
     {
       "do": "expect_tree",
@@ -140,7 +203,7 @@
         {
           "path": "media/new",
           "kind": "dir",
-          "mode": "0755"
+          "mode": "0700"
         },
         {
           "path": "media/new/a",
@@ -155,39 +218,10 @@
     },
     {
       "do": "expect_catalog",
-      "query": "SELECT json_extract(data, '$.disk'), json_extract(data, '$.path'), json_extract(data, '$.mode'), json_type(data, '$.uid'), json_type(data, '$.gid') FROM events WHERE kind = 'mkdir'",
+      "query": "SELECT count(*) FROM jobs",
       "rows": [
         [
-          "t3",
-          "new",
-          493,
-          null,
-          null
-        ]
-      ]
-    },
-    {
-      "do": "expect_catalog",
-      "query": "SELECT kind, state FROM ops WHERE disk_id = 't3' ORDER BY id",
-      "rows": [
-        [
-          "create",
-          "done"
-        ],
-        [
-          "mkdir",
-          "done"
-        ]
-      ]
-    },
-    {
-      "do": "expect_catalog",
-      "query": "SELECT CAST(lpath AS TEXT), mode, created_by FROM entries WHERE disk_id = 't3'",
-      "rows": [
-        [
-          "new",
-          493,
-          "atoll"
+          0
         ]
       ]
     }
