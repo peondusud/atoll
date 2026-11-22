@@ -34,7 +34,22 @@ TODO.md's "The jobs are read whole", which the maintainer said to do as it recom
   - `catalog.json`: the indexes of §9 with the three, and 6 cases: the jobs' indexes each partial, their columns, and what each holds, read through it (`INDEXED BY`).
 - **specs.md** §9: a bullet on the jobs' indexes, as for the other indexes there. §9 is fingerprinted: `Replication.tla` holds no read of the jobs and no index, so it is unchanged, its fingerprint given anew.
 - **Verified**, each in Docker, on the last code: gofmt; `go vet ./...`, with `-tags conformance` and `-tags loopdev`; `go test -timeout 60m ./...`; `go test -race` of `catalog` and `jobs`; `make conformance`, 659 scenarios; `golangci-lint run`, with `--build-tags conformance` and `--build-tags loopdev`: 0 issues; `test/tla/run.sh`, the eleven instances each as it expects (`Copy` 3,862,283 states), on the model unchanged. Before the change, the plan of every query of the jobs in the catalog, 38 texts, those it repeats once each, listed with each index considered, and after it again: only those of a disk or of a kind's own index changed, each to a seek; the others, the plan's sets, `CopiesLater`, `GuardPaths` and the reads of a file's jobs included, have the plan they had.
-- **Not verified**: a pass of the daemon on a queue of 200,000 copies to make, timed whole (`TestScale` makes none: both its disks hold every file); the plans with statistics, which no catalog has (Atoll runs no `ANALYZE`); the plans on another SQLite than modernc's 3.54.1, which the Rust version will be (the vectors' `INDEXED BY` cases pin that each index serves its reads; the plans themselves are pinned by the Go test); mutation tests.
+- **`TestScale` in qemu** (`RUN=TestScale SCALE=200000 KERNELS=debian`, Linux 6.12, no KVM, on `f24e518`: passed, 1 h 58 min). It makes no copy to make, as both its disks hold every file: it says that the indexes cost the passes nothing, and what the binary holds now. Every step under the 200 MB (190.7 MiB), at 186.3 MiB at most, for 183.8 MiB on `47ab5f6` (DONE.md, 2026-11-15), the binary's pages 16.3 to 16.6 MiB where they were 14.4, as the OTLP exporters made it larger (2026-11-19), with OTLP off; no transparent huge page. The times are about twice those of 2026-11-14, the machine shared with five other runs:
+
+  | Step | Time | The most resident | Of it, the Go runtime | The heap live |
+  |---|---|---|---|---|
+  | The first pass, which finds every copy | 12 min 35 s | 186.3 MiB | 165.6 MiB | 140.5 MiB |
+  | A scan with every copy known | 1 min 29 s | 170.9 MiB | 155.0 MiB | 87.0 MiB |
+  | Reading the hash of every copy | 28 min 59 s | 47.4 MiB | 36.6 MiB | 8.7 MiB |
+  | A pass with nothing to do | 1 min 17 s | 179.9 MiB | 163.3 MiB | 113.0 MiB |
+  | `atoll status` | 36 s | 40.2 MiB | 18.0 MiB | 1.6 MiB |
+  | `atoll status` with a strict rule, its plan of the pool included | 1 min 17 s | 180.1 MiB | 158.5 MiB | 134.7 MiB |
+  | The first pass with the link guard, which makes the 400,000 links | 39 min 2 s | 184.9 MiB | 168.7 MiB | 90.8 MiB |
+  | A pass with the link guard | 1 min 56 s | 172.7 MiB | 151.4 MiB | 113.5 MiB |
+  | The pass that removes the links, the guard off | 26 min 26 s | 176.5 MiB | 155.0 MiB | 108.5 MiB |
+
+  SQLite's allocator 10.2 MiB at each step; the catalog 125.0 MiB after the first pass, 141.0 MiB with the hashes, 212.2 MiB after the guard's operations.
+- **Not verified**: a pass of the daemon on a queue of 200,000 copies to make, timed whole (`TestScale` makes none, above); the plans with statistics, which no catalog has (Atoll runs no `ANALYZE`); the plans on another SQLite than modernc's 3.54.1, which the Rust version will be (the vectors' `INDEXED BY` cases pin that each index serves its reads; the plans themselves are pinned by the Go test); mutation tests.
 - **Decided without the maintainer, to confirm**:
   - three partial indexes, each on one kind, rather than one on `jobs(kind, dst_disk)`, for the plans above;
   - `JobOfPart` and `PartsInUse` name `payload IS NOT NULL`, which changes no row, so that `jobs_parts` serves them: an index on the part itself (`json_extract(payload, '$.part')`) would be exact, but would have SQLite read the payload of every copy to make each time one is written, and refuse a write whose payload is not JSON, which changes what the schema accepts (§29.3): not made;
