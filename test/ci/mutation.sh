@@ -32,10 +32,12 @@ operators="--invert-assignments --invert-bitwise --invert-bwassign --invert-logi
 # at 20, on 2026-11-21). At 20 a timed-out mutant is a loop the mutant made endless.
 timeout_coefficient=20
 # The packages whose mutants run only the tests that reach them, MUTATION_BY_TEST in place of the list. gremlins' first
-# run is then the whole of their tests, and a mutant's a part of them: twice that run is room enough, where 20 would
-# leave a mutant that loops for good a worker for half a day.
+# run is then the whole of their tests, and a mutant's a part of them: for jobs, whose tests take most of an hour with
+# one CPU, twice that run is room enough, where 20 would leave a mutant that loops for good a worker for half a day.
+# A package whose tests take less than building it needs more, MUTATION_BY_TEST_COEFFICIENT: glob, whose tests run in a
+# second, had 110 of its 170 mutants timed out at 2, as a mutant's run builds the package again (2026-11-22).
 by_test=${MUTATION_BY_TEST:-./internal/jobs}
-by_test_coefficient=2
+by_test_coefficient=${MUTATION_BY_TEST_COEFFICIENT:-2}
 
 if [ $# -eq 0 ]; then
 	# One package a word, split on purpose.
