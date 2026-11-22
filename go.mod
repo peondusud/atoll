@@ -19,7 +19,7 @@ require (
 	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.44.0
 	google.golang.org/protobuf v1.36.12
-	modernc.org/libc v1.80.1
+	modernc.org/libc v1.82.2
 	modernc.org/sqlite v1.62.0
 	pgregory.net/rapid v1.3.0
 )
@@ -41,5 +41,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261104224025-d1e00e9f33ab // indirect
 	google.golang.org/grpc v1.85.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.12.1 // indirect
+	modernc.org/memory v1.13.0 // indirect
 )
