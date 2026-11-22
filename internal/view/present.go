@@ -155,9 +155,67 @@ func Present(disks []Disk, file *File, entries []Entry, self Owner) (*Node, erro
 		return nil, nil
 	case copyFirst:
 		return presentFile(disks, rank, file, self)
-	default:
-		return presentEntry(entry, self), nil
 	}
+	n := presentEntry(entry, self)
+	if n.Kind == NodeDir {
+		// What is below a folder spans its disks, and the kernel checks a caller against one mode alone (specs.md §21.2).
+		for i := range entries {
+			if e := &entries[i]; e != entry && e.Kind == solver.EntryDir {
+				if _, ok := rank[e.Disk]; ok {
+					n.Mode = narrow(n, presentEntry(e, self))
+				}
+			}
+		}
+	}
+	return n, nil
+}
+
+// Classes of a mode's permission bits, as the kernel picks one for a caller.
+const (
+	classOwner = iota
+	classGroup
+	classOthers
+)
+
+// classBits gives the permission bits of a class of a mode.
+func classBits(mode uint32, class int) uint32 {
+	return mode >> (3 * (classOthers - class)) & 0o7
+}
+
+// narrow gives the mode of the folder n presents, narrowed by another folder at its path on another disk, so that no
+// caller is given through n, by its permission bits, what that folder may refuse it there (specs.md §21.2;
+// conformance/vectors/view_node.json). A caller of n's owner is, there, of that folder's owner when it is the same
+// account, and otherwise of its group or of its others, as nothing here says which groups an account is in; a caller of
+// n's group or of its others may be that folder's owner when it is another account, and is of its group, or of its
+// others, when the two have one group, or may be of either otherwise. Each class keeps the bits every class it may be
+// there gives. The sticky bit of either is kept, as it narrows who removes a name; setuid and setgid are n's, as are its
+// owner and group.
+func narrow(n, other *Node) uint32 {
+	sameOwner, sameGroup := other.UID == n.UID, other.GID == n.GID
+	var may [3][]int
+	if sameOwner {
+		may[classOwner] = []int{classOwner}
+	} else {
+		may[classOwner] = []int{classGroup, classOthers}
+		may[classGroup] = []int{classOwner}
+		may[classOthers] = []int{classOwner}
+	}
+	if sameGroup {
+		may[classGroup] = append(may[classGroup], classGroup)
+		may[classOthers] = append(may[classOthers], classOthers)
+	} else {
+		may[classGroup] = append(may[classGroup], classGroup, classOthers)
+		may[classOthers] = append(may[classOthers], classGroup, classOthers)
+	}
+	mode := n.Mode&0o6000 | (n.Mode|other.Mode)&0o1000
+	for class := classOwner; class <= classOthers; class++ {
+		bits := classBits(n.Mode, class)
+		for _, there := range may[class] {
+			bits &= classBits(other.Mode, there)
+		}
+		mode |= bits << (3 * (classOthers - class))
+	}
+	return mode
 }
 
 // presentFile presents a file's original (specs.md §7), or, when no copy is eligible, its first copy on a failed disk.

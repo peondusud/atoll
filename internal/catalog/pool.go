@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 
 	"github.com/peondusud/atoll/internal/fsx"
@@ -13,14 +14,19 @@ import (
 )
 
 // Create makes a catalog for a pool, with its folder, if it does not exist, and reports whether it
-// did. It may run again, and refuses a catalog of another pool (specs.md §9, §25).
+// did. It may run again, and refuses a catalog of another pool (specs.md §9, §25). What it makes is closed to other
+// accounts whatever the umask, the folders 0750 and the database 0640, whose log and shared memory SQLite makes with
+// its mode (§26).
 func Create(ctx context.Context, file, poolID string) (created bool, err error) {
 	existed, err := fsx.Exists(file)
 	if err != nil {
 		return false, fmt.Errorf("catalog %q: %w", file, err)
 	}
 	if !existed {
-		if err := fsx.MkdirAll(path.Dir(file)); err != nil {
+		if err := fsx.MkdirAllClosed(path.Dir(file)); err != nil {
+			return false, fmt.Errorf("catalog %q: %w", file, err)
+		}
+		if err := fsx.CreateClosed(file); err != nil && !errors.Is(err, fs.ErrExist) {
 			return false, fmt.Errorf("catalog %q: %w", file, err)
 		}
 	}

@@ -40,7 +40,7 @@ func BackupName(nowNS int64) string {
 // that had no room for one must not keep what was written of it.
 func Backup(ctx context.Context, db *sql.DB, catalogFile, poolID string, nowNS int64) (written string, removed []string, err error) {
 	dir := path.Join(path.Dir(catalogFile), BackupFolder)
-	if err := fsx.MkdirAll(dir); err != nil {
+	if err := fsx.MkdirAllClosed(dir); err != nil {
 		return "", nil, fmt.Errorf("backup: %w", err)
 	}
 	if err := removeParts(dir); err != nil {
@@ -48,6 +48,11 @@ func Backup(ctx context.Context, db *sql.DB, catalogFile, poolID string, nowNS i
 	}
 	written = path.Join(dir, BackupName(nowNS))
 	part := written + backupPart
+	// Made empty, closed to other accounts whatever the umask, as the catalog is (§26): VACUUM INTO fills an empty file
+	// as it finds it, and makes one with the umask's mode otherwise.
+	if err := fsx.CreateClosed(part); err != nil {
+		return "", nil, fmt.Errorf("backup: %w", err)
+	}
 	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", part); err != nil {
 		_ = fsx.RemoveFile(part)
 		return "", nil, fmt.Errorf("backup %s: %w", part, err)

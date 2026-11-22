@@ -172,6 +172,18 @@ func (u *unit) checkRunsAsShipped() {
 	if got := u.show("DevicePolicy", "DeviceAllow"); got != "auto " {
 		u.t.Errorf("%s: DevicePolicy and DeviceAllow %q, want none", u.name, got)
 	}
+	// The PATH it runs smartctl, mount, umount and fusermount3 from: the unit's, the system's own folders (G19).
+	environ, err := os.ReadFile("/proc/" + pid + "/environ")
+	mustDo(u.t, err)
+	var paths []string
+	for _, v := range strings.Split(string(environ), "\x00") {
+		if strings.HasPrefix(v, "PATH=") {
+			paths = append(paths, v)
+		}
+	}
+	if want := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}; !slices.Equal(paths, want) {
+		u.t.Errorf("%s runs with %q, want %q", u.name, paths, want)
+	}
 	status, err := os.ReadFile("/proc/" + pid + "/status")
 	mustDo(u.t, err)
 	for _, line := range strings.Split(string(status), "\n") {

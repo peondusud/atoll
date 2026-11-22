@@ -111,7 +111,9 @@ func owned(err error, name string) error {
 }
 
 // CreateUserFile makes a regular file at a logical path with a mode and an owner, after the folders missing on the way,
-// and gives it open for writing.
+// and gives it open for writing. It is made 0600, then given its owner, then its mode, as a copy's part is (specs.md
+// §14.2, §21.2): made with the mode asked, it would be for that moment a file of this process's account, setuid or
+// setgid as asked, that another account could open.
 func (d *Disk) CreateUserFile(logical string, mode, uid, gid uint32, like Like) (fsx.WritableFile, fsx.Stat, error) {
 	if err := d.Verify(); err != nil {
 		return nil, fsx.Stat{}, err
@@ -121,7 +123,7 @@ func (d *Disk) CreateUserFile(logical string, mode, uid, gid uint32, like Like) 
 		return nil, fsx.Stat{}, err
 	}
 	defer parent.close()
-	w, err := parent.CreateFile(name, mode)
+	w, err := parent.CreateFile(name, 0o600)
 	switch {
 	case fsx.IsExisting(err):
 		return nil, fsx.Stat{}, fmt.Errorf("%w: %w", ErrPathTaken, err)
@@ -139,8 +141,14 @@ func (d *Disk) CreateUserFile(logical string, mode, uid, gid uint32, like Like) 
 }
 
 func (d *Disk) madeFile(parent *folder, name string, w fsx.WritableFile, mode, uid, gid uint32) (fsx.Stat, error) {
-	if err := owned(w.SetOwner(uid, gid), name); err != nil {
+	refused := w.SetOwner(uid, gid)
+	if err := owned(refused, name); err != nil {
 		return fsx.Stat{}, err
+	}
+	if refused != nil {
+		// Still this process's: setuid or setgid would run it as this account, as a replica that could not take its
+		// source's owner keeps neither (specs.md §14).
+		mode &^= 0o6000
 	}
 	// The mode asked for, whatever the umask of this process, and after the owner, which clears setuid and setgid.
 	if err := w.SetMode(mode); err != nil {

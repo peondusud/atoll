@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/view"
 )
 
 // How a disk is watched (specs.md §15.1).
@@ -29,6 +31,9 @@ const (
 type WatcherOptions struct {
 	// ViewMount is view.mount, whose mergerfs process makes the view's events.
 	ViewMount string
+	// Accounts are the accounts whose processes may be the view's or Atoll's own: root, the one Atoll runs as and the
+	// catalog's owner (specs.md §10, §15.1). Nil takes root and the account this process acts as.
+	Accounts []uint32
 	// Now gives the time of an event, in Unix nanoseconds.
 	Now func() int64
 	// Inotify takes inotify on every disk, as where fanotify cannot be had: for tests.
@@ -90,7 +95,10 @@ func NewWatcher(opt WatcherOptions) *Watcher {
 	if err != nil {
 		exe = ""
 	}
-	return &Watcher{opt: opt, events: make(chan Event, 4096), self: os.Getpid(), exe: exe, disks: map[string]*diskWatch{}, origins: map[int]originSeen{}}
+	if opt.Accounts == nil {
+		opt.Accounts = []uint32{0, uint32(os.Geteuid())} //nolint:gosec // an account's number, never negative here
+	}
+	return &Watcher{opt: opt, events: make(chan Event, 4096), self: os.Getpid(), exe: strings.TrimSuffix(exe, exeReplaced), disks: map[string]*diskWatch{}, origins: map[int]originSeen{}}
 }
 
 // SetViewMount gives the watcher another view.mount, as a configuration read again does. What each process was
@@ -345,21 +353,27 @@ func (w *Watcher) origin(pid int) string {
 	now := w.now()
 	w.mu.Lock()
 	known, ok := w.origins[pid]
-	view := w.opt.ViewMount
+	viewMount := w.opt.ViewMount
 	w.mu.Unlock()
 	if ok && now-known.atNS < originKept.Nanoseconds() && now >= known.atNS {
 		return known.origin
 	}
+	// What /proc says of the process: the account it runs as, which only a process that may change accounts changes,
+	// then its executable, where /proc lets this process read it. A process gone before it is read, as a user's command,
+	// a mv or a cp, mostly is by then, is a user's: that reading loses nothing, as a user's change wakes a pass.
 	o := OriginUser
-	switch {
-	case w.exe != "" && procExe(pid) == w.exe && servesAtollView(pid):
-		// Atoll's own view writes on a user's behalf: what it does is a user's change, as through mergerfs (specs.md
-		// §15.1, §21.2).
-		o = OriginView
-	case w.exe != "" && procExe(pid) == w.exe:
-		o = OriginAtoll
-	case view != "" && servesView(pid, view):
-		o = OriginView
+	if w.ofAtollsAccounts(pid) {
+		exe, readable := procExe(pid)
+		switch {
+		case readable && w.exe != "" && exe == w.exe && servesAtollView(pid):
+			// Atoll's own view writes on a user's behalf: what it does is a user's change, as through mergerfs (specs.md
+			// §15.1, §21.2).
+			o = OriginView
+		case readable && w.exe != "" && exe == w.exe:
+			o = OriginAtoll
+		case viewMount != "" && procName(pid, exe, readable) == "mergerfs" && servesView(pid, viewMount):
+			o = OriginView
+		}
 	}
 	w.mu.Lock()
 	if len(w.origins) > 1024 {
@@ -370,12 +384,46 @@ func (w *Watcher) origin(pid int) string {
 	return o
 }
 
-func procExe(pid int) string {
+// exeReplaced is what the kernel adds to the name of an executable removed or replaced on disk since the process that
+// runs it started, as an upgrade leaves the daemon's and the view's.
+const exeReplaced = " (deleted)"
+
+// procExe gives the path of the executable a process runs, as /proc names it, whether or not that file was replaced
+// since. readable is false when it cannot be read: the process is gone, or another account's, whose executable only a
+// process that may trace it reads (ptrace(2), PTRACE_MODE_READ), as the daemon, of the account atoll, does not read
+// root's mergerfs.
+func procExe(pid int) (exe string, readable bool) {
 	target, err := fsx.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSuffix(target, exeReplaced), true
+}
+
+// procName gives the name of the program a process runs: its executable's, when it could be read, and otherwise the
+// name it gives itself, its comm, which every account may read, for a process /proc does not let this one trace: of
+// an account the caller already took as one of Atoll's, root's or its own. "" when neither can be read.
+func procName(pid int, exe string, readable bool) string {
+	if readable {
+		return path.Base(exe)
+	}
+	comm, err := fsx.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
 	if err != nil {
 		return ""
 	}
-	return target
+	return strings.TrimSpace(string(comm))
+}
+
+// ofAtollsAccounts says whether a process runs as one of the accounts that may be the view's or Atoll's own: its real
+// account, which a process changes only with CAP_SETUID, and which mergerfs keeps while a thread of its acts as its
+// caller (conformance/vectors/proc_status.json). No when /proc cannot say.
+func (w *Watcher) ofAtollsAccounts(pid int) bool {
+	data, err := fsx.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return false
+	}
+	st, err := view.ParseProcStatus(data)
+	return err == nil && slices.Contains(w.opt.Accounts, st.UID)
 }
 
 // servesView says whether a process is mergerfs with the view's mount point among its arguments.
@@ -405,10 +453,6 @@ func IsMountCommand(cmdline []byte) bool {
 }
 
 func servesView(pid int, mount string) bool {
-	comm, err := fsx.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
-	if err != nil || strings.TrimSpace(string(comm)) != "mergerfs" {
-		return false
-	}
 	cmdline, err := fsx.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
 	if err != nil {
 		return false

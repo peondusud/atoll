@@ -251,8 +251,10 @@ func safeSource(who *Credentials, a *Attrs) bool {
 
 // ProcStatus is what the view reads of a thread from /proc/<pid>/task/<pid>/status (specs.md §21.2;
 // conformance/vectors/proc_status.json): the user and group ids it acts on files as, the fourth field of Uid and Gid;
-// its other groups; and its effective capabilities.
+// its other groups; and its effective capabilities. UID is its real account, the first field of Uid, which the watcher
+// tells the process behind an event by (§15.1).
 type ProcStatus struct {
+	UID          uint32
 	FSUID, FSGID uint32
 	Groups       []uint32
 	CapEff       Caps
@@ -276,7 +278,9 @@ func ParseProcStatus(data []byte) (*ProcStatus, error) {
 		var err error
 		switch name {
 		case "Uid":
-			out.FSUID, err = fourth(fields)
+			if out.FSUID, err = fourth(fields); err == nil {
+				out.UID, err = realID(fields)
+			}
 		case "Gid":
 			out.FSGID, err = fourth(fields)
 		case "Groups":
@@ -306,6 +310,15 @@ func ParseProcStatus(data []byte) (*ProcStatus, error) {
 		}
 	}
 	return out, nil
+}
+
+// realID gives the first of four ids, the real one.
+func realID(fields [][]byte) (uint32, error) {
+	id, err := strconv.ParseUint(string(fields[0]), 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%w", err)
+	}
+	return uint32(id), nil
 }
 
 // fourth gives the fourth of four ids, the filesystem's.

@@ -21,6 +21,7 @@ import (
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/notify"
+	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/ups"
@@ -317,7 +318,8 @@ func Run(ctx context.Context, opt Options) error {
 	}
 	l := &loop{
 		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true, closed: jobs.Closed{},
-		watcher:  watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
+		watcher: watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Accounts: ops.TrustedOwners(set.catalog), Now: opt.Machine.Now,
+			Inotify: opt.Inotify}),
 		smartDue: smartFirst(opt.Machine),
 		queues:   newQueues(set.servers, nil), changed: map[string]bool{}, heard: map[string]watch.Heard{}, lines: map[string]jobs.DiskLine{},
 	}
