@@ -222,6 +222,62 @@ func FuzzListen(f *testing.F) {
 	})
 }
 
+func FuzzListenHost(f *testing.F) {
+	for _, v := range vectors.Load[listenHostVector](f, "listen_host.json") {
+		f.Add(v.Listen, v.Host)
+	}
+	f.Fuzz(func(t *testing.T, listen, host string) {
+		l, err := ParseListen(listen)
+		if err != nil {
+			return
+		}
+		// The address as the daemon listens on it is always named.
+		if !l.NamedBy(l.String()) {
+			t.Fatalf("ParseListen(%q).NamedBy(%q) = false", listen, l.String())
+		}
+		if !l.NamedBy(host) {
+			return
+		}
+		// A Host named is a port, 80 when left out, and an address the standard library reads as the one listened on,
+		// or as a loopback one for a loopback address; or localhost for one.
+		name, port := host, "80"
+		if at := strings.LastIndexByte(host, ':'); at >= 0 && !strings.HasSuffix(host, "]") {
+			name, port = host[:at], host[at+1:]
+		}
+		if n, err := strconv.Atoi(port); err != nil || n != int(l.Port) || strconv.Itoa(n) != port {
+			t.Fatalf("ParseListen(%q).NamedBy(%q): the port %q is not %d", listen, host, port, l.Port)
+		}
+		want := netip.AddrFrom4(l.IPv4)
+		if l.IsIPv6 {
+			want = netip.AddrFrom16(l.IPv6)
+		}
+		lower := []byte(name)
+		for i, c := range lower {
+			if 'A' <= c && c <= 'Z' {
+				lower[i] = c + 'a' - 'A'
+			}
+		}
+		if string(lower) == "localhost" {
+			if !want.IsLoopback() {
+				t.Fatalf("ParseListen(%q).NamedBy(%q): localhost for an address that is not loopback", listen, host)
+			}
+			return
+		}
+		inner, bracketed := strings.CutPrefix(name, "[")
+		if bracketed {
+			inner = strings.TrimSuffix(inner, "]")
+		}
+		got, err := netip.ParseAddr(inner)
+		if err != nil || got.Zone() != "" || got.Is4() == bracketed || got.Is4In6() {
+			t.Fatalf("ParseListen(%q).NamedBy(%q): netip reads %q as %v, %v", listen, host, inner, got, err)
+		}
+		loopbackNamed := want.IsLoopback() && (got == netip.MustParseAddr("127.0.0.1") || got == netip.IPv6Loopback())
+		if got != want && !loopbackNamed {
+			t.Fatalf("ParseListen(%q).NamedBy(%q): %v is not %v", listen, host, got, want)
+		}
+	})
+}
+
 func FuzzNUT(f *testing.F) {
 	for _, v := range vectors.Load[nutVector](f, "ups_address.json") {
 		f.Add(v.NUT)

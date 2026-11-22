@@ -61,3 +61,48 @@ func TestSecretFileWarnings(t *testing.T) {
 		t.Errorf("%d lines:\n%s", n, log.String())
 	}
 }
+
+// A token of api.token_file under 32 bytes, its last line break left out, gets a warning at its key, as does a file
+// that holds none, which refuses every request over TCP; the configuration loads all the same, the warning never
+// quotes the token, and a file that cannot be read gets none, as what reads it says why (specs.md §24.4).
+func TestAShortTokenIsWarned(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "api.token")
+	_, c := apiPool(t, "[api]\nlisten = \"127.0.0.1:7341\"\ntoken_file = "+strconv.Quote(file)+"\n")
+	tokenWarnings := func() []string {
+		var out []string
+		for _, w := range configWarnings(c) {
+			if w.Key == "api.token_file" {
+				out = append(out, w.Message)
+			}
+		}
+		return out
+	}
+	for _, tc := range []struct{ text, want string }{
+		{strings.Repeat("k", 31) + "\n", "31 bytes"},
+		{strings.Repeat("k", 31) + "\r\n", "31 bytes"},
+		{"s3cret", "6 bytes"},
+		{strings.Repeat("k", 32) + "\n", ""},
+		{strings.Repeat("k", 32), ""},
+		{"", "holds no token"},
+		{"\n", "holds no token"},
+	} {
+		if err := os.WriteFile(file, []byte(tc.text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := tokenWarnings()
+		switch {
+		case tc.want == "" && len(got) != 0:
+			t.Errorf("%q: %q, want none", tc.text, got)
+		case tc.want != "" && (len(got) != 1 || !strings.Contains(got[0], tc.want) || !strings.Contains(got[0], "openssl rand -hex 32")):
+			t.Errorf("%q: %q, want one that says %q", tc.text, got, tc.want)
+		case len(got) == 1 && (strings.Contains(got[0], "kkk") || strings.Contains(got[0], "s3cret")):
+			t.Errorf("%q: the warning quotes the token: %q", tc.text, got[0])
+		}
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if got := tokenWarnings(); len(got) != 0 {
+		t.Errorf("a token file that is not there: %q", got)
+	}
+}

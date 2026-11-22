@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/metrics"
+	"github.com/peondusud/atoll/internal/value"
 )
 
 // apiPool writes a configuration with one disk that is not mounted, and makes its catalog.
@@ -157,6 +159,63 @@ func TestTheAPIOverTCPAsksForItsToken(t *testing.T) {
 	}
 	if w := ask(h, http.MethodGet, "/v1/health", "Bearer n3w"); w.Code != http.StatusUnauthorized {
 		t.Errorf("no token file: %d", w.Code)
+	}
+}
+
+// A request over TCP that brings no token, or another, waits a quarter of a second before its 401, so that a token is
+// not guessed at the speed of the network; the right token waits for nothing; and the wait ends with its client, so
+// that it holds its place of api.listen no longer than its client does (specs.md §25.1).
+func TestARefusedTokenWaits(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "api.token")
+	if err := os.WriteFile(token, []byte("s3cret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, c := apiPool(t, "[api]\nlisten = \"127.0.0.1:7341\"\ntoken_file = "+strconv.Quote(token)+"\n")
+	a := newTestAPI(t, c)
+	h := a.withToken(a.routes())
+	if apiRefusedWait < 100*time.Millisecond || apiRefusedWait > 500*time.Millisecond {
+		t.Errorf("a refusal waits %s: a few hundred milliseconds", apiRefusedWait)
+	}
+	for _, header := range []string{"", "Bearer guess"} {
+		start := time.Now()
+		if w := ask(h, http.MethodGet, "/v1/health", header); w.Code != http.StatusUnauthorized {
+			t.Errorf("%q: %d", header, w.Code)
+		}
+		if waited := time.Since(start); waited < apiRefusedWait {
+			t.Errorf("%q was refused after %s, want %s at least", header, waited, apiRefusedWait)
+		}
+	}
+	// With a refusal that waits half a minute, the right token is answered before the request's own 10 s are over.
+	a.refusedWait = 30 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	r := httptest.NewRequestWithContext(ctx, http.MethodGet, "/v1/health", nil)
+	r.Header.Set("Authorization", "Bearer s3cret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || ctx.Err() != nil {
+		t.Errorf("the right token: %d, %v", w.Code, ctx.Err())
+	}
+	// A client that gives up ends the wait of its refusal, over a real connection.
+	done := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r)
+		done <- struct{}{}
+	}))
+	defer server.Close()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/v1/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer guess")
+	if resp, err := (&http.Client{Timeout: 200 * time.Millisecond}).Do(req); err == nil {
+		_ = resp.Body.Close()
+		t.Fatalf("answered %d before the wait was over", resp.StatusCode)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Error("the refusal still waits, its client gone")
 	}
 }
 
@@ -827,5 +886,130 @@ func TestMetricsListenGivesTheMetricsAlone(t *testing.T) {
 		if code := getHealth(t, client, tc.url, tc.token); code != tc.code {
 			t.Errorf("%s with token %q: %d, want %d", tc.url, tc.token, code, tc.code)
 		}
+	}
+}
+
+// An address of 100.64.0.0/10, which carrier-grade NAT uses too, is taken as Tailscale's by its range alone: at the
+// start, the daemon's log warns when it is on no interface whose name begins with tailscale, and the API listens all
+// the same, as headscale or another setup may name it otherwise (specs.md §25.1).
+func TestAnAddressOfCarrierGradeNATIsDoubted(t *testing.T) {
+	ts, other := netip.MustParseAddr("100.101.102.103"), netip.MustParseAddr("100.101.102.104")
+	lan, lo := netip.MustParseAddr("192.168.1.2"), netip.MustParseAddr("127.0.0.1")
+	for _, tc := range []struct {
+		listen string
+		ifaces []netInterface
+		want   string
+	}{
+		{"127.0.0.1:7341", []netInterface{{"wwan0", []netip.Addr{lo}}}, ""},
+		{"[fd7a:115c:a1e0::1]:7341", nil, ""},
+		{"100.101.102.103:7341", []netInterface{{"lo", []netip.Addr{lo}}, {"tailscale0", []netip.Addr{ts}}}, ""},
+		{"100.101.102.103:7341", []netInterface{{"wwan0", []netip.Addr{other}}, {"tailscale0", []netip.Addr{lan, ts}}}, ""},
+		{"100.64.0.0:7341", []netInterface{{"tailscale", []netip.Addr{netip.MustParseAddr("100.64.0.0")}}}, ""},
+		{"100.101.102.103:7341", []netInterface{{"wwan0", []netip.Addr{ts}}}, "it is on wwan0, and on no interface whose name begins with tailscale"},
+		{"100.101.102.103:7341", []netInterface{{"ts0", []netip.Addr{ts}}, {"wg0", []netip.Addr{ts}}}, "it is on ts0, wg0, and on no interface whose name begins with tailscale"},
+		{"100.101.102.103:7341", []netInterface{{"Tailscale0", []netip.Addr{ts}}}, "it is on Tailscale0, and on no interface"},
+		{"100.101.102.103:7341", []netInterface{{"tailscale0", []netip.Addr{other}}}, "it is on no interface of the machine"},
+		{"100.127.255.255:7341", nil, "it is on no interface of the machine"},
+	} {
+		at, err := value.ParseListen(tc.listen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := carrierNATDoubt(at, tc.ifaces); !strings.HasPrefix(got, tc.want) || (tc.want == "") != (got == "") {
+			t.Errorf("%s on %v: %q, want %q", tc.listen, tc.ifaces, got, tc.want)
+		}
+	}
+	var log bytes.Buffer
+	at, err := value.ParseListen("100.101.102.103:7341")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnCarrierNAT(slog.New(slog.NewTextHandler(&log, nil)), "api.listen", at, func() ([]netInterface, error) {
+		return []netInterface{{"eth0", []netip.Addr{ts}}}, nil
+	})
+	if !strings.Contains(log.String(), "level=WARN") || !strings.Contains(log.String(), "carrier-grade NAT") || !strings.Contains(log.String(), "key=api.listen") ||
+		!strings.Contains(log.String(), "eth0") {
+		t.Errorf("the log says:\n%s", log.String())
+	}
+	log.Reset()
+	warnCarrierNAT(slog.New(slog.NewTextHandler(&log, nil)), "metrics.listen", at, func() ([]netInterface, error) {
+		return nil, errors.New("no netlink")
+	})
+	if !strings.Contains(log.String(), "level=WARN") || !strings.Contains(log.String(), "no netlink") {
+		t.Errorf("the log says:\n%s", log.String())
+	}
+	log.Reset()
+	loopback, err := value.ParseListen("127.0.0.1:7341")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnCarrierNAT(slog.New(slog.NewTextHandler(&log, nil)), "api.listen", loopback, func() ([]netInterface, error) {
+		t.Error("the interfaces were listed for a loopback address")
+		return nil, nil
+	})
+	if log.Len() != 0 {
+		t.Errorf("a loopback address: %s", log.String())
+	}
+	// The machine's own interfaces, as the daemon lists them: the loopback one holds 127.0.0.1.
+	ifaces, err := machineInterfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(ifaces, func(i netInterface) bool { return slices.Contains(i.addrs, lo) }) {
+		t.Errorf("no interface holds 127.0.0.1: %v", ifaces)
+	}
+}
+
+// metrics.listen answers a request whose Host names its address, and 421 for another, so that a page a browser
+// loaded from a name that DNS rebinding points at the address reads nothing; api.listen, which asks for its token,
+// answers any Host (specs.md §23.1, conformance/vectors/listen_host.json).
+func TestTheMetricsAnswerOnlyTheirAddress(t *testing.T) {
+	ports := make([]string, 2)
+	for i := range ports {
+		free, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ports[i] = strconv.Itoa(free.Addr().(*net.TCPAddr).Port)
+		_ = free.Close()
+	}
+	token := filepath.Join(t.TempDir(), "api.token")
+	if err := os.WriteFile(token, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api, open := "127.0.0.1:"+ports[0], "127.0.0.1:"+ports[1]
+	_, c := apiPool(t, "[api]\nsocket = \"\"\nlisten = "+strconv.Quote(api)+"\ntoken_file = "+strconv.Quote(token)+"\n[metrics]\nlisten = "+strconv.Quote(open)+"\n")
+	stop := newTestAPI(t, c).start(t.Context(), c)
+	defer stop()
+	askAs := func(at, host, token string) (int, string) {
+		r, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+at+"/metrics", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Host = host
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	for _, host := range []string{open, "localhost:" + ports[1], "LOCALHOST:" + ports[1], "[::1]:" + ports[1]} {
+		if code, body := askAs(open, host, ""); code != http.StatusOK || !strings.Contains(body, "atoll_disk_info") {
+			t.Errorf("Host %q: %d %s", host, code, body)
+		}
+	}
+	for _, host := range []string{"rebind.example:" + ports[1], "rebind.example", "127.0.0.1", "127.0.0.1:" + ports[0], "localhost", "127.0.0.2:" + ports[1]} {
+		code, body := askAs(open, host, "")
+		if code != http.StatusMisdirectedRequest || !strings.Contains(body, `"error"`) || strings.Contains(body, "atoll_") || strings.Contains(body, ports[1]) {
+			t.Errorf("Host %q: %d %s", host, code, body)
+		}
+	}
+	if code, _ := askAs(api, "rebind.example:"+ports[0], "s3cret"); code != http.StatusOK {
+		t.Errorf("api.listen with its token and another Host: %d", code)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/peondusud/atoll/internal/daemon"
+	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
 )
 
@@ -77,7 +78,13 @@ func (a *apiServer) answerGuard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if answer.Done {
-		a.log.Info("the local API answered a guard", "disk", req.disk, "kind", req.kind, "answer", req.what, "up_to", *answer.UpTo, "from", r.RemoteAddr)
+		// Over the socket, the account and the process that connected, as the kernel recorded them: the log alone says
+		// who answered, as the events keep what format version 1 has them keep.
+		said := []any{"disk", req.disk, "kind", req.kind, "answer", req.what, "up_to", *answer.UpTo, "from", r.RemoteAddr}
+		if p, ok := r.Context().Value(peerKey{}).(fsx.Peer); ok {
+			said = append(said, "uid", p.UID, "pid", p.PID)
+		}
+		a.log.Info("the local API answered a guard", said...)
 		if a.told != nil {
 			a.told()
 		}

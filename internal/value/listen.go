@@ -178,16 +178,8 @@ func parsePort(s string) (uint16, bool) {
 // with no leading zero; or ::1 in brackets, in hex groups with no zone, as ipv6 above. Anything else is not, however a
 // resolver would read it.
 func LoopbackHost(host string) bool {
-	if len(host) == len("localhost") {
-		lower := []byte(host)
-		for i, c := range lower {
-			if 'A' <= c && c <= 'Z' {
-				lower[i] = c + 'a' - 'A'
-			}
-		}
-		if string(lower) == "localhost" {
-			return true
-		}
+	if isLocalhost(host) {
+		return true
 	}
 	if inner, ok := strings.CutPrefix(host, "["); ok {
 		inner, ok = strings.CutSuffix(inner, "]")
@@ -196,6 +188,66 @@ func LoopbackHost(host string) bool {
 	}
 	var ip [4]byte
 	return parseIPv4(host, &ip) && ip[0] == 127
+}
+
+// isLocalhost says whether a name is localhost, in any case of its ASCII letters.
+func isLocalhost(name string) bool {
+	if len(name) != len("localhost") {
+		return false
+	}
+	lower := []byte(name)
+	for i, c := range lower {
+		if 'A' <= c && c <= 'Z' {
+			lower[i] = c + 'a' - 'A'
+		}
+	}
+	return string(lower) == "localhost"
+}
+
+// NamedBy says whether the Host of a request names this address, so that what listens on it answers a page a browser
+// loaded from the address, and not one loaded from a name that DNS rebinding then points at it (specs.md §23.1): the
+// address in any form ParseListen takes, with its port; and for a loopback address, localhost in any case of its ASCII
+// letters, 127.0.0.1 or ::1 in brackets, with its port, which no page can have a browser resolve elsewhere. A Host
+// with no port names port 80, as HTTP has it. Nothing is resolved: any other Host, a name included, does not name it.
+func (l Listen) NamedBy(host string) bool {
+	name, port, bracketed := host, "80", false
+	if rest, ok := strings.CutPrefix(host, "["); ok {
+		inner, after, found := strings.Cut(rest, "]")
+		if !found {
+			return false
+		}
+		if after != "" {
+			given, hasPort := strings.CutPrefix(after, ":")
+			if !hasPort {
+				return false
+			}
+			port = given
+		}
+		name, bracketed = inner, true
+	} else if at := strings.LastIndexByte(host, ':'); at >= 0 {
+		name, port = host[:at], host[at+1:]
+	}
+	if number, ok := parsePort(port); !ok || number != l.Port {
+		return false
+	}
+	loopback := l.isLoopback()
+	if bracketed {
+		var ip [16]byte
+		return parseIPv6(name, &ip) && (l.IsIPv6 && ip == l.IPv6 || loopback && ip == [16]byte{15: 1})
+	}
+	var ip [4]byte
+	if parseIPv4(name, &ip) {
+		return !l.IsIPv6 && ip == l.IPv4 || loopback && ip == [4]byte{127, 0, 0, 1}
+	}
+	return loopback && isLocalhost(name)
+}
+
+// isLoopback says whether the address is a loopback one: 127.0.0.0/8 or ::1.
+func (l Listen) isLoopback() bool {
+	if l.IsIPv6 {
+		return l.IPv6 == [16]byte{15: 1}
+	}
+	return l.IPv4[0] == 127
 }
 
 // allowed says whether the address is a loopback one (127.0.0.0/8, ::1) or one of the Tailscale network

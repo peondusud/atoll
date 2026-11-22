@@ -73,7 +73,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 ## The threat model after 2026-11-19 (DONE.md)
 
 - The audit by scrutineer of 2026-11-22 (DONE.md): its eight findings are checked and the real ones fixed; run it again on `beta`, whose head it did not see.
-- The threat model's low gaps G7 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask).
+- The threat model's low gaps G8, G11, G13 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask). G7, G9, G10 and G12, the local API and the network, done on 2026-11-22 without the maintainer: confirm their choices (DONE.md). What they leave: the account that answered over the socket is in the log alone, not in the event (format version 2, or a column); a token under 32 bytes is warned of, not refused; `api.listen` answers any `Host`; an address of `100.64.0.0/10` on no `tailscale*` interface is warned of, not refused.
 - Measure the remount through systemd with systemd 252 (Debian 12, openmediavault 7): the polkit rule is checked there, the remount itself is not.
 - The view (experimental): a file or folder it makes takes the caller's group, not a setgid folder's; a non-owner's write to a setuid file whose presented mode differs from its disk's fails until a pass. Run `TestViewAsAnotherAccount` on Linux 7.3 too.
 

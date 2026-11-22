@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -523,6 +524,61 @@ func TestTheAPIAnswerOverTCP(t *testing.T) {
 	// The socket asks for no token: its mode says who may ask.
 	if w := post(a.routes(), "/v1/guards/t1", `{"answer": "confirm", "yes": true}`, ""); w.Code != http.StatusOK {
 		t.Errorf("over the socket: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// Over the socket, the daemon's log says which account and which process gave an answer to a guard, as the kernel
+// recorded them when they connected (SO_PEERCRED), beside the answer; nothing of it goes to the events (specs.md
+// §25.1).
+func TestTheLogSaysWhoAnsweredOverTheSocket(t *testing.T) {
+	p := newGuardedPool(t, clockBase())
+	socket := filepath.Join(t.TempDir(), "atoll.sock")
+	text, err := os.ReadFile(p.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = append(text, []byte("[api]\nsocket = "+strconv.Quote(socket)+"\n")...)
+	if err := os.WriteFile(p.configPath, text, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := load(p.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, told := answerAPI(t, c)
+	var log lockedBuffer
+	a.log = slog.New(slog.NewTextHandler(&log, nil))
+	stop := a.start(t.Context(), c)
+	defer stop()
+	r, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://atoll/v1/guards/t1", strings.NewReader(`{"answer": "confirm", "yes": true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Header.Set("Content-Type", "application/json")
+	resp, err := socketClient(socket).Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"done": true`) || told.Load() != 1 {
+		t.Fatalf("the answer: %d %s, %v", resp.StatusCode, body, err)
+	}
+	var line string
+	for l := range strings.Lines(log.String()) {
+		if strings.Contains(l, "the local API answered a guard") {
+			line = l
+		}
+	}
+	if want := fmt.Sprintf(" uid=%d pid=%d", os.Geteuid(), os.Getpid()); !strings.Contains(line, want) || !strings.Contains(line, "answer=confirm") {
+		t.Errorf("the log says %q, want %q in it:\n%s", line, want, log.String())
+	}
+	db := p.open(t)
+	defer p.close(t, db)
+	for _, data := range queryLines(t, db, "SELECT COALESCE(data, '') FROM events") {
+		if strings.Contains(data, `"pid"`) || strings.Contains(data, `"uid"`) {
+			t.Errorf("an event holds who answered: %s", data)
+		}
 	}
 }
 

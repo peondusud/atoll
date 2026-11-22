@@ -202,7 +202,8 @@ paths:
       description: >-
         What the daemon recorded, in the Prometheus text format 0.0.4: each metric api/metrics.json lists that has a
         sample, in that file's order. Made from memory alone: the counts of the catalog are those the last pass left. Also
-        given with no token, and with no other path, on metrics.listen when it is set.
+        given with no token, and with no other path, on metrics.listen when it is set, to a request whose Host names
+        that address (specs.md §23.1).
       responses:
         "200":
           description: The metrics.
@@ -210,6 +211,14 @@ paths:
             text/plain; version=0.0.4; charset=utf-8:
               schema: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "421":
+          description: >-
+            On metrics.listen alone, a request whose Host does not name its address, with its port, or localhost,
+            127.0.0.1 or [::1] for a loopback one: what DNS rebinding sends from a page a browser loaded from another
+            name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "503": { $ref: "#/components/responses/Unavailable" }
 components:
@@ -255,7 +264,9 @@ components:
           pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{9}Z$"
   responses:
     Unauthorized:
-      description: Over TCP, a request without the token, or with another. Nothing more is said.
+      description: >-
+        Over TCP, a request without the token, or with another, answered a quarter of a second after it came, so that a
+        token is not guessed at the speed of the network. Nothing more is said.
     MethodNotAllowed:
       description: Any method but GET, on a path that only answers. The Allow header says GET.
       content:
