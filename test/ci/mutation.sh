@@ -11,9 +11,13 @@
 #   bash test/ci/mutation.sh [PACKAGE ...]     # the pure core when no package is named
 #   make mutation PKG=./internal/glob
 #
-# WORKERS mutants are tested at once, the CPUs by default, each test run with one CPU. The exit code is 0 when
-# gremlins ran on every package and each met its gate, a package with no gate only measured; 1 when gremlins failed
-# on one or one fell under its gate; 2 for a wrong argument.
+# WORKERS mutants are tested at once, the CPUs by default, each test run with one CPU. A package of by_test runs, for
+# each mutant, only the tests that reach the line it changed (test/ci/mutation-go.sh), from the coverage of each test
+# alone, which test/ci/mutation-tests.sh reads first: gremlins runs a package's every test against each mutant, and
+# jobs' take half an hour. MUTATION_FILES, an extended regexp, mutates only the files whose names, .go left out, it
+# matches whole, the others left out as generated code is: a part of a package too large for one run. The exit code is 0
+# when gremlins ran on every package and each met its gate, a package with no gate only measured; 1 when gremlins
+# failed on one or one fell under its gate; 2 for a wrong argument.
 set -u
 
 # Released 2025-12-05 (Apache-2.0); a development tool, never a dependency of the module.
@@ -27,6 +31,11 @@ operators="--invert-assignments --invert-bitwise --invert-bwassign --invert-logi
 # among them mutants the tests let live, so hidden from the score (glob: 59 timed out and 15 lived at 3, 15 and 22
 # at 20, on 2026-11-21). At 20 a timed-out mutant is a loop the mutant made endless.
 timeout_coefficient=20
+# The packages whose mutants run only the tests that reach them, MUTATION_BY_TEST in place of the list. gremlins' first
+# run is then the whole of their tests, and a mutant's a part of them: twice that run is room enough, where 20 would
+# leave a mutant that loops for good a worker for half a day.
+by_test=${MUTATION_BY_TEST:-./internal/jobs}
+by_test_coefficient=2
 
 if [ $# -eq 0 ]; then
 	# One package a word, split on purpose.
@@ -85,15 +94,35 @@ for pkg in "$@"; do
 	# Generated code (a table, a generator behind //go:build ignore) is not what the tests are for.
 	excludes=()
 	for f in "$pkg"/*.go; do
-		if grep -q -m1 -E '^// Code generated .* DO NOT EDIT\.$|^//go:build ignore$' "$f"; then
+		base=$(basename "$f" .go)
+		if grep -q -m1 -E '^// Code generated .* DO NOT EDIT\.$|^//go:build ignore$' "$f" ||
+			{ [ -n "${MUTATION_FILES:-}" ] && ! echo "$base" | grep -qxE "$MUTATION_FILES"; }; then
 			excludes+=(-E "$(basename "$f" | sed 's/\./\\./g')\$")
 		fi
 	done
 	echo "==== $pkg"
 	start=$(date +%s)
+	coefficient=$timeout_coefficient
+	shim=()
+	case " $by_test " in
+	*" $pkg "*)
+		if ! bash test/ci/mutation-tests.sh "$pkg" "$out/$name.tests" "$workers"; then
+			echo "| \`$pkg\` | the tests alone failed | | | | | | | | | |" >>"$summary"
+			worst=1
+			failed+=("$pkg: a test fails alone, which would kill every mutant it is run for")
+			continue
+		fi
+		mkdir -p "$out/shim" || exit 1
+		printf '#!/bin/bash\nexec bash %q "$@"\n' "$(pwd)/test/ci/mutation-go.sh" >"$out/shim/go" && chmod +x "$out/shim/go" || exit 1
+		shim=(env "MUTATION_GO=$(command -v go)" "MUTATION_SRC=$(pwd)" "MUTATION_PKG=${pkg#./}" "MUTATION_MAP=$(pwd)/$out/$name.tests"
+			"MUTATION_LOG=$(pwd)/$out/$name.runs" "PATH=$(pwd)/$out/shim:$PATH")
+		: >"$out/$name.runs"
+		coefficient=$by_test_coefficient
+		;;
+	esac
 	# One operator a word, split on purpose.
 	# shellcheck disable=SC2086
-	"$out/gremlins" unleash --workers "$workers" --timeout-coefficient "$timeout_coefficient" $operators \
+	${shim[@]+"${shim[@]}"} "$out/gremlins" unleash --workers "$workers" --timeout-coefficient "$coefficient" $operators \
 		${excludes[@]+"${excludes[@]}"} -o "$out/$name.json" "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | tee "$log"
 	status=${PIPESTATUS[0]}
 	spent=$(($(date +%s) - start))

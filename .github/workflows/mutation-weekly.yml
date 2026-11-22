@@ -4,7 +4,8 @@
 # more. The score and the mutants that lived go to the job's summary, gremlins' log and JSON to an artifact. A package
 # under its gate (test/ci/gates.txt), the mutants test/ci/mutation-equivalents.txt names left out, fails its job; one
 # with no gate is only measured. jobs is not here: gremlins runs every test of a package against each mutant, half an
-# hour for jobs, so a run of its mutants would take days.
+# hour for jobs, and even with only the tests that reach each mutant (test/ci/mutation.sh, by_test), most of its are
+# reached by its sweeps of a whole pass, some 500 hours of tests in all (DONE.md, 2026-11-22).
 name: Mutation, weekly
 
 on:
