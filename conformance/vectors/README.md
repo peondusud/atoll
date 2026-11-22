@@ -235,6 +235,16 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `findings` | array of objects | the findings, in the order of §15.9, as `api/schemas/names-check.schema.json` states them |
 | `error` | boolean | `true` when a path, `under` or a disk is rejected |
 
+### `shown_name.json` — a name in a line of human output and in an alert (§23, §25)
+
+Two kinds of case: a name and what is written for it; and a range of the format characters, the general category `Cf`. The ranges, in order, are every format character of Unicode 17.0.0, the version of Go 1.27's tables (`unicode.Version`), and no other character is one: a version of Go or of Rust whose tables differ fails the test until the file says what changed.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path`, `path_b64` | string | a name, a logical path |
+| `shown` | string | what is written for it: the name as it is when it is valid UTF-8 with no control character (`Cc`) and no format character (`Cf`), and otherwise `(base64) ` and its bytes in standard base64 |
+| `from`, `to` | integer | the first and the last code point of a range of format characters, both included |
+
 ### `file_state.json` — the state a file shows (§4)
 
 | Field | Type | Meaning |

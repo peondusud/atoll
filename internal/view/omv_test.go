@@ -47,9 +47,11 @@ func TestOMVSize(t *testing.T) {
 }
 
 // The plugin refuses a path holding a character a shell or a systemd unit reads, and a line break; a control character
-// cannot be shown as it is. ':' and ',' are NewMergerfs's to refuse.
+// cannot be shown as it is, nor a format character, U+202E RIGHT-TO-LEFT OVERRIDE, U+2066 LEFT-TO-RIGHT ISOLATE,
+// U+200B ZERO WIDTH SPACE, U+FEFF and U+00AD among them (G16). ':' and ',' are NewMergerfs's to refuse.
 func TestOMVRefused(t *testing.T) {
-	for _, c := range []string{`"`, "'", "`", "$", `\`, ";", "|", "&", "<", ">", "\n", "\r", "\t", "\x00", "\x1b", "\x7f", "\u0085"} {
+	for _, c := range []string{`"`, "'", "`", "$", `\`, ";", "|", "&", "<", ">", "\n", "\r", "\t", "\x00", "\x1b", "\x7f", "\xc2\x85",
+		"\xe2\x80\xae", "\xe2\x81\xa6", "\xe2\x80\x8b", "\xef\xbb\xbf", "\xc2\xad", "\U000e0001"} {
 		if got, refused := OMVRefused("/mnt/a" + c + "b/media"); !refused || got != c {
 			t.Errorf("%q: got %q, %v", c, got, refused)
 		}

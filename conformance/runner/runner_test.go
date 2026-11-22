@@ -108,6 +108,27 @@ func TestComparingOutput(t *testing.T) {
 	})
 }
 
+// A human output is translated, the paths it writes are not: stdout_has and stdout_lacks look for those in it.
+func TestLookingForTextInTheOutput(t *testing.T) {
+	const prints = `printf 'Films/a: ok\n(base64) YQli: ok\n'`
+	look := func(fields string) string { return steps(`{"do": "atoll", ` + fields + `}`) }
+	checkVerdicts(t, []verdictCase{
+		{"it holds each", prints, look(`"stdout_has": ["Films/a", "(base64) YQli"]`), ""},
+		{"it lacks one", prints, look(`"stdout_has": ["Films/a", "(base64) Yf9i"]`), `stdout_has: "(base64) Yf9i"`},
+		{"it holds none", prints, look(`"stdout_lacks": ["a\tb", "Films/b"]`), ""},
+		{"it holds one", prints, look(`"stdout_lacks": ["Films/b", "Films/a"]`), `stdout_lacks: "Films/a"`},
+		{"a part of a line", prints, look(`"stdout_has": ["s/a: o"]`), ""},
+		{"bytes outside ASCII", `printf 'a\342\200\256b\n'`, look(`"stdout_lacks": ["a\u202eb"]`), "stdout_lacks"},
+		{"bytes outside ASCII: others", `printf 'a\342\200\255b\n'`, look(`"stdout_lacks": ["a\u202eb"]`), ""},
+		{"the sandbox", `echo "$PWD/y"`, look(`"stdout_has": ["${SANDBOX}/y"]`), ""},
+		{"the sandbox: not it", `echo /other/y`, look(`"stdout_has": ["${SANDBOX}/y"]`), "stdout_has"},
+		{"standard error is not looked at", `echo 'Films/a' >&2`, look(`"stdout_has": ["Films/a"]`), "stdout_has"},
+		{"with stdout_json", `echo '{"path": "a"}'`, look(`"stdout_json": {"path": "a"}, "stdout_has": ["\"path\""]`), ""},
+		{"with stdout_json: it compares too", `echo '{"path": "a"}'`, look(`"stdout_json": {"path": "b"}, "stdout_has": ["\"path\""]`), "$.path"},
+		{"after the exit code", "exit 4", look(`"stdout_lacks": ["x"]`), "exit code 4"},
+	})
+}
+
 func TestRunningTheBinary(t *testing.T) {
 	checkVerdicts(t, []verdictCase{
 		{"the sandbox in the arguments", `[ "$1" = "$PWD/x" ]`, steps(`{"do": "atoll", "args": ["${SANDBOX}/x"]}`), ""},
@@ -184,6 +205,13 @@ func TestRefusingAScenario(t *testing.T) {
 		{"a umask past 0777", "exit 0", steps(`{"do": "atoll", "umask": "01777"}`), "octal digits"},
 		{"a umask with an 8", "exit 0", steps(`{"do": "atoll", "umask": "0028"}`), "octal digits"},
 		{"a umask on the wrong step", "exit 0", steps(`{"do": "advance", "by": "1m", "umask": "0027"}`), "does not apply"},
+		{"stdout_has: an empty list", "exit 0", steps(`{"do": "atoll", "stdout_has": []}`), "checks nothing"},
+		{"stdout_has: an empty text", "exit 0", steps(`{"do": "atoll", "stdout_has": ["a", ""]}`), "checks nothing"},
+		{"stdout_lacks: an empty list", "exit 0", steps(`{"do": "atoll", "stdout_lacks": []}`), "checks nothing"},
+		{"stdout_lacks: an empty text", "exit 0", steps(`{"do": "atoll", "stdout_lacks": [""]}`), "checks nothing"},
+		{"stdout_has: not a list of texts", "exit 0", steps(`{"do": "atoll", "stdout_has": "a"}`), "decode"},
+		{"stdout_has on the wrong step", "exit 0", steps(`{"do": "advance", "by": "1m", "stdout_has": ["a"]}`), "does not apply"},
+		{"stdout_lacks on the wrong step", "exit 0", steps(`{"do": "tick", "stdout_lacks": ["a"]}`), "does not apply"},
 		{"a symlink with a mode", "exit 0", steps(file + `{"path": "a", "kind": "symlink", "target": "b", "mode": "0777"}]}`), "only a path and a target"},
 		{"a symlink with content", "exit 0", steps(file + `{"path": "a", "kind": "symlink", "target": "b", "text": "x"}]}`), "only a path and a target"},
 		{"a symlink with a size", "exit 0", steps(file + `{"path": "a", "kind": "symlink", "target": "b", "size": 1}]}`), "only a path and a target"},

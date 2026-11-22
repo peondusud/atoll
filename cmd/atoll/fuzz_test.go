@@ -12,9 +12,9 @@ import (
 // FuzzEncodePath: a path is bytes, which anyone who names a file on a disk chooses (specs.md §29.3). Whatever they
 // are, a --json output gives it as path when it is UTF-8 and as path_b64 otherwise, never both, and a script that
 // reads either gets the same bytes back; and a line of human output shows it as it is or in base64, with no control
-// character and nothing that is not UTF-8, and its bytes can be told from what it shows.
+// character, no format character and nothing that is not UTF-8, and its bytes can be told from what it shows.
 func FuzzEncodePath(f *testing.F) {
-	for _, p := range []string{"Films/Amélie (2001).mkv", "a\xffb", "a\nb\x1b[2J", " ", "(base64) YQ==", "\xed\xa0\x80", ""} {
+	for _, p := range []string{"Films/Amélie (2001).mkv", "a\xffb", "a\nb\x1b[2J", " ", "(base64) YQ==", "\xed\xa0\x80", "", "Films/Trailer\xe2\x80\xaevkm.exe", "a\xe2\x80\x8db"} {
 		f.Add(p)
 	}
 	f.Fuzz(func(t *testing.T, p string) {
@@ -46,7 +46,7 @@ func FuzzEncodePath(f *testing.F) {
 			t.Fatalf("encodePath(%q) gives %s, which reads %q", p, raw, got)
 		}
 		shown := shownPath(p)
-		if !utf8.ValidString(shown) || strings.ContainsFunc(shown, unicode.IsControl) {
+		if !utf8.ValidString(shown) || strings.ContainsFunc(shown, func(r rune) bool { return unicode.In(r, unicode.Cc, unicode.Cf) }) {
 			t.Fatalf("shownPath(%q) = %q", p, shown)
 		}
 		if shown != p && shown != "(base64) "+base64.StdEncoding.EncodeToString([]byte(p)) {
