@@ -159,7 +159,8 @@ func TestWritesLoseNothingWhereverTheyFail(t *testing.T) {
 			kept: func() bool { return holding(mount, "media/Films/a", "film") },
 		}
 	}})
-	sweep(t, sweepCase{name: "the chunks of an entry purged", prepare: func(t *testing.T, mount string) swept {
+	// The folder that held the chunks, removed once they are gone, may stay, empty, with a warning.
+	sweep(t, sweepCase{name: "the chunks of an entry purged", quiet: map[string]bool{"rmdir a": true}, prepare: func(t *testing.T, mount string) swept {
 		put(t, mount, "Atoll/trash/2026-01-01/9.chunks/Films/a/00000000", "c0")
 		put(t, mount, "Atoll/trash/2026-01-01/9.chunks/Films/a/00000003", "c3")
 		op := &Op{ID: 10, Disk: "t1", Kind: catalog.OpUnlink, Path: "Films/a", Path2: "2026-01-01/9.chunks/Films/a"}

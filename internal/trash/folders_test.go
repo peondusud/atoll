@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // own marks a disk's folders as made by Atoll, as a copy or a restore makes them.
@@ -61,6 +63,46 @@ func TestAtollsEmptyFoldersGo(t *testing.T) {
 	// The other disks' folders are the user's.
 	if !b.there("t1", "d/e") || !b.there("t2", "d/e") {
 		t.Error("a folder of another disk went")
+	}
+}
+
+// Folders Atoll made three deep, which its own move to the trash left empty, go each in its turn, the deepest first,
+// alone or beside another of its own at the top (specs.md §17.5).
+func TestAtollsEmptyFoldersGoHoweverDeep(t *testing.T) {
+	for _, also := range []bool{false, true} {
+		b := newBench(t)
+		b.addFiles("d/e/f/x")
+		b.own("t3", "d", "d/e", "d/e/f")
+		if also {
+			b.addFiles("u/x")
+			b.own("t3", "u")
+		}
+		b.prune()
+		for _, folder := range []string{"d/e/f", "d/e", "d", "u"} {
+			if b.there("t3", folder) {
+				t.Errorf("with u %v: %s stays", also, folder)
+			}
+		}
+	}
+}
+
+// A folder the catalog still holds something of the disk below stays, empty as the disk may show it: the next walk
+// says what became of it, and only then is it Atoll's to remove (specs.md §17.5).
+func TestAFolderTheCatalogHoldsSomethingBelowStays(t *testing.T) {
+	b := newBench(t)
+	b.addFiles("d/x")
+	b.write("t1", "d/y", "y")
+	b.write("t3", "d/y", "y")
+	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	b.own("t3", "d")
+	if err := os.Remove(filepath.Join(b.dirs["t3"], "media", "d", "y")); err != nil {
+		t.Fatal(err)
+	}
+	b.prune()
+	if !b.there("t3", "d") || b.count("SELECT count(*) FROM ops WHERE kind = 'rmdir'") != 0 {
+		t.Error("the folder went, or its removal was journaled")
 	}
 }
 

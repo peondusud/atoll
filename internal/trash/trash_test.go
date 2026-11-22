@@ -3955,6 +3955,12 @@ func TestADiskWhoseMarkerWentIsMissing(t *testing.T) {
 	if v := s.VerdictOf(2); v.State != disks.Missing || v.Reason != disks.NoMarker {
 		t.Errorf("gone before the confirmation: %s %s", v.State, v.Reason)
 	}
+	// What the confirmation made of t3 is t3's alone.
+	for i := range 2 {
+		if v := s.VerdictOf(i); v.State != disks.Online {
+			t.Errorf("gone before the confirmation, disk %d is %s %s", i, v.State, v.Reason)
+		}
+	}
 	s.Close()
 	if got := b.text("SELECT state FROM disks WHERE id = 't3'"); got != "missing" {
 		t.Errorf("gone before the confirmation: the disk is %s", got)

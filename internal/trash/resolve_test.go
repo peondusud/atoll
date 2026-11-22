@@ -210,6 +210,43 @@ func TestAResolutionThatCannotLookAtACopy(t *testing.T) {
 	}
 }
 
+// A resolution stopped once every other copy went, before the conflict was ended, leaves the file in conflict with its
+// kept copy alone: a run that may not write says so and writes nothing, the conflict left in the catalog as it is;
+// one with --yes ends it (specs.md §15.7).
+func TestADryRunAfterAResolutionStoppedEndsNothing(t *testing.T) {
+	b := conflicted(t)
+	s := b.opened()
+	stop := errors.New("stop")
+	seen := 0
+	if _, err := s.Resolve(t.Context(), "c", "t3", func(*ResolveItem) error {
+		// The kept copy, then t1 and t2, each reported once it went.
+		if seen++; seen == 3 {
+			return stop
+		}
+		return nil
+	}); !errors.Is(err, stop) {
+		t.Fatalf("stopped at the last copy: %v", err)
+	}
+	s.Close()
+	if got := b.count("SELECT count(*) FROM copies WHERE file_id = (SELECT id FROM files WHERE lpath = x'63')"); got != 1 {
+		t.Fatalf("%d copies left, not the kept one alone", got)
+	}
+	items, summary := b.resolved("t3", false)
+	if got := outcomesOf(items); got != "t3:kept " || summary.Resolved || summary.Applied || summary.ToDo != 0 {
+		t.Errorf("a dry run: %s, %+v", got, summary)
+	}
+	if got := b.text("SELECT state FROM files WHERE lpath = x'63'"); got != "conflict" {
+		t.Errorf("a dry run left the file %s", got)
+	}
+	_, summary = b.resolved("t3", true)
+	if !summary.Resolved {
+		t.Errorf("with --yes: %+v", summary)
+	}
+	if got := b.text("SELECT state FROM files WHERE lpath = x'63'"); got == "conflict" {
+		t.Error("with --yes, the file is still in conflict")
+	}
+}
+
 // What the caller's function returns stops the resolution, with it.
 func TestAResolutionStops(t *testing.T) {
 	stop := errors.New("stop")

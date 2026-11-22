@@ -11,6 +11,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/solver"
 )
 
 // fileA reads the file a, with its copies.
@@ -32,6 +33,9 @@ func TestWhatASessionSaysOfADisk(t *testing.T) {
 	}
 	if h, err := s.Handle(t.Context(), "t9"); h != nil || err != nil {
 		t.Errorf("a handle on a disk the session does not know: %v, %v", h, err)
+	}
+	if ok, err := s.Confirms(t.Context(), "t9", errors.New("a read failed")); ok || err != nil {
+		t.Errorf("a disk the session does not know confirms: %v, %v", ok, err)
 	}
 	if s.MountOwner("t3") || s.Opened("t3") || !s.Readable("t3") || !s.Writable("t3") {
 		t.Error("t3, before it is opened")
@@ -65,6 +69,73 @@ func TestWhatASessionSaysOfADisk(t *testing.T) {
 	}
 }
 
+// A disk mounted by ntfs-3g gives every file the owner and the mode of its mount, which its mount check finds: the
+// session says so of that disk, and of no other (specs.md §15.4).
+func TestAMountThatGivesItsOwnerIsKnownByItsDisk(t *testing.T) {
+	b := newBenchOf(t, "fuseblk")
+	s := b.opened()
+	for id, want := range map[string]bool{"t1": false, "t2": false, "t3": true} {
+		if got := s.MountOwner(id); got != want {
+			t.Errorf("%s: %v", id, got)
+		}
+	}
+}
+
+// planOn journals a move to the trash of the copy of each path on a disk, and leaves it planned, as a crash would.
+func (b *bench) planOn(disk string, paths ...string) {
+	b.t.Helper()
+	for _, path := range paths {
+		var key string
+		if err := b.db.QueryRowContext(b.t.Context(), "SELECT c.file_key FROM copies c JOIN files f ON f.id = c.file_id WHERE c.disk_id = ? AND f.lpath = ?",
+			disk, []byte(path)).Scan(&key); err != nil {
+			b.t.Fatal(err)
+		}
+		if _, err := catalog.BeginTrash(b.t.Context(), b.db, &catalog.TrashStart{Disk: disk, Path: path, FileKey: key, Reason: "surplus",
+			NowNS: b.Now(), ExpiresNS: b.Now() + 1}); err != nil {
+			b.t.Fatal(err)
+		}
+	}
+}
+
+// plannedOn counts the operations of a disk left planned.
+func (b *bench) plannedOn(disk string) int {
+	b.t.Helper()
+	return b.count("SELECT count(*) FROM ops WHERE state = 'planned' AND disk_id = '" + disk + "'")
+}
+
+// The reprise that opens a session resolves what is left planned on each disk it can write to, whatever another disk
+// does: one it cannot reach waits, one lost on the way waits, and the next disk's operations are resolved all the same,
+// each disk once, its parts cleaned after it (specs.md §17.2).
+func TestTheRepriseOfEachDiskGoesOnWhateverAnotherDoes(t *testing.T) {
+	t.Run("a disk that cannot be reached, then one lost", func(t *testing.T) {
+		b := newBench(t)
+		b.addFiles("b")
+		b.planOn("t1", "a", "b")
+		b.planOn("t2", "a")
+		b.planOn("t3", "a", "b")
+		b.unread[b.dirs["t1"]] = true
+		b.failOn("t2", "stat", syscall.EIO)
+		s := b.opened()
+		if b.plannedOn("t1") != 2 || b.plannedOn("t2") != 1 || b.plannedOn("t3") != 0 || !s.Lost() {
+			t.Errorf("left planned: t1 %d, t2 %d, t3 %d; lost %v", b.plannedOn("t1"), b.plannedOn("t2"), b.plannedOn("t3"), s.Lost())
+		}
+	})
+	t.Run("two disks that answer", func(t *testing.T) {
+		b := newBench(t)
+		b.planOn("t2", "a")
+		b.planOn("t3", "a")
+		for _, id := range []string{"t2", "t3"} {
+			if err := os.MkdirAll(filepath.Join(b.dirs[id], "Atoll", "tmp"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s := b.opened()
+		if b.plannedOn("t2") != 0 || b.plannedOn("t3") != 0 || s.Lost() {
+			t.Errorf("left planned: t2 %d, t3 %d; lost %v", b.plannedOn("t2"), b.plannedOn("t3"), s.Lost())
+		}
+	})
+}
+
 // A session that only reads confirms each disk it reads through, as one that writes does, and writes to none: an
 // operation a crash left stays planned, and tmp/ keeps what it holds (specs.md §17.2).
 func TestASessionThatOnlyReads(t *testing.T) {
@@ -75,6 +146,11 @@ func TestASessionThatOnlyReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(tmp, "1.part"), []byte("p"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The part of a copy done, which a session that writes removes.
+	b.exec("INSERT INTO ops(id, disk_id, kind, path, path2, file_key, started_ns, state) VALUES (9, 't3', 'create', ?, ?, '', 1, 'done')", []byte("a"), []byte("9.part"))
+	if err := os.WriteFile(filepath.Join(tmp, "9.part"), []byte("p"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	b.confirm = map[string]int{}
@@ -89,8 +165,37 @@ func TestASessionThatOnlyReads(t *testing.T) {
 	if b.text("SELECT state FROM ops") != "planned" || !b.sourceThere() || s.Lost() {
 		t.Error("a session that only reads resolved what a crash left")
 	}
-	if _, err := os.Stat(filepath.Join(tmp, "1.part")); err != nil {
-		t.Errorf("tmp/: %v", err)
+	for _, part := range []string{"1.part", "9.part"} {
+		if _, err := os.Stat(filepath.Join(tmp, part)); err != nil {
+			t.Errorf("tmp/: %v", err)
+		}
+	}
+	if h, err := b.opened().Handle(t.Context(), "t3"); h == nil || err != nil {
+		t.Fatalf("a session that writes: %v, %v", h, err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "9.part")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a session that writes left the part of a copy done: %v", err)
+	}
+}
+
+// A disk the configuration marks draining stays draining while it can be read and written, awake or not; one mounted
+// read-only, or missing, is what its check says; a disk not draining is always what its check says (specs.md §18).
+func TestADrainingDiskStaysDrainingWhileItAnswers(t *testing.T) {
+	draining, kept := &config.Disk{State: config.DiskDraining}, &config.Disk{}
+	for _, tc := range []struct {
+		disk       *config.Disk
+		state, out solver.DiskState
+	}{
+		{draining, solver.DiskOnline, solver.DiskDraining},
+		{draining, solver.DiskStandby, solver.DiskDraining},
+		{draining, solver.DiskReadOnly, solver.DiskReadOnly},
+		{draining, solver.DiskMissing, solver.DiskMissing},
+		{kept, solver.DiskOnline, solver.DiskOnline},
+		{kept, solver.DiskStandby, solver.DiskStandby},
+	} {
+		if got := heldState(tc.disk, tc.state); got != tc.out {
+			t.Errorf("%q, found %s: %s", tc.disk.State, tc.state, got)
+		}
 	}
 }
 

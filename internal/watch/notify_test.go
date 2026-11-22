@@ -3,7 +3,9 @@ package watch
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -260,7 +262,37 @@ func TestInotifyRecords(t *testing.T) {
 	if err != nil || len(records) != 3 || records[1].name != "long-enough-name" || records[0].cookie != 9 || records[2].name != "" {
 		t.Fatalf("%+v, %v", records, err)
 	}
-	if _, err := parseInotify(buf[:len(buf)-3]); !errors.Is(err, errMalformed) {
+	if _, err := parseInotify(buf[:len(buf)-3]); !errors.Is(err, errMalformed) || !strings.Contains(err.Error(), ": 13 bytes left") {
 		t.Errorf("cut short: %v", err)
+	}
+}
+
+// What the kernel may give at the edges of a read is read as it is: an info of nothing but its header, a handle of no
+// bytes, a name that runs to the end of its info with no NUL; and what is cut short anywhere is malformed, said with
+// what was left, never read past (specs.md §15.11).
+func TestFanotifyAtTheEdges(t *testing.T) {
+	bare := []byte{0xff, 0, 4, 0}
+	noHandle := fanHandle(infoFID, "", "")
+	unended := append([]byte{infoDFIDName, 0, 0, 0}, make([]byte, 8)...)
+	unended = binary.NativeEndian.AppendUint32(unended, 4)
+	unended = binary.NativeEndian.AppendUint32(unended, 1)
+	unended = append(unended, "rootname"...)
+	binary.NativeEndian.PutUint16(unended[2:], uint16(len(unended)))
+	records, err := parseFanotify(fanEvent(fanCreate, 1, bare, noHandle, unended))
+	if err != nil || len(records) != 1 || len(records[0].infos) != 2 {
+		t.Fatalf("%+v, %v", records, err)
+	}
+	if got := records[0].infos; len(got[0].handle) != 0 || string(got[1].handle) != "root" || got[1].name != "name" {
+		t.Errorf("%+v", got)
+	}
+	good := fanEvent(fanCreate, 1, fanHandle(infoDFIDName, "root", "a"))
+	if _, err := parseFanotify(append(append([]byte{}, good...), good[:5]...)); !errors.Is(err, errMalformed) || !strings.Contains(err.Error(), ": 5 bytes left") {
+		t.Errorf("a second event of five bytes: %v", err)
+	}
+	long := append([]byte{}, good...)
+	binary.NativeEndian.PutUint32(long[fanMetadataSize+4+8:], 4000)
+	inHandle := int(binary.NativeEndian.Uint16(good[fanMetadataSize+2:])) - 4 - 8 - 8
+	if _, err := parseFanotify(long); !errors.Is(err, errMalformed) || !strings.Contains(err.Error(), fmt.Sprintf("a handle of 4000 bytes in %d", inHandle)) {
+		t.Errorf("a handle too long: %v", err)
 	}
 }

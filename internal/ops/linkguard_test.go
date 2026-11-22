@@ -282,3 +282,163 @@ func inodeKey(t *testing.T, path string) string {
 	}
 	return strconv.FormatUint(info.Sys().(*syscall.Stat_t).Ino, 10) //nolint:forcetypeassert // Linux only
 }
+
+// link gives a name below a mount a second name, its folders made on the way.
+func link(t *testing.T, mount, from, to string) {
+	t.Helper()
+	full := filepath.Join(mount, filepath.FromSlash(to))
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(mount, filepath.FromSlash(from)), full); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The names a look counts leave out the guard's own links alone: a regular file of the links folder named by a file id.
+// Anything else there, a file a user put there with another name, is a name like any other (specs.md §17). A file with
+// one name has no link of the guard, and its look reads nothing of the links folder, which may not even be readable.
+func TestALookLeavesOutTheGuardsLinksAlone(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, "media/Films/a", "film")
+	put(t, mount, "media/Films/b", "film")
+	link(t, mount, "media/Films/a", "Atoll/links/7")
+	link(t, mount, "media/Films/b", "Atoll/links/notes")
+	unread := &refusing{call: "names"}
+	d := openAt(t, mount, unread.fail)
+	put(t, mount, "media/Films/c", "film")
+	if st, there, err := d.StatRoot("Films/c"); err != nil || !there || st.Nlink != 1 || unread.calls != 0 {
+		t.Fatalf("a file with one name: %d names, %d reads of the links folder, %v", st.Nlink, unread.calls, err)
+	}
+	d = openAt(t, mount, nil)
+	for path, want := range map[string]uint32{"Films/a": 1, "Films/b": 2} {
+		if st, _, err := d.StatRoot(path); err != nil || st.Nlink != want {
+			t.Errorf("%s: %d names, %v", path, st.Nlink, err)
+		}
+	}
+}
+
+// What the guard counts of its links is what the links folder holds when it was last read: a read of it anew forgets
+// the links gone since, and no count ever says a file found at a name has none.
+func TestTheGuardCountsWhatItLastRead(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, "media/Films/a", "film")
+	link(t, mount, "media/Films/a", "media/Films/b")
+	link(t, mount, "media/Films/a", "Atoll/links/7")
+	link(t, mount, "media/Films/a", "Atoll/links/8")
+	d := openAt(t, mount, nil)
+	if st, _, err := d.StatRoot("Films/a"); err != nil || st.Nlink != 2 {
+		t.Fatalf("a and b, with the links 7 and 8: %d names, %v", st.Nlink, err)
+	}
+	for _, name := range []string{"7", "8"} {
+		if err := os.Remove(filepath.Join(mount, "Atoll", "links", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st, _, err := d.StatRoot("Films/a"); err != nil || st.Nlink < 1 {
+		t.Errorf("the links gone, not read again: %d names, %v", st.Nlink, err)
+	}
+	if _, err := d.Links(); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, err := d.StatRoot("Films/a"); err != nil || st.Nlink != 2 {
+		t.Errorf("the links read again: %d names, %v", st.Nlink, err)
+	}
+}
+
+// The highest file id the links folder names counts the largest a catalog gives, and nothing past it.
+func TestTheHighestLinkIsOneACatalogGives(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, "media/a", "film")
+	link(t, mount, "media/a", fmt.Sprintf("Atoll/links/%d", catalog.MaxID))
+	link(t, mount, "media/a", fmt.Sprintf("Atoll/links/%d", int64(catalog.MaxID)+1))
+	if got, err := openAt(t, mount, nil).HighestLinkID(); err != nil || got != catalog.MaxID {
+		t.Errorf("%d, %v", got, err)
+	}
+}
+
+// Making a link, and removing one, give the change time the file had just before, as each moves it for every name of
+// the file, and a name that recorded another holds a change nobody has looked at (specs.md §17).
+func TestALinkSaysTheChangeTimeBeforeIt(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, "media/Films/a", "film")
+	put(t, mount, "media/Films/other", "x")
+	before := statAt(t, mount, "media/Films/a").Ctime
+	d := openAt(t, mount, nil)
+	folder, err := d.OpenLinks(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer folder.Close()
+	key := keyAt(t, mount, "media/Films/a")
+	links, err := d.MakeLink(&Op{ID: 7, Disk: "t1", Kind: catalog.OpLink, Path: "Films/a", Link: 42, FileKey: key}, folder)
+	if err != nil || links == nil || links.PriorNS != TimeOf(before) {
+		t.Fatalf("made: %+v, %v", links, err)
+	}
+	linked := statAt(t, mount, "media/Films/a").Ctime
+	prior, err := d.DropLink(&Op{ID: 8, Disk: "t1", Kind: catalog.OpUnlink, Path: "Films/a", Link: 42, FileKey: key}, folder)
+	if err != nil || prior != TimeOf(linked) || !absent(mount, "Atoll/links/42") {
+		t.Errorf("removed: %+v, %v", prior, err)
+	}
+}
+
+// A link the guard sends to the trash lands in folders that stand for the root and the folders of its path, each like
+// the one it stands for while that one is there, and private, the file's owner's, once it is gone (specs.md §17.1).
+func TestTheFoldersOfALinkInTheTrashAreLikeThoseOfItsPath(t *testing.T) {
+	old := syscall.Umask(0)
+	defer syscall.Umask(old)
+	mount := newMount(t)
+	put(t, mount, "media/Films/Sub/x", "x")
+	put(t, mount, "media/elsewhere", "film")
+	link(t, mount, "media/elsewhere", "Atoll/links/42")
+	if err := os.Remove(filepath.Join(mount, "media", "elsewhere")); err != nil {
+		t.Fatal(err)
+	}
+	modes := map[string]os.FileMode{"media": 0o751, "media/Films": 0o750, "media/Films/Sub": 0o710}
+	for rel, mode := range modes {
+		if err := os.Chmod(filepath.Join(mount, filepath.FromSlash(rel)), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	op := &Op{ID: 9, Disk: "t1", Kind: catalog.OpTrash, Path: "Films/Sub/Gone/a", Path2: "2026-01-01/9/Films/Sub/Gone/a", Link: 42,
+		FileKey: keyAt(t, mount, "Atoll/links/42")}
+	if _, err := openAt(t, mount, nil).LinkToTrash(op); err != nil {
+		t.Fatal(err)
+	}
+	const place = "Atoll/trash/2026-01-01/9"
+	for trashed, want := range map[string]uint32{
+		place: 0o751, place + "/Films": 0o750, place + "/Films/Sub": 0o710, place + "/Films/Sub/Gone": 0o700,
+	} {
+		if got := statAt(t, mount, trashed).Mode & 0o777; got != want {
+			t.Errorf("%s is %o, not %o", trashed, got, want)
+		}
+	}
+	if !holding(mount, place+"/Films/Sub/Gone/a", "film") {
+		t.Error("the link's data is not in the trash")
+	}
+}
+
+// A link the guard removes is forgotten alone: what the guard counts of the others that lead to the same data stays.
+func TestALinkRemovedIsForgottenAlone(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, "media/Films/a", "film")
+	for _, id := range []string{"41", "42", "43"} {
+		link(t, mount, "media/Films/a", "Atoll/links/"+id)
+	}
+	d := openAt(t, mount, nil)
+	if _, err := d.Links(); err != nil {
+		t.Fatal(err)
+	}
+	folder, err := d.OpenLinks(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer folder.Close()
+	key := keyAt(t, mount, "media/Films/a")
+	if _, err := d.DropLink(&Op{ID: 8, Disk: "t1", Kind: catalog.OpUnlink, Path: "Films/a", Link: 42, FileKey: key}, folder); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, err := d.StatRoot("Films/a"); err != nil || st.Nlink != 1 {
+		t.Errorf("the links 41 and 43 left: %d names, %v", st.Nlink, err)
+	}
+}

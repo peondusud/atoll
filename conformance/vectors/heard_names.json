@@ -34,6 +34,14 @@
                 {"disk": "t1", "path": "b", "kinds": ["written"], "origins": ["user"]},
                 {"disk": "t1", "path": "c", "kinds": ["written"], "origins": ["user"]},
                 {"disk": "t2", "path": "d", "kinds": ["written"], "origins": ["user"]}],
-     "disks": [{"disk": "t1", "whole": true}, {"disk": "t2", "names": [{"path": "d"}]}]}
+     "disks": [{"disk": "t1", "whole": true}, {"disk": "t2", "names": [{"path": "d"}]}]},
+    {"note": "max_names names exactly: still names", "max_names": 2,
+     "groups": [{"disk": "t1", "path": "a", "kinds": ["written"], "origins": ["user"]},
+                {"disk": "t1", "path": "b", "kinds": ["written"], "origins": ["user"]}],
+     "disks": [{"disk": "t1", "names": [{"path": "a"}, {"path": "b"}]}]},
+    {"note": "a group only Atoll made, before one someone else made: that one's name alone", "max_names": 10000,
+     "groups": [{"disk": "t1", "path": "a", "kinds": ["created"], "origins": ["atoll"]},
+                {"disk": "t1", "path": "b", "kinds": ["written"], "origins": ["user"]}],
+     "disks": [{"disk": "t1", "names": [{"path": "b"}]}]}
   ]
 }
