@@ -87,5 +87,14 @@ internal/value/minfree.go:54:38	CONDITIONALS_BOUNDARY	if s := p.Of(capacity); fi
 internal/value/nut.go:40:10	CONDITIONALS_BOUNDARY	if end < 0 {	end <= 0: rest starts with [, so its ] is never at 0
 internal/watch/cache.go:147:22	CONDITIONALS_BOUNDARY	if i == 0 || since < earliest {	since <= earliest: an equal time set again
 internal/watch/cache.go:151:29	CONDITIONALS_BOUNDARY	if !seenCurrent || since < current {	since <= current: an equal time set again
+internal/watch/group.go:125:17	CONDITIONALS_BOUNDARY	if !ok || due < nextNS {	due <= nextNS: an equal time set again
+internal/watch/named.go:136:52	INVERT_LOGICAL	if e := &w.Entries[i]; e.Kind == solver.EntryDir && e.FileKey != nil && !folderAt[e.Path] && atOrBelow(pathSet(paths), e.Path) {	(e.Kind == solver.EntryDir || e.FileKey != nil) && ...: a walk and a look at names give a key to every folder they record (setIdentity) and to nothing else, so either side says the other
+internal/watch/scan.go:408:4	INVERT_LOOPCTRL	continue	break: a break in a case leaves its switch, which ends the body of the loop, so the next name comes as with continue
+internal/watch/scan.go:416:39	CONDITIONALS_BOUNDARY	if f := &w.Files[i]; own[f.FileKey] > 0 {	own[f.FileKey] >= 0: then f.Nlink -= min(0, f.Nlink-1), which takes nothing away, as a file a walk found at a name has a link at least
+internal/watch/scan.go:559:50	CONDITIONALS_BOUNDARY	if at := strings.LastIndexByte(f.Path, '/'); at >= 0 {	at > 0: a logical path never starts with /, so its last / is never at 0
+internal/watch/scan.go:586:12	CONDITIONALS_BOUNDARY	return at >= 0 && atOrBelow(set, path[:at])	at > 0: a logical path never starts with /, so its last / is never at 0
+internal/watch/scan.go:591:15	CONDITIONALS_BOUNDARY	for len(set) > 0 {	len(set) >= 0: in an empty set, the loop walks up the path to its first part, finds none, and says false, as it did at once
+internal/watch/scan.go:596:9	CONDITIONALS_BOUNDARY	if at < 0 {	at <= 0: a logical path never starts with /, so its last / is never at 0
 internal/watch/verdict.go:267:53	ARITHMETIC_BASE	index := make(map[string]*FoundFile, len(c.rowless)+len(c.others))	len(c.rowless)-len(c.others): only the size hint of a map, which grows as it is filled; a hint below 0 makes the empty map a hint of 0 does (measured with Go 1.27)
 internal/watch/verdict.go:470:45	CONDITIONALS_BOUNDARY	if prev := byKey[id]; prev == nil || path < prev.Path {	path <= prev.Path: two keys of one map are never equal, so the first in byte order is kept either way
+internal/watch/walk.go:324:5	INVERT_LOOPCTRL	continue	break: a break in a case leaves its switch, which ends the body of the loop, so the next name comes as with continue, the folder of another mount not walked below either way

@@ -15,13 +15,13 @@ mutation ./internal/solver 95 85
 mutation ./internal/value 95 85
 #
 # The packages that act on the disks, each week (.github/workflows/mutation-weekly.yml), each at its measure rounded down
-# to a whole percent, as proposed in TODO.md on 2026-11-21 and set on 2026-11-22 while the maintainer was away, to
-# confirm (DONE.md): ops 83.68 and 53.56 on 1be6613, 84.15 and 53.70 on 25a5687; trash 82.64 and 90.85 on 25a5687,
-# its first whole run; watch 82.66 and 79.53 on 1be6613, 82.57 and 79.53 on 25a5687, its code the same. Each is raised
-# as its mutants that live are killed or named.
-mutation ./internal/ops 83 53
-mutation ./internal/trash 82 90
-mutation ./internal/watch 82 79
+# to a whole percent, set on 2026-11-22 at 83 and 53, 82 and 90, 82 and 79, and raised the same day by tests, the
+# maintainer away, to confirm (DONE.md): ops 94.94 and 76.93, trash 93.89 and 91.25, watch 94.19 and 80.47, the named
+# equivalents left out. trash's coverage stays at 90 and watch's efficacy at 93: 91 would leave one mutant of margin,
+# and 94 two. Each is raised as its mutants that live are killed or named.
+mutation ./internal/ops 94 76
+mutation ./internal/trash 93 90
+mutation ./internal/watch 93 80
 #
 # cover <part> <share>: test/ci/cover.sh, the CI's cover job (make cover): the share of the module's statements that
 # the unit tests run (unit), and that the unit tests or the scenarios run (merged), in all, rounded to a tenth as the
