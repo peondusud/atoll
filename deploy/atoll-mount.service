@@ -14,6 +14,9 @@ Type=notify
 ExecStart=/usr/local/bin/atoll mount
 User=atoll
 Group=atoll
+# Where go-fuse finds fusermount3, its way where mount(2) is refused: the system's own folders, which root alone writes
+# and the packages fill, whatever systemd's default PATH says; /usr/local left out, as in atoll.service.
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
 # No supplementary group: CAP_DAC_READ_SEARCH reads a device's head to confirm a disk (specs.md §10) whatever the
 # device's mode, and the group disk, which writes every block device, gave nothing more.
 # mount(2) of the view takes CAP_SYS_ADMIN, and /dev/fuse open to the user, as udev's mode 0666 has it: fusermount,

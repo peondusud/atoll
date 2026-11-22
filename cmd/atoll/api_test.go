@@ -675,6 +675,36 @@ func TestTheUnitsAreHardened(t *testing.T) {
 	}
 }
 
+// Each unit of deploy/ sets the PATH its service finds smartctl, mount, umount and fusermount3 on: the system's own
+// folders, which root alone writes and dpkg fills, whatever systemd's default or a DefaultEnvironment= says (specs.md
+// §26; docs/threat-model.md, G19). /usr/local is not on it: a binary there, as the staff group of an older Debian
+// could write, would run with the service's capabilities. test/loopdev/units_test.go reads the PATH of each running
+// service in qemu.
+func TestTheUnitsSetTheirPath(t *testing.T) {
+	units, err := filepath.Glob(filepath.Join("..", "..", "deploy", "*.service"))
+	if err != nil || len(units) == 0 {
+		t.Fatalf("units %v, %v", units, err)
+	}
+	for _, unit := range units {
+		data, err := os.ReadFile(unit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var paths []string
+		for _, line := range strings.Split(string(data), "\n") {
+			if key, value, ok := strings.Cut(strings.TrimSpace(line), "="); ok && key == "Environment" && strings.HasPrefix(value, "PATH=") {
+				paths = append(paths, value)
+			}
+		}
+		if want := []string{"PATH=" + unitPath}; !slices.Equal(paths, want) {
+			t.Errorf("%s sets %q, want %q", filepath.Base(unit), paths, want)
+		}
+	}
+}
+
+// unitPath is the PATH deploy/'s units set.
+const unitPath = "/usr/sbin:/usr/bin:/sbin:/bin"
+
 // deploy/50-atoll.rules lets the account atoll start a mount unit, and nothing else: one action, one account, the verb
 // start alone, a unit whose name ends in .mount (specs.md §15.13). The .deb installs it where polkitd reads it, and the
 // archive holds it. Measured with polkitd 122 (Debian 12) and 126 (Debian 13) through pkcheck, and in qemu by the

@@ -16,6 +16,10 @@ ExecStart=/usr/local/bin/atoll daemon
 ExecReload=/bin/kill -HUP $MAINPID
 User=atoll
 Group=atoll
+# Where smartctl, mount, umount and what mount runs are found: the system's own folders, which root alone writes and
+# the packages fill, whatever systemd's default PATH or a DefaultEnvironment= says. /usr/local is left out: what an
+# account that may write there put in it would run with the capabilities below (docs/threat-model.md, G19).
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
 # No supplementary group: CAP_DAC_READ_SEARCH reads a device's head to confirm a disk (specs.md §10) whatever the
 # device's mode, as it reads every file, and the group disk, which writes every block device, gave nothing more.
 # fanotify marks, the remount after a USB reset and mergerfs's runtime branches need CAP_SYS_ADMIN; reading
