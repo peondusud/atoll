@@ -37,7 +37,9 @@ const anotherEnv = "ATOLL_AS_ANOTHER"
 // of another removed from a sticky folder, a chmod and a chown of another's file, a setuid bit it sets on one, a hard
 // link that fs.protected_hardlinks refuses; and a file of another it writes loses its setuid bit, on its disk too. The
 // view refuses it what a disk holds stricter than the catalog, before any pass: a file made 0600 on its disk, opened
-// to write, and a name made in a folder made 0755 on its disks. Nothing it was refused is journaled or changed.
+// to write, and a name made in a folder made 0755 on its disks. A folder one disk holds 0755 and the other 0700, as a
+// walk recorded them, presents 0700, so the kernel refuses it the listing the stricter disk refuses (G11). Nothing it
+// was refused is journaled or changed.
 func TestViewAsAnotherAccount(t *testing.T) {
 	needRoot(t)
 	if _, err := exec.LookPath("setpriv"); err != nil {
@@ -59,6 +61,7 @@ func TestViewAsAnotherAccount(t *testing.T) {
 		{"Open/Setuid.mkv", 0o666 | os.ModeSetuid, owner},
 		{"Open/Later.mkv", 0o666, owner},
 		{"Later/B.mkv", 0o644, owner},
+		{"Split/C.mkv", 0o644, 0},
 	} {
 		write(t, b.keep, f.path, "of "+strconv.Itoa(f.uid))
 		full := filepath.Join(b.keep, "media", f.path)
@@ -70,6 +73,8 @@ func TestViewAsAnotherAccount(t *testing.T) {
 	}
 	b.scan(false)
 	catchUp(b)
+	// A folder another disk holds stricter, as a pass records it: the view presents the strictest of the two (G11).
+	mustDo(t, os.Chmod(filepath.Join(b.at, "media", "Split"), 0o700))
 	b.scan(false)
 	// Linux's default is off; systemd sets it on, as Debian and the others do.
 	hardlinks, err := os.ReadFile("/proc/sys/fs/protected_hardlinks")
@@ -98,10 +103,15 @@ func TestViewAsAnotherAccount(t *testing.T) {
 		{"a hard link of a file it may neither read nor write", []string{"link", in("Open/Secret.mkv"), in("Open/Secret-link.mkv")}, syscall.EPERM},
 		{"a name made in a folder it may write", []string{"create", in("Open/Mine.mkv")}, 0},
 		{"a file of another it may write, setuid", []string{"write", in("Open/Setuid.mkv")}, 0},
+		{"a folder 0755 of root on k and 0700 on v, listed", []string{"list", in("Split")}, syscall.EACCES},
+		{"a folder 0755 of root on both disks, listed", []string{"list", in("Closed")}, 0},
 	} {
 		if got := asAnother(t, tc.asks...); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
+	}
+	if info, err := os.Stat(in("Split")); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("the folder 0755 on k and 0700 on v presents %v, %v: not the stricter", info, err)
 	}
 	made := 0
 	for _, top := range []string{b.keep, b.at} {
@@ -209,6 +219,12 @@ func TestViewAsAnotherChild(t *testing.T) {
 		var fd int
 		if fd, err = unix.Open(args[1], unix.O_WRONLY|unix.O_APPEND|unix.O_CLOEXEC, 0); err == nil {
 			_, err = unix.Write(fd, []byte(", and more"))
+			err = errors.Join(err, unix.Close(fd))
+		}
+	case "list":
+		var fd int
+		if fd, err = unix.Open(args[1], unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0); err == nil {
+			_, err = unix.Getdents(fd, make([]byte, 4096))
 			err = errors.Join(err, unix.Close(fd))
 		}
 	case "unlink":

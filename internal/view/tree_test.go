@@ -64,7 +64,8 @@ func TestTree(t *testing.T) {
 		t.Errorf("the root: %+v", *root)
 	}
 	top1, err := tree.List(t.Context(), "")
-	if err != nil || len(top1) != 1 || top1[0].Name != "Films" || top1[0].Node.Mode != 0o700 || top1[0].Node.Disk != "t1" {
+	// t1's folder, 0700 of 1:1, narrowed by t2's, 0755 of root's: there, its owner is of the group or of the others.
+	if err != nil || len(top1) != 1 || top1[0].Name != "Films" || top1[0].Node.Mode != 0o500 || top1[0].Node.Disk != "t1" {
 		t.Errorf("the root's listing: %+v, %v", top1, err)
 	}
 	films, err := tree.List(t.Context(), "Films")
