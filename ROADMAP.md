@@ -12,15 +12,15 @@ A milestone is reached when its phase and every phase before it are done.
 
 | Milestone | Phase | What it brings | Progress |
 |---|---|---|---|
-| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 98 % |
-| **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 98 % |
-| **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 97 % |
+| **alpha** | 1a — Safe core | a pool used through mergerfs, whose copies Atoll makes, verifies and keeps in step, safe to stop or uninstall | about 100 %: the memory over days measured on 2026-11-21 |
+| **beta** | 1b — Complete Linux MVP | every replication mode, repair, SMART, notifications, `balance` and `capacity` | about 99 %: the tries on the maintainer's own hardware (TODO.md, item 16) |
+| **v0.1** | 2a — Own view | Atoll's FUSE view in place of mergerfs, and the contracts frozen at format version 1: the first stable version | about 99 %: those tries, then the merge of `beta` and the tag `v0.1.0`, which the maintainer pushes |
 | — | 2b — Disk sleep | SSD cache, NUT, the `ordered` and `colocate` strategies, Prometheus | |
 | — | 3 — Rust rewrite | the same contracts and conformance suite, switched to without migrating data | |
 | — | 4 — Windows | a Windows service and a WinFsp pool drive, in Rust | |
 | — | 5 | web interface, openmediavault plugin, duplicates by metadata | |
 
-Progress counts everything needed to reach the milestone, weighted by an estimate of the effort each part takes. It is an estimate, not a measurement, as of 2026-11-20.
+Progress counts everything needed to reach the milestone, weighted by an estimate of the effort each part takes. It is an estimate, not a measurement, as of 2026-11-22.
 
 ## Alpha: phase 1a, the safe core
 

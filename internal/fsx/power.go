@@ -65,7 +65,9 @@ func CheckPowerMode(device string, timeout time.Duration) ([]byte, error) {
 		interfaceID: 'S', dxferDirection: sgDxferNone, cmdLen: uint8(len(cdb)), mxSbLen: uint8(len(sense)),
 		cmdp: &cdb[0], sbp: &sense[0], timeout: uint32(timeout.Milliseconds()),
 	}
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), sgIO, uintptr(unsafe.Pointer(hdr)))
+	// SG_IO takes its header by address, which only unsafe gives, as x/sys passes its own: the buffers the header points
+	// to are kept alive over the call, and the length read back is bounded by the buffer's.
+	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), sgIO, uintptr(unsafe.Pointer(hdr))) // nosemgrep: go.lang.security.audit.unsafe.use-of-unsafe-block
 	runtime.KeepAlive(cdb)
 	runtime.KeepAlive(sense)
 	if errno != 0 {

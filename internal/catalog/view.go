@@ -194,14 +194,31 @@ func ViewNames(ctx context.Context, db *sql.DB, dir string) ([]string, error) {
 	return names, nil
 }
 
+// namesBelowQueries are namesBelow's queries, each written whole for a table it reads, so that no query is built: below
+// the root, then below a folder.
+var namesBelowQueries = map[string][2]string{
+	"files": {
+		"SELECT lpath FROM files WHERE lpath >= ? ORDER BY lpath LIMIT 1",
+		"SELECT lpath FROM files WHERE lpath >= ? AND lpath < ? ORDER BY lpath LIMIT 1",
+	},
+	"entries": {
+		"SELECT lpath FROM entries WHERE lpath >= ? ORDER BY lpath LIMIT 1",
+		"SELECT lpath FROM entries WHERE lpath >= ? AND lpath < ? ORDER BY lpath LIMIT 1",
+	},
+}
+
 // namesBelow adds the names directly below prefix that a table's paths hold. After a name, the next seek starts past
 // every path below it: past name + "/" + anything, which is name + "0", as '0' comes right after '/'; and past the name
-// itself, name + "\x00", as no path holds a NUL.
+// itself, name + "\x00", as no path holds a NUL. A table of no query of namesBelowQueries is an error.
 func namesBelow(ctx context.Context, db *sql.DB, table, prefix string, set map[string]bool) error {
-	query := "SELECT lpath FROM " + table + " WHERE lpath >= ? ORDER BY lpath LIMIT 1"
+	queries, known := namesBelowQueries[table]
+	if !known {
+		return fmt.Errorf("the view reads no table %q", table)
+	}
+	query := queries[0]
 	var upper []byte
 	if prefix != "" {
-		query = "SELECT lpath FROM " + table + " WHERE lpath >= ? AND lpath < ? ORDER BY lpath LIMIT 1"
+		query = queries[1]
 		// The paths below prefix end before prefix with its '/' turned into '0'.
 		upper = []byte(prefix[:len(prefix)-1] + "0")
 	}

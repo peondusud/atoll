@@ -67,3 +67,29 @@ func TestViewNames(t *testing.T) {
 		t.Errorf("a folder on two disks: %+v, %+v, %v", f, entries, err)
 	}
 }
+
+// namesBelow reads the tables of the view alone, each by a query written whole, never built: a table it does not know
+// is an error, whatever its name holds (scrutineer, semgrep's string-formatted-query, 2026-11-22).
+func TestNamesBelowReadsOnlyItsTables(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "catalog.db")
+	if _, err := Create(t.Context(), file, "p"); err != nil {
+		t.Fatal(err)
+	}
+	db, err := OpenPool(t.Context(), file, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	for _, table := range []string{"ops", "files WHERE 1 = 1 --", ""} {
+		if err := namesBelow(t.Context(), db, table, "", map[string]bool{}); err == nil {
+			t.Errorf("%q was read", table)
+		}
+	}
+	for _, table := range []string{"files", "entries"} {
+		for _, prefix := range []string{"", "A/"} {
+			if err := namesBelow(t.Context(), db, table, prefix, map[string]bool{}); err != nil {
+				t.Errorf("%s below %q: %v", table, prefix, err)
+			}
+		}
+	}
+}
