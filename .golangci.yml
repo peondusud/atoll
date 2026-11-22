@@ -95,6 +95,12 @@ linters:
           deny:
             - pkg: github.com/peondusud/atoll/internal
               desc: "the runner talks to the binary through the CLI and the filesystem only"
+        conformance-models:
+          files:
+            - "**/conformance/models/**"
+          deny:
+            - pkg: github.com/peondusud/atoll/internal
+              desc: "the model's fingerprints read specs.md and the model, nothing of the implementation"
 
     forbidigo:
       forbid:

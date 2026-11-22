@@ -1,0 +1,32 @@
+# The gates of the CI (specs.md §27): the least each measure may give, in percent, as it prints it. A gate is raised
+# when the code earns more, never lowered; the maintainer decided them on 2026-11-21 ("Seuil par paquet").
+#
+# mutation <package> <efficacy> <mutator coverage>: test/ci/mutation.sh, each night (.github/workflows/mutation.yml)
+# or each week (.github/workflows/mutation-weekly.yml), through test/ci/mutation-gate.sh: efficacy with the mutants test/ci/mutation-equivalents.txt names left out, mutator
+# coverage as gremlins counts it. 95 and 85 for each package of the pure core; names and integrity at the coverage
+# measured on 2026-11-21, as gremlins counts a mutant in the condition of a switch's case as one no test reaches, and
+# their switches stay switches.
+mutation ./internal/config 95 85
+mutation ./internal/glob 95 85
+mutation ./internal/integrity 95 69.77
+mutation ./internal/names 95 83.25
+mutation ./internal/rules 95 85
+mutation ./internal/solver 95 85
+mutation ./internal/value 95 85
+#
+# The packages that act on the disks, each week (.github/workflows/mutation-weekly.yml), each at its measure rounded down
+# to a whole percent, as proposed in TODO.md on 2026-11-21 and set on 2026-11-22 while the maintainer was away, to
+# confirm (DONE.md): ops 83.68 and 53.56 on 1be6613, 84.15 and 53.70 on 25a5687; trash 82.64 and 90.85 on 25a5687,
+# its first whole run; watch 82.66 and 79.53 on 1be6613, 82.57 and 79.53 on 25a5687, its code the same. Each is raised
+# as its mutants that live are killed or named.
+mutation ./internal/ops 83 53
+mutation ./internal/trash 82 90
+mutation ./internal/watch 82 79
+#
+# cover <part> <share>: test/ci/cover.sh, the CI's cover job (make cover): the share of the module's statements that
+# the unit tests run (unit), and that the unit tests or the scenarios run (merged), in all, rounded to a tenth as the
+# table prints it. Measured on 2026-11-21, on 1be6613 with the tests the mutation gates brought: 84.4 and 88.9, of
+# 30,181 statements, where 2026-11-20's 84.7 and 89.3 counted 29,584; what came between is mostly the view's writer,
+# which the loop-device tests run.
+cover unit 84.4
+cover merged 88.9

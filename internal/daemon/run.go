@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os/exec"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,8 +19,12 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/metrics"
 	"github.com/peondusud/atoll/internal/notify"
+	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/trash"
+	"github.com/peondusud/atoll/internal/ups"
 	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/view"
 	"github.com/peondusud/atoll/internal/watch"
@@ -32,9 +38,10 @@ const checkEvery = 30 * time.Second
 // asked again and again.
 const retryAfter = time.Minute
 
-// remountTimeout is how long umount, then mount, may each take at a remount, which is what systemd gives a mount: a
-// disk that died halfway can hold one for good, and the loop does nothing else meanwhile. remountLinger is how long
-// one that was killed is then waited for: a helper it started may keep its output open.
+// remountTimeout is how long umount, then mount or the job of the mount unit systemd starts, may each take at a
+// remount, which is what systemd gives a mount: a disk that died halfway can hold one for good, and the loop does
+// nothing else meanwhile. remountLinger is how long one that was killed is then waited for: a helper it started may
+// keep its output open.
 const (
 	remountTimeout = 90 * time.Second
 	remountLinger  = time.Second
@@ -60,6 +67,14 @@ type Options struct {
 	// Reload says to read the configuration again, through Load: SIGHUP (specs.md §15.13).
 	Reload <-chan struct{}
 	Load   func() (*config.Config, error)
+	// UPSEvery, UPSDead and FlushWait are for tests: the UPS read every 5 s, unheard for 15 s at most, and the disks
+	// written out within a minute as the battery runs low (specs.md §20).
+	UPSEvery, UPSDead, FlushWait time.Duration
+	// Metrics holds what /metrics gives, which the loop records as it goes (specs.md §23.1); nil records nothing.
+	Metrics *metrics.Recorder
+	// Catalog takes what the local API hands the loop through Hand: its answers to a guard, which the loop runs on the
+	// catalog between two steps (specs.md §25.1). Nil takes none.
+	Catalog <-chan *CatalogWork
 }
 
 // ErrStartup says that the daemon could not start: its configuration or its catalog cannot be used.
@@ -67,8 +82,10 @@ var ErrStartup = errors.New("the daemon cannot start")
 
 // settings is what the loop reads of the configuration.
 type settings struct {
-	catalog     string
-	viewMount   string
+	catalog   string
+	viewMount string
+	// ownView says that view.engine is "atoll": atoll mount serves the view, and no mergerfs runs (specs.md §21.2).
+	ownView     bool
 	debounce    time.Duration
 	rescanEvery time.Duration
 	window      value.Window
@@ -79,13 +96,17 @@ type settings struct {
 	checkEvery  time.Duration
 	fstab       string
 	// remountWait is for tests: remountTimeout.
-	remountWait  time.Duration
+	remountWait time.Duration
+	// systemd is how the remount reaches systemd: the machine's, or for tests one of their own (specs.md §15.13).
+	systemd      systemdWay
 	resetReasons []disks.Reason
 	channels     []alerts.Channel
 	servers      []notify.Server
 	// scrubWindow is integrity.window, maintenance.window when left out, and scrubBudget integrity.scrub_budget.
 	scrubWindow value.Window
 	scrubBudget time.Duration
+	// scrubEvery is integrity.scrub_every: what the metrics count as due for the scrub (specs.md §16, §23.1).
+	scrubEvery time.Duration
 	// balanceSchedule is balance.schedule: never, immediate, or a window, which balanceWindow holds; balanceBudget is
 	// balance.budget, and balanceRatio and balanceMore balance.trigger (specs.md §13.3).
 	balanceSchedule string
@@ -101,13 +122,16 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 		resetReasons: []disks.Reason{disks.DeviceGone, disks.DeviceUnread, disks.IOError}}
 	s.catalog, _ = e["catalog"].(string)
 	s.viewMount, _ = e["view.mount"].(string)
+	engine, _ := e["view.engine"].(string)
+	s.ownView = engine == "atoll"
 	s.remount, _ = e["health.remount_after_reset"].(bool)
 	if s.checkEvery <= 0 {
 		s.checkEvery = checkEvery
 	}
 	if s.fstab == "" {
-		s.fstab = "/etc/fstab"
+		s.fstab = machineSystemd.fstab
 	}
+	s.systemd = machineSystemd
 	var err error
 	text := func(key string) string { v, _ := e[key].(string); return v }
 	if s.debounce, err = value.ParseDuration(text("deletes.debounce")); err != nil {
@@ -124,6 +148,9 @@ func readSettings(c *config.Config, opt *Options) (*settings, error) {
 	}
 	if s.scrubBudget, err = value.ParseDuration(text("integrity.scrub_budget")); err != nil {
 		return nil, fmt.Errorf("integrity.scrub_budget: %w", err)
+	}
+	if s.scrubEvery, err = value.ParseDuration(text("integrity.scrub_every")); err != nil {
+		return nil, fmt.Errorf("integrity.scrub_every: %w", err)
 	}
 	s.balanceSchedule = text("balance.schedule")
 	if s.balanceSchedule != scheduleNever && s.balanceSchedule != scheduleImmediate {
@@ -162,11 +189,23 @@ type diskState struct {
 	// walked says that a pass walked it since it was last found again: its watch and its branch may come back.
 	walked  bool
 	watched bool
+	// unheard says that its watch may have missed a change since its last walk: it was not watched all along, as from
+	// the start of the daemon, or its watch overflowed. The next pass tells the media servers of the folders where its
+	// walk finds new copies, which nothing else told them of (specs.md §21.5).
+	unheard bool
 	// reset says that it went missing for a reason a USB reset gives, so each check tries the remount.
 	reset bool
+	// source is the device the last check that found it mounted says it was mounted from, and device what that name
+	// led to then, for what tells whether the device left once it is no longer mounted (specs.md §15.13).
+	source string
+	device fsx.DeviceNode
 	// probed says that the NTFS volume of a missing disk was read once since it went missing, and dirty that it was
 	// marked dirty then (specs.md §22).
 	probed, dirty bool
+	// standby says that the last check found it online and asleep, and spinWritten that the catalog holds what it
+	// found; counts are its whole disks' completed I/O at that check (specs.md §10).
+	standby, spinWritten bool
+	counts               map[string]int64
 }
 
 type loop struct {
@@ -189,6 +228,9 @@ type loop struct {
 	readDecided bool
 	// purgePending says that the purge of the trash stopped at its slice with entries left (specs.md §17).
 	purgePending bool
+	// versions counts, by disk, the versions a modification replaced that the trash purged for room before their
+	// retention ended, for the alert of that (specs.md §17, §23).
+	versions map[string]*purgedVersions
 	// unsent holds what the last pass left to send that did not go, alertDue when it is tried again, alone, and
 	// alertTries how many tries in a row left some unsent (specs.md §23).
 	unsent     *alerts.Due
@@ -202,6 +244,10 @@ type loop struct {
 	scrubSpent  time.Duration
 	scrubOpened int64
 	scrubIdle   int64
+	// scrubTaken holds the corrupt copies left in the root that the scrub took again in that stretch: each is taken
+	// once a stretch, so that one that cannot go, as one whose name its trash refuses, costs a read of its healthy copy
+	// a night and not one a slice. A restart takes them again (specs.md §15.13, §16).
+	scrubTaken map[catalog.CorruptCopy]bool
 	// backupOpened is the stretch of maintenance.window whose catalog backup was made, or tried (specs.md §9).
 	backupOpened int64
 	checkDue     int64
@@ -212,7 +258,19 @@ type loop struct {
 	// once ripe, so a turn of the loop that does something else first, as a check, must not lose what it asks for
 	// (specs.md §15.13).
 	origins []string
+	// heard holds what the ripe groups someone other than Atoll made ask a pass to look at, by disk, until a pass takes
+	// it: their names, or the whole disk; again the names the last pass's looks limited to names left to see again; and
+	// waitDisks the disks where the last pass's look found what the catalog does not hold yet, or concluded nothing of a
+	// copy it no longer found. A pass for events or next_due alone looks at these, walks the disks whose watch may have
+	// missed a change, and spares the others (specs.md §15.13).
+	heard     map[string]watch.Heard
+	again     map[string][]watch.Named
+	waitDisks []string
+	// lines holds, by disk, what the last pass that walked it said of it, for the alerts after a pass that spared it.
+	lines   map[string]jobs.DiskLine
 	lastEnd *int64
+	// lastFullEnd is when the last pass that walked every disk ended: rescan_every counts from it (specs.md §15.13).
+	lastFullEnd *int64
 	// smartDue is when the disks' SMART is next read: nil when it is not (specs.md §23).
 	smartDue *int64
 	// queues holds what each media server is to be told, by its name, and changed the folders ripe groups named,
@@ -226,6 +284,14 @@ type loop struct {
 	balanceNext    int64
 	balanceWork    bool
 	balanceSpent   time.Duration
+	// noAnswer holds the whole disks that gave no answer to CHECK POWER MODE: asked no more until the configuration is
+	// read again, they count as spinning (specs.md §10).
+	noAnswer map[string]bool
+	// power reads the UPS, and lastPower is what the loop last made of it (specs.md §20).
+	power     *power
+	lastPower ups.Reading
+	// mountWhys holds why a remount mounted a disk itself rather than through systemd, each said once (specs.md §15.13).
+	mountWhys map[string]bool
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -252,13 +318,25 @@ func Run(ctx context.Context, opt Options) error {
 	}
 	l := &loop{
 		opt: &opt, set: set, log: opt.Log, grouping: grouping, disks: map[string]*diskState{}, first: true, closed: jobs.Closed{},
-		watcher:  watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Now: opt.Machine.Now, Inotify: opt.Inotify}),
+		watcher: watch.NewWatcher(watch.WatcherOptions{ViewMount: set.viewMount, Accounts: ops.TrustedOwners(set.catalog), Now: opt.Machine.Now,
+			Inotify: opt.Inotify}),
 		smartDue: smartFirst(opt.Machine),
-		queues:   newQueues(set.servers, nil), changed: map[string]bool{},
+		queues:   newQueues(set.servers, nil), changed: map[string]bool{}, heard: map[string]watch.Heard{}, lines: map[string]jobs.DiskLine{},
 	}
 	defer l.watcher.Close()
+	// The UPS is read before the first pass, so that a daemon that starts on battery starts no copy.
+	l.power = newPower(opt.Log, opt.Machine.Now, opt.UPSEvery, opt.UPSDead)
+	l.power.metrics = opt.Metrics
+	l.recordConfig()
+	l.power.configure(opt.Config)
+	l.power.poll(ctx)
+	l.lastPower = ups.Reading{Power: ups.Online}
+	reading, stopReading := context.WithCancel(ctx)
+	defer stopReading()
+	go l.power.run(reading)
 	l.notify("READY=1")
 	l.check(ctx)
+	l.lookAtDevices(ctx)
 	for id, st := range l.disks {
 		if st.state != disks.Missing {
 			l.watch(ctx, id)
@@ -290,16 +368,28 @@ func (l *loop) takeRipe(now int64) (groupNext int64, waiting bool) {
 		}
 	}
 	for _, g := range ripe {
+		// An overflow, or a watch that ended and began again: nothing says what it lost.
+		if slices.Contains(g.Kinds, watch.KindOverflow) {
+			if st := l.disks[g.Disk]; st != nil {
+				st.unheard = true
+			}
+		}
 		for _, o := range g.Origins {
 			if !slices.Contains(l.origins, o) {
 				l.origins = append(l.origins, o)
 			}
 		}
 	}
+	// What Atoll did itself is in its journal and its catalog: no look needs to find it.
+	if l.heard == nil {
+		l.heard = map[string]watch.Heard{}
+	}
+	watch.AddHeard(l.heard, watch.HeardNames(ripe, watch.MaxNames), watch.MaxNames)
 	return groupNext, waiting
 }
 
-// run is the loop of §15.13: what Wake says is due, then a sleep until it says to look again.
+// run is the loop of §15.13: what Wake says is due, then a sleep until it says to look again. A battery running low
+// parks it until line power is back (specs.md §20).
 func (l *loop) run(ctx context.Context) error {
 	for {
 		select {
@@ -309,93 +399,124 @@ func (l *loop) run(ctx context.Context) error {
 		default:
 		}
 		l.listen()
-		now := l.opt.Machine.Now()
-		groupNext, waiting := l.takeRipe(now)
-		// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
-		nowLocal := time.Unix(0, now).In(l.set.location)
-		opened := l.set.scrubWindow.Opened(nowLocal)
-		idle := !opened.IsZero() && l.scrubIdle == opened.UnixNano()
-		// One catalog backup a stretch of maintenance.window.
-		window := l.set.window.Opened(nowLocal)
-		backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
-		in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
-			RipeOrigins: l.origins, LastPassEndNS: l.lastEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
-			HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending, AlertRetryDueNS: l.alertDue,
-			// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
-			ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
-			ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
-			ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue,
-			NotifyDueNS: l.notifyDue(), BalanceDueNS: l.balanceDue(now)}
-		if waiting {
-			in.GroupDueNS = &groupNext
-		}
-		out, err := Wake(&in)
-		if err != nil {
-			return fmt.Errorf("daemon: %w", err)
-		}
-		if out.Check {
-			l.check(ctx)
+		l.powerChanged()
+		if l.power.get().Power == ups.Low {
+			if l.park(ctx) {
+				return nil
+			}
 			continue
 		}
-		if len(out.Because) > 0 {
-			l.pass(ctx, out.Because)
-			l.afterPass = true
-			continue
-		}
-		if out.Read || out.Purge || out.Alerts || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
-			// The turn another step has after a pass.
-			l.afterPass = false
-		}
-		if out.Read {
-			l.readChanged(ctx)
-			continue
-		}
-		if out.Purge {
-			l.purgeMore(ctx)
-			continue
-		}
-		if out.Alerts {
-			l.resendAlerts(ctx)
-			continue
-		}
-		if out.Notify {
-			l.tell(ctx)
-			continue
-		}
-		if out.Smart {
-			l.readSmart(ctx)
-			continue
-		}
-		if out.Balance {
-			l.balance(ctx)
-			continue
-		}
-		if out.Hash {
-			l.hash(ctx)
-			continue
-		}
-		if out.Backup {
-			l.backup(ctx, window.UnixNano())
-			continue
-		}
-		if out.Scrub {
-			l.scrub(ctx, out.ScrubOpenedNS)
-			continue
-		}
-		timer := time.NewTimer(time.Duration(out.WakeNS - now))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil
-		case e := <-l.watcher.Events():
-			timer.Stop()
-			l.add(e)
-		case <-l.opt.Reload:
-			timer.Stop()
-			l.reload()
-		case <-timer.C:
+		turn, done := l.power.turn(ctx)
+		stop, err := l.step(ctx, turn)
+		done()
+		if stop || err != nil {
+			return err
 		}
 	}
+}
+
+// step takes one turn of the loop: the step due, run under turn, which the battery running low ends as SIGTERM would,
+// or a sleep until something calls for a look. It says whether the daemon was asked to stop.
+func (l *loop) step(ctx, turn context.Context) (bool, error) {
+	// What the local API handed comes first: it waited for the step before, as a command waits for a pass (specs.md
+	// §25.1).
+	if l.takeWork(turn) {
+		return false, nil
+	}
+	now := l.opt.Machine.Now()
+	groupNext, waiting := l.takeRipe(now)
+	// A stretch of integrity.window in which the scrub found nothing left waits for the next one.
+	nowLocal := time.Unix(0, now).In(l.set.location)
+	opened := l.set.scrubWindow.Opened(nowLocal)
+	idle := !opened.IsZero() && l.scrubIdle == opened.UnixNano()
+	// One catalog backup a stretch of maintenance.window.
+	window := l.set.window.Opened(nowLocal)
+	backedUp := !window.IsZero() && l.backupOpened == window.UnixNano()
+	in := WakeInput{NowNS: now, CheckDueNS: l.checkDue, First: l.first, Reloaded: l.reloaded, Gone: l.gone, Back: l.back, AfterPass: l.afterPass, PassDueNS: l.passDue,
+		RipeOrigins: l.origins, LastPassEndNS: l.lastFullEnd, RescanEveryNS: l.set.rescanEvery.Nanoseconds(), Window: l.set.window, Location: l.set.location,
+		HashPending: l.hashPending && l.opt.Apply, ChangedPending: len(l.toRead) > 0, PurgePending: l.purgePending, AlertRetryDueNS: l.alertDue,
+		// A daemon in shadow mode scrubs nothing, as it would read the same copies again and again.
+		ScrubPending: l.opt.Apply && l.lastEnd != nil && !idle,
+		ScrubWindow:  l.set.scrubWindow, ScrubBudgetNS: l.set.scrubBudget.Nanoseconds(), ScrubSpentNS: l.scrubSpent.Nanoseconds(),
+		ScrubSpentOpenedNS: l.scrubOpened, BackupPending: l.opt.Apply && l.lastEnd != nil && !backedUp, SmartDueNS: l.smartDue,
+		NotifyDueNS: l.notifyDue(), BalanceDueNS: l.balanceDue(now),
+		// On battery, nothing that reads or moves data in bulk starts (specs.md §20).
+		OnBattery: l.power.get().Power == ups.Battery}
+	if waiting {
+		in.GroupDueNS = &groupNext
+	}
+	out, err := Wake(&in)
+	if err != nil {
+		return false, fmt.Errorf("daemon: %w", err)
+	}
+	if out.Check {
+		l.check(turn)
+		return false, nil
+	}
+	if len(out.Because) > 0 {
+		l.pass(turn, out.Because)
+		l.afterPass = true
+		return false, nil
+	}
+	if out.Read || out.Purge || out.Alerts || out.Notify || out.Smart || out.Balance || out.Hash || out.Backup || out.Scrub {
+		// The turn another step has after a pass.
+		l.afterPass = false
+	}
+	if out.Read {
+		l.readChanged(turn)
+		return false, nil
+	}
+	if out.Purge {
+		l.purgeMore(turn)
+		return false, nil
+	}
+	if out.Alerts {
+		l.resendAlerts(turn)
+		return false, nil
+	}
+	if out.Notify {
+		l.tell(turn)
+		return false, nil
+	}
+	if out.Smart {
+		l.readSmart(turn)
+		return false, nil
+	}
+	if out.Balance {
+		l.balance(turn)
+		return false, nil
+	}
+	if out.Hash {
+		l.hash(turn)
+		return false, nil
+	}
+	if out.Backup {
+		l.backup(turn, window.UnixNano())
+		return false, nil
+	}
+	if out.Scrub {
+		l.scrub(turn, out.ScrubOpenedNS)
+		return false, nil
+	}
+	timer := time.NewTimer(time.Duration(out.WakeNS - now))
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return true, nil
+	case e := <-l.watcher.Events():
+		timer.Stop()
+		l.add(e)
+	case <-l.opt.Reload:
+		timer.Stop()
+		l.reload()
+	case w := <-l.opt.Catalog:
+		timer.Stop()
+		l.runWork(turn, w)
+	case <-l.power.signal():
+		timer.Stop()
+	case <-timer.C:
+	}
+	return false, nil
 }
 
 // reload reads the configuration again (specs.md §15.13). One that does not load is left aside, and the one read
@@ -429,6 +550,10 @@ func (l *loop) reload() {
 		}
 	}
 	l.reloaded = true
+	l.recordConfig()
+	l.power.configure(c)
+	// A disk that gave no answer to CHECK POWER MODE is asked again, as one a configuration read again may name.
+	clear(l.noAnswer)
 	l.checkDue = l.opt.Machine.Now()
 	if l.smartDue == nil {
 		l.smartDue = smartFirst(l.opt.Machine)
@@ -482,7 +607,7 @@ func (l *loop) check(ctx context.Context) {
 		d, v := &l.opt.Config.Disks[i], verdicts[i]
 		st := l.disks[d.ID]
 		if st == nil {
-			st = &diskState{state: v.State}
+			st = newDiskState(v.State)
 			l.disks[d.ID] = st
 			if v.State == disks.Missing {
 				l.log.Warn("a disk is missing", "disk", d.ID, "reason", v.Reason, "message", v.Message)
@@ -493,7 +618,7 @@ func (l *loop) check(ctx context.Context) {
 			// Nothing reads or writes it: going and coming back calls for no pass.
 		case st.state != disks.Missing && v.State == disks.Missing:
 			l.gone = true
-			st.walked, st.reset = false, slices.Contains(l.set.resetReasons, v.Reason)
+			st.walked, st.reset = false, l.resetFor(d.ID, st, v.Reason)
 			l.unwatch(d.ID)
 			l.log.Warn("a disk went missing", "disk", d.ID, "reason", v.Reason, "message", v.Message)
 		case st.state == disks.Missing && v.State != disks.Missing:
@@ -504,6 +629,10 @@ func (l *loop) check(ctx context.Context) {
 			l.log.Info("a disk changed state", "disk", d.ID, "from", st.state, "to", v.State, "reason", v.Reason)
 		}
 		st.state = v.State
+		if v.State != disks.Missing {
+			l.noteDevice(st, v.Source)
+		}
+		l.spin(d, st)
 		l.probeDirty(d, st)
 		if remountWanted(d, st) {
 			l.remount(ctx, d)
@@ -512,6 +641,8 @@ func (l *loop) check(ctx context.Context) {
 			l.rearm(ctx, d.ID)
 		}
 	}
+	l.recordSpin(ctx)
+	l.recordDisks(true)
 }
 
 // rearm watches again a disk whose watch ended while the disk stayed there: its reader stopped on an error, or the
@@ -525,13 +656,53 @@ func (l *loop) rearm(ctx context.Context, id string) {
 	l.add(watch.Event{Disk: id, Kind: watch.KindOverflow, Origin: watch.OriginUnknown, AtNS: l.opt.Machine.Now()})
 }
 
+// resetFor says whether a disk that went missing for reason was taken by a USB reset, so that each check tries the
+// remount (specs.md §15.13): a reason a USB reset gives, or not-mounted when the device it was mounted from left, as
+// when systemd itself unmounts an idle /etc/fstab mount whose device went. An administrator's umount leaves the
+// device where it was, and nothing tells of a disk the daemon never found mounted.
+func (l *loop) resetFor(id string, st *diskState, reason disks.Reason) bool {
+	if slices.Contains(l.set.resetReasons, reason) {
+		return true
+	}
+	ident, ok := l.opt.Machine.(disks.DeviceIdentifier)
+	if reason != disks.NotMounted || st.source == "" || !ok {
+		return false
+	}
+	now, err := ident.DeviceNode(st.source)
+	switch {
+	case err != nil:
+		l.log.Warn("a disk is no longer mounted, and whether its device left cannot be told: it is not mounted again",
+			"disk", id, "device", st.source, "error", err)
+		return false
+	case !disks.DeviceLeft(st.device, now):
+		return false
+	}
+	l.log.Warn("a disk is no longer mounted and its device left, as after a USB reset", "disk", id, "device", st.source)
+	return true
+}
+
+// noteDevice keeps what the device a disk is mounted from leads to, for what tells, once the disk is no longer
+// mounted, whether that device left (specs.md §15.13). It reads a name under /dev and a file of /sys: no disk wakes.
+func (l *loop) noteDevice(st *diskState, source string) {
+	st.source, st.device = "", fsx.DeviceNode{}
+	ident, ok := l.opt.Machine.(disks.DeviceIdentifier)
+	if !ok || !strings.HasPrefix(source, "/") {
+		return
+	}
+	if node, err := ident.DeviceNode(source); err == nil {
+		st.source, st.device = source, node
+	}
+}
+
 // remountWanted says whether to try the remount of a disk: missing for a reason a USB reset gives, not failed, and
 // not with a volume marked dirty, which Linux mounts only by force (specs.md §10, §22).
 func remountWanted(d *config.Disk, st *diskState) bool {
 	return st.state == disks.Missing && st.reset && d.State != config.DiskFailed && !st.dirty
 }
 
-// remount tries umount -l then mount of a disk a USB reset took, through its fstab entry (specs.md §15.13).
+// remount mounts again a disk a USB reset took, through its fstab entry (specs.md §15.13): umount -l, then systemd
+// starts the disk's mount unit, so that what the mount starts, as ntfs-3g's FUSE process, belongs to that unit and not
+// to the daemon's service. Where systemd cannot or will not, the daemon runs mount itself, as before.
 func (l *loop) remount(ctx context.Context, d *config.Disk) {
 	if !l.set.remount || !l.opt.Apply {
 		return
@@ -540,11 +711,18 @@ func (l *loop) remount(ctx context.Context, d *config.Disk) {
 	if err != nil || !fstabHas(table, d.Mount) {
 		return
 	}
+	unit, why, detail := l.mountUnitOf(ctx, d)
 	if out, err := l.command(ctx, "umount", "-l", d.Mount); err != nil {
 		l.log.Info("umount before the remount", "disk", d.ID, "error", err, "output", string(out))
 	}
+	if unit != "" {
+		if why, detail = l.startUnit(ctx, d, unit); why == "" {
+			return
+		}
+	}
+	l.mountsItself(ctx, d, why, detail)
 	args := []string{d.Mount}
-	if l.set.fstab != "/etc/fstab" {
+	if l.set.fstab != machineSystemd.fstab {
 		args = []string{"-T", l.set.fstab, d.Mount}
 	}
 	if out, err := l.command(ctx, "mount", args...); err != nil {
@@ -554,13 +732,28 @@ func (l *loop) remount(ctx context.Context, d *config.Disk) {
 	l.log.Info("remounted after a reset", "disk", d.ID, "mount", d.Mount)
 }
 
-// command runs a command of the remount and gives what it wrote. Past remountTimeout it is killed, with what it
+// remountWait is how long each command of the remount may take: remountTimeout, or a test's own.
+func (l *loop) remountWait() time.Duration {
+	if l.set.remountWait > 0 {
+		return l.set.remountWait
+	}
+	return remountTimeout
+}
+
+// command runs a command of the remount and gives what it wrote. Past remountWait it is killed, with what it
 // started, and is waited for no longer than remountLinger: the next check tries again (specs.md §15.13).
 func (l *loop) command(ctx context.Context, name string, args ...string) ([]byte, error) {
-	wait := l.set.remountWait
-	if wait <= 0 {
-		wait = remountTimeout
-	}
+	return l.runCommand(ctx, true, name, args...)
+}
+
+// output runs a command as command does, and gives what it wrote to its standard output alone; its error holds what
+// it wrote to its standard error.
+func (l *loop) output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return l.runCommand(ctx, false, name, args...)
+}
+
+func (l *loop) runCommand(ctx context.Context, combined bool, name string, args ...string) ([]byte, error) {
+	wait := l.remountWait()
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -568,7 +761,18 @@ func (l *loop) command(ctx context.Context, name string, args ...string) ([]byte
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = remountLinger
-	out, err := cmd.CombinedOutput()
+	var out []byte
+	var err error
+	if combined {
+		out, err = cmd.CombinedOutput()
+	} else {
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err = cmd.Output()
+		if err != nil && stderr.Len() > 0 {
+			err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+		}
+	}
 	if err != nil && ctx.Err() != nil {
 		return out, fmt.Errorf("no answer within %v: %w", wait, err)
 	}
@@ -580,7 +784,7 @@ func (l *loop) watch(ctx context.Context, id string) {
 	if st == nil || d == nil || st.watched || d.State == config.DiskFailed {
 		return
 	}
-	how, err := l.watcher.Watch(ctx, d)
+	how, err := l.watcher.Watch(ctx, d, watch.LimitsOf(l.opt.Config, d))
 	if err != nil {
 		l.log.Warn("cannot watch a disk: only passes will see it", "disk", id, "error", err)
 		return
@@ -592,44 +796,108 @@ func (l *loop) watch(ctx context.Context, id string) {
 func (l *loop) unwatch(id string) {
 	l.watcher.Stop(id)
 	if st := l.disks[id]; st != nil {
-		st.watched = false
+		st.watched, st.unheard = false, true
 	}
+}
+
+// newDiskState is what the loop first keeps of a disk: nothing heard what changed on it while the daemon was stopped.
+func newDiskState(state disks.State) *diskState {
+	return &diskState{state: state, unheard: true}
+}
+
+// walked records that a pass walked a disk: what changes on it from then on, its watch hears, if it has one. One that
+// begins after the pass hears nothing of what changed in between.
+func (l *loop) walked(id string) {
+	if st := l.disks[id]; st != nil {
+		st.walked, st.unheard = true, !st.watched
+	}
+}
+
+// scope gives the disks a pass walks, nil for every disk (specs.md §15.13). A pass whose every reason is events or due
+// walks the disks of the ripe groups, those where the last pass found what the catalog does not hold yet, and those
+// whose watch may have missed a change: not watched all along since their last walk, or not walked since they were
+// found. It spares the others, watched all along and heard of nothing, whose copies are as the catalog says. Any other
+// reason walks every disk, and so does a daemon in shadow mode, which records nothing a later pass could start from.
+func (l *loop) scope(because []string) jobs.Scope {
+	if !l.opt.Apply || len(because) == 0 || slices.ContainsFunc(because, func(r string) bool { return r != BecauseEvents && r != BecauseDue }) {
+		return nil
+	}
+	scope := jobs.Scope{}
+	for id, h := range l.heard {
+		if h.Whole {
+			scope[id] = jobs.Whole
+		} else {
+			scope.Add(id, h.Names)
+		}
+	}
+	for id, names := range l.again {
+		scope.Add(id, names)
+	}
+	for _, id := range l.waitDisks {
+		scope[id] = jobs.Whole
+	}
+	for i := range l.opt.Config.Disks {
+		id := l.opt.Config.Disks[i].ID
+		if st := l.disks[id]; st == nil || st.unheard || !st.watched || !st.walked {
+			scope[id] = jobs.Whole
+		}
+	}
+	// So many names cost more than a walk of the disk.
+	for id, looking := range scope {
+		if len(looking.Names) > watch.MaxNames {
+			scope[id] = jobs.Whole
+		}
+	}
+	return scope
 }
 
 // pass runs one pass of §15.12 under the catalog's lock, then puts the runtime branches right.
 func (l *loop) pass(ctx context.Context, because []string) {
 	start := l.opt.Machine.Now()
 	l.first, l.reloaded, l.gone, l.back = false, false, false, false
-	// The pass walks every disk, which takes in every change the ripe groups told of.
+	// The pass walks every disk a ripe group told of, which takes in every change those groups said.
 	l.origins = nil
-	l.log.Info("a pass begins", "because", because)
+	scope := l.scope(because)
+	if scope == nil {
+		l.log.Info("a pass begins", "because", because)
+	} else {
+		l.log.Info("a pass begins", "because", because, "walks", slices.Sorted(maps.Keys(scope)))
+	}
 	// The sink counts what the pass did instead of keeping each line: a pass over a whole pool would not fit in the
 	// memory of specs.md §26.
-	sink := &passSink{folders: map[string]bool{}}
+	unheard := map[string]bool{}
+	for id, st := range l.disks {
+		if st.unheard {
+			unheard[id] = true
+		}
+	}
+	sink := &passSink{folders: map[string]bool{}, unheard: unheard}
 	var due *alerts.Due
+	var count *passCount
 	outcome, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		// A pass reads no file whole: what must be read to be decided is read after it, by slices (specs.md §15.13).
-		outcome, err := jobs.RunLater(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed)
+		outcome, err := jobs.RunLaterOn(ctx, db, l.opt.Config, l.opt.Machine, l.opt.Apply, sink, l.closed, scope, l.power.onBattery)
 		if err != nil {
 			return nil, err
 		}
 		for _, line := range outcome.Disks {
 			st := l.disks[line.ID]
 			switch {
-			case st == nil:
+			case st == nil, line.Spared, line.Partial:
 			case line.Walked:
-				st.walked = true
+				l.walked(line.ID)
 			case line.Verdict.State == disks.Missing && st.state != disks.Missing:
 				// A device that fails still answers the mount check from the cache: only the pass's confirmation
 				// finds it, and the pass has recorded it already.
-				st.state, st.walked, st.reset = disks.Missing, false, slices.Contains(l.set.resetReasons, line.Verdict.Reason)
+				st.state, st.walked, st.reset = disks.Missing, false, l.resetFor(line.ID, st, line.Verdict.Reason)
 				l.unwatch(line.ID)
 				l.log.Warn("a disk went missing", "disk", line.ID, "reason", line.Verdict.Reason, "message", line.Verdict.Message)
 			}
 		}
 		l.branches(ctx, db)
 		l.purge(ctx, db)
-		due = l.prepareAlerts(ctx, db, outcome, &sink.refused)
+		due = l.prepareAlerts(ctx, db, l.withLastLines(outcome), &sink.refused)
+		count = l.countForMetrics(ctx, db)
 		return outcome, nil
 	})
 	end := l.opt.Machine.Now()
@@ -638,10 +906,20 @@ func (l *loop) pass(ctx context.Context, because []string) {
 		if ctx.Err() != nil {
 			return
 		}
+		l.opt.Metrics.Update(func(s *metrics.Snapshot) { s.PassFailures++ })
 		retry := end + retryAfter.Nanoseconds()
 		l.passDue = &retry
 		l.log.Error("the pass failed", "error", err)
 		return
+	}
+	// What the ripe groups told of, the pass looked at; what its looks left, the next one looks at again.
+	clear(l.heard)
+	l.again = outcome.Again
+	// A look limited to names that concluded nothing of a copy it no longer found leaves its disk to a walk of the
+	// whole disk, as what its look found waits for one (specs.md §15.13).
+	l.waitDisks = append(slices.Clip(outcome.WaitDisks), outcome.Whole...)
+	if !slices.ContainsFunc(outcome.Disks, func(line jobs.DiskLine) bool { return line.Spared || line.Partial }) {
+		l.lastFullEnd = &end
 	}
 	// What the watcher saw closed served this pass, and what changed goes to the media servers.
 	l.closed = jobs.Closed{}
@@ -661,6 +939,9 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	}
 	l.log.Info("a pass ended", "because", because, "seconds", float64(end-start)/1e9, "decisions", sink.decisions,
 		"operations", sink.operations, "waiting", outcome.Waiting, "partial", outcome.Partial, "held", outcome.Held)
+	// A disk the pass found missing is missing in the metrics too, before the next check.
+	l.recordDisks(false)
+	l.recordPass(start, end, outcome, sink, count)
 	l.sendAlerts(ctx, due)
 	l.remindAt(due)
 	if l.opt.OnPass != nil {
@@ -668,15 +949,65 @@ func (l *loop) pass(ctx context.Context, because []string) {
 	}
 }
 
+// withLastLines gives the outcome the alerts are worked out from (specs.md §23): a disk the pass spared says what the
+// last pass that walked it said, the names its walk could not reach among them, with the verdict of its mount check now,
+// so that an alert holds until a walk says otherwise. It keeps what each walk said of a disk for later.
+func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
+	if l.lines == nil {
+		l.lines = map[string]jobs.DiskLine{}
+	}
+	spared := false
+	for _, line := range outcome.Disks {
+		if line.Spared || line.Partial {
+			spared = true
+			continue
+		}
+		l.lines[line.ID] = jobs.DiskLine{ID: line.ID, Verdict: line.Verdict, Walked: line.Walked, Refused: line.Refused, RefusedFirst: line.RefusedFirst,
+			TooLong: line.TooLong, TooLongFirst: line.TooLongFirst}
+	}
+	if !spared {
+		return outcome
+	}
+	merged := *outcome
+	merged.Disks = make([]jobs.DiskLine, len(outcome.Disks))
+	for i, line := range outcome.Disks {
+		merged.Disks[i] = line
+		if last, ok := l.lines[line.ID]; ok && (line.Spared || line.Partial) {
+			last.Verdict = line.Verdict
+			merged.Disks[i] = last
+		}
+	}
+	return &merged
+}
+
 // passSink counts what a pass decided and did, and keeps the names a driver refused and the folders its operations
 // changed.
 type passSink struct {
 	decisions, operations int64
-	refused               alerts.Refused
-	folders               map[string]bool
+	// ops counts the operations by kind and outcome, for the metrics (specs.md §23.1).
+	ops     map[[2]string]int64
+	refused alerts.Refused
+	folders map[string]bool
+	// unheard holds the disks whose watch may have missed a change since their last walk.
+	unheard map[string]bool
 }
 
-func (s *passSink) Disks([]jobs.DiskLine) error { return nil }
+// Disks keeps the folders where the pass's walks found new copies on a disk whose watch may have missed them: a file
+// written straight to a disk while the daemon was stopped, which no rename or deletion tells the media servers of. On
+// a disk watched all along, the watcher heard it, and its group told of it, or not, by who made it (specs.md §21.5).
+func (s *passSink) Disks(lines []jobs.DiskLine) error {
+	for i := range lines {
+		if !s.unheard[lines[i].ID] {
+			continue
+		}
+		for _, folder := range lines[i].NewFolders {
+			if s.folders != nil {
+				s.folders[folder] = true
+			}
+		}
+	}
+	return nil
+}
 
 func (s *passSink) Decision(*jobs.Decision) error {
 	s.decisions++
@@ -685,6 +1016,10 @@ func (s *passSink) Decision(*jobs.Decision) error {
 
 func (s *passSink) Operation(op *jobs.Operation) error {
 	s.operations++
+	if s.ops == nil {
+		s.ops = map[[2]string]int64{}
+	}
+	s.ops[[2]string{op.Kind, op.Outcome}]++
 	for _, f := range OperationFolders(op) {
 		if s.folders != nil {
 			s.folders[f] = true
@@ -704,7 +1039,8 @@ func (s *passSink) Operation(op *jobs.Operation) error {
 // prepareAlerts works out, under the catalog's lock, the alerts a pass leaves to send (specs.md §23). With no
 // channel set, the table alerts stays as it is, so that a channel set later hears of what holds then.
 func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outcome, refused *alerts.Refused) *alerts.Due {
-	if len(l.set.channels) == 0 {
+	// The metrics give what holds whether or not a channel is set (specs.md §23.1).
+	if len(l.set.channels) == 0 && l.opt.Metrics == nil {
 		return nil
 	}
 	now := l.opt.Machine.Now()
@@ -713,6 +1049,10 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 		facts.Dirty = l.dirtyDisks()
 		facts.Foreign = l.foreignWorkdirs(outcome)
 		facts.Unopened = l.stillUnopened()
+		facts.Versions = l.versionsPurged(now)
+		if l.power.get().Unreachable {
+			facts.UPSUnreachable, _ = l.opt.Config.Effective()["ups.nut"].(string)
+		}
 		// A trash that a purge still under way will bring back under its limit is not full: only one that stays over
 		// once everything due is gone is told of (specs.md §23).
 		if l.purgePending && len(facts.TrashFull) > 0 {
@@ -723,6 +1063,10 @@ func (l *loop) prepareAlerts(ctx context.Context, db *sql.DB, outcome *jobs.Outc
 		}
 	}
 	if err == nil {
+		l.recordAlerts(alerts.Holdings(facts))
+		if len(l.set.channels) == 0 {
+			return nil
+		}
 		var due *alerts.Due
 		if due, err = alerts.Prepare(ctx, db, facts, now, l.opt.Apply); err == nil {
 			if l.opt.Apply {
@@ -827,6 +1171,10 @@ func (l *loop) readChanged(ctx context.Context) {
 		return
 	}
 	l.queueFolders(sink.folders)
+	l.opt.Metrics.Update(func(s *metrics.Snapshot) {
+		s.AddOperations(sink.ops)
+		s.CopiedBytes += outcome.Copied
+	})
 	l.toRead = left
 	l.readDecided = l.readDecided || sink.decisions > 0 || outcome.Held || outcome.Partial
 	if sink.decisions > 0 || sink.operations > 0 || outcome.Held {
@@ -934,18 +1282,19 @@ func (l *loop) stillUnopened() map[string][]string {
 
 // scrub reads the copies due for a slice of time, under the catalog's lock, within what is left of the budget of the
 // stretch of integrity.window that began at opened, and moves a corrupt copy to the trash when another is healthy:
-// starting the daemon is the consent (specs.md §15.13, §16). A corrupt copy brings a pass, which sends its alert, and
-// makes the copy moved again.
+// starting the daemon is the consent (specs.md §15.13, §16). The corrupt copies an earlier scrub left in the root come
+// first, each once a stretch. A corrupt copy found, repaired or moved brings a pass, which sends its alert, and makes
+// the copy moved again.
 func (l *loop) scrub(ctx context.Context, opened int64) {
 	if l.scrubOpened != opened {
-		l.scrubOpened, l.scrubSpent = opened, 0
+		l.scrubOpened, l.scrubSpent, l.scrubTaken = opened, 0, nil
 	}
 	slice := min(hashSlice, l.set.scrubBudget-l.scrubSpent)
 	start := l.opt.Machine.Now()
 	var out *jobs.ScrubOutcome
 	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		var err error
-		out, err = jobs.Scrub(ctx, db, l.opt.Config, l.opt.Machine, jobs.ScrubOptions{Budget: slice, Apply: true, Quarantine: true})
+		out, err = jobs.Scrub(ctx, db, l.opt.Config, l.opt.Machine, jobs.ScrubOptions{Budget: slice, Apply: true, Quarantine: true, Taken: l.scrubTaken})
 		return nil, err
 	})
 	l.scrubSpent += time.Duration(l.opt.Machine.Now() - start)
@@ -957,18 +1306,26 @@ func (l *loop) scrub(ctx context.Context, opened int64) {
 		}
 		return
 	}
+	l.recordScrub(out)
+	for _, cc := range out.Taken {
+		if l.scrubTaken == nil {
+			l.scrubTaken = map[catalog.CorruptCopy]bool{}
+		}
+		l.scrubTaken[cc] = true
+	}
 	left, corrupt := false, 0
 	refused := map[string][]string{}
 	for i := range out.Disks {
 		d := &out.Disks[i]
 		left = left || d.Left
-		corrupt += len(d.Corrupt)
+		// Repaired and moved are of the copies found corrupt, or taken again.
+		corrupt += len(d.Corrupt) + len(d.Repaired) + len(d.Quarantined)
 		if len(d.Refused) > 0 {
 			refused[d.ID] = d.Refused
 		}
-		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Changed) > 0 {
-			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "repaired", len(d.Repaired), "quarantined", len(d.Quarantined),
-				"kept", len(d.Kept), "changed", len(d.Changed))
+		if d.Read > 0 || len(d.Corrupt) > 0 || len(d.Again) > 0 || len(d.Changed) > 0 {
+			l.log.Info("scrubbed", "disk", d.ID, "copies", d.Read, "bytes", d.Bytes, "corrupt", len(d.Corrupt), "again", len(d.Again), "repaired", len(d.Repaired),
+				"quarantined", len(d.Quarantined), "kept", len(d.Kept), "changed", len(d.Changed))
 		}
 	}
 	if !left {
@@ -1051,6 +1408,7 @@ func (l *loop) purgeSlice(ctx context.Context, db *sql.DB) bool {
 		} else {
 			stayed++
 		}
+		l.notePurged(e, l.opt.Machine.Now())
 		return nil
 	})
 	if err == nil {
@@ -1064,6 +1422,51 @@ func (l *loop) purgeSlice(ctx context.Context, db *sql.DB) bool {
 	}
 	l.log.Info("the trash was purged", "entries", purged, "bytes", summary.Bytes, "stayed", stayed, "full", summary.Full, "left", left)
 	return left
+}
+
+// purgedVersions counts, on a disk, the versions a modification replaced that the trash purged for room before their
+// retention ended, since the alert of that began, with when the last of them went (specs.md §17, §23).
+type purgedVersions struct {
+	paths  alerts.Refused
+	lastNS int64
+}
+
+// versionsHeld is how long the alert of versions purged early holds after the last of them: as long as a reminder
+// waits, so that an alert a channel could not take is tried again while it holds, and a loss that goes on is told of
+// again as its count grows (specs.md §23).
+const versionsHeld = alerts.Remind
+
+// notePurged counts an entry a purge removed when it was a version a modification replaced, purged for room before
+// its retention ended: that version is lost, as a library rewritten slowly would lose them all (specs.md §17).
+func (l *loop) notePurged(e *trash.EntryItem, nowNS int64) {
+	if e.Outcome != trash.OutcomePurged || e.Why != string(solver.PurgeMaxSize) || e.Reason != catalog.ReasonOverwritten {
+		return
+	}
+	if l.versions == nil {
+		l.versions = map[string]*purgedVersions{}
+	}
+	p := l.versions[e.Disk]
+	if p == nil {
+		p = &purgedVersions{}
+		l.versions[e.Disk] = p
+	}
+	p.paths.Add(e.Path)
+	p.lastNS = nowNS
+}
+
+// versionsPurged gives, by disk id, the disks whose trash purged versions early within versionsHeld of now, for the
+// alerts, and forgets the others: their alert ends, and one that comes later begins again.
+func (l *loop) versionsPurged(nowNS int64) []alerts.VersionsPurged {
+	var out []alerts.VersionsPurged
+	for _, id := range slices.Sorted(maps.Keys(l.versions)) {
+		p := l.versions[id]
+		if nowNS-p.lastNS >= versionsHeld.Nanoseconds() {
+			delete(l.versions, id)
+			continue
+		}
+		out = append(out, alerts.VersionsPurged{ID: id, Paths: p.paths})
+	}
+	return out
 }
 
 // locked runs fn on the catalog, under its lock, which it takes after the others' and lets go of last.
@@ -1085,7 +1488,7 @@ func (l *loop) locked(ctx context.Context, fn func(db *sql.DB) (*jobs.Outcome, e
 // branches writes mergerfs's runtime branches when they should change: every branch of the configuration but
 // those of the disks missing, or not walked since they came back (specs.md §15.13).
 func (l *loop) branches(ctx context.Context, db *sql.DB) {
-	if !l.opt.Apply || l.set.viewMount == "" {
+	if !l.opt.Apply || l.set.viewMount == "" || l.set.ownView {
 		return
 	}
 	current, err := view.ReadBranches(l.set.viewMount)
@@ -1138,4 +1541,22 @@ func ClosedPaths(ripe []watch.Group) []string {
 		out = append(out, g.Path)
 	}
 	return out
+}
+
+// lookAtDevices records, at each start, the physical disks each disk the check found mounted lives on (specs.md §10,
+// R-06). A dry run records nothing.
+func (l *loop) lookAtDevices(ctx context.Context) {
+	if !l.opt.Apply {
+		return
+	}
+	db, err := catalog.OpenPool(ctx, l.set.catalog, l.opt.Config.PoolID)
+	if err != nil {
+		l.log.Warn("the physical disks of the pool are not looked at", "error", err)
+		return
+	}
+	defer func() { _ = db.Close() }()
+	jobs.RecordDevices(ctx, db, l.opt.Config, l.opt.Machine, func(i int) bool {
+		st := l.disks[l.opt.Config.Disks[i].ID]
+		return st != nil && st.state != disks.Missing
+	})
 }

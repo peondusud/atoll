@@ -1,0 +1,70 @@
+{
+  "about": "The states of a disk and of a copy, and what moves one to another, as specs.md says. states_test.go keeps them equal to the closed lists of schema/migrations and of specs.md §4, each transition to a state, and each bug to an entry of DONE.md that fixed it, or to a flaw of README.md, open or fixed.",
+  "machines": [
+    {
+      "name": "disk",
+      "title": "Disk states",
+      "table": "disks",
+      "glossary": "Disk states",
+      "states": ["online", "standby", "missing", "readonly", "draining", "failed", "retired"],
+      "transitions": [
+        {"from": "[*]", "to": "online", "label": "disk add", "when": "`disk add`, the identity, topology and mount point checked", "spec": "§10, §18"},
+        {"from": "online", "to": "standby", "label": "spun down", "when": "the daemon's check finds a whole disk in standby, waking none", "spec": "§10"},
+        {"from": "standby", "to": "online", "label": "spinning", "when": "its counters moved, it has requests under way, or it answers spinning", "spec": "§10"},
+        {"from": "online", "to": "missing", "label": "check fails, or EIO", "when": "a mount check fails, or an I/O error on a disk that then does not confirm (invariant 4)", "spec": "§10, §16, §17.1"},
+        {"from": "standby", "to": "missing", "label": "check fails", "when": "a mount check fails", "spec": "§10"},
+        {"from": "missing", "to": "online", "label": "check passes", "when": "a mount check passes again; reconciliation first", "spec": "§10, §18"},
+        {"from": "online", "to": "readonly", "label": "second table of §10", "when": "ro, ads, nocase, iocharset, errors-continue, hibernated, casefold, ascii-ci, no-journal, ignore-case or other-marker", "spec": "§10"},
+        {"from": "readonly", "to": "online", "label": "remounted", "when": "mounted again without what made it readonly", "spec": "§10"},
+        {"from": "readonly", "to": "missing", "label": "check fails", "when": "a mount check fails", "spec": "§10"},
+        {"from": "online", "to": "draining", "label": "disk remove --evacuate", "when": "`disk remove --evacuate` or `disk replace` set its state to draining", "spec": "§18"},
+        {"from": "draining", "to": "missing", "label": "check fails", "when": "a mount check fails; draining again once it passes", "spec": "§9, §18"},
+        {"from": "missing", "to": "draining", "label": "check passes", "when": "a mount check passes, its state still draining", "spec": "§9, §18"},
+        {"from": "draining", "to": "retired", "label": "disk remove --yes", "when": "out of the configuration once nothing depends on it", "spec": "§9, §18"},
+        {"from": "online", "to": "failed", "label": "disk fail", "when": "`disk fail`: failed even if it comes back", "spec": "§18"},
+        {"from": "missing", "to": "failed", "label": "disk fail", "when": "`disk fail`", "spec": "§18"},
+        {"from": "failed", "to": "retired", "label": "disk remove --yes", "when": "out of the configuration", "spec": "§9, §18"},
+        {"from": "retired", "to": "online", "label": "listed again", "when": "the configuration lists it again", "spec": "§9"}
+      ],
+      "unentered": {},
+      "bugs": [
+        {"from": "online", "to": "missing", "label": "a sector the scrub could not read took its disk out at each slice, the copy never named", "entry": "The review's sixteen decisions, made by the maintainer on 2026-11-13"},
+        {"from": "online", "to": "readonly", "label": "a disk another pool's marker named was written to", "entry": "The maintainer's answers on the alpha, 2026-11-14"},
+        {"from": "online", "to": "readonly", "label": "an ext4 without a journal was written to", "entry": "Two more decisions of the maintainer, made on 2026-11-14"}
+      ]
+    },
+    {
+      "name": "copy",
+      "title": "Copy states",
+      "table": "copies",
+      "glossary": "Copy states",
+      "states": ["ok", "pending", "stale", "corrupt", "unavailable", "surplus"],
+      "transitions": [
+        {"from": "[*]", "to": "ok", "label": "found", "when": "a walk finds a copy new to the catalog: a user's, never verified", "spec": "§15.10"},
+        {"from": "[*]", "to": "pending", "label": "queued", "when": "the plan queues a replicate job and its pending copy", "spec": "§13.4, §14.1"},
+        {"from": "pending", "to": "ok", "label": "create done", "when": "the operation create committed, or finished by a reprise", "spec": "§14.2, §17.2"},
+        {"from": "pending", "to": "[*]", "label": "canceled", "when": "no longer kept or counted by the plan, or its job ended; never while its job is running", "spec": "§13.4, §14.1"},
+        {"from": "ok", "to": "surplus", "label": "beyond the level", "when": "more copies count than the level, and this one is not kept", "spec": "§13.4"},
+        {"from": "surplus", "to": "ok", "label": "kept again", "when": "kept toward the level again", "spec": "§13.4"},
+        {"from": "ok", "to": "stale", "label": "another modified", "when": "a modification of another copy, or a change of metadata it could not be given", "spec": "§15.4"},
+        {"from": "surplus", "to": "stale", "label": "another modified", "when": "a modification of another copy", "spec": "§15.4"},
+        {"from": "stale", "to": "pending", "label": "in the trash, overwritten", "when": "its trash job done: the row stays, a pending copy with its replicate job", "spec": "§15.4, §15.12"},
+        {"from": "ok", "to": "corrupt", "label": "scrub mismatch", "when": "a chunk that does not match, read again past the cache, size and times unchanged", "spec": "§16"},
+        {"from": "corrupt", "to": "ok", "label": "repaired or read right", "when": "a chunk repair, or a copy that reads right after all", "spec": "§16.1"},
+        {"from": "corrupt", "to": "[*]", "label": "quarantined", "when": "to the trash, quarantined or repaired whole", "spec": "§16, §16.1"},
+        {"from": "ok", "to": "[*]", "label": "to the trash, or row dropped", "when": "deleted or renamed to the trash, or its row dropped by a decision Kept or Gone", "spec": "§15.12, §17.1"},
+        {"from": "surplus", "to": "[*]", "label": "pruned", "when": "`prune` or `balance` send it to the trash", "spec": "§13.3, §17.3"},
+        {"from": "stale", "to": "[*]", "label": "deleted", "when": "its file deleted, or its row dropped", "spec": "§15.12"}
+      ],
+      "unentered": {
+        "unavailable": "in the closed list, kept as every value of version 1 is (§29.3), and read by the plan, the view and the alerts; but no transition of specs.md sets it, and no code writes it"
+      },
+      "bugs": [
+        {"from": "pending", "to": "[*]", "label": "a pending copy kept past min_free was written into the reserve", "entry": "The review's sixteen decisions, made by the maintainer on 2026-11-13"},
+        {"from": "ok", "to": "stale", "label": "a copy no user changed went over the others", "entry": "Two more decisions of the maintainer, made on 2026-11-14"},
+        {"from": "pending", "to": "ok", "label": "flaw 1, fixed: a write before the commit recorded as verified", "flaw": "Flaw 1", "fixed": true},
+        {"from": "pending", "to": "[*]", "label": "flaw 2, fixed: a job running canceled with its pending copy", "flaw": "Flaw 2", "fixed": true}
+      ]
+    }
+  ]
+}

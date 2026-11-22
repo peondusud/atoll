@@ -180,7 +180,7 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 			return failure(stderr, fmt.Errorf(T("disk %s: the configuration is unchanged: %w"), verbOf(change), err))
 		}
 		out.Done = true
-		if code = recordAndTell(ctx, edited, m, warn, stderr, "the next scan or pass takes it in"); partial {
+		if code = recordAndTell(ctx, configPath, edited, m, warn, stderr, "the next scan or pass takes it in"); partial {
 			code = exitPartial
 		}
 	}
@@ -494,7 +494,7 @@ func diskReplace(configPath string, args []string, stdout, stderr io.Writer) int
 		if err != nil {
 			return failure(stderr, fmt.Errorf(T("disk replace: the configuration is unchanged: %w"), err))
 		}
-		if code = a.finish(ctx); partial {
+		if code = a.finish(ctx, configPath); partial {
 			code = exitPartial
 		}
 	}

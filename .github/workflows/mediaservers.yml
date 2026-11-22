@@ -1,0 +1,30 @@
+# Atoll's notifications on real Plex, Jellyfin and Emby, each in its vendor's latest image (make test-mediaservers,
+# test/mediaservers/run.sh), once a week and on demand, never on a push: it pulls about 4.4 GB, and what it watches is
+# the vendors' images changing. Plex runs unclaimed, in no account, the test in its network namespace: no secret is
+# needed.
+name: Media servers
+
+on:
+  schedule:
+    # Mondays at 05:17 UTC, on beta, where the work is; main takes it at each merge.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mediaservers
+  cancel-in-progress: false
+
+jobs:
+  mediaservers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      # A dispatch tries the branch it was started on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'beta' || github.ref }}
+          persist-credentials: false
+      - run: make test-mediaservers

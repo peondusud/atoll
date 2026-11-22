@@ -301,7 +301,8 @@ label = "c"
 	}
 }
 
-// The warnings of this build: every later-phase key of the example, and no default.
+// The warnings of this build: every later-phase key of the example, and no default. Its cache disk, with mergerfs, has
+// no effect, a warning of no later phase (specs.md §19, §24.4).
 func TestLaterPhaseWarnings(t *testing.T) {
 	c, err := Parse(specExample(t))
 	if err != nil {
@@ -309,37 +310,79 @@ func TestLaterPhaseWarnings(t *testing.T) {
 	}
 	var got []string
 	for _, w := range c.Warnings {
-		if !w.LaterPhase {
-			t.Errorf("the example names something no disk carries: %v", w)
-		}
 		got = append(got, w.Key)
+		switch {
+		case w.Key == "disk[3].role":
+			if w.LaterPhase || !strings.Contains(w.Message, "mergerfs") {
+				t.Errorf("%v", w)
+			}
+		case !w.LaterPhase:
+			t.Errorf("the example names something no disk carries: %v", w)
+		case w.Message != "arrives in phase 4: no effect yet":
+			t.Errorf("%v does not name the phase and its effect", w)
+		}
 	}
 	want := []string{
 		"disk[3].role",
 		"health.avoid_hotter_than",
 		"health.evacuate_on",
-		"placement.colocate", // set by the energy preset, unlike new_files, which the file sets
-		"read.classes",
-		"rule[5].cache_min_age",
-		"rule[6].cache_min_age",
-		"rule[7].colocate",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("warnings at\n%q, want\n%q", got, want)
 	}
-	for _, w := range c.Warnings {
-		if !strings.Contains(w.Message, "phase") {
-			t.Errorf("%v does not name the phase", w)
+}
+
+// read.policy and read.classes came with phase 2b, which knows which disk spins. read.classes still warns, as a
+// setting of no effect and of no later phase, where the file sets it and read.policy is "oldest", which reads the
+// original alone (specs.md §7, §24.4).
+func TestReadClassesWarnWithOldest(t *testing.T) {
+	for _, tc := range []struct {
+		name, read string
+		warn       bool
+	}{
+		{"classes with oldest, the default", `classes = ["sata"]` + "\n", true},
+		{"an empty list, as the file wrote it", "classes = []\n", true},
+		{"classes with oldest said", `policy = "oldest"` + "\n" + `classes = ["sata"]` + "\n", true},
+		{"classes with prefer-spinning", `policy = "prefer-spinning"` + "\n" + `classes = ["sata"]` + "\n", false},
+		{"prefer-spinning alone", `policy = "prefer-spinning"` + "\n", false},
+	} {
+		c, err := Parse([]byte(`pool_id = "p"
+[view]
+mount = "/srv/pool"
+[[disk]]
+id = "t1"
+uuid = "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b"
+mount = "/mnt/t1"
+fs = "ext4"
+tags = ["sata"]
+[read]
+` + tc.read))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var got []Problem
+		for _, w := range c.Warnings {
+			if w.Key == "read.classes" || w.Key == "read.policy" {
+				got = append(got, w)
+			}
+		}
+		switch {
+		case !tc.warn && len(got) != 0:
+			t.Errorf("%s: %v", tc.name, got)
+		case tc.warn && (len(got) != 1 || got[0].Key != "read.classes" || got[0].LaterPhase || !strings.Contains(got[0].Message, "oldest")):
+			t.Errorf("%s: %v", tc.name, got)
 		}
 	}
 }
 
-func TestFallbackWarnings(t *testing.T) {
+// placement.new_files and colocate came with phase 2b: neither warns any more (specs.md §12.4, §24.4).
+func TestStrategiesNoLongerWarn(t *testing.T) {
 	c, err := Parse([]byte(`pool_id = "p"
 [view]
 mount = "/srv/pool"
 [placement]
 new_files = "ordered"
+colocate = "season"
 [integrity]
 auto_repair = false
 [ups]
@@ -348,11 +391,7 @@ enabled = false
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]string{}
-	for _, w := range c.Warnings {
-		got[w.Key] = w.Message
-	}
-	if len(got) != 1 || !strings.Contains(got["placement.new_files"], "works as most-free") {
+	if len(c.Warnings) != 0 {
 		t.Errorf("warnings: %v", c.Warnings)
 	}
 }
@@ -363,8 +402,8 @@ func TestEffectiveTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := c.Effective()["replication.max_parallel_per_disk"]; got != int64(1) {
-		t.Errorf("max_parallel_per_disk from the file: %T %v", got, got)
+	if got := c.Effective()["replication.max_parallel_per_ssd"]; got != int64(1) {
+		t.Errorf("max_parallel_per_ssd from the file: %T %v", got, got)
 	}
 	minimal, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n"))
 	if err != nil {
@@ -394,12 +433,60 @@ func TestEffectiveTypes(t *testing.T) {
 	}
 }
 
-func TestViewEngineAtollWaitsForItsPhase(t *testing.T) {
-	_, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\nengine = \"atoll\"\n"))
-	var e *Error
-	// The message tells it from a value the schema does not know.
-	if !errors.As(err, &e) || len(e.Problems) != 1 || e.Problems[0].Key != "view.engine" || !strings.Contains(e.Problems[0].Message, "phase 2a") {
-		t.Errorf("got %v, want a problem at view.engine that names phase 2a", err)
+// view.engine = "atoll" is Atoll's own view at view.mount, in place of mergerfs, since phase 2a (specs.md §21.2, §24.4).
+func TestViewEngineAtoll(t *testing.T) {
+	c, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\nengine = \"atoll\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if engine, _ := c.Effective()["view.engine"].(string); engine != "atoll" {
+		t.Errorf("view.engine %q", engine)
+	}
+}
+
+// The copies at once a disk takes (specs.md §14, the maintainer, 2026-11-19): max_parallel_per_disk, set, for every disk
+// alike, as in format version 1; left out, the per-kind keys, one copy at a time on every disk by default, as copies at once are
+// experimental (specs.md §28).
+func TestCopyLimits(t *testing.T) {
+	for text, want := range map[string]CopyLimits{
+		"": {PerDisk: 0, HDD: 1, SSD: 1},
+		"[replication]\nmax_parallel_per_disk = 1\n":                {PerDisk: 1, HDD: 1, SSD: 1},
+		"[replication]\nmax_parallel_per_disk = 3\n":                {PerDisk: 3, HDD: 1, SSD: 1},
+		"[replication]\nmax_parallel_per_hdd = 2\n":                 {PerDisk: 0, HDD: 2, SSD: 1},
+		"[replication]\nmax_parallel_per_ssd = 16\n":                {PerDisk: 0, HDD: 1, SSD: 16},
+		"[replication]\nmax_parallel_per_ssd = 1\nenabled = true\n": {PerDisk: 0, HDD: 1, SSD: 1},
+	} {
+		c, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n" + text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.CopyLimits(); got != want {
+			t.Errorf("%q: %+v, want %+v", text, got, want)
+		}
+	}
+}
+
+// A point given to atoll mount on its command line follows the relations of view.readonly_mount (specs.md §21.2,
+// §24.3), which the vectors pin for the key itself.
+func TestCheckReadonlyMount(t *testing.T) {
+	c, err := Parse([]byte("pool_id = \"p\"\ncatalog = \"/var/lib/atoll/catalog.db\"\n[view]\nmount = \"/srv/pool\"\n" +
+		"[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"/mnt/t1\"\nfs = \"ext4\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for point, key := range map[string]string{
+		"/srv/pool-ro": "", "/srv/pool": "view.readonly_mount", "/srv": "view.readonly_mount", "/srv/pool/ro": "view.readonly_mount",
+		"/mnt/t1/x": "view.readonly_mount", "/mnt": "view.readonly_mount", "srv/ro": "view.readonly_mount", "/srv/ro/": "view.readonly_mount",
+		"/srv/./ro": "view.readonly_mount", "/var/lib/atoll": "catalog",
+	} {
+		err := CheckReadonlyMount(c, point)
+		var e *Error
+		switch {
+		case key == "" && err != nil:
+			t.Errorf("%s: %v", point, err)
+		case key != "" && (!errors.As(err, &e) || len(e.Problems) != 1 || e.Problems[0].Key != key):
+			t.Errorf("%s: got %v, want a problem at %s", point, err, key)
+		}
 	}
 }
 
@@ -474,5 +561,92 @@ func TestAnErrorShowsNoURL(t *testing.T) {
 	_, err := Parse([]byte("pool_id = \"Not An Id\"\n[view]\nmount = \"/srv/pool\"\n"))
 	if err == nil || !strings.Contains(err.Error(), "Not An Id") {
 		t.Errorf("a value that holds no secret is not shown: %v", err)
+	}
+}
+
+// The files of a secret the configuration names, by key in byte order, each that is set (specs.md §24.4).
+func TestSecretFiles(t *testing.T) {
+	c, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[notify.plex]\ntoken_file = \"/etc/atoll/plex.token\"\n" +
+		"[notify.emby]\napi_key_file = \"\"\n[alerts]\nsmtp_password_file = \"/etc/atoll/smtp\"\nntfy_token_file = \"/etc/atoll/ntfy\"\n" +
+		"[api]\ntoken_file = \"/etc/atoll/api.token\"\n[telemetry]\notlp_headers_file = \"/etc/atoll/otlp.headers\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []SecretFile{
+		{"alerts.ntfy_token_file", "/etc/atoll/ntfy"}, {"alerts.smtp_password_file", "/etc/atoll/smtp"}, {"api.token_file", "/etc/atoll/api.token"},
+		{"notify.plex.token_file", "/etc/atoll/plex.token"}, {"telemetry.otlp_headers_file", "/etc/atoll/otlp.headers"},
+	}
+	if got := c.SecretFiles(); !slices.Equal(got, want) {
+		t.Errorf("%v, want %v", got, want)
+	}
+}
+
+// The words of a problem are Go's own, never the vectors' (config.json names keys alone): these pin a few that the
+// vectors cannot tell apart, as two checks of one key that would each refuse it.
+func TestProblemWords(t *testing.T) {
+	const base = "pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n"
+	for _, c := range []struct {
+		name, toml, key, words string
+		warning                bool
+	}{
+		// The schema's minItems speaks first; min_free's own grammar would refuse the empty list too.
+		{"an empty min_free", base + "[placement]\nmin_free = []\n", "placement.min_free", "want at least 1 items", false},
+		{"a secret and a user in clear", base + "[notify.plex]\nurl = \"http://me:pw@nas.lan:32400\"\ntoken_file = \"/etc/atoll/plex.token\"\n",
+			"notify.plex.url", "the secret of notify.plex.token_file and the user and the password of its address go in clear", true},
+		{"a user in clear", base + "[notify.plex]\nurl = \"http://me:pw@nas.lan:32400\"\n",
+			"notify.plex.url", "the user and the password of its address go in clear", true},
+		{"a secret in clear", base + "[notify.plex]\nurl = \"http://nas.lan:32400\"\ntoken_file = \"/etc/atoll/plex.token\"\n",
+			"notify.plex.url", "the secret of notify.plex.token_file go in clear", true},
+	} {
+		cfg, err := Parse([]byte(c.toml))
+		var list []Problem
+		if c.warning {
+			if err != nil {
+				t.Errorf("%s: %v", c.name, err)
+				continue
+			}
+			list = cfg.Warnings
+		} else {
+			var cerr *Error
+			if !errors.As(err, &cerr) {
+				t.Errorf("%s: %v, want an *Error", c.name, err)
+				continue
+			}
+			list = cerr.Problems
+		}
+		if len(list) != 1 || list[0].Key != c.key || !strings.HasPrefix(list[0].Message, c.words) {
+			t.Errorf("%s: %+v, want one problem at %s starting %q", c.name, list, c.key, c.words)
+		}
+	}
+}
+
+// A format the code does not apply to a list is a mistake in the schema, as is a format on a value of another kind.
+func TestFormatOnTheWrongKind(t *testing.T) {
+	if err := checkFormat("atoll-min-free", []any{"5%", "1GiB"}); err != nil {
+		t.Errorf("min_free: %v", err)
+	}
+	for _, c := range []struct {
+		format string
+		v      any
+	}{
+		{"atoll-size", []any{"1GiB"}},
+		{"atoll-duration", []any{"1s"}},
+		{"atoll-size", int64(1)},
+	} {
+		if err := checkFormat(c.format, c.v); err == nil || !strings.HasPrefix(err.Error(), "configuration schema:") {
+			t.Errorf("checkFormat(%s, %#v) = %v, want a mistake in the schema", c.format, c.v, err)
+		}
+	}
+}
+
+// A warning about a secret sent in clear names its key and never the address, which may hold the secret itself: the
+// topic of a ntfy server, or a user and a password (specs.md §23, §24.4).
+func TestAWarningShowsNoURL(t *testing.T) {
+	c, err := Parse([]byte("pool_id = \"p\"\n[view]\nmount = \"/srv/pool\"\n[alerts]\nntfy = \"http://me:s3cret@ntfy.lan/s3cret-topic\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Warnings) != 1 || c.Warnings[0].Key != "alerts.ntfy" || strings.Contains(c.Warnings[0].Message, "s3cret") {
+		t.Errorf("%+v", c.Warnings)
 	}
 }

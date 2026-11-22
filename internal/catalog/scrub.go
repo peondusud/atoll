@@ -36,10 +36,13 @@ const scrubColumns = `c.file_id, COALESCE(c.old_lpath, f.lpath), c.size, c.mtime
 	COALESCE(fc.chunks, x'')`
 
 // scrubDue is the condition of a copy c of a disk ?1 the scrub has to read: one that counts, of a file hashed and not
-// in conflict, never verified or verified at or before ?2, its size and times known. The copies of a file in conflict
-// are versions of it, which nothing tells apart: one never verified would be read first by every scrub, to find the
-// same again.
-const scrubDue = `c.disk_id = ?1 AND c.state IN ('ok', 'surplus') AND f.blake3 IS NOT NULL AND f.state <> 'conflict'
+// in conflict, nor corrupt and holding one, never verified or verified at or before ?2, its size and times known. The
+// copies of a file in conflict are versions of it, which nothing tells apart: one never verified would be read first
+// by every scrub, to find the same again (specs.md §4, §16).
+const scrubDue = `c.disk_id = ?1 AND ` + scrubDueCopy
+
+// scrubDueCopy is that condition on whichever disk: what the metrics count by disk (specs.md §23.1).
+const scrubDueCopy = `c.state IN ('ok', 'surplus') AND f.blake3 IS NOT NULL AND f.state <> 'conflict' AND NOT f.conflict_held
 	AND (c.verified_ns IS NULL OR c.verified_ns <= ?2) AND c.size IS NOT NULL AND c.mtime_ns IS NOT NULL AND c.ctime_ns IS NOT NULL`
 
 // ScrubDue gives up to limit copies of a disk that are due, after the key: those never verified first, then by the
@@ -144,7 +147,8 @@ func SetCopyVerified(ctx context.Context, db *sql.DB, fileID int64, disk string,
 }
 
 // MarkCopyCorrupt records that a copy no longer holds its file's content, its size and times unchanged: the copy
-// is corrupt, and so is its file, which nothing else remembers (specs.md §4, §16). The event comes first.
+// is corrupt, and so is its file, which nothing else remembers (specs.md §4, §16); a file in conflict holds the
+// conflict. The event comes first.
 func MarkCopyCorrupt(ctx context.Context, db *sql.DB, fileID int64, disk, path string, nowNS int64) error {
 	return inTransaction(ctx, db, func(tx *sql.Tx) error {
 		data := &eventRow{Disk: disk}
@@ -155,7 +159,8 @@ func MarkCopyCorrupt(ctx context.Context, db *sql.DB, fileID int64, disk, path s
 		if _, err := tx.ExecContext(ctx, "UPDATE copies SET state = 'corrupt', verified_ns = NULL WHERE file_id = ? AND disk_id = ?", fileID, disk); err != nil {
 			return fmt.Errorf("copy of %d on %q: %w", fileID, disk, err)
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE files SET state = 'corrupt', updated_ns = ? WHERE id = ?", nowNS, fileID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET state = 'corrupt', conflict_held = (conflict_held OR state = 'conflict'), updated_ns = ?
+			WHERE id = ?`, nowNS, fileID); err != nil {
 			return fmt.Errorf("file %d: %w", fileID, err)
 		}
 		return nil

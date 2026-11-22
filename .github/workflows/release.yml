@@ -1,0 +1,205 @@
+# A release (specs.md §26), on a tag v* that the maintainer alone pushes, as v0.1.0, in three jobs, each with only the
+# permissions it needs (docs/threat-model.md, G21):
+#
+#   ci     refuses a tag whose commit has no successful run of the CI, .github/workflows/ci.yml, on a push or a dispatch
+#          of that very commit, and waits for one that is still running; it reads the runs with GITHUB_TOKEN.
+#   build  builds, packs and writes the notes with GoReleaser (.goreleaser.yaml), which publishes nothing, with
+#          `contents: read` alone: the commit's code, its hooks and its tools run with no permission to write anything.
+#          What it made goes to the run's artifact `dist`.
+#   draft  checks that artifact against the build's SHA256SUMS, attests the provenance of each archive and package, and
+#          drafts the release with them, the SBOMs, SHA256SUMS and the notes. It checks nothing out and runs none of the
+#          commit's code: only gh and the attestation action, on the build's files, with `contents: write`,
+#          `id-token: write` and `attestations: write`.
+#
+# The draft waits for the maintainer, who publishes it once this run has passed.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    # The CI's longest job, qemu, has 150 minutes.
+    timeout-minutes: 190
+    permissions:
+      actions: read # the runs of ci.yml
+    steps:
+      # A pull request's run tests the merge of its head into its base, another commit: only a push to beta or main, or a
+      # dispatch, tests this one. The runs are read from the API and checked again here, the commit included.
+      - name: The CI passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          deadline=$(($(date +%s) + 180 * 60))
+          while :; do
+            gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" -f head_sha="$SHA" -F per_page=100 >runs.json
+            ours='.workflow_runs[] | select(.head_sha == env.SHA and (.event == "push" or .event == "workflow_dispatch"))'
+            passed=$(jq -r "[$ours | select(.status == \"completed\" and .conclusion == \"success\")] | first | .html_url // empty" runs.json)
+            if [ -n "$passed" ]; then
+              echo "The CI passed on $SHA: $passed"
+              echo "The CI passed on \`$SHA\`: $passed" >>"$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            running=$(jq -r "[$ours | select(.status != \"completed\")] | length" runs.json)
+            if [ "$running" = 0 ]; then
+              jq -r "$ours | \"\(.html_url) \(.event) \(.status) \(.conclusion)\"" runs.json
+              echo "::error::No run of ci.yml passed on $SHA, by a push or a dispatch: run the CI on the tag (Actions, CI, Run workflow, the tag as its ref), then run this workflow again"
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::The CI of $SHA is still running after 3 hours: run this workflow again once it has passed"
+              exit 1
+            fi
+            echo "$running run(s) of ci.yml on $SHA not finished: waiting"
+            sleep 60
+          done
+
+  build:
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # the checkout
+    outputs:
+      sums: ${{ steps.sums.outputs.sha256 }}
+    steps:
+      # The whole history: the release notes list the commits since the last tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The latest patch of go.mod's version of Go, which the binary records (go version -m).
+      - id: go
+        run: echo "version=$(sed -n 's/^go \([0-9]*\.[0-9]*\).*/\1/p' go.mod).x" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          check-latest: true
+          cache: false
+      # syft, which writes each archive's SBOM.
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.57.2
+      # No token: GoReleaser publishes nothing (.goreleaser.yaml, release.disable), and this job could not.
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.20.3
+          args: release --clean --skip=publish
+      # The notes: how to check a download, then the commits since the last tag, as GoReleaser wrote them.
+      - name: The notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version=${TAG#v}
+          {
+            echo "Atoll $TAG for Linux, amd64 and arm64: a \`.tar.gz\` holding the static binary, the systemd units, a sample configuration, LICENSE and README, with its SBOM; and a \`.deb\`. Installing either enables and starts nothing (README.md, \"Installing a release\")."
+            echo
+            echo "Check a download against \`SHA256SUMS\`, then against the provenance GitHub attested when it built it:"
+            echo
+            echo '```'
+            echo 'sha256sum --ignore-missing -c SHA256SUMS'
+            echo "gh attestation verify atoll_${version}_linux_amd64.tar.gz --repo $GITHUB_REPOSITORY"
+            echo '```'
+            echo
+            cat dist/CHANGELOG.md
+          } >dist/notes.md
+      - id: sums
+        run: |
+          set -eu
+          cd dist
+          sha256sum --strict -c SHA256SUMS
+          echo "sha256=$(sha256sum SHA256SUMS | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+          {
+            echo "### $GITHUB_REF_NAME, built"
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.sbom.json
+            dist/SHA256SUMS
+            dist/notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  draft:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # the draft release and its files
+      id-token: write # the Sigstore certificate of the attestations
+      attestations: write # the attestations
+    steps:
+      # Checked against its digest as it was uploaded, which a mismatch fails.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist
+      # The files, against the SHA256SUMS the build wrote, and that against the digest the build gave of it.
+      - name: The build's files
+        env:
+          SUMS: ${{ needs.build.outputs.sums }}
+        run: |
+          set -eu
+          cd dist
+          echo "$SUMS  SHA256SUMS" | sha256sum --strict -c
+          sha256sum --strict -c SHA256SUMS
+          for f in *.tar.gz *.deb *.sbom.json; do
+            grep -q -F "  $f" SHA256SUMS || { echo "::error::$f is not in SHA256SUMS"; exit 1; }
+          done
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+      # A draft of this tag already there, from an earlier run, has its files and notes replaced; a published release is
+      # never touched. A tag with a suffix, -alpha.N, -beta.N or -rc.N, is a prerelease.
+      - name: The draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          cd dist
+          version=${TAG#v}
+          version=${version%%+*}
+          prerelease=false
+          case $version in *-*) prerelease=true ;; esac
+          set -- ./*.tar.gz ./*.deb ./*.sbom.json SHA256SUMS
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::A release of $TAG is published already: nothing changed"
+              exit 1
+            fi
+            gh release edit "$TAG" --draft=true --prerelease="$prerelease" --title "Atoll $TAG" --notes-file notes.md
+            gh release upload "$TAG" --clobber "$@"
+          else
+            gh release create "$TAG" --draft --verify-tag --prerelease="$prerelease" --title "Atoll $TAG" --notes-file notes.md "$@"
+          fi
+          {
+            echo "### $TAG, drafted"
+            echo
+            echo '```'
+            cat SHA256SUMS
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

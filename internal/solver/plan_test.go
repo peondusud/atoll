@@ -27,6 +27,11 @@ type planVector struct {
 	Balance bool           `json:"balance"`
 	// MoveOriginals is the plan of atoll balance --move-originals, with Balance.
 	MoveOriginals bool   `json:"move_originals"`
+	NewFiles      string `json:"new_files"`
+	FillTo        string `json:"fill_to"`
+	Equalize      string `json:"equalize"`
+	CacheMirror   bool   `json:"cache_mirror"`
+	CacheEarly    bool   `json:"cache_early"`
 	Note          string `json:"note"`
 }
 
@@ -43,6 +48,7 @@ type diskVector struct {
 	Mount     *string  `json:"mount"`
 	Root      *string  `json:"root"`
 	PastGrace bool     `json:"past_grace"`
+	Physical  string   `json:"physical"`
 }
 
 type copyVector struct {
@@ -52,6 +58,8 @@ type copyVector struct {
 	FirstSeenNS int64   `json:"first_seen_ns"`
 	OldPath     string  `json:"old_path"`
 	Away        bool    `json:"away"`
+	Unverified  bool    `json:"unverified"`
+	Running     bool    `json:"running"`
 }
 
 type policyVector struct {
@@ -63,6 +71,7 @@ type policyVector struct {
 	Spread     *string  `json:"spread"`
 	SpreadMode *string  `json:"spread_mode"`
 	Overflow   *string  `json:"overflow"`
+	Colocate   *string  `json:"colocate"`
 }
 
 type fileVector struct {
@@ -72,6 +81,7 @@ type fileVector struct {
 	Copies  []copyVector `json:"copies"`
 	Manual  bool         `json:"manual"`
 	Leaving bool         `json:"leaving"`
+	Cache   string       `json:"cache"`
 	Policy  policyVector `json:"policy"`
 }
 
@@ -116,8 +126,15 @@ func or[T any](v *T, fallback T) T {
 // input turns a vector into the input of MakePlan, with the defaults of
 // conformance/vectors/README.md.
 func (v *planVector) input() (Input, error) {
-	in := Input{Balance: v.Balance, MoveOriginals: v.MoveOriginals}
+	in := Input{Balance: v.Balance, MoveOriginals: v.MoveOriginals, NewFiles: v.NewFiles, Equalize: v.Equalize, CacheMirror: v.CacheMirror, CacheEarly: v.CacheEarly}
 	var err error
+	fillTo := v.FillTo
+	if fillTo == "" {
+		fillTo = "90%"
+	}
+	if in.FillTo, err = value.ParsePercent(fillTo); err != nil {
+		return in, fmt.Errorf("fill_to: %w", err)
+	}
 	minFree := v.MinFree
 	if minFree == nil {
 		minFree = []string{"0%"}
@@ -130,7 +147,7 @@ func (v *planVector) input() (Input, error) {
 			ID: d.ID, Position: d.Position, Capacity: d.Capacity, Free: d.Free,
 			State: DiskState(or(d.State, "online")), Role: or(d.Role, "data"),
 			FS: names.Filesystem(or(d.FS, "ext4")), Domain: d.Domain, Tags: d.Tags,
-			Mount: or(d.Mount, "/mnt/"+d.ID), Root: or(d.Root, "media"), PastGrace: d.PastGrace,
+			Mount: or(d.Mount, "/mnt/"+d.ID), Root: or(d.Root, "media"), PastGrace: d.PastGrace, Physical: d.Physical,
 		})
 	}
 	for _, f := range v.Files {
@@ -138,16 +155,17 @@ func (v *planVector) input() (Input, error) {
 		if err != nil {
 			return in, err
 		}
-		file := File{Path: path, Size: f.Size, Hold: f.Manual, Leaving: f.Leaving, Placement: &Placement{
+		file := File{Path: path, Size: f.Size, Hold: f.Manual, Leaving: f.Leaving, Cache: Residency(f.Cache), Placement: &Placement{
 			Replicas: or(f.Policy.Replicas, 1), Priority: f.Policy.Priority,
 			Tags: f.Policy.Tags, TagsMode: or(f.Policy.TagsMode, "prefer"), Domains: f.Policy.Domains,
 			Spread: or(f.Policy.Spread, "domain"), SpreadMode: or(f.Policy.SpreadMode, "prefer"),
-			Overflow: or(f.Policy.Overflow, "allow"),
+			Overflow: or(f.Policy.Overflow, "allow"), Colocate: or(f.Policy.Colocate, "none"),
 		}}
 		for _, c := range f.Copies {
 			file.Copies = append(file.Copies, Copy{
 				Disk: c.Disk, State: CopyState(or(c.State, "ok")),
-				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS, OldPath: c.OldPath, Away: c.Away,
+				CreatedBy: or(c.CreatedBy, "user"), FirstSeenNS: c.FirstSeenNS, OldPath: c.OldPath, Away: c.Away, Unverified: c.Unverified,
+				Running: c.Running,
 			})
 		}
 		in.Files = append(in.Files, file)
@@ -233,6 +251,10 @@ func TestPlanVectors(t *testing.T) {
 		}
 		if want := wantResults(t, v.Results); !reflect.DeepEqual(plan.Results, want) && (len(plan.Results) > 0 || len(want) > 0) {
 			t.Errorf("vector %d (%s): results\n%s, want\n%s", i, v.Note, show(plan.Results), show(want))
+		}
+		// A plan with nothing to say of any file holds no list of results at all, which its caller would keep.
+		if plan.Results != nil && len(plan.Results) == 0 {
+			t.Errorf("vector %d (%s): an empty list of results, want none", i, v.Note)
 		}
 		for _, r := range plan.Results {
 			if _, err := ShownState(r.States); err != nil {
@@ -321,17 +343,18 @@ func randomInput(x *xorshift) Input {
 	if err != nil {
 		panic(err) //nolint:forbidigo // a test helper with constant input
 	}
+	in.CacheMirror, in.CacheEarly = x.intn(2) == 0, x.intn(2) == 0
 	nDisks := 1 + x.intn(6)
 	for i := range nDisks {
 		capacity := int64(50 + x.intn(400))
 		in.Disks = append(in.Disks, Disk{
 			ID: fmt.Sprintf("d%d", i), Position: 100 - i, Capacity: capacity, Free: int64(x.intn(int(capacity) + 1)),
 			State:  oneOf(x, DiskOnline, DiskOnline, DiskOnline, DiskStandby, DiskStandby, DiskMissing, DiskReadOnly, DiskDraining, DiskFailed, DiskRetired),
-			Role:   oneOf(x, RoleData, RoleData, RoleData, RoleCache),
+			Role:   oneOf(x, RoleData, RoleData, RoleCache),
 			FS:     oneOf(x, names.Ext4, names.Ext4, names.NTFS, names.XFS),
 			Domain: oneOf(x, "", "a", "b", "c"),
 			Tags:   oneOf(x, nil, []string{"x"}, []string{"y"}, []string{"x", "y"}),
-			Mount:  "/mnt/d", Root: "media", PastGrace: x.intn(2) == 0,
+			Mount:  "/mnt/d", Root: "media", PastGrace: x.intn(2) == 0, Physical: oneOf(x, "", "", "", "sda", "sdb"),
 		})
 	}
 	paths := []string{"p", "P", "p/q", "p/r", "P/s", "t", "T", "t/u/v", "a:b", "w", "x", "y", "z/1", "z/2", "z/3"}
@@ -350,9 +373,13 @@ func randomInput(x *xorshift) Input {
 			if x.intn(3) == 0 {
 				f.Copies = append(f.Copies, Copy{
 					Disk: d.ID, State: oneOf(x, CopyOK, CopyOK, CopyOK, CopySurplus, CopyPending, CopyStale, CopyCorrupt, CopyUnavailable),
-					CreatedBy: oneOf(x, CreatedByUser, CreatedByAtoll), FirstSeenNS: int64(x.intn(4)),
+					CreatedBy: oneOf(x, CreatedByUser, CreatedByAtoll), FirstSeenNS: int64(x.intn(4)), Unverified: x.intn(6) == 0,
 				})
 			}
+		}
+		// A file with a copy on a cache disk may be on the SSD cache, resident or leaving it (specs.md §19).
+		if slices.ContainsFunc(f.Copies, func(c Copy) bool { return roleOf(in.Disks, c.Disk) == RoleCache }) {
+			f.Cache = oneOf(x, CacheNone, CacheResident, CacheTransfer, CacheTransfer)
 		}
 		in.Files = append(in.Files, f)
 	}
@@ -434,6 +461,61 @@ func writable(d *Disk) bool {
 	return d.Role == RoleData && (d.State == DiskOnline || d.State == DiskStandby)
 }
 
+func roleOf(disks []Disk, id string) string {
+	if i := slices.IndexFunc(disks, func(d Disk) bool { return d.ID == id }); i >= 0 {
+		return disks[i].Role
+	}
+	return ""
+}
+
+// onCache says whether a copy of a file on the SSD cache is on a cache disk: it counts toward no level (specs.md §19).
+func onCache(f *File, d *Disk) bool {
+	return f.Cache != CacheNone && d.Role == RoleCache
+}
+
+// checkTransfer checks a transfer job (specs.md §19): of a file leaving the cache, from a copy there that can go, once
+// the copies on data disks that count reach its level, each ok, verified, at its path and on a disk that can be read,
+// and with no other job of its file but transfers.
+func checkTransfer(t reporter, round int, f *File, j Job, disks map[string]*Disk, plan Plan) {
+	t.Helper()
+	if f.Cache != CacheTransfer || f.Leaving || f.Hold || j.Dst != "" {
+		t.Errorf("round %d: transfer %+v of a file that does not leave the cache: %+v", round, j, *f)
+	}
+	src := slices.IndexFunc(f.Copies, func(c Copy) bool { return c.Disk == j.Src })
+	if src < 0 || disks[j.Src].Role != RoleCache {
+		t.Fatalf("round %d: transfer %+v from no copy on a cache disk", round, j)
+	}
+	c, d := &f.Copies[src], disks[j.Src]
+	if c.State != CopyOK && c.State != CopySurplus || c.Away || c.OldPath != "" || d.State != DiskOnline && d.State != DiskStandby {
+		t.Errorf("round %d: transfer %+v of a copy that cannot go: %+v on %+v", round, j, *c, *d)
+	}
+	held, physical := 0, map[string]bool{}
+	for i := range f.Copies {
+		c, d := &f.Copies[i], disks[f.Copies[i].Disk]
+		if d.Role != RoleData || c.State != CopyOK || c.Unverified || c.Away || c.OldPath != "" {
+			continue
+		}
+		if d.State != DiskOnline && d.State != DiskStandby && d.State != DiskReadOnly {
+			continue
+		}
+		if d.Physical != "" {
+			if physical[d.Physical] {
+				continue
+			}
+			physical[d.Physical] = true
+		}
+		held++
+	}
+	if held < f.Placement.Replicas+1 {
+		t.Errorf("round %d: transfer %+v while the data disks hold %d copies to lean on of %d: %+v", round, j, held, f.Placement.Replicas+1, f.Copies)
+	}
+	for _, k := range plan.Jobs {
+		if k.Path == j.Path && k.Kind != JobTransfer {
+			t.Errorf("round %d: transfer %+v beside job %+v", round, j, k)
+		}
+	}
+}
+
 func TestPlanProperties(t *testing.T) {
 	x := xorshift(0x9E3779B97F4A7C15)
 	withJobs := 0
@@ -466,6 +548,9 @@ func TestPlanProperties(t *testing.T) {
 		checkStable(t, round, in, plan)
 		for _, j := range plan.Jobs {
 			reach[string(j.Kind)]++
+			if j.Kind == JobReplicate && roleOf(in.Disks, j.Dst) == RoleCache {
+				reach["mirror"]++
+			}
 		}
 		for _, r := range plan.Results {
 			reach["surplus"] += len(r.Surplus)
@@ -489,7 +574,7 @@ func TestPlanProperties(t *testing.T) {
 		t.Errorf("only %d of 20000 plans had a job", withJobs)
 	}
 	for _, what := range []string{
-		"refresh", "replicate", "surplus", "back", "cancel", "overflow",
+		"refresh", "replicate", "transfer", "mirror", "surplus", "back", "cancel", "overflow",
 		"unavailable", "name-incompatible", "name-collision", "degraded", "pending", "unprotected", "leaving",
 	} {
 		if reach[what] < 100 {
@@ -498,8 +583,17 @@ func TestPlanProperties(t *testing.T) {
 	}
 }
 
+// reporter is what the checks of a plan report to: a *testing.T, or a *rapid.T, which then shrinks the input that
+// failed (rapid_test.go).
+type reporter interface {
+	Helper()
+	Errorf(format string, args ...any)
+	Fatalf(format string, args ...any)
+	Fatal(args ...any)
+}
+
 // checkPlan checks what no plan may ever do (CLAUDE.md, "solver: property tests").
-func checkPlan(t *testing.T, round int, in Input, plan Plan) {
+func checkPlan(t reporter, round int, in Input, plan Plan) {
 	t.Helper()
 	disks := map[string]*Disk{}
 	for i := range in.Disks {
@@ -524,7 +618,12 @@ func checkPlan(t *testing.T, round int, in Input, plan Plan) {
 	kept := map[string]bool{}
 	for _, f := range in.Files {
 		for _, c := range f.Copies {
-			if c.State == CopyPending && !slices.Contains(results[f.Path].Cancel, c.Disk) {
+			// A pending copy whose job is running is never canceled, and holds no room: what it wrote is on its disk
+			// (specs.md §13.4, §14.1).
+			if c.Running && results[f.Path] != nil && slices.Contains(results[f.Path].Cancel, c.Disk) {
+				t.Errorf("round %d: %q on %s, whose job is running, is canceled", round, f.Path, c.Disk)
+			}
+			if cancelable(&c) && !slices.Contains(results[f.Path].Cancel, c.Disk) {
 				room[c.Disk] -= f.Size
 				kept[c.Disk] = true
 			}
@@ -539,13 +638,34 @@ func checkPlan(t *testing.T, round int, in Input, plan Plan) {
 	placed := map[string]int{}
 	seenReplicate := false
 	jobsOn := map[string]bool{}
+	onCacheJobs, onDataJobs := map[string]int{}, map[string]int{}
 	for _, j := range plan.Jobs {
 		f, d := files[j.Path], disks[j.Dst]
+		if f != nil && j.Kind == JobTransfer {
+			checkTransfer(t, round, f, j, disks, plan)
+			continue
+		}
 		if f == nil || d == nil {
 			t.Fatalf("round %d: job %+v names what does not exist", round, j)
 		}
-		if !writable(d) {
+		// A copy on a cache disk is only a resident file's second, with cache.mirror (specs.md §19).
+		mirror := d.Role == RoleCache && f.Cache == CacheResident && in.CacheMirror && (d.State == DiskOnline || d.State == DiskStandby)
+		if !writable(d) && !mirror {
 			t.Errorf("round %d: job %+v on a disk that is not writable: %+v", round, j, *d)
+		}
+		if f.Cache == CacheResident {
+			if d.Role == RoleCache {
+				onCacheJobs[j.Path]++
+			} else {
+				onDataJobs[j.Path]++
+			}
+			early := 0
+			if in.CacheEarly {
+				early = 1
+			}
+			if onCacheJobs[j.Path] > 1 || onDataJobs[j.Path] > early {
+				t.Errorf("round %d: a file resident on the cache gets more than its residency allows: %+v", round, plan.Jobs)
+			}
 		}
 		mark := j.Path + "\x00" + j.Dst
 		if jobsOn[mark] {
@@ -572,10 +692,25 @@ func checkPlan(t *testing.T, round int, in Input, plan Plan) {
 			if f.Hold {
 				t.Errorf("round %d: a replica of %q, which waits for atoll replicate", round, j.Path)
 			}
+		case JobTransfer:
+			// checkTransfer has it.
 		default:
 			t.Errorf("round %d: job %+v of an unknown kind", round, j)
 		}
 		checkNames(t, round, j.Path, d)
+		// Never a copy placed on a physical disk that holds one of the file's copies, or another copy planned (R-06).
+		if d.Physical != "" && j.Kind == JobReplicate {
+			for _, c := range f.Copies {
+				if other := disks[c.Disk]; other.ID != d.ID && other.Physical == d.Physical {
+					t.Errorf("round %d: job %+v beside the copy on %q, on one physical disk", round, j, other.ID)
+				}
+			}
+			for _, k := range plan.Jobs {
+				if k.Path == j.Path && k.Dst != j.Dst && disks[k.Dst].Physical == d.Physical {
+					t.Errorf("round %d: jobs %+v and %+v on one physical disk", round, j, k)
+				}
+			}
+		}
 		src := slices.IndexFunc(f.Copies, func(c Copy) bool { return c.Disk == j.Src })
 		if src < 0 || !isSource(&f.Copies[src], &planDisk{Disk: disks[j.Src]}) {
 			t.Errorf("round %d: job %+v reads from a copy that cannot be read", round, j)
@@ -613,7 +748,7 @@ func checkPlan(t *testing.T, round int, in Input, plan Plan) {
 	}
 }
 
-func checkNames(t *testing.T, round int, path string, d *Disk) {
+func checkNames(t reporter, round int, path string, d *Disk) {
 	t.Helper()
 	problems, err := names.CheckPath(path, d.FS)
 	if err != nil || len(problems) > 0 {
@@ -626,7 +761,7 @@ func checkNames(t *testing.T, round int, path string, d *Disk) {
 }
 
 // checkCollisions replays the jobs on each NTFS disk: none may collide with a name there.
-func checkCollisions(t *testing.T, round int, in Input, plan Plan) {
+func checkCollisions(t reporter, round int, in Input, plan Plan) {
 	t.Helper()
 	for i := range in.Disks {
 		d := &in.Disks[i]
@@ -668,18 +803,27 @@ func checkCollisions(t *testing.T, round int, in Input, plan Plan) {
 
 // checkMarks checks the marks of one file: never beyond its level, and never away from
 // its last readable copy or its last readable user copy.
-func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Disk, placed int) {
+func checkMarks(t reporter, round int, f File, r *Result, disks map[string]*Disk, placed int) {
 	t.Helper()
 	counted, readable, readableUser := 0, 0, 0
 	surplusReadable, surplusUser := 0, 0
+	// The copies of a file on one physical disk count once (R-06).
+	physical := map[string]bool{}
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		d := &planDisk{Disk: disks[c.Disk]}
 		if c.State == CopyPending && slices.Contains(r.Cancel, c.Disk) {
 			continue
 		}
-		if c.State == CopyPending && f.Leaving {
+		if cancelable(c) && f.Leaving {
 			t.Errorf("round %d: %q, whose deletion waits, keeps its pending copy on %s", round, f.Path, c.Disk)
+		}
+		if onCache(&f, disks[c.Disk]) {
+			// Kept toward no level, and never surplus; a file leaving gives it no mark at all.
+			if slices.Contains(r.Surplus, c.Disk) || f.Cache == CacheTransfer && slices.Contains(r.Back, c.Disk) {
+				t.Errorf("round %d: a copy on the cache has a mark: %+v, %+v", round, *c, *r)
+			}
+			continue
 		}
 		if !counts(c, d) {
 			if slices.Contains(r.Surplus, c.Disk) || slices.Contains(r.Back, c.Disk) {
@@ -688,6 +832,12 @@ func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Di
 			continue
 		}
 		counted++
+		if p := disks[c.Disk].Physical; p != "" && !slices.Contains(r.Surplus, c.Disk) {
+			if physical[p] {
+				counted--
+			}
+			physical[p] = true
+		}
 		inHand := isSource(c, d)
 		user := c.CreatedBy == CreatedByUser
 		if inHand {
@@ -726,7 +876,7 @@ func checkMarks(t *testing.T, round int, f File, r *Result, disks map[string]*Di
 
 // checkStable feeds a plan back: with its jobs as pending copies, there is nothing to
 // add. A plan that kept finding more would move data for nothing.
-func checkStable(t *testing.T, round int, in Input, plan Plan) {
+func checkStable(t reporter, round int, in Input, plan Plan) {
 	t.Helper()
 	second, err := MakePlan(applied(in, plan, false))
 	if err != nil {
@@ -777,11 +927,22 @@ func applied(in Input, plan Plan, drop bool) Input {
 			if j.Path != f.Path {
 				continue
 			}
+			if j.Kind == JobTransfer {
+				f.Copies = slices.DeleteFunc(f.Copies, func(c Copy) bool { return c.Disk == j.Src })
+				continue
+			}
 			if k := slices.IndexFunc(f.Copies, func(c Copy) bool { return c.Disk == j.Dst }); k >= 0 {
 				f.Copies[k].State = CopyPending
 			} else {
 				f.Copies = append(f.Copies, Copy{Disk: j.Dst, State: CopyPending, CreatedBy: CreatedByAtoll, FirstSeenNS: 9})
 			}
+		}
+	}
+	// A file with no copy left on the cache, transferred or canceled, is on it no more (specs.md §19).
+	for i := range next.Files {
+		f := &next.Files[i]
+		if !slices.ContainsFunc(f.Copies, func(c Copy) bool { return roleOf(in.Disks, c.Disk) == RoleCache }) {
+			f.Cache = CacheNone
 		}
 	}
 	// The catalog has a row for each copy queued, and answers for its name.
@@ -802,6 +963,29 @@ func TestSubtractStops(t *testing.T) {
 	} {
 		if got := subtract(c.room, c.size); got != c.want {
 			t.Errorf("subtract(%d, %d) = %d, want %d", c.room, c.size, got, c.want)
+		}
+	}
+}
+
+// percent compares shares of room exactly, a disk with no capacity, or with a room below zero, holding none, as the
+// view's own placement asks of disks past their min_free (specs.md §12.4, §21.2).
+func TestCompareNewByShare(t *testing.T) {
+	for _, c := range []struct {
+		a, b Fill
+		want int
+	}{
+		{Fill{Room: 50, Capacity: 100}, Fill{Room: 40, Capacity: 50}, 1},
+		{Fill{Room: 10, Capacity: 100, Position: 0}, Fill{Room: 1, Capacity: 10, Position: 1}, 0},
+		{Fill{Room: 5, Capacity: 0}, Fill{Room: 1, Capacity: 10}, 1},
+		{Fill{Room: 0, Capacity: 0}, Fill{Room: 0, Capacity: 10}, 0},
+		{Fill{Room: -5, Capacity: 10}, Fill{Room: 0, Capacity: 10}, 0},
+		{Fill{Room: -5, Capacity: 10}, Fill{Room: 1, Capacity: 10}, 1},
+	} {
+		if got := CompareNew(NewPercent, value.Percent{}, 0, c.a, c.b); got != c.want {
+			t.Errorf("CompareNew(percent, %+v, %+v) = %d, want %d", c.a, c.b, got, c.want)
+		}
+		if got := CompareNew(NewPercent, value.Percent{}, 0, c.b, c.a); got != -c.want {
+			t.Errorf("CompareNew(percent, %+v, %+v) = %d, want %d", c.b, c.a, got, -c.want)
 		}
 	}
 }

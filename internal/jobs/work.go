@@ -37,6 +37,16 @@ func (p *pass) work(ctx context.Context) error {
 			}
 			continue
 		}
+		if p.spared[d.ID] {
+			// A disk spared is opened, which confirms it and wakes it, only for work that waits for it (specs.md §15.13).
+			idle, err := p.idle(ctx, d.ID)
+			if err != nil {
+				return err
+			}
+			if idle {
+				continue
+			}
+		}
 		if !p.session.Writable(d.ID) {
 			if err := p.reportUnavailable(ctx, d.ID); err != nil {
 				return err
@@ -58,6 +68,24 @@ func (p *pass) work(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// idle says that no work of a pass waits for a disk: no folder to rename, no copy behind its file's name, nothing to
+// send to the trash.
+func (p *pass) idle(ctx context.Context, id string) (bool, error) {
+	folders, err := catalog.FolderJobs(ctx, p.db, id)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	renames, err := catalog.PendingRenames(ctx, p.db, id, "", 1)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	trashJobs, err := catalog.TrashJobs(ctx, p.db, id)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	return len(folders)+len(renames)+len(trashJobs) == 0, nil
 }
 
 func (p *pass) workOn(ctx context.Context, d *config.Disk, handle *ops.Disk) error {
@@ -500,15 +528,16 @@ func (p *pass) holdersOf(ctx context.Context, fileID int64) (map[string]bool, er
 // folderLike finds a folder to make one like: on the first disk by position among those given that holds
 // it. A look that fails ends the search with an error that says nothing of the disk being written to: made
 // with no model, a private folder would be open there for good. For the same reason a disk not looked at, which
-// may hold it, stops a search that found no other.
+// may hold it, stops a search that found no other. A failed disk is never looked at and comes back by nothing a
+// pass does: it is none to wait for, as a copy waits for none (specs.md §14.2, §15.12; the maintainer, 2026-11-22).
 func (p *pass) folderLike(ctx context.Context, skip, folder string, holders map[string]bool) (*fsx.Stat, error) {
 	away := ""
 	for i := range p.config.Disks {
 		id := p.config.Disks[i].ID
-		if id == skip || (holders != nil && !holders[id]) {
+		if id == skip || (holders != nil && !holders[id]) || p.config.Disks[i].State == config.DiskFailed {
 			continue
 		}
-		if !p.walked[id] {
+		if !p.looked(id) {
 			if away == "" {
 				away = id
 			}
@@ -904,7 +933,7 @@ func (p *pass) wantTrash(ctx context.Context, d *config.Disk, refused []catalog.
 func (p *pass) goodAtTarget(f *catalog.FileRow, skip string) bool {
 	for i := range f.Copies {
 		c := &f.Copies[i]
-		if c.Disk != skip && c.OldPath == nil && c.VerifiedNS.Valid && p.walked[c.Disk] && p.session.Readable(c.Disk) && p.verdictOf(f, c).Verdict == solver.VerdictThere {
+		if c.Disk != skip && c.OldPath == nil && c.VerifiedNS.Valid && p.looked(c.Disk) && p.session.Readable(c.Disk) && p.verdictOf(f, c).Verdict == solver.VerdictThere {
 			return true
 		}
 	}
@@ -1017,7 +1046,7 @@ func (p *pass) jobStands(ctx context.Context, d *config.Disk, job *catalog.Trash
 		v := p.verdictOf(f, &o).Verdict
 		return !slices.Contains(covered, o.Disk) || (o.Disk != d.ID && (v == solver.VerdictMoved || p.isMovedOutOfReach(&o, v)))
 	})
-	return p.direct == "propagate" && !bad && !gained, nil
+	return (p.direct == "propagate" || p.deletedThroughView(f.Path)) && !bad && !gained, nil
 }
 
 // stillStands says whether a job stands, and removes what does not.
@@ -1213,7 +1242,7 @@ func (p *pass) planDecided(ctx context.Context, d *solver.PropDecision, f *catal
 				outcome = trash.OutcomeChanged
 			}
 			plan.trashes = append(plan.trashes, Operation{Disk: a.Disk, Kind: KindTrash, Path: c.Place(f), Reason: reasonDeleted, Outcome: outcome})
-		case solver.ActDrop:
+		case solver.ActDrop, solver.ActRestore:
 			plan.dropped[f.ID] = true
 			p.leftBelow(plan, a.Disk, c.Place(f))
 		case solver.ActFollow, solver.ActOtherTarget:

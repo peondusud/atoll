@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
@@ -52,12 +53,18 @@ type Disk struct {
 	// precision is how finely the disk holds a time (specs.md §9), 0 when unknown, which compares exactly.
 	precision int64
 	// own holds, by inode, the files whose link of the guard leads to it, nil until the links folder is read
-	// (specs.md §17).
-	own map[uint64][]int64
+	// (specs.md §17). Copies at once share a handle, so ownMu guards it (§14).
+	own   map[uint64][]int64
+	ownMu sync.Mutex
+	// driver is the type the mount table gives an NTFS disk's mount when it was opened, "" for another disk or when
+	// the table has no entry: it says what EINVAL from a rename means (specs.md §17.1), and whether a link moves its
+	// file's modification time (§17, §22).
+	driver string
 }
 
 // Open opens the top of a disk, which holds a time to precisionNS. The caller confirms it afterwards, then calls
-// Verify, so that what was confirmed is what the handle leads to (specs.md §10).
+// Verify, so that what was confirmed is what the handle leads to (specs.md §10). An NTFS disk also has its mount's type
+// read, as two of its drivers answer a rename and a link otherwise (§17.1).
 func Open(m disks.Machine, d *config.Disk, precisionNS int64) (*Disk, error) {
 	top, err := m.OpenTop(d.Mount)
 	if err != nil {
@@ -67,7 +74,26 @@ func Open(m disks.Machine, d *config.Disk, precisionNS int64) (*Disk, error) {
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("disk %q: %w", d.ID, err), top.Close())
 	}
-	return &Disk{ID: d.ID, config: d, machine: m, top: top, mountID: info.MountID, dev: info.Dev, ino: info.Ino, precision: precisionNS}, nil
+	driver := ""
+	if d.FS == names.NTFS {
+		if seen := m.Mount(d.Mount); seen.Entry != nil {
+			driver = seen.Entry.FSType
+		}
+	}
+	return &Disk{ID: d.ID, config: d, machine: m, top: top, mountID: info.MountID, dev: info.Dev, ino: info.Ino, precision: precisionNS,
+		driver: driver}, nil
+}
+
+// LinkMovesTimes says whether a link made on the disk sets every time of its file to now, its modification time
+// included, as the type ntfs does, measured (specs.md §22): ntfs3 and the others move the change time alone.
+func (d *Disk) LinkMovesTimes() bool {
+	return disks.LinkMovesTimes(d.driver)
+}
+
+// renameTells says whether EINVAL from renameat2 with RENAME_NOREPLACE is a name the driver refuses, so that neither
+// link nor a plain rename is tried (specs.md §17.1).
+func (d *Disk) renameTells(err error) bool {
+	return disks.RenameTellsNames(d.driver) && fsx.IsNameRefused(err)
 }
 
 // Close lets go of the disk.
@@ -248,7 +274,60 @@ func modeLike(like *fsx.Stat) uint32 {
 	if like != nil {
 		return like.Mode
 	}
-	return 0o755
+	return FolderMode
+}
+
+// FolderMode is the mode of a folder made below the root that stands for none: open to read and to enter, as the
+// library is, whatever the umask of the process that makes it (specs.md §15.12, step 3, §17.4). Atoll's own folders
+// below the work folder are made with it too, less the umask, as they are not the library (§17.1, step 3).
+const FolderMode = 0o755
+
+// openUp gives a folder just made below the root that stands for none the permission bits of mode, through a handle
+// on it: mkdir took off what the umask holds, and the units' 0027 left it 0750, closed to a media server running under
+// another account, whose library lost what landed below it with nothing said (the maintainer, 2026-11-20). The setgid
+// bit a parent passes on stays, as mkdir gives it whatever the umask, and so does the owner mkdir gave. As adopt does,
+// it reaches the folder by its name without following a link, and leaves one that holds anything, as a folder just
+// made holds nothing; a driver that refuses only leaves the folder as mkdir made it, and only a disk that is gone makes
+// this matter.
+func openUp(parent fsx.Dir, name string, mode uint32) error {
+	err := setPerm(parent, name, mode)
+	switch {
+	case err == nil:
+		return nil
+	case fsx.IsDiskLost(err):
+		return lost(err)
+	default:
+		slog.Warn("a new folder keeps the mode the umask left it", "name", name, "error", err)
+		return nil
+	}
+}
+
+// setPerm sets the permission bits of a folder just made, through a handle on it, and leaves the other bits as they
+// are.
+func setPerm(parent fsx.Dir, name string, mode uint32) error {
+	dir, err := parent.OpenDir(name)
+	if err != nil {
+		return fmt.Errorf("open %q: %w", name, err)
+	}
+	defer func() { _ = dir.Close() }()
+	held, err := dir.Names()
+	switch {
+	case err != nil:
+		return fmt.Errorf("list %q: %w", name, err)
+	case len(held) > 0:
+		return fmt.Errorf("%q: %w", name, fsx.ErrNotNew)
+	}
+	st, err := dir.Info()
+	if err != nil {
+		return fmt.Errorf("look at %q: %w", name, err)
+	}
+	if st.Mode&0o777 == mode&0o777 {
+		return nil
+	}
+	if err := dir.SetMode(st.Mode&^0o777 | mode&0o777); err != nil {
+		return fmt.Errorf("give %q its mode: %w", name, err)
+	}
+	return nil
 }
 
 // adopt gives a new folder the mode and owner it stands in for, where the driver allows it. A driver
@@ -351,7 +430,9 @@ func (d *Disk) stat(path []string) (fsx.Stat, bool, error) {
 	case err != nil:
 		return fsx.Stat{}, false, classify(err)
 	}
-	d.withoutOwn(&st)
+	if err := d.withoutOwn(&st); err != nil {
+		return fsx.Stat{}, false, err
+	}
 	return st, true, nil
 }
 
@@ -428,9 +509,10 @@ func (d *Disk) LookAt(logical string) (taken bool, missing []string, err error) 
 	return false, nil, nil
 }
 
-// MakeRootFolder makes one folder below the root, for a restore, and keeps the time of the folder it
-// lands in (specs.md §6.1, item 8). like is the folder of the trash at that level, when there is
-// one. It says what it made. The root itself is never made: its absence is an error (invariant 3).
+// MakeRootFolder makes one folder below the root, for a restore, a copy or a rename, and keeps the time of the folder
+// it lands in (specs.md §6.1, item 8). like is the folder it stands for, when there is one, whose mode and owner it
+// takes; with none, it takes the mode FolderMode, whatever the umask, and keeps the owner mkdir gives it (§17.4). It
+// says what it made. The root itself is never made: its absence is an error (invariant 3).
 func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) {
 	if err := d.Verify(); err != nil {
 		return fsx.Stat{}, err
@@ -458,10 +540,14 @@ func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) 
 	case err != nil:
 		return fsx.Stat{}, classify(err)
 	}
+	d.machine.Checkpoint("mkdir-made")
 	if like != nil {
-		if err := adopt(parent, name, like); err != nil {
-			return fsx.Stat{}, err
-		}
+		err = adopt(parent, name, like)
+	} else {
+		err = openUp(parent, name, FolderMode)
+	}
+	if err != nil {
+		return fsx.Stat{}, err
 	}
 	d.machine.Checkpoint("folder-made")
 	if err := syncEntry(parent.Dir, name); err != nil {
@@ -493,10 +579,11 @@ func (d *Disk) TrashFolderInfo(trashPath string) (*fsx.Stat, error) {
 }
 
 // moveNoReplace is renameat2 with RENAME_NOREPLACE, or link then unlink where that gives EINVAL or
-// ENOSYS. Whether EINVAL was about the flag or the name, only link can tell (measured). Unlike a
-// rename, those are two calls, so the link is made durable before the source's name goes: a device
-// that fails between them must not leave the file with no name at all. is says what the source's name
-// must still hold once the link is durable, which that fsync can make long.
+// ENOSYS. Whether EINVAL was about the flag or the name, only link can tell (measured), but on the type
+// ntfs, where it is the name's (specs.md §17.1). Unlike a rename, those are two calls, so the link is made
+// durable before the source's name goes: a device that fails between them must not leave the file with no
+// name at all. is says what the source's name must still hold once the link is durable, which that fsync
+// can make long.
 func (d *Disk) moveNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string, is func(*fsx.Stat) bool) error {
 	err := source.Rename(name, target, newName)
 	switch {
@@ -506,6 +593,8 @@ func (d *Disk) moveNoReplace(source fsx.Dir, name string, target fsx.Dir, newNam
 		return fmt.Errorf("%w: %w", ErrGone, err)
 	case fsx.IsExisting(err):
 		return fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case d.renameTells(err):
+		return fmt.Errorf("%w: %w", ErrNameRefused, err)
 	case !fsx.IsFlagRefused(err):
 		return classify(err)
 	}
@@ -556,6 +645,9 @@ type Moved struct {
 	Stat fsx.Stat
 	// PriorNS is the change time the file had just before the move.
 	PriorNS sql.NullInt64
+	// Placed is, for a copy's part placed at its name, the look right after the rename, before anything was synced
+	// (PlacePart).
+	Placed fsx.Stat
 }
 
 // Links says what the other names of the file must record, when it has any.
@@ -612,8 +704,10 @@ func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
 		return nil, err
 	}
 	// A file that took the name between the look and the move goes back: resolving the operation does
-	// that, as a reprise would (specs.md §17.1, §17.2).
-	if _, err := holds(target.Dir, newName, byKey(op.FileKey)); err != nil {
+	// that, as a reprise would (specs.md §17.1, §17.2). It is known by the inode, the size and the
+	// modification time, as the look of the link path knows it, never by its inode alone: a file made at
+	// the copy's name right after the copy was removed can take the inode number it had.
+	if _, err := holds(target.Dir, newName, linked(row)); err != nil {
 		return nil, err
 	}
 	d.machine.Checkpoint("moved")
@@ -653,12 +747,16 @@ func (d *Disk) likeSource(source *folder, src, dst []string) (map[int]fsx.Stat, 
 	return like, nil
 }
 
+// movedFrom looks at what a move left at its target. A look that fails after the move, its count of names included,
+// is resolved as a reprise would (specs.md §17.1, §17.2).
 func (d *Disk) movedFrom(dir fsx.Dir, name string, seen *fsx.Stat) (*Moved, error) {
 	st, err := dir.Stat(name)
 	if err != nil {
 		return nil, classify(err)
 	}
-	d.withoutOwn(&st)
+	if err := d.withoutOwn(&st); err != nil {
+		return nil, err
+	}
 	return &Moved{Stat: st, PriorNS: timeOf(seen.Ctime)}, nil
 }
 
@@ -777,7 +875,9 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, sameFileAs(row)); err != nil {
 		return nil, nil, err
 	}
-	if _, err := holds(target.Dir, newName, byKey(op.FileKey)); err != nil {
+	// Known at its new name as the look of the link path and the reprise know it, by the identity of §15.1, never by its
+	// inode alone (specs.md §17.2).
+	if _, err := holds(target.Dir, newName, sameFileAs(row)); err != nil {
 		return nil, nil, err
 	}
 	d.machine.Checkpoint("moved")
@@ -853,10 +953,11 @@ func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, m
 	default:
 		return nil, nil, nil, nil, classify(err)
 	}
-	if _, err := holds(dirB.Dir, nameB, byKey(a.FileKey)); err != nil {
+	// Each known at its new name as a rename knows it, by the identity of §15.1, never by its inode alone.
+	if _, err := holds(dirB.Dir, nameB, sameFileAs(rowA)); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	if _, err := holds(dirA.Dir, nameA, byKey(b.FileKey)); err != nil {
+	if _, err := holds(dirA.Dir, nameA, sameFileAs(rowB)); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	d.machine.Checkpoint("moved")
@@ -975,6 +1076,8 @@ func holdsFolder(dir fsx.Dir, name, fileKey string) (fsx.Stat, error) {
 	return st, nil
 }
 
+// moveFolderNoReplace is renameat2 with RENAME_NOREPLACE, or a look and a plain rename where that gives EINVAL or ENOSYS,
+// as a folder has no link; on the type ntfs, EINVAL is the name's (specs.md §15.12, §17.1).
 func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, newName string) error {
 	err := source.Rename(name, target, newName)
 	switch {
@@ -984,6 +1087,8 @@ func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, 
 		return fmt.Errorf("%w: %w", ErrGone, err)
 	case fsx.IsExisting(err):
 		return fmt.Errorf("%w: %w", ErrPathTaken, err)
+	case d.renameTells(err):
+		return fmt.Errorf("%w: %w", ErrNameRefused, err)
 	case !fsx.IsFlagRefused(err):
 		return classify(err)
 	}
@@ -1013,10 +1118,11 @@ func (d *Disk) moveFolderNoReplace(source fsx.Dir, name string, target fsx.Dir, 
 // which names where each copy Atoll moved went, and looks at those names alone: every operation is journaled before it
 // runs (invariant 12). tmp/, which holds only what is in progress, is listed whole. The trash is walked whole, as it
 // always was, only when the journal cannot answer for it: it holds something that is no operation of this disk's in
-// the journal, as after a catalog rebuild, or on a disk that came with its work folder.
-func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool) (map[string][]solver.FileLook, error) {
+// the journal, as after a catalog rebuild, or on a disk that came with its work folder. Both walks go as far as
+// limits say, those of a walk of the disk's own folders (specs.md §15.8).
+func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool, limits watch.Limits) (map[string][]solver.FileLook, error) {
 	out := map[string][]solver.FileLook{}
-	if err := d.walkOwn(ctx, layout.TmpFolder, inodes, out); err != nil {
+	if err := d.walkOwn(ctx, layout.TmpFolder, inodes, out, nil, limits); err != nil {
 		return nil, err
 	}
 	asked := false
@@ -1054,14 +1160,40 @@ func (d *Disk) OwnFiles(ctx context.Context, db *sql.DB, inodes map[string]bool)
 			left[key] = true
 		}
 	}
-	if err := d.walkOwn(ctx, layout.TrashFolder, left, out); err != nil {
+	// What Atoll's own view sent there for a deletion or a replacement is no interrupted operation of Atoll's: a user
+	// deleted it, through the view. What a move of the view sent there is Atoll's own (specs.md §21.2).
+	viewTrash := func(place string) (bool, error) {
+		id, ok := trashOpOf(place)
+		if !ok {
+			return false, nil
+		}
+		is, err := catalog.IsViewDeletion(ctx, db, id)
+		if err != nil {
+			return false, fmt.Errorf("catalog: %w", err)
+		}
+		return is, nil
+	}
+	if err := d.walkOwn(ctx, layout.TrashFolder, left, out, viewTrash, limits); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// walkOwn walks one of the work folder's folders whole, and adds what it holds of those inodes.
-func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]bool, out map[string][]solver.FileLook) error {
+// trashOpOf gives the operation whose folder of the trash holds a place, <date>/<op-id>/...
+func trashOpOf(place string) (int64, bool) {
+	parts := strings.SplitN(place, "/", 3)
+	if len(parts) < 3 {
+		return 0, false
+	}
+	id, chunks, ok := layout.TrashOp(parts[1])
+	return id, ok && !chunks
+}
+
+// walkOwn walks one of the work folder's folders whole, as far as limits say, and adds what it holds of those inodes, but
+// for what skip, when given, leaves out.
+func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]bool, out map[string][]solver.FileLook, skip func(string) (bool, error),
+	limits watch.Limits,
+) error {
 	dir, err := d.open(components(d.config.Workdir, folder))
 	switch {
 	case fsx.IsAbsent(err):
@@ -1070,15 +1202,25 @@ func (d *Disk) walkOwn(ctx context.Context, folder string, inodes map[string]boo
 		// That disk's trouble, as a walk of it that fails is: nothing can be said of what is absent.
 		return lost(err)
 	}
-	walked, err := watch.Walk(ctx, dir.Dir)
+	walked, err := watch.Walk(ctx, dir.Dir, limits)
 	dir.close()
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrDiskLost, err)
 	}
 	for i := range walked.Files {
-		if f := &walked.Files[i]; inodes[f.FileKey] {
-			out[f.FileKey] = append(out[f.FileKey], watch.FoundLook(f))
+		f := &walked.Files[i]
+		if !inodes[f.FileKey] {
+			continue
 		}
+		if skip != nil {
+			if left, err := skip(f.Path); err != nil || left {
+				if err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		out[f.FileKey] = append(out[f.FileKey], watch.FoundLook(f))
 	}
 	return nil
 }
@@ -1190,6 +1332,10 @@ func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
 	case st.Kind != fsx.KindFile || keyOf(&st) != op.FileKey:
 		return Purged{}, ErrGone
 	}
+	// Counted before the unlink, so that a links folder that cannot be read purges nothing.
+	if err := d.withoutOwn(&st); err != nil {
+		return Purged{}, err
+	}
 	if err := parent.Unlink(name); err != nil && !fsx.IsAbsent(err) {
 		return Purged{}, classify(err)
 	}
@@ -1198,7 +1344,6 @@ func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
 		return Purged{}, lost(err)
 	}
 	d.machine.Checkpoint("source-synced")
-	d.withoutOwn(&st)
 	return Purged{Nlink: st.Nlink, PriorNS: timeOf(st.Ctime)}, nil
 }
 

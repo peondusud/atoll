@@ -1,6 +1,6 @@
 # The in-kernel `ntfs` driver of Linux 7.1 and later
 
-This report measures the read-write NTFS driver of the type `ntfs` against what Atoll relies on from an NTFS driver, for a decision on `specs.md` §10, §15.8 and §22. It is research, not a contract, and it changes nothing: until the maintainer decides, a disk mounted with this driver stays `readonly` with the reason `unsupported-driver` (§10).
+This report measures the read-write NTFS driver of the type `ntfs` against what Atoll relies on from an NTFS driver, for a decision on `specs.md` §10, §15.8 and §22. It is research, not a contract. When it was written, a disk mounted with this driver was `readonly` with the reason `unsupported-driver` (§10), as the measurements below still say. On 2026-11-19 the maintainer chose option C with the author's suggestion (below): the type `ntfs` is supported as ntfs3 is, and `readonly` with the new reason `errors-continue` unless mounted with `errors=remount-ro`; `EINVAL` from `renameat2` there is a name refused, and `link` is not tried; `umask=022` is recommended and the `link` bug documented (§22). On 2026-11-20 he decided point 3 ("Oui, readonly"): on every driver, a `hiberfil.sys` at the top under 4 KiB, or whose first 4 KiB are not all zeros, makes the disk `readonly` with the new reason `hibernated` (§10, §22).
 
 ## Why it matters
 
@@ -237,6 +237,7 @@ A `hiberfil.sys` at the top of a volume made by ntfs-3g stands for Windows hiber
 - After a read-write mount of a hibernated volume, `ntfs` left the volume marked dirty at unmount ("Volume has errors. Leaving volume marked dirty"). That is how the last row's volume was made.
 - With `errors=remount-ro`, a hibernated or dirty disk shows `ro` in its superblock options, which Atoll already reads as `readonly`/`read-only-mount` (§10).
 - §22 says Atoll never forces the mount of a dirty volume. With `ntfs` and its default, the mount is forced without anyone asking. ntfs3 also writes to a hibernated volume: that gap is not new.
+- Measured again on 2026-11-20, once point 3 was decided, a fresh volume for each driver, its `hiberfil.sys` written through ntfs-3g (`test/loopdev`, `TestAHibernatedVolumeOnEachDriver`, Linux 6.12 and 7.3): 10 bytes, or 8 KiB beginning with `HIBR`, mounted read-write by ntfs3 and by `ntfs` under `errors=continue`, read-only by `ntfs` under `errors=remount-ro` (its superblock options `ro`, its mount options `rw`), by ntfs-3g and by lowntfs-3g; 8 KiB of zeros, read-write by all. ntfs-3g and lowntfs-3g moved the access time of `hiberfil.sys` when Atoll read it on a volume mounted read-write, though Atoll opens it with `O_NOATIME`; the kernel's drivers did not. `ntfsfix` refused the volume ("Windows is hibernated, refused to mount", exit 1) after emptying `$LogFile`, and left `hiberfil.sys` as it was; ntfs-3g's `remove_hiberfile` mounted it read-write and removed the file.
 
 ## `windows_names` and the trash
 
@@ -278,6 +279,10 @@ All passed but four:
 7. **Tests.** Whatever the choice, add `ntfs` to `test/loopdev`, and consider booting Debian sid's 7.3.3 in `test/qemu` beside Ubuntu's mainline, as it is the kernel without ntfs3.
 
 The author's suggestion, for what it is worth: C, with `errors=remount-ro` required (point 2), `EINVAL` from `renameat2` read as a refused name on `ntfs` (point 4), `umask=022` recommended (point 5), the `link` bug reported upstream (point 6), and point 3 decided apart, as it concerns ntfs3 already.
+
+**Decided on 2026-11-19**: C, with that suggestion. Point 1: supported as ntfs3 (`specs.md` §10, §22). Point 2: `errors=remount-ro` required, the reason `errors-continue` otherwise. Point 3: not decided. Point 4: `EINVAL` from `renameat2` is `name-refused` on the type `ntfs`, with no `link`, and for a folder no plain `rename` (§17.1). Point 5: `umask=022` recommended (§22). Point 6: documented in §22; reporting it upstream is the maintainer's. As a link of the guard would move the modification time of the copy it guards, the guard makes no link on that type (§17). Point 7: `ntfs` is in the driver lists of `test/loopdev`, skipped where the kernel has no such module.
+
+**Decided on 2026-11-20**: point 3, `readonly` ("Oui, readonly"), with the reason `hibernated`, on ntfs3, `ntfs`, ntfs-3g and lowntfs-3g alike; the check reads `hiberfil.sys` once per mount (`specs.md` §10, §22).
 
 ## Not measured
 

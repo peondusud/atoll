@@ -53,13 +53,25 @@
       "kind": "trash",
       "target": "same",
       "source": "absent",
-      "changed": true,
+      "changed": false,
       "action": "finish",
       "remove_source": false,
       "remove_target": false,
       "move_back": false,
       "warn": false,
-      "note": "changed says nothing without a source"
+      "note": "the move was done, and the file in the trash is what the copy's row says"
+    },
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "absent",
+      "changed": true,
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": true,
+      "warn": true,
+      "note": "the copy's inode alone, with another size or modification time: a file that took the copy's name and its inode number before the move, or an edit, is not the copy, and goes back"
     },
     {
       "kind": "trash",
@@ -71,6 +83,18 @@
       "move_back": false,
       "warn": false,
       "note": "a new file at the source, for the next scan"
+    },
+    {
+      "kind": "trash",
+      "target": "same",
+      "source": "other",
+      "changed": true,
+      "action": "undo",
+      "remove_source": false,
+      "remove_target": false,
+      "move_back": false,
+      "warn": true,
+      "note": "not the copy either, and its name in the library taken: it stays where it is"
     },
     {
       "kind": "trash",

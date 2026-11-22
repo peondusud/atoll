@@ -111,7 +111,7 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return failure(stderr, fmt.Errorf(T("disk add: the configuration is unchanged: %w"), err))
 		}
-		if code = a.finish(ctx); partial {
+		if code = a.finish(ctx, configPath); partial {
 			code = exitPartial
 		}
 	}
@@ -259,6 +259,10 @@ func checkDiskAdd(ctx context.Context, c *config.Config, m disks.Machine, text [
 	case verdict.State == disks.Readonly && verdict.Reason == disks.NoJournal:
 		// What every operation of Atoll's rests on, a name durable once its folder is synced, does not hold there.
 		return nil, fmt.Errorf(T("%s: Atoll cannot make what it writes there durable: %s (%s)"), mount, verdict.Message, verdict.Reason)
+	case verdict.State == disks.Readonly && verdict.Reason == disks.Hibernated:
+		// It is mounted read-write: what it waits for is Windows (specs.md §22).
+		a.warn(warnReadonly, fmt.Sprintf(T("%s is read-only, %s (%s): Atoll makes no copy on it until Windows has shut down fully and it is mounted again"),
+			mount, verdict.Message, verdict.Reason))
 	case verdict.State == disks.Readonly:
 		a.warn(warnReadonly, fmt.Sprintf(T("%s is read-only, %s (%s): Atoll makes no copy on it until it is mounted read-write"), mount, verdict.Message, verdict.Reason))
 	}
@@ -426,8 +430,8 @@ func checkCatalogTakes(ctx context.Context, c *config.Config, d *config.Disk) (e
 // finish records the disk in the catalog, writes its marker and tells the daemon, once the configuration holds
 // it. What it cannot do is a warning, and exit 4: the next scan or pass records the disk, and a later disk add
 // writes its marker.
-func (a *diskAdding) finish(ctx context.Context) int {
-	code := recordAndTell(ctx, a.config, a.machine, a.warn, a.stderr, "atoll scan --disk "+a.disk.ID+" records what the disk holds")
+func (a *diskAdding) finish(ctx context.Context, configPath string) int {
+	code := recordAndTell(ctx, configPath, a.config, a.machine, a.warn, a.stderr, "atoll scan --disk "+a.disk.ID+" records what the disk holds")
 	if a.marker != "" {
 		if err := a.writeMarker(); err != nil {
 			a.warn(warnMarkerNotWritten, fmt.Sprintf(T("its marker was not written: %v"), err))
@@ -440,13 +444,13 @@ func (a *diskAdding) finish(ctx context.Context) int {
 // recordAndTell records every disk's state in the catalog and tells the daemon, once the configuration holds a
 // disk command's edit. What it cannot do is a warning, and exit 4: the next scan or pass records the disks, and
 // systemctl reload atoll tells the daemon. alone says what to do when no daemon runs.
-func recordAndTell(ctx context.Context, c *config.Config, m disks.Machine, warn func(kind, message string), stderr io.Writer, alone string) int {
+func recordAndTell(ctx context.Context, configPath string, c *config.Config, m disks.Machine, warn func(kind, message string), stderr io.Writer, alone string) int {
 	code := exitOK
 	if err := syncCatalog(ctx, c, m); err != nil {
 		warn(warnCatalogNotUpdated, fmt.Sprintf(T("the catalog was not updated, %v: the next scan or pass records the disks"), err))
 		code = exitPartial
 	}
-	told, err := tellDaemon()
+	told, err := tellDaemon(configPath, c)
 	switch {
 	case err != nil:
 		warn(warnDaemonNotTold, fmt.Sprintf(T("the daemon was not told, %v: systemctl reload atoll"), err))

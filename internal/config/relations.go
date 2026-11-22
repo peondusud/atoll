@@ -44,6 +44,12 @@ func checkAPI(tree map[string]any, found *problems) {
 	if text(api, "listen") != "" && text(api, "token_file") == "" {
 		found.add("api.token_file", "api.listen needs a token file: HTTP over TCP asks every request for its token")
 	}
+	// metrics.listen asks no token: on api.listen's address, one of the two could not listen, and which is a race.
+	apiAt, apiErr := value.ParseListen(text(api, "listen"))
+	metricsAt, metricsErr := value.ParseListen(text(table(tree, "metrics"), "listen"))
+	if apiErr == nil && metricsErr == nil && apiAt == metricsAt {
+		found.add("metrics.listen", "metrics.listen is api.listen: give each its own address or port")
+	}
 }
 
 func checkRelations(tree, user map[string]any, c *Config, found *problems) {
@@ -53,7 +59,21 @@ func checkRelations(tree, user map[string]any, c *Config, found *problems) {
 		found.add("ups.nut", "ups.enabled needs a NUT address")
 	}
 	checkAPI(tree, found)
+	checkTelemetry(tree, found)
 	checkRules(tree, user, c, found)
+}
+
+// checkTelemetry refuses a signal to export with nowhere to send it, and headers sent in clear (specs.md §23.2): they
+// hold a secret, as an API key.
+func checkTelemetry(tree map[string]any, found *problems) {
+	t := table(tree, "telemetry")
+	endpoint := text(t, "otlp_endpoint")
+	if endpoint == "" && (t["otlp_metrics"] == true || t["otlp_logs"] == true) {
+		found.add("telemetry.otlp_endpoint", "otlp_metrics and otlp_logs need an endpoint to send to")
+	}
+	if text(t, "otlp_headers_file") != "" && strings.HasPrefix(endpoint, "http://") {
+		found.add("telemetry.otlp_headers_file", "headers hold a secret, which plain HTTP would send in clear: the endpoint needs https://")
+	}
 }
 
 func checkDisks(tree map[string]any, c *Config, found *problems) {
@@ -133,7 +153,7 @@ func checkFolders(key string, d, layout map[string]any, fs names.Filesystem, fou
 	return root, workdir
 }
 
-// checkMounts checks that no mount, view.mount or catalog sits inside another one.
+// checkMounts checks that no mount, view.mount, view.readonly_mount or catalog sits inside another one.
 func checkMounts(tree map[string]any, disks []map[string]any, found *problems) {
 	for i, d := range disks {
 		mount := text(d, "mount")
@@ -144,19 +164,67 @@ func checkMounts(tree map[string]any, disks []map[string]any, found *problems) {
 		}
 	}
 	view := text(table(tree, "view"), "mount")
+	readonly := text(table(tree, "view"), "readonly_mount")
 	catalog := text(tree, "catalog")
 	if inside(catalog, view) || catalog == view {
 		found.add("catalog", "inside view.mount")
 	}
+	mounts := make([]diskMount, 0, len(disks))
 	for _, d := range disks {
 		mount := text(d, "mount")
-		if view == mount || inside(view, mount) || inside(mount, view) {
+		mounts = append(mounts, diskMount{id: text(d, "id"), mount: mount})
+		if overlaps(view, mount) {
 			found.add("view.mount", "on, inside or around the mount of disk %s", text(d, "id"))
 		}
 		if catalog == mount || inside(catalog, mount) {
 			found.add("catalog", "inside the mount of disk %s", text(d, "id"))
 		}
 	}
+	if readonly != "" {
+		checkReadonlyMount(readonly, view, catalog, mounts, found)
+	}
+}
+
+// diskMount is a disk's id and mount.
+type diskMount struct{ id, mount string }
+
+// checkReadonlyMount checks view.readonly_mount against view.mount, the disks' mounts and the catalog (specs.md
+// §24.3).
+func checkReadonlyMount(readonly, view, catalog string, mounts []diskMount, found *problems) {
+	if inside(catalog, readonly) || catalog == readonly {
+		found.add("catalog", "inside view.readonly_mount")
+	}
+	if overlaps(readonly, view) {
+		found.add("view.readonly_mount", "on, inside or around view.mount")
+	}
+	for _, d := range mounts {
+		if overlaps(readonly, d.mount) {
+			found.add("view.readonly_mount", "on, inside or around the mount of disk %s", d.id)
+		}
+	}
+}
+
+// CheckReadonlyMount checks a point given to atoll mount on its command line as view.readonly_mount would be: an
+// absolute path, apart from view.mount, from the disks' mounts and from the catalog (specs.md §21.2, §24.3).
+func CheckReadonlyMount(c *Config, point string) error {
+	found := &problems{}
+	if err := checkAbsolutePath(point); err != nil {
+		found.add("view.readonly_mount", "%s", err)
+		return found.err()
+	}
+	view, _ := c.effective["view.mount"].(string)
+	catalog, _ := c.effective["catalog"].(string)
+	mounts := make([]diskMount, 0, len(c.Disks))
+	for _, d := range c.Disks {
+		mounts = append(mounts, diskMount{id: d.ID, mount: d.Mount})
+	}
+	checkReadonlyMount(point, view, catalog, mounts, found)
+	return found.err()
+}
+
+// overlaps reports whether two paths are the same, or one is inside the other.
+func overlaps(a, b string) bool {
+	return a == b || inside(a, b) || inside(b, a)
 }
 
 // inside reports whether path is strictly below parent, by whole components.
@@ -389,6 +457,125 @@ func poolKeys() map[string]string {
 		"overflow":      "placement.overflow",
 		"cache_min_age": "cache.min_age",
 	}
+}
+
+// noEffect warns about what the file or the preset set and what else it set makes of no effect (specs.md §24.4):
+// read.classes with read.policy = "oldest", which reads the original alone (§7), walk.max_open with
+// walk.long_paths = "skip" (§15.8), and an OTLP endpoint with no signal to send there (§23.2), among others.
+func noEffect(tree map[string]any, set map[string]any) []Problem {
+	var out []Problem
+	if _, classes := set["read.classes"]; classes && text(table(tree, "read"), "policy") == "oldest" {
+		out = append(out, Problem{Key: "read.classes", Message: `no effect with read.policy = "oldest", which reads the original alone`})
+	}
+	// A walk that skips long paths holds every folder it is below, as few as such a path has (specs.md §15.8).
+	if _, maxOpen := set["walk.max_open"]; maxOpen && text(table(tree, "walk"), "long_paths") == WalkSkip {
+		out = append(out, Problem{Key: "walk.max_open", Message: `no effect with walk.long_paths = "skip", whose walk holds every folder it is below`})
+	}
+	// new_files = "percent" places every copy by the most free share already (specs.md §12.4).
+	if set["balance.equalize"] == "percent" && text(table(tree, "placement"), "new_files") == "percent" {
+		out = append(out, Problem{Key: "balance.equalize", Message: `no effect with placement.new_files = "percent", which places every copy so already`})
+	}
+	// The SSD cache needs Atoll's own view: mergerfs cannot apply a rule when a file is created (specs.md §19).
+	if text(table(tree, "view"), "engine") == "mergerfs" {
+		const needsOwnView = `no effect with view.engine = "mergerfs": the SSD cache needs Atoll's own view`
+		if set["cache.enabled"] == true {
+			out = append(out, Problem{Key: "cache.enabled", Message: needsOwnView})
+		}
+		for i, d := range list(tree, "disk") {
+			if key := indexKey("disk", i) + ".role"; set[key] == "cache" && text(d, "role") == "cache" {
+				out = append(out, Problem{Key: key, Message: needsOwnView})
+			}
+		}
+		// Only Atoll's own view moves a file whose write runs out of space; mergerfs's moveonenospc stays off (§21.1, §21.2).
+		if set["view.move_on_enospc"] == true {
+			out = append(out, Problem{Key: "view.move_on_enospc", Message: `no effect with view.engine = "mergerfs": only Atoll's own view moves a file whose write runs out of space`})
+		}
+	}
+	// An endpoint with neither signal sends nothing (specs.md §23.2).
+	if t := table(tree, "telemetry"); text(t, "otlp_endpoint") != "" && t["otlp_metrics"] != true && t["otlp_logs"] != true {
+		out = append(out, Problem{Key: "telemetry.otlp_endpoint", Message: "no effect with neither otlp_metrics nor otlp_logs: nothing is sent"})
+	}
+	return out
+}
+
+// inClear warns about a secret that goes over http:// to a host that is not this machine, where anyone on the way can
+// read it (specs.md §24.4): the token or key of a media server, ntfy's topic, which is its secret, with its token,
+// Gotify's token, and a user and a password written in any of their addresses. A warning, not a refusal: version 1
+// takes such a configuration. The OTLP headers file is refused with http:// already (checkRelations).
+func inClear(tree map[string]any) []Problem {
+	var out []Problem
+	add := func(key, url string, secret bool, what string) {
+		if p, ok := clearProblem(key, url, secret, what); ok {
+			out = append(out, p)
+		}
+	}
+	notify := table(tree, "notify")
+	for _, kind := range []string{Plex, Jellyfin, Emby} {
+		t := table(notify, kind)
+		secret := "api_key_file"
+		if kind == Plex {
+			secret = "token_file"
+		}
+		add("notify."+kind+".url", text(t, "url"), text(t, secret) != "", "the secret of notify."+kind+"."+secret)
+	}
+	alerts := table(tree, "alerts")
+	add("alerts.ntfy", text(alerts, "ntfy"), true, "the topic, which is its secret, and any token of alerts.ntfy_token_file,")
+	add("alerts.gotify", text(alerts, "gotify"), text(alerts, "gotify_token_file") != "", "the token of alerts.gotify_token_file")
+	return out
+}
+
+// clearProblem is the warning of inClear for one address, when it is http:// to a host that is not this machine and
+// carries a secret, or a user in the address. The host is what follows the last "@" of the authority, which ends at
+// the first "/", "?" or "#", without its port.
+func clearProblem(key, url string, secret bool, what string) (Problem, bool) {
+	rest, plain := strings.CutPrefix(url, "http://")
+	if !plain {
+		return Problem{}, false
+	}
+	authority := rest
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+		authority = rest[:end]
+	}
+	host, user := authority, false
+	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+		host, user = authority[at+1:], true
+	}
+	if !secret && !user {
+		return Problem{}, false
+	}
+	if strings.HasPrefix(host, "[") {
+		if end := strings.IndexByte(host, ']'); end >= 0 {
+			host = host[:end+1]
+		}
+	} else if colon := strings.LastIndexByte(host, ':'); colon >= 0 {
+		host = host[:colon]
+	}
+	if value.LoopbackHost(host) {
+		return Problem{}, false
+	}
+	switch {
+	case !secret:
+		what = "the user and the password of its address"
+	case user:
+		what += " and the user and the password of its address"
+	}
+	return Problem{Key: key, Message: what + " go in clear over http:// to a host that is not this machine, for anyone on the way to " +
+		"read: use https://, or a loopback address"}, true
+}
+
+// unreadableUPS warns about a UPS the daemon is to read at an address NUT cannot have, as a port past 65535: the
+// schema takes it, and so does a configuration of format version 1, so it loads, and the daemon finds the UPS
+// unreachable (specs.md §20, §24.4).
+func unreadableUPS(tree map[string]any) []Problem {
+	ups := table(tree, "ups")
+	nut := text(ups, "nut")
+	if ups["enabled"] != true || nut == "" {
+		return nil
+	}
+	if _, err := value.ParseNUT(nut); err != nil {
+		return []Problem{{Key: "ups.nut", Message: fmt.Sprintf("the daemon cannot read a UPS there: %v", err)}}
+	}
+	return nil
 }
 
 // unknownLabels warns about tags and domains no disk carries (specs.md §24.4).

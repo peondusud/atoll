@@ -12,27 +12,37 @@ import (
 
 // modGuard is the mass-modification guard of one disk in a pass (specs.md §15.6).
 type modGuard struct {
-	read    *catalog.ModifyGuardRead
-	count   int64 // what read counted, with the decisions of this pass
-	tripped bool
+	read     *catalog.ModifyGuardRead
+	count    int64 // what read counted over the window, with the decisions of this pass
+	dayCount int64 // and over the day
+	tripped  bool
 }
 
 // readModifyGuards works out the mass-modification guard of each disk, from events, before any modification is
-// decided: one that stands holds, whatever this pass finds.
+// decided: one that stands holds, whatever this pass finds. Both counts come from events too, so that neither a crash
+// nor a restart starts the day again.
 func (p *pass) readModifyGuards(ctx context.Context) error {
 	for i := range p.config.Disks {
 		d := &p.config.Disks[i]
-		read, err := catalog.ReadModifyGuard(ctx, p.db, d.ID, p.now, p.modWindow.Nanoseconds())
+		read, err := catalog.ReadModifyGuard(ctx, p.db, d.ID, p.now, p.modWindow.Nanoseconds(), p.dayWindow.Nanoseconds())
 		if err != nil {
 			return fmt.Errorf("catalog: %w", err)
 		}
-		g := &modGuard{read: read, count: read.Count, tripped: read.Stands}
+		g := &modGuard{read: read, count: read.Count, dayCount: read.DayCount, tripped: read.Stands}
 		p.modGuards[d.ID] = g
 		if g.tripped {
-			p.out.Guards = append(p.out.Guards, GuardLine{Disk: d.ID, Kind: GuardModifications, Count: g.count})
+			p.out.Guards = append(p.out.Guards, g.line(d.ID, read.Window))
 		}
 	}
 	return nil
+}
+
+// line is the guard tripped on the count of a window: WindowDay, or "" for its own.
+func (g *modGuard) line(disk, window string) GuardLine {
+	if window == WindowDay {
+		return GuardLine{Disk: disk, Kind: GuardModifications, Count: g.dayCount, Window: WindowDay}
+	}
+	return GuardLine{Disk: disk, Kind: GuardModifications, Count: g.count}
 }
 
 // sortGuards puts the guards tripped by disk position, the mass-deletion guard first (specs.md §15.12).
@@ -95,8 +105,9 @@ func (p *pass) answerOver(disk string, ctimeNS int64) int64 {
 }
 
 // guardModification asks the mass-modification guard about a decision that would make copies stale (specs.md §15.6):
-// an answer decides it, a reject making it a conflict; otherwise it counts, and the one that would trip the guard
-// waits, as heldBefore holds every one after it. It says whether the decision goes, and whether a confirm answered it.
+// an answer decides it, a reject making it a conflict; otherwise it counts, over the window and over the day, and the
+// one that would trip either waits, as heldBefore holds every one after it. The window is asked first: a burst that
+// trips both is the window's. It says whether the decision goes, and whether a confirm answered it.
 func (p *pass) guardModification(ctx context.Context, d *solver.ModDecision, ctimeNS int64) (goes, answered bool, err error) {
 	if d.Kind != solver.ModModified || len(d.Stale) == 0 {
 		return true, false, nil
@@ -111,16 +122,25 @@ func (p *pass) guardModification(ctx context.Context, d *solver.ModDecision, cti
 		return true, true, nil
 	}
 	// A guard that stands held this file before anything of it was read (heldBefore): here it is clear.
-	rows := p.rows[disk]
-	if !solver.GuardTrips(&solver.GuardInput{Count: g.count + 1, CountPercent: g.count + 1, Rows: rows, Files: p.modFiles, Percent: p.modPercent}) {
+	rows, err := p.rowsOf(ctx, disk)
+	if err != nil {
+		return false, false, err
+	}
+	window := ""
+	switch {
+	case solver.GuardTrips(&solver.GuardInput{Count: g.count + 1, CountPercent: g.count + 1, Rows: rows, Files: p.modFiles, Percent: p.modPercent}):
+	case solver.GuardTrips(&solver.GuardInput{Count: g.dayCount + 1, CountPercent: g.dayCount + 1, Rows: rows, Files: p.dayFiles, Percent: p.dayPercent}):
+		window = WindowDay
+	default:
 		g.count++
+		g.dayCount++
 		return true, false, nil
 	}
 	g.tripped = true
 	p.out.Held = true
-	p.out.Guards = append(p.out.Guards, GuardLine{Disk: disk, Kind: GuardModifications, Count: g.count})
+	p.out.Guards = append(p.out.Guards, g.line(disk, window))
 	if p.apply {
-		if err := catalog.WriteModifyGuardEvent(ctx, p.db, disk, p.now); err != nil {
+		if err := catalog.WriteModifyGuardEvent(ctx, p.db, disk, window, p.now); err != nil {
 			return false, false, fmt.Errorf("catalog: %w", err)
 		}
 	}

@@ -35,6 +35,9 @@ type MetaCopy struct {
 	HasRowOwner  bool
 	LookOwner    Owner
 	HasLookOwner bool
+	// MountOwner says that the copy's disk gives every file the owner and the mode of its mount, as ntfs-3g and
+	// lowntfs-3g do (specs.md §15.4): neither is the copy's own, so neither goes to the other copies.
+	MountOwner bool
 }
 
 // Owner is a copy's user and group ids.
@@ -94,11 +97,12 @@ func MetadataPlan(copies []MetaCopy) (MetaPlan, error) {
 		if c.Changed && c.Mtime != c.RowMtime && (lastTime == nil || c.Ctime > lastTime.Ctime) {
 			lastTime = c
 		}
-		// A row with no mode says nothing of what moved. Only a changed copy has a look's mode.
-		if c.HasRowMode && c.HasLookMode && c.LookMode != c.RowMode && (lastMode == nil || c.Ctime > lastMode.Ctime) {
+		// A row with no mode says nothing of what moved. Only a changed copy has a look's mode. A copy whose disk gives
+		// it its mount's mode and owner moved neither: another account mounting the disk again moves both for every file.
+		if c.HasRowMode && c.HasLookMode && c.LookMode != c.RowMode && !c.MountOwner && (lastMode == nil || c.Ctime > lastMode.Ctime) {
 			lastMode = c
 		}
-		if c.HasRowOwner && c.HasLookOwner && c.LookOwner != c.RowOwner && (lastOwner == nil || c.Ctime > lastOwner.Ctime) {
+		if c.HasRowOwner && c.HasLookOwner && c.LookOwner != c.RowOwner && !c.MountOwner && (lastOwner == nil || c.Ctime > lastOwner.Ctime) {
 			lastOwner = c
 		}
 	}

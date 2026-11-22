@@ -15,13 +15,17 @@ import (
 )
 
 // copies queues the copies the plan wants of every file whose settle has passed since it was first seen, then
-// runs every copy that is due, one at a time (specs.md §14.1). A dry run says what it would copy.
+// runs every copy that is due, several at once as their disks allow (specs.md §14, §14.1). A dry run says what it would
+// copy.
 func (p *pass) copies(ctx context.Context) error {
 	if enabled, _ := p.config.Effective()["replication.enabled"].(bool); !enabled {
 		return nil
 	}
-	// What the walks found has served, and the plan reads every file.
+	// What the walks found has served, and the plan reads every file, or what may have changed.
 	p.seen, p.moves = nil, nil
+	if err := p.planOnly(ctx); err != nil {
+		return err
+	}
 	var lines []copyLine
 	rep := &watch.Replicate{DryRun: !p.apply, Queue: func(jobs []watch.PlannedJob) error {
 		jobs = p.settledCopies(jobs)
@@ -32,9 +36,13 @@ func (p *pass) copies(ctx context.Context) error {
 			return nil
 		}
 		return queue(ctx, p.db, p.now, jobs)
-	}}
+	}, Only: p.only}
 	if err := watch.SettleFor(ctx, p.db, p.config, p.now, rep); err != nil {
 		return fmt.Errorf("%w", err)
+	}
+	// What the view wrote in parallel goes to the jobs just queued, before any runs (specs.md §12.3).
+	if err := p.adoptParts(ctx); err != nil {
+		return err
 	}
 	if !p.apply {
 		// The queue is read once the plan has gone, so that both are never held at once.
@@ -42,7 +50,7 @@ func (p *pass) copies(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		return p.listCopies(lines)
+		return p.listCopies(slices.DeleteFunc(lines, func(copyLine) bool { return p.batteryHolds() }))
 	}
 	p.settled = true
 	r := &replicator{db: p.db, config: p.config, machine: p.machine, session: p.session, now: p.now, sum: &ReplicateSummary{Applied: true}}
@@ -51,33 +59,25 @@ func (p *pass) copies(ctx context.Context) error {
 		return err
 	}
 	reader := catalog.NewDueReader(p.db, p.now)
-	for {
-		page, err := reader.Next(ctx)
-		if err != nil {
-			return fmt.Errorf("catalog: %w", err)
+	skip := func(job *catalog.ReplicateJob) bool {
+		if p.batteryHolds() || p.waitsForWindow(job, schedule) {
+			return true
 		}
-		if len(page) == 0 {
-			break
+		// What a copy does, the files must be worked out again for.
+		p.settled = false
+		return false
+	}
+	// Several at once, as their disks allow, each listed in the order of the queue (specs.md §14, §15.12).
+	err = r.runAll(ctx, reader.Next, skip, func(job *catalog.ReplicateJob, outcome string) error {
+		if outcome == OutcomeReplicated {
+			p.out.Copied += job.Size
 		}
-		for i := range page {
-			if err := ctx.Err(); err != nil {
-				return fmt.Errorf("replicate: %w", err)
-			}
-			job := &page[i]
-			if p.waitsForWindow(job, schedule) {
-				continue
-			}
-			// What a copy does, the files must be worked out again for.
-			p.settled = false
-			outcome, err := r.run(ctx, job)
-			if err != nil {
-				return err
-			}
-			p.record(Operation{Disk: job.Dst, Kind: KindReplicate, Path: job.Path, Source: job.Src, Outcome: outcome})
-			if p.sinkErr != nil {
-				return p.sinkErr
-			}
-		}
+		p.ranFile(job.FileID)
+		p.record(Operation{Disk: job.Dst, Kind: KindReplicate, Path: job.Path, Source: job.Src, Outcome: outcome})
+		return p.sinkErr
+	})
+	if err != nil {
+		return err
 	}
 	count, next, err := catalog.CopiesLater(ctx, p.db, p.now)
 	if err != nil {
@@ -94,10 +94,12 @@ func (p *pass) copies(ctx context.Context) error {
 // one file come together.
 func (p *pass) settledCopies(jobs []watch.PlannedJob) []watch.PlannedJob {
 	last := int64(-1)
+	// The view saw the program close a file it wrote in parallel: that is closed and stable too.
+	parts := p.partPaths()
 	return slices.DeleteFunc(jobs, func(j watch.PlannedJob) bool {
 		size := j.Size
 		policy := p.config.Policy(j.Path, &size)
-		if policy.Mode == "immediate" && p.closed[j.Path] {
+		if policy.Mode == "immediate" && (p.closed[j.Path] || parts[j.Path]) {
 			return false
 		}
 		due := j.FirstSeenNS + policy.Settle.Nanoseconds()
@@ -111,6 +113,17 @@ func (p *pass) settledCopies(jobs []watch.PlannedJob) []watch.PlannedJob {
 		p.copiesDue = earliest(p.copiesDue, sql.NullInt64{Int64: due, Valid: true})
 		return true
 	})
+}
+
+// batteryHolds says whether the UPS runs on battery as a copy or a transfer is about to start: none starts then, and each
+// counts as waiting, with no time it is due at, as the daemon passes again once line power is back (specs.md §20). A copy
+// under way when the battery took over finishes.
+func (p *pass) batteryHolds() bool {
+	if p.onBattery == nil || !p.onBattery() {
+		return false
+	}
+	p.copiesWaiting++
+	return true
 }
 
 func boolInt(b bool) int {
@@ -185,19 +198,11 @@ type schedule struct {
 
 // scheduleOf reads replication.window, maintenance.window when left out, and timezone, local when left out.
 func scheduleOf(c *config.Config) (schedule, error) {
-	effective := c.Effective()
-	text, _ := effective["replication.window"].(string)
-	w, err := value.ParseWindow(text)
+	w, location, err := c.Schedule()
 	if err != nil {
-		return schedule{}, fmt.Errorf("replication.window: %w", err)
+		return schedule{}, fmt.Errorf("%w", err)
 	}
-	s := schedule{window: w, location: time.Local}
-	if zone, _ := effective["timezone"].(string); zone != "" && zone != "local" {
-		if s.location, err = time.LoadLocation(zone); err != nil {
-			return schedule{}, fmt.Errorf("timezone: %w", err)
-		}
-	}
-	return s, nil
+	return schedule{window: w, location: location}, nil
 }
 
 // waitsForWindow says whether a copy of a file in scheduled mode waits for replication.window: outside it, it stays

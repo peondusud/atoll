@@ -102,6 +102,37 @@ func TestTheGuardLinksEachCopy(t *testing.T) {
 	}
 }
 
+// On the type ntfs, link sets its file's modification time to now, measured: the guard makes no link there, as it would
+// change the very copy it guards, whose new time the next pass would give every other copy (specs.md §17, §22). On
+// ntfs3, as on any other driver, it makes one.
+func TestTheGuardMakesNoLinkOnTheTypeNTFS(t *testing.T) {
+	for _, tc := range []struct {
+		driver string
+		links  bool
+	}{
+		{"ntfs", false},
+		{"ntfs3", true},
+	} {
+		t.Run(tc.driver, func(t *testing.T) {
+			b := newBenchOf(t, tc.driver)
+			if items, lost := b.guarded("t3", true); len(items) != 0 || lost {
+				t.Fatalf("%+v, lost %v", items, lost)
+			}
+			if got := inodeOf(t, b.linkOf("t3", 1)) != 0; got != tc.links {
+				t.Errorf("a link made: %v", got)
+			}
+			if got := b.count("SELECT count(*) FROM ops") == 1; got != tc.links {
+				t.Errorf("%d operations", b.count("SELECT count(*) FROM ops"))
+			}
+			if !tc.links {
+				if _, err := os.Lstat(filepath.Dir(b.linkOf("t3", 1))); !os.IsNotExist(err) {
+					t.Errorf("the links folder: %v", err)
+				}
+			}
+		})
+	}
+}
+
 // lostItsName makes t3's link, then takes the copy away as a deletion through the merged view does, and its row as the
 // pass that saw it does.
 func (b *bench) lostItsName() uint64 {
@@ -496,5 +527,40 @@ func TestTheSizeOfALinkSentToTheTrash(t *testing.T) {
 	}
 	if got := b.text("SELECT group_concat(CAST(lpath AS TEXT) || ' ' || size, ', ') FROM (SELECT lpath, size FROM trash ORDER BY lpath)"); got != "f03 5, f09 11" {
 		t.Errorf("the entries are %q", got)
+	}
+}
+
+// A link whose data nothing names, with neither a row nor a copy-gone event, stays where it is, with a warning (specs.md
+// §17): each run of the guard records on the disk's row how many it found so, for the alert link-unnamed and atoll
+// status, and 0 once there is none.
+func TestALinkNothingNamesIsCounted(t *testing.T) {
+	b := newBench(t)
+	if _, lost := b.guarded("t3", true); lost {
+		t.Fatal("lost")
+	}
+	link := b.linkOf("t3", 1)
+	if err := os.Remove(filepath.Join(b.dirs["t3"], "media", "a")); err != nil {
+		t.Fatal(err)
+	}
+	// Its file's rows went, and nothing says where it was: a catalog rebuilt from disks that no longer hold it.
+	b.exec("DELETE FROM copies")
+	b.exec("DELETE FROM file_chunks")
+	b.exec("DELETE FROM files")
+	if items, lost := b.guarded("t3", true); len(items) != 0 || lost {
+		t.Fatalf("%+v, lost %v", items, lost)
+	}
+	if inodeOf(t, link) == 0 {
+		t.Fatal("the link went")
+	}
+	if got := b.count("SELECT links_unnamed FROM disks WHERE id = 't3'"); got != 1 {
+		t.Errorf("the disk counts %d", got)
+	}
+	// Once the user removed it, nothing is counted any more.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	b.guarded("t3", true)
+	if got := b.count("SELECT links_unnamed FROM disks WHERE id = 't3'"); got != 0 {
+		t.Errorf("with no such link, the disk counts %d", got)
 	}
 }

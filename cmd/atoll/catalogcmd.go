@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
 	"path"
 	"slices"
+	"strings"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
@@ -15,6 +17,7 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -32,12 +35,14 @@ type catalogBackupDisk struct {
 
 // catalogRebuildOutput is the output of api/schemas/catalog-rebuild.schema.json.
 type catalogRebuildOutput struct {
-	Catalog   string     `json:"catalog"`
-	SetAside  *string    `json:"set_aside"`
-	OpsAfter  int64      `json:"ops_after"`
-	Disks     []scanDisk `json:"disks"`
-	Conflicts []pathItem `json:"conflicts"`
-	Done      bool       `json:"done"`
+	Catalog  string  `json:"catalog"`
+	SetAside *string `json:"set_aside"`
+	OpsAfter int64   `json:"ops_after"`
+	// TrashListed counts the entries of the disks' trash listed again.
+	TrashListed int        `json:"trash_listed"`
+	Disks       []scanDisk `json:"disks"`
+	Conflicts   []pathItem `json:"conflicts"`
+	Done        bool       `json:"done"`
 }
 
 // catalogVerifyOutput is the output of api/schemas/catalog-verify.schema.json.
@@ -177,11 +182,12 @@ func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, s
 }
 
 // differs says whether a disk was not walked, or does not hold what the catalog says: a file it does not know, a
-// copy changed, moved, absent or whose path another file took, or a name that could not be read.
+// copy changed, moved, absent or whose path another file took, a name that could not be read, or one past the limit
+// of its mergerfs branch, which the walk did not read (specs.md §15.8).
 func differs(list []scanDisk) bool {
 	for i := range list {
 		d := &list[i]
-		if !d.Walked || d.New > 0 || len(d.Changed)+len(d.Moved)+len(d.Absent)+len(d.PathTaken)+len(d.Unreadable) > 0 {
+		if !d.Walked || d.New > 0 || len(d.Changed)+len(d.Moved)+len(d.Absent)+len(d.PathTaken)+len(d.Unreadable)+len(d.TooLong) > 0 {
 			return true
 		}
 	}
@@ -212,8 +218,9 @@ func verifyCatalog(ctx context.Context, c *config.Config, m disks.Machine) (out 
 }
 
 // catalogRebuild runs atoll catalog rebuild (specs.md §9): a new catalog from what the disks hold, every copy read
-// whole, made beside the old one, which is then set aside as <catalog>.old-<UTC time>, never removed. Without --yes it
-// says what it would do. It works when the old catalog cannot be opened: of a later version, damaged, or gone.
+// whole, made beside the old one, which is then set aside as <catalog>.old-<UTC time>, never removed, as is what an
+// earlier rebuild left, kept as <catalog>.rebuild-<UTC time>. Without --yes it says what it would do. It works when the
+// old catalog cannot be opened: of a later version, damaged, or gone.
 func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool, stdout, stderr io.Writer) int {
 	file := catalogPath(c)
 	out := catalogRebuildOutput{Catalog: file, Disks: []scanDisk{}, Conflicts: []pathItem{}}
@@ -243,10 +250,8 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 		}
 	}
 	fresh := file + ".rebuild"
-	for _, name := range []string{fresh, fresh + "-wal", fresh + "-shm"} {
-		if err := fsx.RemoveFile(name); err != nil && !fsx.IsAbsent(err) {
-			return failure(stderr, fmt.Errorf("catalog rebuild: %w", err))
-		}
+	if err := keepLeftover(fresh, m.Now(), stderr); err != nil {
+		return failure(stderr, err)
 	}
 	if _, err := catalog.Create(ctx, fresh, c.PoolID); err != nil {
 		return failure(stderr, fmt.Errorf("catalog rebuild: %w", err))
@@ -263,7 +268,7 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 	}
 	old, err := catalog.SetAside(file, fresh, m.Now())
 	if err != nil {
-		return failure(stderr, fmt.Errorf(T("catalog rebuild: the new catalog is %s, not yet in place: %w"), fresh, err))
+		return failure(stderr, notInPlace(fresh, err))
 	}
 	if old != "" {
 		out.SetAside = &old
@@ -275,6 +280,58 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 		code = exitPartial
 	}
 	return writeRebuild(&out, flags["--json"], code, stdout, stderr)
+}
+
+// keepLeftover keeps what an earlier rebuild left at fresh, and its log, beside the catalog under a name that holds the
+// time, never removed, and says where on standard error: the old catalog, when that rebuild's last rename failed past
+// the swap or a crash came between the two, or a catalog it did not finish (specs.md §9, §25). A catalog another
+// rebuild holds the lock of is that rebuild's, still making it: nothing is moved, and the command gives up.
+func keepLeftover(fresh string, nowNS int64, stderr io.Writer) error {
+	release, err := fsx.LockFile(fresh)
+	switch {
+	case errors.Is(err, fsx.ErrBusy):
+		return fmt.Errorf(T("catalog rebuild: another rebuild is making %s: nothing is changed"), fresh)
+	case err == nil:
+		defer release()
+	case !fsx.IsAbsent(err):
+		return fmt.Errorf("catalog rebuild: %w", err)
+	}
+	moved, err := catalog.KeepLeftover(fresh, nowNS)
+	if err != nil {
+		return fmt.Errorf("catalog rebuild: %w", err)
+	}
+	if len(moved) > 0 {
+		report(stderr, keptMessage(moved))
+	}
+	return nil
+}
+
+// keptMessage says where what an earlier rebuild left went, the catalog first.
+func keptMessage(moved []catalog.Moved) string {
+	to := make([]string, 0, len(moved))
+	for _, m := range moved {
+		to = append(to, m.To)
+	}
+	return fmt.Sprintf(T("warning: what an earlier rebuild left at %s is kept beside it, never removed, at %s: the old catalog, when that rebuild could not set it aside, or a catalog it did not finish"),
+		moved[0].From, strings.Join(to, ", "))
+}
+
+// notInPlace says what a set-aside that failed left: the new catalog not yet in place, the old one where it was; or,
+// once the swap went through, the new one in place, where the old one stays, where its log went, and the rename that
+// puts them together; a rebuild run again keeps the old one beside the catalog under a name of its own (specs.md §9,
+// §25).
+func notInPlace(fresh string, err error) error {
+	var half *catalog.OldNotSetAside
+	switch {
+	case !errors.As(err, &half):
+		return fmt.Errorf(T("catalog rebuild: the new catalog is %s, not yet in place: %w"), fresh, err)
+	case len(half.Log) == 0:
+		return fmt.Errorf(T("catalog rebuild: the new catalog is in place at %s; the old one could not be renamed to %s, and stays at %s, which a rebuild run again keeps beside it under a name of its own: rename it to %s yourself: %w"),
+			half.File, half.Want, half.At, half.Want, half.Err)
+	default:
+		return fmt.Errorf(T("catalog rebuild: the new catalog is in place at %s; the old one could not be renamed to %s, and stays at %s, which a rebuild run again keeps beside it under a name of its own, while its log went to %s: rename it to %s yourself, which puts them together: %w"),
+			half.File, half.Want, half.At, strings.Join(half.Log, ", "), half.Want, half.Err)
+	}
 }
 
 // rebuildInto fills the new catalog: its operations past the highest id the disks' trash and tmp/ name, and its files
@@ -305,11 +362,72 @@ func rebuildInto(ctx context.Context, c *config.Config, m disks.Machine, fresh s
 	if err := catalog.StartFilesAfter(ctx, db, filesAfter); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
+	// Before the scan: a copy it finds gone is looked for in the journal, which knows the trash from here on.
+	if out.TrashListed, err = listTrashAgain(ctx, c, m, db, stderr); err != nil {
+		return nil, err
+	}
 	outcome, err = watch.Scan(ctx, db, c, m, watch.Options{Full: true})
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	return outcome, nil
+}
+
+// listTrashAgain lists again the entries of each disk's trash, which a catalog made from the disks knew none of, so that
+// none could be restored or purged (specs.md §9, §17). Nothing on a disk says why an entry went to the trash, nor
+// exactly when: its time is the end of its folder's date, or now when that is later, so that it reads as no older
+// than it is, and it expires the retention after it, never sooner than it would have. What the walk leaves out stays as
+// it is, with a warning.
+func listTrashAgain(ctx context.Context, c *config.Config, m disks.Machine, db *sql.DB, stderr io.Writer) (int, error) {
+	text, _ := c.Effective()["trash.retention"].(string)
+	retention, err := value.ParseDuration(text)
+	if err != nil {
+		return 0, fmt.Errorf("trash.retention: %w", err)
+	}
+	now, listed := m.Now(), 0
+	for i := range c.Disks {
+		d := &c.Disks[i]
+		if d.State == config.DiskFailed {
+			continue
+		}
+		if v := disks.Check(m, d); v.State == disks.Missing {
+			report(stderr, fmt.Sprintf(T("warning: disk %s: its trash is not listed again, as it is missing (%s): run atoll catalog rebuild again once it is back"), d.ID, v.Reason))
+			continue
+		}
+		found, err := foundTrash(m, d, func(place, why string) {
+			report(stderr, fmt.Sprintf(T("warning: disk %s: %s in its trash is no entry (%s), and stays as it is"), d.ID, place, why))
+		}, watch.LimitsOf(c, d).Own())
+		if err != nil {
+			report(stderr, fmt.Sprintf(T("warning: disk %s: its trash could not be listed again (%v)"), d.ID, err))
+			continue
+		}
+		list := make([]catalog.FoundTrash, 0, len(found))
+		for j := range found {
+			e := &found[j]
+			deleted := min(e.Day.AddDate(0, 0, 1).UnixNano(), now)
+			list = append(list, catalog.FoundTrash{OpID: e.OpID, Chunks: e.Chunks, Path: e.Path, TrashPath: e.TrashPath, Size: e.Size,
+				FileKey: e.FileKey, DeletedNS: deleted, ExpiresNS: ops.AddRetention(deleted, retention)})
+		}
+		if err := catalog.ListTrashAgain(ctx, db, d.ID, list); err != nil {
+			return listed, fmt.Errorf("%w", err)
+		}
+		listed += len(list)
+	}
+	return listed, nil
+}
+
+// foundTrash lists a disk's trash through a handle on its top, as far as limits let a walk of its own folders go.
+func foundTrash(m disks.Machine, d *config.Disk, left func(place, why string), limits watch.Limits) ([]ops.FoundEntry, error) {
+	handle, err := ops.Open(m, d, 0)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	defer handle.Close()
+	found, err := handle.FoundTrash(left, limits)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	return found, nil
 }
 
 // highestOpID reads the highest operation id a disk's work folder names, and the highest file id its links folder

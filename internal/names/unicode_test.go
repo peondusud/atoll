@@ -146,6 +146,8 @@ func TestNonStarterRun(t *testing.T) {
 		{"\u09be", 1}, // class 0, but composes backwards
 		{"a" + strings.Repeat("\u0301", 31), 31},
 		{"a" + strings.Repeat("\u0301", 15) + "\xff" + strings.Repeat("\u0301", 15), 15},
+		{"a\u0301\xff" + strings.Repeat("\u0301", 20), 20}, // the bytes after one that is not UTF-8 count too
+		{"\xff\xfe" + strings.Repeat("\u0301", 3), 3},
 	} {
 		if got := NonStarterRun(c.s); got != c.want {
 			t.Errorf("NonStarterRun(%+q) = %d, want %d", c.s, got, c.want)

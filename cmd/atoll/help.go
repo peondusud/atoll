@@ -51,8 +51,8 @@ func commandHelps() []commandHelp {
 			"report names a disk would refuse, and those that collide"},
 		{"guard", []string{
 			"atoll guard list [--json]",
-			"atoll guard confirm --disk <id> [--kind deletions|modifications] [--json]",
-			"atoll guard reject --disk <id> [--kind deletions|modifications] [--json]",
+			"atoll guard confirm --disk <id> [--kind deletions|modifications] [--dry-run] [--json]",
+			"atoll guard reject --disk <id> [--kind deletions|modifications] [--dry-run] [--json]",
 		}, "show the mass-deletion and mass-modification guards, or answer one that tripped"},
 		{"balance", []string{"atoll balance [--move-originals] [--dry-run] [--yes] [--json]"},
 			"move the copies Atoll made that break a strict setting of their file to where it wants them, and with --move-originals the user's copies too"},
@@ -66,8 +66,12 @@ func commandHelps() []commandHelp {
 		}, "list the files in conflict, or keep one copy of a file and send the others to the trash"},
 		{"daemon", []string{"atoll daemon [--foreground] [--dry-run]", "atoll daemon --until-idle [--dry-run] [--json]"},
 			"run for good, or do all the work that is due once and stop"},
-		{"mergerfs-config", []string{"atoll mergerfs-config [--json]"},
-			"print the mergerfs line that presents the pool"},
+		{"mergerfs-config", []string{"atoll mergerfs-config [--omv] [--json]"},
+			"print the mergerfs line that presents the pool, or with --omv the fields of the openmediavault mergerfs plugin's form"},
+		{"polkit-rule", []string{"atoll polkit-rule [--json]"},
+			"print polkit's rule that lets the account atoll start the mount units of the pool's disks, and no other mount unit"},
+		{"mount", []string{"atoll mount [<point>]"},
+			"serve Atoll's own view until stopped: at view.mount, where it writes, and read only at view.readonly_mount or a point"},
 		{"notify", []string{"atoll notify test [--json]"},
 			"send a test alert through each channel that is set"},
 		{"catalog", []string{"atoll catalog backup [--json]", "atoll catalog verify [--json]", "atoll catalog rebuild [--dry-run] [--yes] [--json]"},
@@ -114,6 +118,7 @@ func writeHelp(name, sub string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(&text, "  %-16s %s\n", h.name, T(h.does))
 		}
 		text.WriteString("\n" + T("atoll help <command>, or atoll <command> --help, says more of one.") + "\n")
+		text.WriteString(T("atoll --version gives the version of this build.") + "\n")
 		text.WriteString(T("--config names the configuration, /etc/atoll/atoll.toml by default; --json gives the output its schema of api/schemas/.") + "\n")
 	} else {
 		at := slices.IndexFunc(helps, func(h commandHelp) bool { return h.name == name })

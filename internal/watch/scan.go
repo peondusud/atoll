@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path"
 	"slices"
 	"strconv"
@@ -56,6 +57,10 @@ type Report struct {
 	// (specs.md §15.10). An alert says so (§23); the output of a scan lists them with the others. The files that could
 	// not be opened for their hash, for a reason that says nothing of their disk, come after them.
 	Refused []string
+	// TooLong holds the names the walk neither recorded nor went below, as their path through the disk's mount is past
+	// the limit of its mergerfs branch while their folder's is not (specs.md §15.8). Nothing is concluded of them or of
+	// what is below them, and while there is one, a copy the walk found nowhere is uncertain, never gone: it may be there.
+	TooLong []string
 	// Seen holds the verdict about each copy that is not as its row says, by file id, and FolderMoves
 	// the folders renamed: what a pass decides on (specs.md §15.12).
 	Seen        []CopySeen
@@ -63,6 +68,15 @@ type Report struct {
 	// UnfoundFolders holds the folders found at neither name whose rows stay for the copies below them. What their
 	// rows say of a name is on its way out.
 	UnfoundFolders []string
+	// NewFolders holds the folders where the walk found copies new to the catalog, each once, in the walk's order, ""
+	// for the top of the root: the daemon tells the media servers of them (specs.md §21.5).
+	NewFolders []string
+	newFolders map[string]bool
+	// Looked holds, for a look limited to names, the names it read in the end, in byte order: those it was given, and
+	// those it took in for the inodes it found (specs.md §15.13). Whole says that it concluded nothing of a copy it no
+	// longer found, which a walk of the whole disk must look for.
+	Looked []string
+	Whole  bool
 }
 
 // MovedCopy is a copy found at a new name.
@@ -145,7 +159,7 @@ func CheckDisks(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 }
 
 func sortPaths(r *Report) {
-	for _, list := range [][]string{r.Changed, r.Absent, r.PathTaken, r.Unreadable, r.OtherMounts} {
+	for _, list := range [][]string{r.Changed, r.Absent, r.PathTaken, r.Unreadable, r.OtherMounts, r.TooLong} {
 		slices.Sort(list)
 	}
 	slices.SortFunc(r.Moved, func(a, b MovedCopy) int { return cmp.Compare(a.Path, b.Path) })
@@ -199,6 +213,9 @@ type Look struct {
 	// written, as a scan does. It says false for a disk that fails.
 	Confirm     func(ctx context.Context, d *config.Disk) (bool, error)
 	ConfirmEach bool
+	// Names limits the look to the names the watcher gave, and to what they hold (specs.md §15.13); nil walks the whole
+	// disk.
+	Names []Named
 }
 
 // Compare walks each disk not failed and compares it with the catalog, as a scan would, and writes nothing, to the
@@ -241,7 +258,16 @@ func LookAtDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 	if verdict.State == disks.Missing {
 		return r, nil
 	}
-	walked, err := walkRoot(ctx, m, d)
+	var found *catalog.Walk
+	var err error
+	if look.Names != nil {
+		found, err = lookNamed(ctx, db, c, m, d, r, look, now)
+	} else {
+		var walked *Walked
+		if walked, err = walkRoot(ctx, m, d, LimitsOf(c, d)); err == nil {
+			found, err = compareWalk(ctx, db, c, d, walked, r, look, now, nil)
+		}
+	}
 	switch {
 	case errors.Is(err, ErrInterrupted):
 		r.Verdict = disks.Verdict{State: disks.Missing, Reason: disks.IOError, Message: err.Error()}
@@ -252,11 +278,7 @@ func LookAtDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 		}
 		return r, nil
 	case err != nil:
-		return nil, err
-	}
-	found, err := compareWalk(ctx, db, c, d, walked, r, look, now)
-	if err != nil {
-		return nil, fmt.Errorf("catalog: %w", err)
+		return nil, fmt.Errorf("%w", err)
 	}
 	if look.Confirm != nil && (look.ConfirmEach || needsConfirming(r)) {
 		ok, err := look.Confirm(ctx, d)
@@ -288,7 +310,7 @@ func needsConfirming(r *Report) bool {
 	})
 }
 
-func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, error) {
+func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk, limits Limits) (*Walked, error) {
 	root, err := m.OpenRoot(d.Mount, d.Root)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
@@ -298,7 +320,7 @@ func walkRoot(ctx context.Context, m disks.Machine, d *config.Disk) (*Walked, er
 		_ = root.Close()
 		return nil, fmt.Errorf("%w: %w", ErrInterrupted, err)
 	}
-	walked, err := Walk(ctx, root)
+	walked, err := Walk(ctx, root, limits)
 	// A folder only read, whose close failing changes nothing that was read from it.
 	_ = root.Close()
 	if err != nil {
@@ -380,17 +402,26 @@ func withoutOwnLinks(m disks.Machine, d *config.Disk, w *Walked) error {
 // compareWalk says what a walk means against what the catalog knows, and fills the report. Both
 // sides are in the byte order of paths, so it is a merge. Only what is not where its row says is looked
 // up, and only what no row claims is indexed for that.
-func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Disk, w *Walked, r *Report, look *Look, now int64) (*catalog.Walk, error) {
+// A look limited to names compares the rows at or below what it read alone, and concludes of a copy it no longer finds
+// only what NamedVerdict says (specs.md §15.13); named is nil for a walk of the whole disk.
+func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Disk, w *Walked, r *Report, look *Look, now int64, named *namedLook) (*catalog.Walk, error) {
 	r.Unreadable, r.Refused = w.Unreadable, w.Refused
-	r.OtherMounts = w.OtherMounts
+	r.OtherMounts, r.TooLong = w.OtherMounts, w.TooLong
 	slices.SortFunc(w.Files, func(a, b FoundFile) int { return cmp.Compare(a.Path, b.Path) })
 	found := func(f *FoundFile) {
 		r.Files++
 		r.Bytes += f.Size
 	}
-	cmpr := compared{notReached: pathSet(w.Unreadable, w.OtherMounts, look.Planned), planned: pathSet(look.Planned), r: r, found: found, quiet: look.Own != nil}
+	cmpr := compared{notReached: pathSet(w.Unreadable, w.OtherMounts, w.TooLong, look.Planned), planned: pathSet(look.Planned), r: r, found: found,
+		quiet: look.Own != nil, named: named, tooLong: len(w.TooLong) > 0}
 	next := 0
-	err := catalog.EachKnownCopy(ctx, db, d.ID, func(k *catalog.KnownCopy) {
+	each := func(fn func(*catalog.KnownCopy)) error { return catalog.EachKnownCopy(ctx, db, d.ID, fn) }
+	if named != nil {
+		each = func(fn func(*catalog.KnownCopy)) error {
+			return catalog.EachKnownCopyAt(ctx, db, d.ID, named.names, fn)
+		}
+	}
+	err := each(func(k *catalog.KnownCopy) {
 		for next < len(w.Files) && w.Files[next].Path < k.Path {
 			w.Files[next].rowless = true
 			cmpr.rowless = append(cmpr.rowless, &w.Files[next])
@@ -416,7 +447,7 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 	out := &catalog.Walk{}
 	// A name the walk could not read may be a folder renamed since it was listed, which only says so by its
 	// row: this look may find the new name, and the next look otherwise.
-	tops, err := moveFolders(ctx, db, d.ID, w, r, out, pathSet(w.OtherMounts, look.Planned))
+	tops, err := moveFolders(ctx, db, d.ID, w, r, out, pathSet(w.OtherMounts, w.TooLong, look.Planned), named)
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +456,7 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 	}
 	out.Clocks, out.Modes = cmpr.clocks, cmpr.modes
 	planned := pathSet(look.Planned)
-	if err := keepPlanned(ctx, db, d.ID, pathSet(look.Planned, w.Unreadable), out); err != nil {
+	if err := keepPlanned(ctx, db, d.ID, pathSet(look.Planned, w.Unreadable, w.TooLong), out); err != nil {
 		return nil, err
 	}
 	for _, f := range cmpr.rowless {
@@ -452,7 +483,8 @@ func compareWalk(ctx context.Context, db *sql.DB, c *config.Config, d *config.Di
 			r.Ignored++
 		}
 		if !atOrBelow(tops, e.Path) && !atOrBelow(out.Kept, e.Path) {
-			out.Entries = append(out.Entries, catalog.EntryRow{Path: e.Path, Kind: string(e.Kind), Mode: e.Mode, MtimeNS: e.MtimeNS, Target: e.Target, FileKey: e.FileKey, BtimeNS: e.BtimeNS})
+			out.Entries = append(out.Entries, catalog.EntryRow{Path: e.Path, Kind: string(e.Kind), Mode: e.Mode, MtimeNS: e.MtimeNS, Target: e.Target, FileKey: e.FileKey, BtimeNS: e.BtimeNS,
+				Size: e.Size, UID: e.UID, GID: e.GID})
 		}
 	}
 	return out, nil
@@ -485,7 +517,7 @@ func freshFile(c *config.Config, f *FoundFile, r *Report, out *catalog.Walk, top
 	policy := c.Policy(f.Path, &size)
 	if policy.Action == rules.Ignore {
 		if !atOrBelow(tops, f.Path) && !atOrBelow(out.Kept, f.Path) {
-			out.Entries = append(out.Entries, catalog.EntryRow{Path: f.Path, Kind: string(solver.EntryIgnored), Mode: f.Mode, MtimeNS: f.MtimeNS})
+			out.Entries = append(out.Entries, catalog.EntryRow{Path: f.Path, Kind: string(solver.EntryIgnored), Mode: f.Mode, MtimeNS: f.MtimeNS, Size: f.Size, UID: f.UID, GID: f.GID})
 		}
 		r.Ignored++
 		return
@@ -502,6 +534,17 @@ func freshFile(c *config.Config, f *FoundFile, r *Report, out *catalog.Walk, top
 		UID: f.UID, GID: f.GID,
 	})
 	r.New++
+	folder := ""
+	if at := strings.LastIndexByte(f.Path, '/'); at >= 0 {
+		folder = f.Path[:at]
+	}
+	if !r.newFolders[folder] {
+		if r.newFolders == nil {
+			r.newFolders = map[string]bool{}
+		}
+		r.newFolders[folder] = true
+		r.NewFolders = append(r.NewFolders, folder)
+	}
 	found(f)
 }
 
@@ -549,8 +592,10 @@ func Unchanged(f *FoundFile, k *catalog.KnownCopy) bool {
 // themselves cost more than the plan's input (specs.md §26). update is set when the file already
 // changed, whatever the plan says.
 type settled struct {
-	id        int64
-	state     string
+	id    int64
+	state string
+	// held says that the file, corrupt, holds a conflict (specs.md §4).
+	held      bool
 	firstSeen int64
 	update    *catalog.FileUpdate
 }
@@ -579,6 +624,22 @@ type Replicate struct {
 	// MoveOriginals makes a user copy that breaks a strict setting count as misplaced too, with Balance: atoll
 	// balance --move-originals (specs.md §13.3).
 	MoveOriginals bool
+	// Only limits the plan to the files that may have changed since the last; nil plans every file.
+	Only *Only
+}
+
+// Only limits a plan to the files that may have changed since the last one, and those it must place with them
+// (specs.md §15.13): the files at or below the names a pass looked at, given by disk, and those catalog.PlanSet adds to
+// them, with every file of the same group of colocate. The others keep what the last plan gave them.
+type Only struct {
+	Names map[string][]string
+	// IDs are more files to plan: those a pass made a copy of, or transferred, which may be at their level now.
+	IDs map[int64]bool
+}
+
+// SettleOnly is Settle for the files only says, and those it adds.
+func SettleOnly(ctx context.Context, db *sql.DB, c *config.Config, now int64, only *Only) error {
+	return settle(ctx, db, c, now, nil, only)
 }
 
 // PlannedJob is a job of the plan, with what queueing it needs of its file.
@@ -593,6 +654,14 @@ type PlannedJob struct {
 // SettleFor is Settle, and with a Replicate, also what atoll replicate asks of the plan. A file in
 // conflict is never given a job, as nothing says which version to copy (specs.md §14.1).
 func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate) error {
+	var only *Only
+	if rep != nil {
+		only = rep.Only
+	}
+	return settle(ctx, db, c, now, rep, only)
+}
+
+func settle(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate, only *Only) error {
 	diskList, err := catalog.Disks(ctx, db)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
@@ -612,13 +681,31 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 	// The plan asks the catalog of the names an NTFS disk holds, and holds none of them (specs.md §13.4).
 	taken, done := catalog.KeysTaken(ctx, db)
 	defer done()
+	newFiles, fillTo, err := NewFilesOf(c)
+	if err != nil {
+		return err
+	}
 	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance,
-		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals, Taken: taken}
+		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals, Taken: taken, NewFiles: newFiles, FillTo: fillTo, Equalize: EqualizeOf(c)}
 	var release func(string) bool
 	if rep != nil {
 		release = rep.Release
 	}
-	remembered, err := filesForPlan(ctx, db, c, diskList, &input, release)
+	cacheSettings, err := c.Cache()
+	if err != nil {
+		return err
+	}
+	input.CacheMirror, input.CacheEarly = cacheSettings.Mirror, cacheSettings.Early
+	residency, err := Residencies(ctx, db, c, diskList, now, release)
+	if err != nil {
+		return err
+	}
+	var remembered []settled
+	if only == nil {
+		remembered, err = filesForPlan(ctx, db, c, diskList, &input, release, residency)
+	} else {
+		remembered, err = filesOnly(ctx, db, c, diskList, &input, release, residency, only)
+	}
 	if err != nil {
 		return err
 	}
@@ -662,7 +749,7 @@ func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep
 const copyBatch = 1000
 
 // copyQueue hands the replicate jobs of the plan to Queue as the plan makes them, leaving out those of a file in
-// conflict.
+// conflict, or that holds one: nothing says which version to copy (specs.md §4, §13).
 type copyQueue struct {
 	queue      func(jobs []PlannedJob) error
 	files      []solver.File
@@ -671,7 +758,7 @@ type copyQueue struct {
 }
 
 func (q *copyQueue) add(i int, jobs []solver.Job) error {
-	if q.remembered[i].state == string(solver.StateConflict) {
+	if q.remembered[i].state == string(solver.StateConflict) || q.remembered[i].held {
 		return nil
 	}
 	for _, job := range jobs {
@@ -704,8 +791,28 @@ func missingGraceOf(c *config.Config) (time.Duration, error) {
 	return grace, nil
 }
 
+// EqualizeOf gives balance.equalize: with percent, the plan places Atoll's copies by the most free share, and the view
+// still lands what is new as placement.new_files says (specs.md §12.4).
+func EqualizeOf(c *config.Config) string {
+	equalize, _ := c.Effective()["balance.equalize"].(string)
+	return equalize
+}
+
+// NewFilesOf gives placement.new_files and placement.fill_to (specs.md §12.4).
+func NewFilesOf(c *config.Config) (string, value.Percent, error) {
+	newFiles, _ := c.Effective()["placement.new_files"].(string)
+	text, _ := c.Effective()["placement.fill_to"].(string)
+	fillTo, err := value.ParsePercent(text)
+	if err != nil {
+		return "", value.Percent{}, fmt.Errorf("placement.fill_to: %w", err)
+	}
+	return newFiles, fillTo, nil
+}
+
 func planDisks(list []catalog.Disk, now int64, grace time.Duration) []solver.Disk {
 	out := make([]solver.Disk, 0, len(list))
+	// Two disks on one physical disk count as one (R-06).
+	shared := catalog.SharedDevices(list)
 	for i := range list {
 		d := &list[i]
 		out = append(out, solver.Disk{
@@ -713,6 +820,7 @@ func planDisks(list []catalog.Disk, now int64, grace time.Duration) []solver.Dis
 			Capacity: d.Capacity, Free: d.Free, FS: names.Filesystem(d.FS), Domain: d.Domain, Tags: d.Tags, Mount: d.Mount, Root: d.Root,
 			// The plan looks at this only for a disk that is missing. A disk never seen holds nothing.
 			PastGrace: d.LastSeenNS > 0 && now-d.LastSeenNS > int64(grace),
+			Physical:  shared[d.ID],
 		})
 	}
 	return out
@@ -728,14 +836,12 @@ func planEntries(list []catalog.EntryKey) []solver.Entry {
 
 // filesForPlan works out each file's original and policy, gives the plan what it needs of them, and
 // says what else must be remembered of each, in the same order.
-func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input, released func(string) bool) ([]settled, error) {
-	position := make(map[string]int, len(diskList))
-	state := make(map[string]solver.DiskState, len(diskList))
-	for i := range diskList {
-		position[diskList[i].ID] = diskList[i].Position
-		state[diskList[i].ID] = solver.DiskState(diskList[i].State)
+func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input, released func(string) bool,
+	residency map[int64]solver.Residency) ([]settled, error) {
+	k, err := newPlanKit(ctx, db, c, diskList, released)
+	if err != nil {
+		return nil, err
 	}
-	placements := map[placementKey]*solver.Placement{}
 	// Sized once: grown file by file, each list is for a moment both its old size and its new one.
 	count, err := catalog.FileCount(ctx, db)
 	if err != nil {
@@ -758,39 +864,197 @@ func filesForPlan(ctx context.Context, db *sql.DB, c *config.Config, diskList []
 		}
 		for i := range page {
 			f := &page[i]
-			update, err := settleFile(c, f, position, state)
+			file, update, err := k.planFile(f, leaving[f.ID], residency[f.ID])
 			if err != nil {
-				return nil, fmt.Errorf("%q: %w", f.Path, err)
+				return nil, err
 			}
-			// A rule that now ignores a file leaves it what it was, with the pool's placement (specs.md §15.10).
-			placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread,
-				spreadMode: c.Pool.SpreadMode, tagsMode: c.Pool.TagsMode, overflow: c.Pool.Overflow}
-			size := update.Size
-			if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
-				placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread, spreadMode: policy.SpreadMode,
-					tagsMode: policy.TagsMode, overflow: policy.Overflow, tags: joinNames(policy.Tags), domains: joinNames(policy.Domains)}
-			}
-			copies := make([]solver.Copy, 0, len(f.Copies))
-			for j := range f.Copies {
-				cp := &f.Copies[j]
-				// A copy whose clock runs is no source: nothing is at its name until its file is decided (specs.md §13.4).
-				plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS, Away: cp.GoneNS.Valid}
-				if cp.OldPath != nil {
-					plan.OldPath = *cp.OldPath
-				}
-				copies = append(copies, plan)
-			}
-			hold := update.Mode == "manual" && (released == nil || !released(f.Path))
-			input.Files = append(input.Files, solver.File{
-				Path: f.Path, Size: update.Size, Placement: placementFor(placements, placement), Hold: hold, Leaving: leaving[f.ID], Copies: copies,
-			})
-			entry := settled{id: f.ID, state: f.State, firstSeen: f.FirstSeenNS}
+			input.Files = append(input.Files, file)
+			entry := settled{id: f.ID, state: f.State, held: f.ConflictHeld, firstSeen: f.FirstSeenNS}
 			if fileChanged(f, &update) {
 				entry.update = &update
 			}
 			remembered = append(remembered, entry)
 		}
 	}
+}
+
+// filesOnly is filesForPlan for the files only says, catalog.PlanSet adds, and those of their groups of colocate, by
+// path in byte order as a plan of every file has them.
+func filesOnly(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, input *solver.Input, released func(string) bool,
+	residency map[int64]solver.Residency, only *Only) (_ []settled, err error) {
+	var cacheDisks []string
+	for i := range diskList {
+		if diskList[i].Role == solver.RoleCache {
+			cacheDisks = append(cacheDisks, diskList[i].ID)
+		}
+	}
+	ids, err := catalog.PlanSet(ctx, db, only.Names, cacheDisks)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	for id := range only.IDs {
+		ids[id] = true
+	}
+	finder, err := catalog.NewFileFinder(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	defer func() { err = errors.Join(err, finder.Close()) }()
+	var rows []catalog.FileRow
+	read := func(list []int64) error {
+		for _, id := range list {
+			f, err := finder.ByID(ctx, id)
+			if err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+			if f != nil {
+				rows = append(rows, *f)
+			}
+		}
+		return nil
+	}
+	if err := read(slices.Sorted(maps.Keys(ids))); err != nil {
+		return nil, err
+	}
+	// A group of colocate is placed whole: the disk that holds the most of it is the best for each of its files (specs.md
+	// §12.4).
+	groups := map[string]bool{}
+	for i := range rows {
+		if folder, ok := solver.GroupFolder(rows[i].Path, colocateOf(c, &rows[i])); ok {
+			groups[folder] = true
+		}
+	}
+	var more []int64
+	for _, folder := range slices.Sorted(maps.Keys(groups)) {
+		below, err := catalog.FileIDsBelow(ctx, db, folder)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		for _, id := range below {
+			if !ids[id] {
+				ids[id] = true
+				more = append(more, id)
+			}
+		}
+	}
+	// A file at a name above another's stands in the way of its copies, as a folder of that name cannot be made there.
+	parents := map[string]bool{}
+	for i := range rows {
+		for at := strings.IndexByte(rows[i].Path, '/'); at >= 0; at = strings.IndexByte(rows[i].Path[at+1:], '/') + at + 1 {
+			parents[rows[i].Path[:at]] = true
+			if strings.IndexByte(rows[i].Path[at+1:], '/') < 0 {
+				break
+			}
+		}
+	}
+	above, err := catalog.FileIDsAt(ctx, db, slices.Sorted(maps.Keys(parents)))
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	for _, id := range above {
+		if !ids[id] {
+			ids[id] = true
+			more = append(more, id)
+		}
+	}
+	if err := read(more); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(rows, func(a, b catalog.FileRow) int { return strings.Compare(a.Path, b.Path) })
+	k, err := newPlanKit(ctx, db, c, diskList, released)
+	if err != nil {
+		return nil, err
+	}
+	input.Files = slices.Grow(input.Files, len(rows))
+	remembered := make([]settled, 0, len(rows))
+	for i := range rows {
+		f := &rows[i]
+		leaving, err := catalog.Leaving(ctx, db, f.Path, f.Path)
+		if err != nil {
+			return nil, fmt.Errorf("catalog: %w", err)
+		}
+		file, update, err := k.planFile(f, leaving[f.ID], residency[f.ID])
+		if err != nil {
+			return nil, err
+		}
+		input.Files = append(input.Files, file)
+		entry := settled{id: f.ID, state: f.State, held: f.ConflictHeld, firstSeen: f.FirstSeenNS}
+		if fileChanged(f, &update) {
+			entry.update = &update
+		}
+		remembered = append(remembered, entry)
+	}
+	return remembered, nil
+}
+
+// colocateOf gives a file's colocate, as its plan reads it: its policy's, or the pool's for a file a rule now ignores.
+func colocateOf(c *config.Config, f *catalog.FileRow) string {
+	size := f.Size
+	if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
+		return policy.Colocate
+	}
+	return c.Pool.Colocate
+}
+
+// planKit is what giving the plan a file needs of the pool and of the configuration, and the placements made so far.
+type planKit struct {
+	c          *config.Config
+	position   map[string]int
+	state      map[string]solver.DiskState
+	placements map[placementKey]*solver.Placement
+	released   func(string) bool
+	// running gives, by file, the disks of its pending copies whose job is running (specs.md §14.1).
+	running map[int64][]string
+}
+
+func newPlanKit(ctx context.Context, db *sql.DB, c *config.Config, diskList []catalog.Disk, released func(string) bool) (*planKit, error) {
+	running, err := catalog.RunningCopies(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	k := &planKit{c: c, position: make(map[string]int, len(diskList)), state: make(map[string]solver.DiskState, len(diskList)),
+		placements: map[placementKey]*solver.Placement{}, released: released, running: running}
+	for i := range diskList {
+		k.position[diskList[i].ID] = diskList[i].Position
+		k.state[diskList[i].ID] = solver.DiskState(diskList[i].State)
+	}
+	return k, nil
+}
+
+// planFile gives the plan a file of the catalog, and what its original and policy make of its row.
+func (k *planKit) planFile(f *catalog.FileRow, leaving bool, residency solver.Residency) (solver.File, catalog.FileUpdate, error) {
+	c := k.c
+	update, err := settleFile(c, f, k.position, k.state)
+	if err != nil {
+		return solver.File{}, update, fmt.Errorf("%q: %w", f.Path, err)
+	}
+	// A rule that now ignores a file leaves it what it was, with the pool's placement (specs.md §15.10).
+	placement := placementKey{replicas: update.ReplicasTarget, priority: c.Pool.Priority, spread: c.Pool.Spread,
+		spreadMode: c.Pool.SpreadMode, tagsMode: c.Pool.TagsMode, overflow: c.Pool.Overflow, colocate: c.Pool.Colocate}
+	size := update.Size
+	if policy := c.Policy(f.Path, &size); policy.Action != rules.Ignore {
+		placement = placementKey{replicas: policy.Replicas, priority: policy.Priority, spread: policy.Spread, spreadMode: policy.SpreadMode,
+			tagsMode: policy.TagsMode, overflow: policy.Overflow, tags: joinNames(policy.Tags), domains: joinNames(policy.Domains),
+			colocate: policy.Colocate}
+	}
+	copies := make([]solver.Copy, 0, len(f.Copies))
+	for j := range f.Copies {
+		cp := &f.Copies[j]
+		// A copy whose clock runs is no source: nothing is at its name until its file is decided (specs.md §13.4).
+		plan := solver.Copy{Disk: cp.Disk, State: solver.CopyState(cp.State), CreatedBy: cp.CreatedBy, FirstSeenNS: cp.FirstSeenNS, Away: cp.GoneNS.Valid,
+			Unverified: !cp.VerifiedNS.Valid}
+		// A pending copy whose job is running is kept and counted, never canceled (specs.md §13.4, §14.1).
+		plan.Running = plan.State == solver.CopyPending && slices.Contains(k.running[f.ID], cp.Disk)
+		if cp.OldPath != nil {
+			plan.OldPath = *cp.OldPath
+		}
+		copies = append(copies, plan)
+	}
+	hold := update.Mode == "manual" && (k.released == nil || !k.released(f.Path))
+	return solver.File{
+		Path: f.Path, Size: update.Size, Placement: placementFor(k.placements, placement), Hold: hold, Leaving: leaving, Copies: copies,
+		Cache: residency,
+	}, update, nil
 }
 
 // settleFile gives what a file's original and policy make of its row. The state is the plan's. With
@@ -828,6 +1092,7 @@ type placementKey struct {
 	replicas, priority                     int
 	spread, spreadMode, tagsMode, overflow string
 	tags, domains                          string
+	colocate                               string
 }
 
 func joinNames(list []string) string {
@@ -848,7 +1113,7 @@ func placementFor(known map[placementKey]*solver.Placement, key placementKey) *s
 	}
 	p := &solver.Placement{
 		Replicas: key.replicas, Priority: key.priority, Spread: key.spread, SpreadMode: key.spreadMode, TagsMode: key.tagsMode, Overflow: key.overflow,
-		Tags: splitNames(key.tags), Domains: splitNames(key.domains),
+		Tags: splitNames(key.tags), Domains: splitNames(key.domains), Colocate: key.colocate,
 	}
 	known[key] = p
 	return p
@@ -866,8 +1131,9 @@ func originalOf(f *catalog.FileRow, position map[string]int, state map[string]so
 		}
 		candidates = append(candidates, candidate)
 	}
+	// A file corrupt that holds a conflict keeps its original too: its copies differ (specs.md §4, §7).
 	previous := ""
-	if f.State == string(solver.StateConflict) {
+	if f.State == string(solver.StateConflict) || f.ConflictHeld {
 		previous = f.Original.String
 	}
 	original, err := solver.SelectOriginal(candidates, previous)
@@ -889,11 +1155,14 @@ func applyResults(files []solver.File, remembered []settled, results []solver.Re
 	for i := range files {
 		f, r := &files[i], &remembered[i]
 		var applying []solver.State
-		// Corrupt holds while a copy is: once that copy went to the trash, the file takes the state its copies give
-		// it, and a conflict they still hold is found again by the next pass, from their rows (specs.md §16).
+		// Corrupt holds while a copy is: once that copy was repaired or went to the trash, the file takes the state its
+		// copies give it, and the conflict it held, found while it was corrupt, comes first (specs.md §4, §16).
 		corrupt := r.state == string(solver.StateCorrupt) && slices.ContainsFunc(f.Copies, func(c solver.Copy) bool { return c.State == solver.CopyCorrupt })
-		if r.state == string(solver.StateConflict) || corrupt {
+		switch {
+		case r.state == string(solver.StateConflict) || corrupt:
 			applying = append(applying, solver.State(r.state))
+		case r.held:
+			applying = append(applying, solver.StateConflict)
 		}
 		if next < len(results) && results[next].Path == f.Path {
 			result := &results[next]
@@ -995,7 +1264,8 @@ func hashWalked(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machi
 		if !report.Walked {
 			continue
 		}
-		reader := &diskReader{report: report, skip: pathSet(report.Changed, report.Absent, movedFrom(report)), notReached: pathSet(report.Unreadable, report.OtherMounts)}
+		reader := &diskReader{report: report, skip: pathSet(report.Changed, report.Absent, movedFrom(report)),
+			notReached: pathSet(report.Unreadable, report.OtherMounts, report.TooLong)}
 		if d := diskOf(c, report.ID); d != nil {
 			reader.root, err = m.OpenRoot(d.Mount, d.Root)
 			if err != nil {

@@ -33,8 +33,14 @@ const (
 	KeySmartFailing = "smart-failing:"
 	KeySmartSectors = "smart-sectors:"
 	KeyNTFSDirty    = "ntfs-dirty:"
+	KeyNTFSNames    = "ntfs-names:"
+	KeyLinkUnnamed  = "link-unnamed:"
+	KeySharedDevice = "shared-device:"
 	KeyNoAccess     = "no-access:"
 	KeyWorkdirOwner = "workdir-owner:"
+	KeyUPS          = "ups-unreachable"
+	KeyTooLong      = "branch-path-too-long:"
+	KeyVersions     = "versions-purged:"
 )
 
 // FirstN is how many paths an alert names, at most.
@@ -84,19 +90,59 @@ type Facts struct {
 	// TrashFull holds the disks that hold their files now whose trash holds more than trash.max_size of their capacity,
 	// in the catalog's order of the disks.
 	TrashFull []TrashFull
-	// MaxSize is trash.max_size, as the configuration writes it.
-	MaxSize string
+	// MaxSize is trash.max_size, and Retention trash.retention, as the configuration writes them.
+	MaxSize, Retention string
+	// Versions holds the disks whose trash purged, for room, versions a modification replaced before their retention
+	// ended, by id (specs.md §17).
+	Versions []VersionsPurged
 	// Smart holds the last reading of SMART of each disk that has one, neither failed nor retired, in the catalog's
 	// order of the disks.
 	Smart []SmartLine
 	// Dirty holds the missing disks whose NTFS volume the daemon found marked dirty (specs.md §22).
 	Dirty []string
+	// Disagree holds the disks whose last reprise left operations planned as a name and its file's record disagree
+	// there, in the catalog's order of the disks (specs.md §17.2).
+	Disagree []NamesDisagree
+	// Unnamed holds the disks whose links of the guard hold data nothing names, as its last run found them, in the
+	// catalog's order of the disks (specs.md §17).
+	Unnamed []UnnamedLinks
+	// Shared holds the groups of disks a start found on one physical disk, by their first disk (specs.md §10, R-06),
+	// in the catalog's order of the disks.
+	Shared []SharedDevice
 	// Foreign holds the disks whose work folder belongs to an account that is neither root's nor Atoll's, in the
 	// configuration's order (specs.md §10).
 	Foreign []ForeignWorkdir
 	// Unopened holds, by disk, the files a read of the daemon could not open, for a reason that says nothing of
 	// their disk, in byte order (specs.md §15.10): they count with the names a walk could not reach.
 	Unopened map[string][]string
+	// UPSUnreachable is ups.nut when the UPS the daemon reads has said nothing for 15 s or more, "" otherwise
+	// (specs.md §20).
+	UPSUnreachable string
+}
+
+// SharedDevice is a group of disks of the pool on one physical disk, by its first disk: each disk of it in the
+// catalog's order, with the physical disks a start found it on.
+type SharedDevice struct {
+	ID    string
+	Disks []SharedDisk
+}
+
+// SharedDisk is a disk of such a group, and the physical disks it lives on, joined by a comma.
+type SharedDisk struct {
+	ID     string
+	Device string
+}
+
+// UnnamedLinks is a disk whose links of the guard hold data nothing names, and how many.
+type UnnamedLinks struct {
+	ID    string
+	Links int
+}
+
+// NamesDisagree is a disk whose volume holds names and records that disagree, and the operations left for that.
+type NamesDisagree struct {
+	ID  string
+	Ops int
 }
 
 // ForeignWorkdir is a disk's work folder, or the folder of its parts, of its links or of its trash, that another
@@ -112,6 +158,14 @@ type ForeignWorkdir struct {
 type SmartLine struct {
 	ID string
 	disks.SmartRecord
+}
+
+// VersionsPurged is a disk whose trash purged, for room under trash.max_size, entries of the reason overwritten,
+// versions of files a modification replaced, before their retention ended: how many, and their first paths in byte
+// order (specs.md §17, §23).
+type VersionsPurged struct {
+	ID    string
+	Paths Refused
 }
 
 // TrashFull is a disk whose trash holds more than trash.max_size of its capacity: Used bytes of Capacity.
@@ -130,6 +184,7 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 	}
 	f := &Facts{Disks: o.Disks, Guards: o.Guards, Refused: *refused, SeenByNS: nowNS - wait.Nanoseconds(), ManualAfter: after}
 	f.MaxSize, _ = c.Effective()["trash.max_size"].(string)
+	f.Retention, _ = c.Effective()["trash.retention"].(string)
 	maxSize, err := value.ParsePercent(f.MaxSize)
 	if err != nil {
 		return nil, fmt.Errorf("trash.max_size: %w", err)
@@ -145,9 +200,25 @@ func Gather(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, o *j
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
+	shared := catalog.SharedDevices(list)
 	for i := range list {
 		d := &list[i]
 		f.Smart = appendSmart(f.Smart, d)
+		if shared[d.ID] == d.ID {
+			s := SharedDevice{ID: d.ID}
+			for j := range list {
+				if other := &list[j]; shared[other.ID] == d.ID {
+					s.Disks = append(s.Disks, SharedDisk{ID: other.ID, Device: other.Device})
+				}
+			}
+			f.Shared = append(f.Shared, s)
+		}
+		if d.NamesDisagree > 0 && d.State != "retired" {
+			f.Disagree = append(f.Disagree, NamesDisagree{ID: d.ID, Ops: d.NamesDisagree})
+		}
+		if d.LinksUnnamed > 0 && d.State != "retired" {
+			f.Unnamed = append(f.Unnamed, UnnamedLinks{ID: d.ID, Links: d.LinksUnnamed})
+		}
 		if !slices.Contains([]string{"online", "standby", "readonly", "draining"}, d.State) {
 			continue
 		}
@@ -192,9 +263,15 @@ func Holdings(f *Facts) []Holding {
 		if n := d.Refused + int64(len(f.Unopened[d.ID])); d.Walked && n > 0 {
 			counts[KeyNoAccess+d.ID] = n
 		}
+		if d.Walked && d.TooLong > 0 {
+			counts[KeyTooLong+d.ID] = d.TooLong
+		}
 	}
 	for i := range f.Foreign {
 		counts[KeyWorkdirOwner+f.Foreign[i].ID] = 1
+	}
+	if f.UPSUnreachable != "" {
+		counts[KeyUPS] = 1
 	}
 	for _, g := range f.Guards {
 		counts[KeyGuard+g.Kind+":"+g.Disk] = 1
@@ -218,8 +295,22 @@ func Holdings(f *Facts) []Holding {
 	for _, d := range f.TrashFull {
 		counts[KeyTrashFull+d.ID] = 1
 	}
+	for _, v := range f.Versions {
+		if v.Paths.Count > 0 {
+			counts[KeyVersions+v.ID] = v.Paths.Count
+		}
+	}
 	for _, id := range f.Dirty {
 		counts[KeyNTFSDirty+id] = 1
+	}
+	for _, d := range f.Disagree {
+		counts[KeyNTFSNames+d.ID] = int64(d.Ops)
+	}
+	for _, d := range f.Unnamed {
+		counts[KeyLinkUnnamed+d.ID] = int64(d.Links)
+	}
+	for _, d := range f.Shared {
+		counts[KeySharedDevice+d.ID] = 1
 	}
 	for i := range f.Smart {
 		s := &f.Smart[i]
@@ -268,9 +359,16 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 	case strings.HasPrefix(h.Key, KeyGuard):
 		kind, id, _ := strings.Cut(strings.TrimPrefix(h.Key, KeyGuard), ":")
 		m.Priority = priorityHigh
+		line := guardLine(f, kind, id)
 		m.Title = fmt.Sprintf("Atoll: the mass-%s guard of disk %s tripped", strings.TrimSuffix(kind, "s"), id)
-		m.Body = fmt.Sprintf("Atoll holds the %s it found on disk %s (%d) and spreads none of them to the other copies "+
-			"until you answer: atoll guard list.", kind, id, guardCount(f, kind, id))
+		count := fmt.Sprint(line.Count)
+		if line.Window == jobs.WindowDay {
+			// Its day tripped it, modifies.day_guard: a rewrite slower than its window lets through (specs.md §15.6).
+			m.Title += " on what a day changed"
+			count += " within a day"
+		}
+		m.Body = fmt.Sprintf("Atoll holds the %s it found on disk %s (%s) and spreads none of them to the other copies "+
+			"until you answer: atoll guard list.", kind, id, count)
 	case h.Key == KeyManual:
 		paths, err := catalog.FirstManualPaths(ctx, db, f.SeenByNS, FirstN)
 		if err != nil {
@@ -291,12 +389,65 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Body = fmt.Sprintf("The trash of disk %s holds %d bytes, more than trash.max_size (%s) of its %d bytes, once purged: "+
 			"what is left there, deleted or renamed files, waits for its retention. atoll trash list shows it; "+
 			"atoll trash purge --older-than <duration> --yes purges it sooner.", id, d.Used, f.MaxSize, d.Capacity)
+	case strings.HasPrefix(h.Key, KeyVersions):
+		id := strings.TrimPrefix(h.Key, KeyVersions)
+		var first []string
+		for _, v := range f.Versions {
+			if v.ID == id {
+				first = v.Paths.First
+			}
+		}
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: the trash of disk %s purged %d versions of files before their time", id, h.Count)
+		if h.Count == 1 {
+			m.Title = fmt.Sprintf("Atoll: the trash of disk %s purged 1 version of a file before its time", id)
+		}
+		m.Body = list(fmt.Sprintf("To make room under trash.max_size (%s), the trash of disk %s purged %d %s that a modification "+
+			"replaced, before their %s of retention ended: those versions are lost, and the trash no longer holds what these files "+
+			"were. A library rewritten slowly, as by a tool that encrypts it, ends so with no clean version. Look at what changes "+
+			"them; raise trash.max_size, or free room on the disk, to keep the versions to come. Backups are the answer to "+
+			"ransomware.", f.MaxSize, id, h.Count, plural(h.Count, "version", "versions"), f.Retention), first, h.Count)
 	case strings.HasPrefix(h.Key, KeyNTFSDirty):
 		id := strings.TrimPrefix(h.Key, KeyNTFSDirty)
 		m.Priority = priorityHigh
 		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s is marked dirty", id)
 		m.Body = fmt.Sprintf("The disk %s is missing: its NTFS volume is marked dirty, as an unclean unplugging leaves it, and Linux "+
 			"mounts it only by force, which Atoll never does. Repair it with chkdsk /f on Windows, then plug it back.", id)
+	case strings.HasPrefix(h.Key, KeySharedDevice):
+		id := strings.TrimPrefix(h.Key, KeySharedDevice)
+		var ids, each []string
+		for i := range f.Shared {
+			if f.Shared[i].ID == id {
+				for _, d := range f.Shared[i].Disks {
+					ids = append(ids, d.ID)
+					each = append(each, fmt.Sprintf("%s (%s)", d.ID, strings.ReplaceAll(d.Device, ",", ", ")))
+				}
+			}
+		}
+		if len(ids) < 2 {
+			return nil, fmt.Errorf("alert %q: no such group of disks", h.Key)
+		}
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: disks %s share a physical disk", andList(ids))
+		m.Body = fmt.Sprintf("The disks %s live on one physical disk: one failure of it loses them all (R-06). Atoll counts them as one "+
+			"and places no two copies of a file on them, moving an extra copy it made elsewhere, and goes on writing to them. Put "+
+			"each on a physical disk of its own, or take one out of the pool: atoll disk remove %s --evacuate --dry-run.",
+			andList(each), ids[len(ids)-1])
+	case strings.HasPrefix(h.Key, KeyLinkUnnamed):
+		id := strings.TrimPrefix(h.Key, KeyLinkUnnamed)
+		m.Title = fmt.Sprintf("Atoll: %d %s of disk %s %s data nothing names", h.Count, plural(h.Count, "link", "links"), id,
+			plural(h.Count, "holds", "hold"))
+		m.Body = fmt.Sprintf("The link guard of disk %s holds %d %s in Atoll/links whose data has no other name Atoll knows, and no "+
+			"row or event says where it was: nothing is removed, as it may be someone's file. Look at it there, and move it back "+
+			"under the root, or remove the link once it is nobody's.", id, h.Count, plural(h.Count, "link", "links"))
+	case strings.HasPrefix(h.Key, KeyNTFSNames):
+		id := strings.TrimPrefix(h.Key, KeyNTFSNames)
+		m.Priority = priorityHigh
+		m.Title = fmt.Sprintf("Atoll: the NTFS volume of disk %s needs a repair", id)
+		m.Body = fmt.Sprintf("%d %s on disk %s stay planned: a name and its file's record disagree on its volume, as ntfs3 leaves "+
+			"them when the device fails during a move. Atoll concludes nothing of them, and every run on that disk exits with 4 "+
+			"until the volume is repaired. Repair it with chkdsk /f on Windows, then plug it back: the next run finishes them.",
+			h.Count, plural(h.Count, "operation", "operations"), id)
 	case strings.HasPrefix(h.Key, KeyNoAccess):
 		id := strings.TrimPrefix(h.Key, KeyNoAccess)
 		var first []string
@@ -314,6 +465,21 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 			"the account Atoll runs as, as the mount of another user does, a rule of the system's, a folder when Atoll lacks its "+
 			"rights, or a file whose key is not loaded. Nothing is concluded of them or of what is below them, and nothing there is "+
 			"copied or verified until they can be read.", id), first, h.Count)
+	case strings.HasPrefix(h.Key, KeyTooLong):
+		id := strings.TrimPrefix(h.Key, KeyTooLong)
+		var first []string
+		for _, d := range f.Disks {
+			if d.ID == id {
+				first = d.TooLongFirst
+			}
+		}
+		m.Title = fmt.Sprintf("Atoll: %d %s of disk %s %s past the limit of its mergerfs branch", h.Count, plural(h.Count, "name", "names"), id,
+			plural(h.Count, "is", "are"))
+		m.Body = list(fmt.Sprintf("The path of each of these names on the disk %s is past 4095 bytes, which mergerfs cannot present: "+
+			"a walk of the disk neither records them nor goes below them. Nothing is concluded of them or of what is below them, and "+
+			"while one is there no copy of that disk is taken for deleted, as it may have gone there: its file is kept, and its "+
+			"copies made again. Give them a shorter path, or "+
+			"set walk.long_paths = \"walk\".", id), first, h.Count)
 	case strings.HasPrefix(h.Key, KeyWorkdirOwner):
 		id := strings.TrimPrefix(h.Key, KeyWorkdirOwner)
 		var w ForeignWorkdir
@@ -326,6 +492,11 @@ func Describe(ctx context.Context, db *sql.DB, f *Facts, h Holding) (*Message, e
 		m.Body = fmt.Sprintf("The folder %s, which Atoll works in on disk %s, belongs to the account %d, which is neither root's "+
 			"nor the one Atoll runs as. That account can read what Atoll copies, through the folders of its parts and of its links, "+
 			"and remove what its trash holds. Atoll goes on writing there. Give the folder back: chown -R %d %s", Shown(w.Path), id, w.UID, w.Want, Shown(w.Path))
+	case h.Key == KeyUPS:
+		m.Title = "Atoll: the UPS cannot be read"
+		m.Body = fmt.Sprintf("NUT has said nothing of the UPS %s for 15 s or more. Atoll goes on as on line power: a power cut "+
+			"would neither stop its copies nor have it write its disks out before the battery runs low. Check that upsd runs "+
+			"there and knows that UPS: upsc %s ups.status", f.UPSUnreachable, f.UPSUnreachable)
 	case strings.HasPrefix(h.Key, KeySmartFailing):
 		id := strings.TrimPrefix(h.Key, KeySmartFailing)
 		m.Priority = priorityHigh
@@ -403,13 +574,14 @@ func why(f *Facts, id string) string {
 	return ""
 }
 
-func guardCount(f *Facts, kind, id string) int64 {
+// guardLine gives the line of the guard of that kind of a disk that tripped, an empty one when none did.
+func guardLine(f *Facts, kind, id string) jobs.GuardLine {
 	for _, g := range f.Guards {
 		if g.Disk == id && g.Kind == kind {
-			return g.Count
+			return g
 		}
 	}
-	return 0
+	return jobs.GuardLine{}
 }
 
 func files(n int64) string { return plural(n, "file", "files") }
@@ -448,4 +620,12 @@ func Shown(p string) string {
 		return p
 	}
 	return "(base64) " + base64.StdEncoding.EncodeToString([]byte(p))
+}
+
+// andList joins names as a sentence does: "a", "a and b", "a, b and c".
+func andList(list []string) string {
+	if len(list) < 2 {
+		return strings.Join(list, "")
+	}
+	return strings.Join(list[:len(list)-1], ", ") + " and " + list[len(list)-1]
 }

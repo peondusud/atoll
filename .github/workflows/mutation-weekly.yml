@@ -1,0 +1,74 @@
+# Mutation testing of the packages that act on the disks (specs.md §27), ops, trash and watch, each week and on demand,
+# never on a push: gremlins changes each package's code one mutant at a time and runs the package's tests against each
+# (test/ci/mutation.sh, make mutation PKG=./internal/ops), each package in a job of its own, as each takes an hour or
+# more. The score and the mutants that lived go to the job's summary, gremlins' log and JSON to an artifact. A package
+# under its gate (test/ci/gates.txt), the mutants test/ci/mutation-equivalents.txt names left out, fails its job; one
+# with no gate is only measured. jobs is not here: gremlins runs every test of a package against each mutant, half an
+# hour for jobs, so a run of its mutants would take days.
+name: Mutation, weekly
+
+on:
+  schedule:
+    # Sundays at 04:23 UTC, on beta, where the work is.
+    - cron: "23 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# As in ci.yml: git trusts the checkout of a container job.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+concurrency:
+  group: mutation-weekly
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    name: mutation (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    # The image of ci.yml and test/ci/run.sh.
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    # Under the 6 hours GitHub gives a job.
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/ops
+            name: ops
+          - package: ./internal/trash
+            name: trash
+          - package: ./internal/watch
+            name: watch
+    steps:
+      # A dispatch mutates the branch it was started on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'beta' || github.ref }}
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-mutation-${{ matrix.name }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-mutation-${{ matrix.name }}-${{ runner.arch }}-
+            go-mutation-${{ runner.arch }}-
+      - run: bash test/ci/mutation.sh "$PACKAGE"
+        env:
+          PACKAGE: ${{ matrix.package }}
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-${{ matrix.name }}
+          path: |
+            bin/mutation/*.log
+            bin/mutation/*.json
+            bin/mutation/lived.txt
+          if-no-files-found: ignore
+          retention-days: 30

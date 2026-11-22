@@ -1,0 +1,267 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §10, §22",
+  "description": "An NTFS disk whose top holds a $LogFile that is no journal a restart page proves clean is readonly, hibernated, on each driver: bytes that hold no restart page, or no regular file at that name, a symbolic link not followed. The name is the one NTFS gives it, exactly, and on ext4 it is a file like any other. A folder stands for a volume: one with no $LogFile reads as the empty journal every driver of Linux leaves, and the disk is online. Gone, the disk is online at the next run, which reads it again.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "01D9F3A2B4C5E6F1",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x"
+        },
+        {
+          "path": "$LogFile",
+          "size": 204800
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "01D9F3A2B4C5E6F2",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "driver": "ntfs",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "$LogFile",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "01D9F3A2B4C5E6F3",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "$LogFile",
+          "kind": "symlink",
+          "target": "media"
+        }
+      ]
+    },
+    {
+      "id": "t4",
+      "uuid": "01D9F3A2B4C5E6F4",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t5",
+      "uuid": "01D9F3A2B4C5E6F5",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "$LOGFILE",
+          "size": 204800
+        }
+      ]
+    },
+    {
+      "id": "t6",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "$LogFile",
+          "size": 204800
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"01D9F3A2B4C5E6F1\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ntfs\"\n[[disk]]\nid = \"t2\"\nuuid = \"01D9F3A2B4C5E6F2\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ntfs\"\n[[disk]]\nid = \"t3\"\nuuid = \"01D9F3A2B4C5E6F3\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ntfs\"\n[[disk]]\nid = \"t4\"\nuuid = \"01D9F3A2B4C5E6F4\"\nmount = \"${SANDBOX}/disks/t4\"\nfs = \"ntfs\"\n[[disk]]\nid = \"t5\"\nuuid = \"01D9F3A2B4C5E6F5\"\nmount = \"${SANDBOX}/disks/t5\"\nfs = \"ntfs\"\n[[disk]]\nid = \"t6\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t6\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "uuid": "01D9F3A2B4C5E6F1",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t1",
+            "role": "data",
+            "state": "readonly",
+            "reason": "hibernated",
+            "message": "${ANY}"
+          },
+          {
+            "id": "t2",
+            "uuid": "01D9F3A2B4C5E6F2",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t2",
+            "role": "data",
+            "state": "readonly",
+            "reason": "hibernated",
+            "message": "${ANY}"
+          },
+          {
+            "id": "t3",
+            "uuid": "01D9F3A2B4C5E6F3",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t3",
+            "role": "data",
+            "state": "readonly",
+            "reason": "hibernated",
+            "message": "${ANY}"
+          },
+          {
+            "id": "t4",
+            "uuid": "01D9F3A2B4C5E6F4",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t4",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t5",
+            "uuid": "01D9F3A2B4C5E6F5",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t5",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t6",
+            "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t6",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          }
+        ]
+      }
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "$LogFile"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "uuid": "01D9F3A2B4C5E6F1",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t1",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t2",
+            "uuid": "01D9F3A2B4C5E6F2",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t2",
+            "role": "data",
+            "state": "readonly",
+            "reason": "hibernated",
+            "message": "${ANY}"
+          },
+          {
+            "id": "t3",
+            "uuid": "01D9F3A2B4C5E6F3",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t3",
+            "role": "data",
+            "state": "readonly",
+            "reason": "hibernated",
+            "message": "${ANY}"
+          },
+          {
+            "id": "t4",
+            "uuid": "01D9F3A2B4C5E6F4",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t4",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t5",
+            "uuid": "01D9F3A2B4C5E6F5",
+            "fs": "ntfs",
+            "mount": "${SANDBOX}/disks/t5",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t6",
+            "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t6",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t5",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "$LOGFILE",
+          "size": 204800
+        }
+      ]
+    }
+  ]
+}

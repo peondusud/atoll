@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -102,6 +103,27 @@ type MediaServer struct {
 	PathMap map[string]string
 }
 
+// SecretFile is a file of a secret the configuration names: its key, and its path.
+type SecretFile struct {
+	Key, Path string
+}
+
+// SecretFiles gives the files of a secret the configuration names, by key in byte order (specs.md §24.4): the token or
+// key of each media server, the tokens and the password of the alert channels, the local API's token and the OTLP
+// headers file. A key left empty names none.
+func (c *Config) SecretFiles() []SecretFile {
+	var out []SecretFile
+	for _, key := range []string{
+		"alerts.gotify_token_file", "alerts.ntfy_token_file", "alerts.smtp_password_file", "api.token_file",
+		"notify.emby.api_key_file", "notify.jellyfin.api_key_file", "notify.plex.token_file", "telemetry.otlp_headers_file",
+	} {
+		if path, _ := c.effective[key].(string); path != "" {
+			out = append(out, SecretFile{Key: key, Path: path})
+		}
+	}
+	return out
+}
+
 // Effective returns every value of the configuration after the rules of specs.md
 // §24.2, by key: a string, an int64, a bool, a []any of these or an empty map. A key
 // with no value is not there. The caller must not change it.
@@ -122,6 +144,138 @@ func (c *Config) MinFree() (value.MinFree, error) {
 		return value.MinFree{}, fmt.Errorf("placement.min_free: %w", err)
 	}
 	return minFree, nil
+}
+
+// Read returns [read]: whether read.policy is "prefer-spinning" rather than "oldest", and read.classes (specs.md §7).
+func (c *Config) Read() (preferSpinning bool, classes []string) {
+	policy, _ := c.effective["read.policy"].(string)
+	raw, _ := c.effective["read.classes"].([]any)
+	for _, v := range raw {
+		if text, ok := v.(string); ok {
+			classes = append(classes, text)
+		}
+	}
+	return policy == "prefer-spinning", classes
+}
+
+// The values of walk.long_paths (specs.md §15.8, §24).
+const (
+	// WalkSkip: a walk neither records nor goes below a name whose path through its disk's mount is past the limit
+	// of a mergerfs branch.
+	WalkSkip = "skip"
+	// WalkAll: a walk goes below every name, holding at most walk.max_open folders open at once.
+	WalkAll = "walk"
+)
+
+// Walk returns [walk]: whether a walk goes past the limit of a mergerfs branch, walk.long_paths = "walk", and how
+// many folders it then holds open at most, walk.max_open (specs.md §15.8).
+func (c *Config) Walk() (all bool, maxOpen int) {
+	long, _ := c.effective["walk.long_paths"].(string)
+	open, _ := c.effective["walk.max_open"].(int64)
+	return long == WalkAll, int(open)
+}
+
+// Cache is what the SSD cache's settings say (specs.md §19).
+type Cache struct {
+	// InView says that view.engine is "atoll", whose view presents the cache disks and lands new files there: with
+	// mergerfs the cache does nothing, and its disks count as any other.
+	InView bool
+	// Enabled is cache.enabled: new files land on the cache, and stay there their residency.
+	Enabled bool
+	// MaxFill is cache.max_fill: above it, the oldest files of a cache disk leave at once.
+	MaxFill value.Percent
+	// Mirror and Early are cache.mirror and cache.replicate_early.
+	Mirror, Early bool
+}
+
+// Cache returns the SSD cache's settings (specs.md §19). A file's cache and cache_min_age are its policy's.
+func (c *Config) Cache() (Cache, error) {
+	engine, _ := c.effective["view.engine"].(string)
+	out := Cache{InView: engine == "atoll"}
+	out.Enabled, _ = c.effective["cache.enabled"].(bool)
+	out.Mirror, _ = c.effective["cache.mirror"].(bool)
+	out.Early, _ = c.effective["cache.replicate_early"].(bool)
+	text, _ := c.effective["cache.max_fill"].(string)
+	maxFill, err := value.ParsePercent(text)
+	if err != nil {
+		return Cache{}, fmt.Errorf("cache.max_fill: %w", err)
+	}
+	out.MaxFill = maxFill
+	return out, nil
+}
+
+// The formats a process may write its log in (specs.md §23.2).
+const (
+	LogJSON = "json"
+	LogText = "text"
+)
+
+// Telemetry is what [telemetry] says (specs.md §23.2): how each process writes its log, and what goes to an OTLP/HTTP
+// collector.
+type Telemetry struct {
+	// LogFormat is LogJSON or LogText.
+	LogFormat string
+	// Endpoint is otlp_endpoint, empty for none; Metrics and Logs say which signals go there.
+	Endpoint      string
+	Metrics, Logs bool
+	// Interval is how often the metrics go, and Timeout what a request may take.
+	Interval, Timeout time.Duration
+	// HeadersFile holds the headers each request carries, empty for none.
+	HeadersFile string
+}
+
+// Telemetry returns [telemetry] (specs.md §23.2).
+func (c *Config) Telemetry() (Telemetry, error) {
+	e := c.effective
+	t := Telemetry{}
+	t.LogFormat, _ = e["telemetry.log_format"].(string)
+	t.Endpoint, _ = e["telemetry.otlp_endpoint"].(string)
+	t.Metrics, _ = e["telemetry.otlp_metrics"].(bool)
+	t.Logs, _ = e["telemetry.otlp_logs"].(bool)
+	t.HeadersFile, _ = e["telemetry.otlp_headers_file"].(string)
+	var err error
+	interval, _ := e["telemetry.otlp_interval"].(string)
+	if t.Interval, err = value.ParseDuration(interval); err != nil {
+		return Telemetry{}, fmt.Errorf("telemetry.otlp_interval: %w", err)
+	}
+	timeout, _ := e["telemetry.otlp_timeout"].(string)
+	if t.Timeout, err = value.ParseDuration(timeout); err != nil {
+		return Telemetry{}, fmt.Errorf("telemetry.otlp_timeout: %w", err)
+	}
+	return t, nil
+}
+
+// Schedule returns replication.window, maintenance.window when it is left out, and the time zone both are read in,
+// timezone, local when left out (specs.md §12.3): where the copies of a file in scheduled mode run, and when files
+// leave the SSD cache (§19).
+func (c *Config) Schedule() (value.Window, *time.Location, error) {
+	text, _ := c.effective["replication.window"].(string)
+	w, err := value.ParseWindow(text)
+	if err != nil {
+		return value.Window{}, nil, fmt.Errorf("replication.window: %w", err)
+	}
+	location := time.Local
+	if zone, _ := c.effective["timezone"].(string); zone != "" && zone != "local" {
+		if location, err = time.LoadLocation(zone); err != nil {
+			return value.Window{}, nil, fmt.Errorf("timezone: %w", err)
+		}
+	}
+	return w, location, nil
+}
+
+// CopyLimits is how many copies may read or write a disk at once (specs.md §14): PerDisk, replication.max_parallel_per_disk,
+// for every disk alike, 0 when it is left out; otherwise HDD for a disk with a spindle or whose kind is unknown, and SSD
+// for one with none, replication.max_parallel_per_hdd and max_parallel_per_ssd.
+type CopyLimits struct {
+	PerDisk, HDD, SSD int
+}
+
+// CopyLimits returns the keys of [replication] that bound the copies at once (specs.md §14).
+func (c *Config) CopyLimits() CopyLimits {
+	perDisk, _ := c.effective["replication.max_parallel_per_disk"].(int64)
+	hdd, _ := c.effective["replication.max_parallel_per_hdd"].(int64)
+	ssd, _ := c.effective["replication.max_parallel_per_ssd"].(int64)
+	return CopyLimits{PerDisk: int(perDisk), HDD: int(max(hdd, 1)), SSD: int(max(ssd, 1))}
 }
 
 // Policy returns the effective policy of a file (specs.md §11.3). A nil size means it
@@ -194,7 +348,7 @@ func Parse(data []byte) (*Config, error) {
 	c.effective = flatten(tree)
 	c.PoolID, c.Strategy = text(tree, "pool_id"), text(tree, "strategy")
 	c.MediaServers = mediaServers(tree)
-	c.Warnings = append(unknownLabels(tree), laterPhaseWarnings(set)...)
+	c.Warnings = slices.Concat(unknownLabels(tree), noEffect(tree, set), unreadableUPS(tree), inClear(tree), laterPhaseWarnings(set))
 	sortProblems(c.Warnings)
 	return c, nil
 }

@@ -1,6 +1,7 @@
 package solver
 
 import (
+	"maps"
 	"math"
 	"reflect"
 	"testing"
@@ -115,6 +116,16 @@ func TestChoosePurgeKeepsItsInput(t *testing.T) {
 	}
 	if in.Entries[0] != before || in.Disks[0].ID != "t2" {
 		t.Errorf("the input changed: %+v", in)
+	}
+}
+
+// An entry of unknown size counts for nothing, whatever Size holds, and a disk is counted when its trash holds bytes.
+func TestTrashUsedCountsKnownBytes(t *testing.T) {
+	used := TrashUsed([]TrashEntry{
+		{Disk: "t1", Size: 7}, {Disk: "t2", Size: 0, HasSize: true}, {Disk: "t3", Size: 4, HasSize: true}, {Disk: "t3", Size: 2, HasSize: true},
+	})
+	if want := map[string]int64{"t3": 6}; !maps.Equal(used, want) {
+		t.Errorf("TrashUsed = %v, want %v", used, want)
 	}
 }
 

@@ -92,7 +92,8 @@
    "stdout_json": {
     "moves": [],
     "applied": true,
-    "bytes": 0
+    "bytes": 0,
+    "originals": 0
    }
   },
   {
@@ -117,7 +118,8 @@
      }
     ],
     "applied": false,
-    "bytes": 1024
+    "bytes": 1024,
+    "originals": 2
    }
   },
   {
@@ -138,7 +140,8 @@
      }
     ],
     "applied": false,
-    "bytes": 1024
+    "bytes": 1024,
+    "originals": 2
    }
   },
   {
@@ -175,7 +178,8 @@
      }
     ],
     "applied": true,
-    "bytes": 1024
+    "bytes": 1024,
+    "originals": 2
    }
   },
   {
@@ -246,7 +250,8 @@
    "stdout_json": {
     "moves": [],
     "applied": true,
-    "bytes": 0
+    "bytes": 0,
+    "originals": 2
    }
   },
   {
@@ -274,7 +279,8 @@
      }
     ],
     "applied": false,
-    "bytes": 1024
+    "bytes": 1024,
+    "originals": 0
    }
   },
   {

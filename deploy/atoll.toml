@@ -33,7 +33,7 @@ fs     = "ntfs"
 domain = "d4-320"
 tags   = ["usb"]
 
-[[disk]]                                # phase 2b
+[[disk]]                                # the SSD cache (§19), with view.engine = "atoll"
 id     = "c1"
 uuid   = "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b"
 mount  = "/mnt/c1"
@@ -60,20 +60,29 @@ overflow       = "allow"                # allow | deny (never relaxes strict set
 [view]
 engine = "mergerfs"                     # mergerfs (phase 1) | atoll (phase 2a)
 mount  = "/srv/pool"
+# readonly_mount = "/srv/pool-ro"       # atoll mount: Atoll's own view, read only, for the media servers (§21.2)
+# omv_min_free = "same"                 # largest (the default) | same: the openmediavault plugin's one minfreespace (§21.1)
+# move_on_enospc = true                 # with atoll: a new file whose write runs out of space moves to another disk (§21.2)
 
-[read]                                  # Atoll's own view (phase 2a)
-policy   = "oldest"                     # oldest | prefer-spinning
-classes  = ["sata", "usb"]
+[read]                                  # Atoll's own view (§7, §21.2)
+policy   = "prefer-spinning"            # oldest (the default) | prefer-spinning
+classes  = ["sata", "usb"]              # with prefer-spinning: SATA before USB
 
 [maintenance]
 window           = "02:00-06:00"        # rescans, catalog backups; default of the windows below
 rescan_every     = "7d"
 catalog_on_disks = false                # a catalog backup in each disk's Atoll/catalog/
 
+[walk]                                  # how deep a walk of a disk goes (§15.8)
+long_paths = "skip"                     # skip: no path past the 4095 bytes of a mergerfs branch | walk
+# max_open = 64                         # with walk: the folders a walk holds open at once
+
 [replication]
 enabled               = true
 window                = "02:00-06:00"   # may wrap past midnight, e.g. "23:00-05:00"
-max_parallel_per_disk = 1
+max_parallel_per_hdd  = 1               # copies at once on a disk with a spindle, or of unknown kind
+max_parallel_per_ssd  = 1               # on a SATA SSD or an NVMe drive; more is experimental (§28)
+# max_parallel_per_disk = 1             # every disk alike, whatever its kind
 
 [deletes]
 direct     = "propagate"                # propagate | restore
@@ -82,12 +91,13 @@ mass_guard = { files = 100, percent = "5%", window = "10m" }
 
 [modifies]
 mass_guard = { files = 100, percent = "5%", window = "10m" }   # files modified, not touched
+day_guard  = { files = 1000, percent = "10%", window = "24h" } # the same over a day: a slow rewrite
 
 [balance]
 schedule = "02:00-06:00"                # never | immediate | time window
 trigger  = { ratio_below = "90%", or_more_than = "200GiB" }   # share of bytes correctly placed
 budget   = "3h"
-equalize = "off"
+equalize = "off"                        # off | percent: Atoll's copies by the most free share
 
 [integrity]
 scrub_every  = "30d"
@@ -102,7 +112,7 @@ retention        = "30d"
 max_size         = "5%"                 # of each disk's capacity
 link_guard       = false                # phase-1 protection against deletions through mergerfs
 
-[cache]                                 # phase 2b
+[cache]                                 # with view.engine = "atoll" (§19)
 enabled         = false
 min_age         = "7d"                  # minimum residency on the SSD
 max_fill        = "80%"                 # of the cache's capacity
@@ -115,7 +125,7 @@ remount_after_reset = true              # never for an NTFS volume marked dirty
 evacuate_on         = ["smart_failing", "pending_sectors"]   # phase 4
 avoid_hotter_than   = "50C"                                  # phase 4
 
-[ups]                                   # phase 2b, through NUT
+[ups]                                   # through NUT (§20)
 enabled = false
 nut     = "ups@localhost"
 
@@ -139,11 +149,24 @@ gotify          = ""                    # "https://gotify.example", the server
 gotify_token_file = ""                  # the application token Gotify asks for
 smtp            = ""                    # "smtps://user@mail.example?from=atoll@example&to=me@example"
 smtp_password_file = ""                 # the password of that user
+smtp_require_tls = false                # true: a mail only over TLS, even with no user
 
 [api]                                   # the local API of the daemon (§25.1)
 socket     = "/run/atoll/atoll.sock"
 listen     = ""                         # "127.0.0.1:7341", or an address of the Tailscale network
-token_file = ""                         # the Bearer token TCP asks for
+token_file = ""                         # the Bearer token TCP asks for; to answer a guard, root's or atoll's, 0600 or 0640
+
+[metrics]                               # Prometheus (§23.1), which the API gives on /metrics too
+listen = ""                             # "127.0.0.1:9341": /metrics alone, with no token
+
+[telemetry]                             # the log, and OpenTelemetry (§23.2)
+log_format        = "json"              # json: OpenTelemetry's log data model, a record a line | text
+otlp_endpoint     = ""                  # "http://127.0.0.1:4318": an OTLP/HTTP collector, as Vector or Elastic Agent
+otlp_metrics      = false               # the metrics of /metrics, to <endpoint>/v1/metrics
+otlp_logs         = false               # each record of the log, to <endpoint>/v1/logs
+otlp_interval     = "1m"                # how often the metrics go
+otlp_timeout      = "10s"               # what an export may take, its retries included
+otlp_headers_file = ""                  # "Name: value" lines, as an Authorization; needs https://
 
 # Rules: the first matching rule wins; conditions are combined with AND.
 [[rule]]

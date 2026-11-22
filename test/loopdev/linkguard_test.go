@@ -21,6 +21,9 @@ func TestTheLinkGuardThroughMergerfs(t *testing.T) {
 	needMergerfs(t)
 	for _, tc := range trashDrivers {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.driver == "ntfs" {
+				t.Skip("the guard makes no link on the type ntfs: TestTheLinkGuardOnTheTypeNTFS (specs.md §17)")
+			}
 			options := driverOptions(t, tc.driver)
 			v := newVolume(t, tc.fs)
 			at := mountPoint(t)

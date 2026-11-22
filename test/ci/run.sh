@@ -1,22 +1,28 @@
 #!/bin/bash
 # What a CI runs on a commit, on this machine, with only git and Docker: the tests with the race
-# detector, the integration tests, the conformance scenarios, lint, and test/loopdev in qemu on two
-# kernels. Each job runs in a container of its own, all at once, on the commit as git holds it, never
-# on the working tree, which may hold what no commit does.
+# detector, the integration tests, the conformance scenarios, lint, test/loopdev in qemu on two
+# kernels, and the TLA+ model by TLC. Each job runs in a container of its own, all at once, on the
+# commit as git holds it, never on the working tree, which may hold what no commit does.
 #
 #   test/ci/run.sh [--report] [--jobs "race lint ..."] [REV]
 #
 # REV is HEAD by default. Each job writes its log to bin/ci/<commit>/<job>.log. The exit code is 0
 # when every job passed, 1 when one failed, 2 when nothing could run. --report also posts each job to
 # GitHub as a commit status, local/<job>, which a pull request on that commit lists among its checks:
-# the commit must be pushed, and gh signed in. KERNELS, MAINLINE, RUN, COUNT and VERBOSE reach the qemu
-# job as they reach make test-qemu (test/qemu/README.md).
+# the commit must be pushed, and gh signed in. KERNELS, MAINLINE, RUN, SYSTEMD_RUN, COUNT and VERBOSE reach
+# the qemu job as they reach make test-qemu (test/qemu/README.md).
 set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
 
-image=golangci/golangci-lint:v2.15.0
-all_jobs="race integration conformance lint qemu"
+# The images of .github/workflows/ci.yml, each by its digest, its tag after it: a tag can be moved, a digest cannot.
+# Its GOTOOLCHAIN is auto: its go fetches go.mod's version of Go, when newer than its own, into the module cache.
+image=golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+# test/tla/run.sh's image, with Java, for the TLA+ model.
+tla_image=eclipse-temurin@sha256:b4f9d2a0bc273417cf5219b7b832bbf0493ed500b7b57d5001d9f83374659060 # 21.0.13_9-jre-noble
+# The Makefile's image for test/qemu/run.sh.
+qemu_image=debian@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 # 13
+all_jobs="race integration conformance lint qemu tla"
 jobs=$all_jobs report=0 rev=HEAD
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -75,7 +81,7 @@ rm -rf "$logs" && mkdir -p "$logs" || exit 2
 # The commit, in a volume: a bind mount of the working tree would show what is not committed, and a
 # path of the host means something else to Docker Desktop. The module cache outlives the run.
 id=atoll-ci-${sha:0:12}-$$
-src=$id-src built=$id-qemu gomod=atoll-ci-gomod
+src=$id-src built=$id-qemu gomod=atoll-ci-gomod tla=atoll-ci-tla
 cleanup() {
 	local left
 	left=$(docker ps -aq --filter "name=^$id-")
@@ -105,14 +111,20 @@ go_job() {
 job_race() { go_job race 'make test-race'; }
 job_integration() { go_job integration 'make test-integration'; }
 job_conformance() { go_job conformance 'make conformance'; }
-# make lint covers the delivered build and the conformance build; the loopdev tests are a third.
-job_lint() { go_job lint 'make lint && golangci-lint run --build-tags loopdev ./test/loopdev/...'; }
+# make lint covers the delivered build and the conformance build; the loopdev and mediaservers tests come after.
+job_lint() { go_job lint 'make lint && golangci-lint run --build-tags loopdev ./test/loopdev/... && golangci-lint run --build-tags mediaservers ./test/mediaservers/...'; }
+# TLC on the model of conformance/models/, as the CI's job runs it; tla2tools.jar outlives the run, as
+# the module cache does.
+job_tla() {
+	docker run --rm --name "$id-tla" --cpus 2 --memory 3g -v "$src:/src:ro" -v "$tla:/cache" -e TLA_CACHE=/cache \
+		"$tla_image" bash -c 'cp -r /src /w && cd /w && bash test/tla/run.sh --inside'
+}
 job_qemu() {
 	go_job qemu-build 'make qemu-build && cp -r bin/qemu/. /qemu/' -v "$built:/qemu" || return 2
 	local kvm=()
 	[ -e /dev/kvm ] && kvm=(--device /dev/kvm)
-	docker run --rm --name "$id-qemu" ${kvm[@]+"${kvm[@]}"} -e KERNELS -e MAINLINE -e RUN -e COUNT -e VERBOSE \
-		-v "$src:/src:ro" -v "$built:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
+	docker run --rm --name "$id-qemu" ${kvm[@]+"${kvm[@]}"} -e KERNELS -e MAINLINE -e RUN -e SYSTEMD_RUN -e COUNT -e VERBOSE \
+		-v "$src:/src:ro" -v "$built:/qemu:ro" "$qemu_image" bash /src/test/qemu/run.sh
 }
 
 took() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }

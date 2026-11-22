@@ -1,0 +1,111 @@
+# Fuzzing and the solver's properties with new seeds (specs.md §27), each night and on demand, never on a push: each
+# fuzz target of the module for a few minutes in a job of its own (test/ci/fuzz.sh, make fuzz), from what the earlier
+# nights found, kept in a cache; a failing input goes to the run's artifact and summary. Then rapid's properties of
+# the solver, which go test ./... runs with fixed seeds, with a new seed and many more checks: a failure prints the seed
+# that reproduces it.
+name: Fuzz
+
+on:
+  schedule:
+    # Each night at 03:17 UTC, on beta, where the work is.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Each target's time, as go test -fuzztime takes it"
+        required: false
+        default: "5m"
+      checks:
+        description: "The checks of each rapid property"
+        required: false
+        default: "100000"
+
+permissions:
+  contents: read
+
+# As in ci.yml: git trusts the checkout of a container job.
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: "*"
+
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+jobs:
+  # Every fuzz target of the module, as a matrix: a new one is fuzzed without a change here.
+  targets:
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      # A dispatch fuzzes the branch it was started on.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'beta' || github.ref }}
+          persist-credentials: false
+      - id: list
+        run: echo "matrix=$(bash test/ci/fuzz.sh --list)" >>"$GITHUB_OUTPUT"
+
+  fuzz:
+    needs: targets
+    name: ${{ matrix.target }} (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'beta' || github.ref }}
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /go/pkg/mod
+          key: go-fuzz-mod-${{ hashFiles('go.sum') }}
+          restore-keys: go-fuzz-mod-
+      # What the target found worth keeping on earlier nights, which go test keeps in the build cache's fuzz/: a new
+      # entry each run, the latest restored.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ matrix.package }}-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.package }}-${{ matrix.target }}-
+      - run: bash test/ci/fuzz.sh "$PACKAGE" "$TARGET"
+        env:
+          PACKAGE: ${{ matrix.package }}
+          TARGET: ${{ matrix.target }}
+          FUZZTIME: ${{ inputs.fuzztime || '5m' }}
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: bin/fuzz/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  # The properties of the solver (internal/solver/rapid_test.go) from a new seed, with many more checks.
+  rapid:
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'beta' || github.ref }}
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-rapid-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: go-rapid-${{ runner.arch }}-
+      - run: go test -count=1 -v -run 'Rapid|StateMachine' ./internal/solver -rapid.seed=0 -rapid.checks="$CHECKS"
+        env:
+          CHECKS: ${{ inputs.checks || '100000' }}

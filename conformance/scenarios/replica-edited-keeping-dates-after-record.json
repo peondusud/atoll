@@ -1,0 +1,154 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14.2, §17.2, §15.4; conformance/models/README.md, flaw 1 and its limit",
+  "description": "A replica written into while Atoll is down, after a crash once its job recorded the change time the copy had right after its rename, by a program that keeps the size and the dates, so that only the change time tells the write: the reprise finds another change time than the one recorded, a write since the rename, and records the part as it was verified, so that the next look reads the edit, a modification propagated to the other copy, the version before going to the trash. Before the remedy of 2026-11-20, the reprise took the change time it found, which it could not tell from the rename's: the edit was recorded as a verified copy of the version it was made from, every later look found it as its row said, and a scrub would have repaired it away.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "a",
+        "--now"
+      ],
+      "crash_at": "placed",
+      "exit": 137
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT json_extract(j.payload, '$.placed.op') = o.id, json_type(j.payload, '$.placed.ctime_ns'), o.state FROM jobs j, ops o WHERE o.kind = 'create'",
+      "rows": [
+        [
+          1,
+          "integer",
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "tick"
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/a",
+      "text": "y",
+      "mtime_ns": 1600000000000000000
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "y",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/a",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "y",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state, verified_ns IS NOT NULL FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "atoll",
+          "ok",
+          1
+        ],
+        [
+          "t2",
+          "user",
+          "ok",
+          1
+        ]
+      ]
+    }
+  ]
+}

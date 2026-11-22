@@ -5,6 +5,9 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // fanEvent writes one fanotify event as the kernel does, with infos of handles.
@@ -182,20 +185,75 @@ func TestFolderTree(t *testing.T) {
 	}
 }
 
-func TestInotifyRecords(t *testing.T) {
-	event := func(wd int32, mask, cookie uint32, name string) []byte {
-		size := (len(name) + 1 + 15) / 16 * 16
-		if name == "" {
-			size = 0
-		}
-		b := make([]byte, 16+size)
-		binary.NativeEndian.PutUint32(b[0:], uint32(wd))
-		binary.NativeEndian.PutUint32(b[4:], mask)
-		binary.NativeEndian.PutUint32(b[8:], cookie)
-		binary.NativeEndian.PutUint32(b[12:], uint32(size))
-		copy(b[16:], name)
-		return b
+func inotifyEvent(wd int32, mask, cookie uint32, name string) []byte {
+	size := (len(name) + 1 + 15) / 16 * 16
+	if name == "" {
+		size = 0
 	}
+	b := make([]byte, 16+size)
+	binary.NativeEndian.PutUint32(b[0:], uint32(wd))
+	binary.NativeEndian.PutUint32(b[4:], mask)
+	binary.NativeEndian.PutUint32(b[8:], cookie)
+	binary.NativeEndian.PutUint32(b[12:], uint32(size))
+	copy(b[16:], name)
+	return b
+}
+
+// The two ends of a folder's rename come in two reads when a read falls between the two, as the kernel queues them
+// one after the other: the read waits a little for the other end before it forgets the folder, which keeps its
+// watches and its place in the tree. The folder was forgotten, then watched again from scratch, listed and every
+// name in it reported as created (specs.md §15.1). One that does not come back left the root.
+func TestARenameInTwoReads(t *testing.T) {
+	for _, back := range []bool{true, false} {
+		s := &inotifySource{ino: -1, root: "/nowhere", moved: map[uint32]*folderNode[int32]{}}
+		s.tree = newFolderTree[int32](1)
+		s.tree.add(s.tree.root, "Show", 2)
+		reads := [][]byte{inotifyEvent(1, unix.IN_MOVED_FROM|unix.IN_ISDIR, 9, "Show"), nil}
+		if back {
+			reads = append(reads, inotifyEvent(1, unix.IN_MOVED_TO|unix.IN_ISDIR, 9, "Show (2020)"), nil)
+		}
+		s.read = func(buf []byte) (int, error) {
+			if len(reads) == 0 || reads[0] == nil {
+				if len(reads) > 0 {
+					reads = reads[1:]
+				}
+				return -1, unix.EAGAIN
+			}
+			n := copy(buf, reads[0])
+			reads = reads[1:]
+			return n, nil
+		}
+		waits := 0
+		s.wait = func(time.Duration) bool {
+			waits++
+			return len(reads) > 0
+		}
+		out, _, err := s.drain(make([]byte, 4096))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waits != 1 {
+			t.Errorf("back %v: waited %d times", back, waits)
+		}
+		node := s.tree.nodes[2]
+		switch {
+		case back && node == nil:
+			t.Errorf("the folder renamed was forgotten: %+v", out)
+		case back:
+			if p, ok := node.path(); !ok || p != "Show (2020)" {
+				t.Errorf("the folder renamed is at %q", p)
+			}
+		case node != nil:
+			t.Errorf("the folder that left is still watched")
+		}
+		if len(s.moved) != 0 {
+			t.Errorf("back %v: %d moves left", back, len(s.moved))
+		}
+	}
+}
+
+func TestInotifyRecords(t *testing.T) {
+	event := inotifyEvent
 	buf := append(event(1, 0x40, 9, "a"), event(2, 0x80, 9, "long-enough-name")...)
 	buf = append(buf, event(1, 0x4, 0, "")...)
 	records, err := parseInotify(buf)

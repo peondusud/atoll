@@ -26,6 +26,11 @@ var ErrNotRepaired = errors.New("a chunk written in place does not read back as 
 // other place, or its disk is failing, which a confirmation tells (specs.md §10, §16.1).
 var ErrReadBack = errors.New("a chunk written in place cannot be read back")
 
+// ErrChunkUnreadable says that a chunk of a copy could not be read when a repair, or its reprise, looked at the copy
+// whole: the chunk's fault on a disk that confirms right after, and the disk's on one that does not, which the caller
+// asks (invariant 4, specs.md §16.1). The operation stays planned either way, for a reprise that can read it.
+var ErrChunkUnreadable = errors.New("a chunk of the copy cannot be read")
+
 // OpenRepair opens a corrupt copy for reading and writing in place, after a look that its name still holds what
 // its row says (specs.md §16.1). ErrGone means it no longer does.
 func (d *Disk) OpenRepair(row *catalog.KnownCopy) (fsx.WritableFile, fsx.Stat, error) {
@@ -257,11 +262,8 @@ func (d *Disk) SavedChunks(op *Op) (map[int64]SavedChunk, error) {
 	saved := map[int64]SavedChunk{}
 	var buf []byte
 	for _, name := range listed {
-		index, err := strconv.ParseInt(name, 10, 64)
-		if err != nil || index < 0 {
-			continue
-		}
-		if want, _ := layout.ChunkName(index); want != name {
+		index, ok := layout.ChunkIndex(name)
+		if !ok {
 			continue
 		}
 		chunk, err := sumOf(dir.Dir, name, &buf)
@@ -333,7 +335,14 @@ func (d *Disk) PurgeChunks(op *Op) error {
 			slog.Warn("something not a chunk stays in the trash", "disk", d.config.ID, "entry", op.Path2, "name", chunk)
 			continue
 		}
-		if st, err := dir.Stat(chunk); err != nil || st.Kind != fsx.KindFile {
+		// A chunk that cannot be looked at says nothing of itself: the purge stays planned, for the reprise to end it, as
+		// one ended here would leave that chunk in the trash with no entry left to purge it (invariant 4).
+		switch st, err := dir.Stat(chunk); {
+		case fsx.IsAbsent(err):
+			continue
+		case err != nil:
+			return classify(err)
+		case st.Kind != fsx.KindFile:
 			continue
 		}
 		if err := dir.Unlink(chunk); err != nil && !fsx.IsAbsent(err) {
@@ -483,9 +492,11 @@ func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved m
 				continue
 			}
 			if err == nil || errors.Is(err, io.EOF) {
-				err = io.ErrUnexpectedEOF
+				return nil, io.ErrUnexpectedEOF
 			}
-			return nil, classify(err)
+			// Not the disk lost on the strength of this read alone: a sector that cannot be read, on a disk that confirms,
+			// would lose it at every reprise, for as long as the sector cannot be read.
+			return nil, fmt.Errorf("%w: chunk %d: %w", ErrChunkUnreadable, i, err)
 		}
 		sum := integrity.ChunkSum(buf[:length])
 		was, isSaved := saved[i]

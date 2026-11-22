@@ -59,6 +59,7 @@ func (l *loop) readSmart(ctx context.Context) {
 	if len(readings) == 0 {
 		return
 	}
+	l.recordSmart(now, readings)
 	var worse []string
 	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		var err error

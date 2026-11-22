@@ -56,6 +56,7 @@
     { "name": "nul . .x", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
     { "name": "PRN.srt", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
     { "name": "AUX", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
+    { "name": "aux.nfo", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"], "note": "a, the first ASCII letter, compared without case too" },
     { "name": "COM1", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
     { "name": "com9.srt", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },
     { "name": "LPT1", "ext4": [], "xfs": [], "btrfs": [], "ntfs": ["reserved-name"] },

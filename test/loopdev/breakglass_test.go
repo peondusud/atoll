@@ -94,6 +94,54 @@ func TestBreakGlass(t *testing.T) {
 	}
 }
 
+// TestBreakGlassWithADiskAway: Atoll stopped and removed while a disk is away, unplugged or not mounted, and plain
+// mergerfs mounted from the line atoll mergerfs-config printed, at the same mount point. Every file has a copy on the
+// disk that stayed, so the view lists and holds the whole library: a branch whose folder is not there stops neither
+// the mount nor what the other branch holds (CLAUDE.md, break glass; specs.md §21.1, §27).
+func TestBreakGlassWithADiskAway(t *testing.T) {
+	needRoot(t)
+	needMergerfs(t)
+	for _, tc := range trashDrivers {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, v, tc.driver, at, options...)
+			b := newPassBenchWith(t, v, at, "[defaults]\nsettle = \"0s\"\n")
+			write(t, b.keep, "Films/A.mkv", "a")
+			write(t, b.at, "Films/B.mkv", "b")
+			write(t, b.at, "Series/S01/e01.mkv", "e01")
+			b.scan(false)
+			catchUp(b)
+			line, pool := fstabLine(b)
+			want, folders := snapshot(t, filepath.Join(b.keep, "media"))
+			if len(want) != 3 {
+				t.Fatalf("the disk that stays holds %v", want)
+			}
+
+			// Atoll stopped and removed, its catalog gone, and the disk v away.
+			mustDo(t, b.db.Close())
+			file, _ := b.config.Effective()["catalog"].(string)
+			for _, suffix := range []string{"", "-wal", "-shm"} {
+				if err := os.Remove(file + suffix); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			}
+			must(t, "umount", at)
+			if _, err := os.Stat(filepath.Join(at, "media")); !os.IsNotExist(err) {
+				t.Fatalf("the disk away still shows its root: %v", err)
+			}
+
+			mountView(t, line, pool)
+			got, again := snapshot(t, pool)
+			if !maps.Equal(got, want) || !slices.Equal(again, folders) {
+				t.Errorf("with a disk away: %v %v, want %v %v", got, again, want, folders)
+			}
+			must(t, "umount", pool)
+		})
+	}
+}
+
 // needMergerfs skips where mergerfs is missing, but in the qemu guest, where run.sh installs it: there, its absence
 // is a broken guest, not a machine without it.
 func needMergerfs(t *testing.T) {

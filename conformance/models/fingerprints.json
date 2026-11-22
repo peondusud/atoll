@@ -1,0 +1,76 @@
+{
+  "model": "Replication.tla",
+  "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
+  "sections": [
+    {
+      "section": "6.1",
+      "title": "### 6.1 Writes under `media/`",
+      "sha256": "6e54ff8b83e9cd1dbec2a2a700545e35fc597b925788320ca42131590e3c8fe4"
+    },
+    {
+      "section": "9",
+      "title": "## 9. Data model (SQLite)",
+      "sha256": "a72aff0f9db3cf70f8bcd949cc17574d73889c505e9d022f0cc93cd907524db7"
+    },
+    {
+      "section": "10",
+      "title": "## 10. Disk identity and mounts",
+      "sha256": "8aa77cc2760fc1fa0254b65cd2366b55dbf7cff90efdf03377eca2b567ffd8b3"
+    },
+    {
+      "section": "13.4",
+      "title": "### 13.4 The placement plan",
+      "sha256": "791657cbf3dcd9ef6c64f2fed6217d064d6b163010aea77f4d08c0ab8493d299"
+    },
+    {
+      "section": "14",
+      "title": "## 14. Replication",
+      "sha256": "f87f0ddce50a70c8b05fe0f676e39b14c41b2f1aa038f9af254b0860a25cfad7"
+    },
+    {
+      "section": "14.1",
+      "title": "### 14.1 Jobs and pending copies",
+      "sha256": "240ddc5b490ab6f5f418d49433661334b159b3ae03c096ed68841df0b874001a"
+    },
+    {
+      "section": "14.2",
+      "title": "### 14.2 The operation `create`",
+      "sha256": "ef898d93f0e77a5af5b8cd2bacfde4ba560489c6046dc92fc68a44812f40f98b"
+    },
+    {
+      "section": "15.4",
+      "title": "### 15.4 Modifications",
+      "sha256": "0cbcd76e8381a7cfdbce2d68166e9b5df3cfa76f7beb874932077d03c67b6e88"
+    },
+    {
+      "section": "15.5",
+      "title": "### 15.5 Deletions directly on one disk",
+      "sha256": "70937a3fd3075e7b18d7f7e04f2b9a10cecce0da92a1e75884ba9f6534090919"
+    },
+    {
+      "section": "15.10",
+      "title": "### 15.10 `atoll scan`",
+      "sha256": "03a1b9a3e007272e33de38b686379c8f3e3e1f468f3643de97fd18faac3a4c4d"
+    },
+    {
+      "section": "15.12",
+      "title": "### 15.12 The propagation pass",
+      "sha256": "cdde2a2674789feeda7d85bf3e0109d4b6cdd3d4a6748c5f3e80fd35e5a948bc"
+    },
+    {
+      "section": "17.1",
+      "title": "### 17.1 Sending a copy to the trash",
+      "sha256": "8b987ef854f5f0f2d556211e8cc6c6b766b54cb21143ff4819b4d8d0839e0293"
+    },
+    {
+      "section": "17.2",
+      "title": "### 17.2 Reprise after a crash",
+      "sha256": "6e1cc7d2a3cb35f9c06b302825301baee37e94f6ee69d3de27e9b1ec6864eaa6"
+    },
+    {
+      "section": "20",
+      "title": "## 20. Power loss",
+      "sha256": "6692b88fbd1ee76edabf8080f5dd21732fa73dda4888bf3263052be3744e9326"
+    }
+  ]
+}

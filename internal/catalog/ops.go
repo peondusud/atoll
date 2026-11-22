@@ -69,6 +69,8 @@ type eventData struct {
 	GID    *int64  `json:"gid,omitempty"`
 	// Link is the file whose link in <workdir>/links/ went to the trash (specs.md §17).
 	Link int64 `json:"link,omitempty"`
+	// Names holds the extended attributes a copy was made without, in byte order (specs.md §14).
+	Names []string `json:"names,omitempty"`
 }
 
 // writeEvent writes an event, in the transaction of the operation it speaks of, so before it runs.
@@ -96,33 +98,44 @@ func writeEventData(ctx context.Context, tx *sql.Tx, nowNS int64, level, kind st
 // BeginTrash journals sending a copy to the trash, before anything is written to a disk. Until its
 // operation is done, a trash row says nothing of what the trash holds (specs.md §17.1).
 func BeginTrash(ctx context.Context, db *sql.DB, s *TrashStart) (*Op, error) {
-	op := &Op{Disk: s.Disk, Kind: OpTrash, Path: s.Path, FileKey: s.FileKey, Link: s.Link}
+	var op *Op
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, file_key, started_ns, state, link) VALUES (?, 'trash', ?, ?, ?, 'planned', ?)",
-			s.Disk, []byte(s.Path), s.FileKey, s.NowNS, linkOf(s.Link))
-		if err != nil {
-			return fmt.Errorf("journal: %w", err)
-		}
-		if op.ID, err = result.LastInsertId(); err != nil {
-			return fmt.Errorf("journal: %w", err)
-		}
-		if op.Path2, err = layout.TrashPath(s.NowNS, op.ID, s.Path); err != nil {
-			return fmt.Errorf("journal: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE ops SET path2 = ? WHERE id = ?", []byte(op.Path2), op.ID); err != nil {
-			return fmt.Errorf("journal: %w", err)
-		}
-		_, err = tx.ExecContext(ctx, `
-			INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, blake3, reason, deleted_ns, expires_ns)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			[]byte(s.Path), s.Disk, []byte(op.Path2), op.ID, s.Size, s.Hash, s.Reason, s.NowNS, s.ExpiresNS)
-		if err != nil {
-			return fmt.Errorf("trash: %w", err)
-		}
-		return writeEvent(ctx, tx, s.NowNS, "info", "trash", op, s.Reason)
+		var err error
+		op, err = beginTrashTx(ctx, tx, s)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%q: %w", s.Path, err)
+	}
+	return op, nil
+}
+
+// beginTrashTx journals sending a copy to the trash within a transaction: the operation, the trash row and the event.
+func beginTrashTx(ctx context.Context, tx *sql.Tx, s *TrashStart) (*Op, error) {
+	op := &Op{Disk: s.Disk, Kind: OpTrash, Path: s.Path, FileKey: s.FileKey, Link: s.Link}
+	result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, file_key, started_ns, state, link) VALUES (?, 'trash', ?, ?, ?, 'planned', ?)",
+		s.Disk, []byte(s.Path), s.FileKey, s.NowNS, linkOf(s.Link))
+	if err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	if op.ID, err = result.LastInsertId(); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	if op.Path2, err = layout.TrashPath(s.NowNS, op.ID, s.Path); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE ops SET path2 = ? WHERE id = ?", []byte(op.Path2), op.ID); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO trash(lpath, disk_id, trash_path, op_id, size, blake3, reason, deleted_ns, expires_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		[]byte(s.Path), s.Disk, []byte(op.Path2), op.ID, s.Size, s.Hash, s.Reason, s.NowNS, s.ExpiresNS)
+	if err != nil {
+		return nil, fmt.Errorf("trash: %w", err)
+	}
+	if err := writeEvent(ctx, tx, s.NowNS, "info", "trash", op, s.Reason); err != nil {
+		return nil, err
 	}
 	return op, nil
 }
@@ -244,10 +257,16 @@ func finishCopy(ctx context.Context, tx *sql.Tx, op *Op) error {
 }
 
 // dropFileIfEmpty removes a file with no copy left, with its chunks and jobs. A pending copy is nothing
-// on a disk, and has no source left to be made from: it goes with its file (specs.md §14.1).
+// on a disk, and has no source left to be made from: it goes with its file (specs.md §14.1). But for one whose job is
+// running: its operation is left planned, the copy may be at its target already, and only the reprise of its disk may
+// end it. The file stays with it, and with that job, its other jobs going (§14.1).
 func dropFileIfEmpty(ctx context.Context, tx *sql.Tx, fileID int64) error {
-	if _, err := tx.ExecContext(ctx, "DELETE FROM copies WHERE file_id = ?1 AND state = 'pending' AND NOT EXISTS(SELECT 1 FROM copies o WHERE o.file_id = ?1 AND o.state <> 'pending')", fileID); err != nil {
+	const empty = "NOT EXISTS(SELECT 1 FROM copies o WHERE o.file_id = ?1 AND o.state <> 'pending')"
+	if _, err := tx.ExecContext(ctx, "DELETE FROM copies AS c WHERE c.file_id = ?1 AND c.state = 'pending' AND "+empty+" AND NOT "+runningThere, fileID); err != nil {
 		return fmt.Errorf("pending copies: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE file_id = ?1 AND state <> 'running' AND "+empty, fileID); err != nil {
+		return fmt.Errorf("jobs: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM files WHERE id = ?1 AND NOT EXISTS(SELECT 1 FROM copies WHERE file_id = ?1)", fileID); err != nil {
 		return fmt.Errorf("file: %w", err)
@@ -433,15 +452,18 @@ func CopyCtimes(ctx context.Context, db *sql.DB, fileID int64) (map[string]sql.N
 	return out, nil
 }
 
-// MkdirLike is the mode and owner a folder made below the root is to take: those of the folder it stands for
-// (specs.md §17.4).
+// MkdirLike is what a folder made below the root is to take (specs.md §17.4): the mode and owner of the folder it
+// stands for; or, for one that stands for none, the mode 0755 alone, whatever the umask, as it keeps the owner mkdir
+// gives it (§15.12, step 3).
 type MkdirLike struct {
-	Mode, UID, GID int64
+	Mode int64
+	// UID and GID are the owner of the folder it stands for, both nil for one that stands for none.
+	UID, GID *int64
 }
 
-// BeginMkdir journals a folder made below the root (specs.md §6.1, §17.4). With like, its event holds the mode and
-// owner the folder is to take: it is made, then given them, and a reprise that finds it made and not yet given them
-// has nothing else to say whose it is (§17.2).
+// BeginMkdir journals a folder made below the root (specs.md §6.1, §17.4). With like, its event holds what the folder
+// is to take: it is made, then given it, and a reprise that finds it made and not yet given it has nothing else to say
+// what it is to be (§17.2).
 func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, like *MkdirLike, nowNS int64) (*Op, error) {
 	op := &Op{Disk: disk, Kind: OpMkdir, Path: path}
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
@@ -455,7 +477,7 @@ func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, like *MkdirL
 		if like == nil {
 			return nil
 		}
-		return writeEventData(ctx, tx, nowNS, "info", OpMkdir, op, eventData{Mode: &like.Mode, UID: &like.UID, GID: &like.GID})
+		return writeEventData(ctx, tx, nowNS, "info", OpMkdir, op, eventData{Mode: &like.Mode, UID: like.UID, GID: like.GID})
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%q: %w", path, err)
@@ -463,8 +485,9 @@ func BeginMkdir(ctx context.Context, db *sql.DB, disk, path string, like *MkdirL
 	return op, nil
 }
 
-// MkdirLikeOf gives the mode and owner the event of a folder's operation holds, and nil when it holds none: a folder
-// that stood for none, or one journaled before its event held them.
+// MkdirLikeOf gives what the event of a folder's operation holds: the mode and owner of the folder it stands for, or
+// the mode alone for one that stands for none; and nil when it holds no mode, as for a folder that stood for none
+// journaled before its event held one.
 func MkdirLikeOf(ctx context.Context, db *sql.DB, opID int64) (*MkdirLike, error) {
 	var mode, uid, gid sql.NullInt64
 	err := db.QueryRowContext(ctx, `
@@ -475,10 +498,12 @@ func MkdirLikeOf(ctx context.Context, db *sql.DB, opID int64) (*MkdirLike, error
 		return nil, nil //nolint:nilnil // no event is an answer
 	case err != nil:
 		return nil, fmt.Errorf("event: %w", err)
-	case !mode.Valid || !uid.Valid || !gid.Valid:
+	case !mode.Valid || uid.Valid != gid.Valid:
 		return nil, nil //nolint:nilnil // likewise
+	case !uid.Valid:
+		return &MkdirLike{Mode: mode.Int64}, nil
 	}
-	return &MkdirLike{Mode: mode.Int64, UID: uid.Int64, GID: gid.Int64}, nil
+	return &MkdirLike{Mode: mode.Int64, UID: &uid.Int64, GID: &gid.Int64}, nil
 }
 
 // FinishMkdir says that a folder is there, and Atoll's own.
@@ -488,10 +513,11 @@ func FinishMkdir(ctx context.Context, db *sql.DB, op *Op, e *EntryRow) error {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, created_by, file_key, btime_ns)
-			VALUES (?, ?, ?, 'dir', ?, ?, 'atoll', ?, ?)
-			ON CONFLICT(lpath, disk_id) DO UPDATE SET kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, created_by = 'atoll'`,
-			[]byte(e.Path), keyOf(e.Path), op.Disk, e.Mode, e.MtimeNS, e.FileKey, e.BtimeNS)
+			INSERT INTO entries(lpath, lpath_key, disk_id, kind, mode, mtime_ns, created_by, file_key, btime_ns, size, uid, gid)
+			VALUES (?, ?, ?, 'dir', ?, ?, 'atoll', ?, ?, ?, ?, ?)
+			ON CONFLICT(lpath, disk_id) DO UPDATE SET kind = excluded.kind, mode = excluded.mode, mtime_ns = excluded.mtime_ns, created_by = 'atoll',
+				size = excluded.size, uid = excluded.uid, gid = excluded.gid`,
+			[]byte(e.Path), keyOf(e.Path), op.Disk, e.Mode, e.MtimeNS, e.FileKey, e.BtimeNS, e.Size, e.UID, e.GID)
 		if err != nil {
 			return fmt.Errorf("entry %q: %w", e.Path, err)
 		}
@@ -559,9 +585,14 @@ func Undo(ctx context.Context, db *sql.DB, op *Op, warn bool, nowNS int64) error
 	return nil
 }
 
-// PlannedOps gives the operations left planned, by id.
+// plannedOpsSQL leaves out the operations of Atoll's own view, which only its own reprise resolves (specs.md §21.2).
+const plannedOpsSQL = `
+	SELECT id, disk_id, kind, path, COALESCE(path2, x''), COALESCE(file_key, ''), COALESCE(link, 0) FROM ops
+	WHERE state = 'planned' AND NOT EXISTS(SELECT 1 FROM view_ops v WHERE v.op_id = ops.id) ORDER BY id`
+
+// PlannedOps gives the operations left planned, by id, but for those of Atoll's own view.
 func PlannedOps(ctx context.Context, db *sql.DB) ([]Op, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, disk_id, kind, path, COALESCE(path2, x''), COALESCE(file_key, ''), COALESCE(link, 0) FROM ops WHERE state = 'planned' ORDER BY id")
+	rows, err := db.QueryContext(ctx, plannedOpsSQL)
 	if err != nil {
 		return nil, fmt.Errorf("journal: %w", err)
 	}
@@ -634,6 +665,7 @@ const (
 	// a purge reads first, whatever else the trash holds.
 	trashExpiredSQL = trashEntrySQL + ` AND t.expires_ns <= ?1 AND (t.expires_ns, t.id) > (?2, ?3) ORDER BY t.expires_ns, t.id LIMIT ?4`
 	trashByRowSQL   = trashEntrySQL + ` AND t.id = ?`
+	trashOfOpSQL    = trashEntrySQL + ` AND t.lpath = ?1 AND t.op_id = ?2`
 	trashDueSQL     = `SELECT EXISTS(SELECT 1 FROM trash t JOIN ops o ON o.id = t.op_id WHERE t.expires_ns <= ? AND o.state = 'done')`
 	// Every entry once, in the order the table holds them, which costs no sort.
 	trashWeightsSQL = `
@@ -733,6 +765,16 @@ func TrashExpired(ctx context.Context, db *sql.DB, nowNS, afterNS, afterRow int6
 // TrashEntryByRow gives the entry of a row, and false when it is gone, or its operation is not done.
 func TrashEntryByRow(ctx context.Context, db *sql.DB, row int64) (TrashEntry, bool, error) {
 	list, err := trashEntries(ctx, db, trashByRowSQL, row)
+	if err != nil || len(list) == 0 {
+		return TrashEntry{}, false, err
+	}
+	return list[0], true, nil
+}
+
+// TrashEntryOfOp gives the entry an operation sent to the trash from a path, and false when it is gone, or the
+// operation is not done: through trash_by_path.
+func TrashEntryOfOp(ctx context.Context, db *sql.DB, path string, opID int64) (TrashEntry, bool, error) {
+	list, err := trashEntries(ctx, db, trashOfOpSQL, []byte(path), opID)
 	if err != nil || len(list) == 0 {
 		return TrashEntry{}, false, err
 	}
@@ -913,12 +955,15 @@ func FinishRestore(ctx context.Context, db *sql.DB, op *Op, nowNS int64, c *NewC
 // What a pass asks of the journal about a copy a walk no longer finds at its name (invariant 11): where the operations
 // on its disk put the file of that inode, through ops_by_key, and whether an operation is one of that disk's.
 const (
-	placesOfSQL = "SELECT path2 FROM ops WHERE disk_id = ?1 AND file_key = ?2 AND path2 IS NOT NULL ORDER BY id"
+	placesOfSQL = `
+		SELECT path2 FROM ops WHERE disk_id = ?1 AND file_key = ?2 AND path2 IS NOT NULL
+		AND NOT EXISTS(SELECT 1 FROM view_ops v WHERE v.op_id = ops.id AND v.kind <> 'move') ORDER BY id`
 	opOnDiskSQL = "SELECT EXISTS(SELECT 1 FROM ops WHERE id = ?1 AND disk_id = ?2)"
 )
 
 // PlacesOf gives where the journal says its operations on a disk put the file of an inode: the second path of each,
-// in the order of the operations. An operation is journaled before it runs (invariant 12), so a copy Atoll moved is at
+// in the order of the operations. What Atoll's own view sent to the trash is no part of it: a user deleted it, through
+// the view; but for what a move of the view sent there, Atoll's own (specs.md §21.2). An operation is journaled before it runs (invariant 12), so a copy Atoll moved is at
 // one of them, or was moved on since.
 func PlacesOf(ctx context.Context, db *sql.DB, disk, fileKey string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, placesOfSQL, disk, fileKey)

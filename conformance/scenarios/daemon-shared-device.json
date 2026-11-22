@@ -1,0 +1,200 @@
+{
+ "format_version": 1,
+ "spec": "specs.md \u00a710, \u00a713.1, \u00a713.4",
+ "description": "Two disks a start finds on one physical disk count as one (R-06): the start records the physical disks of each, the plan places the replica on the third disk although the second has the most room, writes go on, and the capacity counts the two as one disk of both their sizes: 950000 bytes at two copies, the room of the third, and nothing at three.",
+ "disks": [
+  {
+   "id": "t1",
+   "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "device": "sda",
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    }
+   ]
+  },
+  {
+   "id": "t2",
+   "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+   "fs": "ext4",
+   "capacity": 2000000,
+   "device": "sda",
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  },
+  {
+   "id": "t3",
+   "uuid": "9c3d5e7f-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+   "fs": "ext4",
+   "capacity": 1000000,
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  }
+ ],
+ "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"9c3d5e7f-1a2b-4c3d-8e4f-5a6b7c8d9e0f\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n[defaults]\nsettle = \"0s\"\n",
+ "steps": [
+  {
+   "do": "atoll",
+   "args": [
+    "init"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "daemon",
+    "--until-idle",
+    "--json"
+   ],
+   "stdout_json": {
+    "dry_run": false,
+    "disks": [
+     {
+      "id": "t1",
+      "state": "online",
+      "reason": null,
+      "message": null,
+      "walked": true
+     },
+     {
+      "id": "t2",
+      "state": "online",
+      "reason": null,
+      "message": null,
+      "walked": true
+     },
+     {
+      "id": "t3",
+      "state": "online",
+      "reason": null,
+      "message": null,
+      "walked": true
+     }
+    ],
+    "decisions": [],
+    "operations": [
+     {
+      "disk": "t3",
+      "kind": "replicate",
+      "path": "a",
+      "source": "t1",
+      "outcome": "replicated"
+     }
+    ],
+    "guards": [],
+    "waiting": 0,
+    "next_due": null
+   }
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT id, COALESCE(device, '') FROM disks ORDER BY position",
+   "rows": [
+    [
+     "t1",
+     "sda"
+    ],
+    [
+     "t2",
+     "sda"
+    ],
+    [
+     "t3",
+     "t3"
+    ]
+   ]
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t2",
+   "tree": [
+    {
+     "path": "media",
+     "kind": "dir"
+    }
+   ]
+  },
+  {
+   "do": "expect_tree",
+   "disk": "t3",
+   "tree": [
+    {
+     "path": "media/a",
+     "size": 1024,
+     "mtime_ns": 1600000000000000000
+    },
+    {
+     "path": "Atoll/tmp",
+     "kind": "dir"
+    }
+   ]
+  },
+  {
+   "do": "expect_catalog",
+   "query": "SELECT disk_id, created_by, state FROM copies ORDER BY disk_id",
+   "rows": [
+    [
+     "t1",
+     "user",
+     "ok"
+    ],
+    [
+     "t3",
+     "atoll",
+     "ok"
+    ]
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "scan"
+   ]
+  },
+  {
+   "do": "atoll",
+   "args": [
+    "capacity",
+    "--json"
+   ],
+   "stdout_json": {
+    "spread_mode": "prefer",
+    "levels": [
+     {
+      "copies": 1,
+      "theoretical": 3800000,
+      "reachable": 3798976,
+      "stored": 1024,
+      "short": 0
+     },
+     {
+      "copies": 2,
+      "theoretical": 950000,
+      "reachable": 950000,
+      "stored": 1024,
+      "short": 0
+     },
+     {
+      "copies": 3,
+      "theoretical": 0,
+      "reachable": 0,
+      "stored": 0,
+      "short": 1
+     }
+    ]
+   }
+  }
+ ]
+}

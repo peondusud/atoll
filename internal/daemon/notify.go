@@ -26,3 +26,9 @@ func sdNotify(state string) error {
 	}
 	return nil
 }
+
+// Notify tells the service manager a state, as the daemon does, for another command that runs for good: atoll mount
+// (specs.md §21.2).
+func Notify(state string) error {
+	return sdNotify(state)
+}

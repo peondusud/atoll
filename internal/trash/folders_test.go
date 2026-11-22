@@ -1,6 +1,7 @@
 package trash
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -109,7 +110,8 @@ func TestAnotherFolderAtTheNameStays(t *testing.T) {
 }
 
 // EIO from the removal makes the disk lost, and the operation stays planned; the next run finds the folder there and
-// undoes it, and does not try again what it did not empty.
+// undoes it, then looks at it again, as at every folder a run that did not end its look left (specs.md §17.5): empty,
+// it goes.
 func TestARemovalThatFailsLosesTheDisk(t *testing.T) {
 	b := newBench(t)
 	b.addFiles("d/x")
@@ -127,11 +129,55 @@ func TestARemovalThatFailsLosesTheDisk(t *testing.T) {
 	}
 	delete(b.fail, b.dirs["t3"])
 	b.prune()
-	if got := b.text("SELECT state FROM ops WHERE kind = 'rmdir'"); got != "undone" {
+	if got := b.text("SELECT group_concat(state, ', ') FROM (SELECT state FROM ops WHERE kind = 'rmdir' ORDER BY id)"); got != "undone, done" {
 		t.Errorf("after the reprise: %q", got)
 	}
-	if !b.there("t3", "d") {
-		t.Error("the folder went")
+	if b.there("t3", "d") {
+		t.Error("the folder stays")
+	}
+}
+
+// A run stopped while it removed the folders it left empty, as kill -9 stops it: the next run that writes looks at
+// them again, from the journal, which says what Atoll's own operations left, and removes those still empty, the
+// deepest first (specs.md §17.5). They stayed for good, as nothing else recorded them.
+func TestTheFoldersARunStoppedOnGoAtTheNext(t *testing.T) {
+	b := newBench(t)
+	b.addFiles("d/e/x", "u/x")
+	b.own("t3", "d", "d/e")
+	stop := errors.New("stopped")
+	b.at["rmdir-journaled"] = func() { panic(stop) } //nolint:forbidigo // what stands for kill -9
+	func() {
+		defer func() {
+			if err, ok := recover().(error); !ok || !errors.Is(err, stop) {
+				t.Fatalf("it did not stop: %v", err)
+			}
+		}()
+		b.prune()
+	}()
+	delete(b.at, "rmdir-journaled")
+	if !b.there("t3", "d/e") {
+		t.Fatal("the folder went before the stop")
+	}
+	// A command that writes, and that empties nothing itself.
+	s, err := Open(t.Context(), b.db, b.config, b, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if b.there("t3", "d") || !b.there("t3", "u") {
+		t.Errorf("d there: %v, u there: %v", b.there("t3", "d"), b.there("t3", "u"))
+	}
+	if got := b.text("SELECT group_concat(CAST(path AS TEXT) || ' ' || state, ', ') FROM (SELECT path, state FROM ops WHERE kind = 'rmdir' ORDER BY id)"); got != "d/e undone, d/e done, d done" {
+		t.Errorf("%q", got)
+	}
+	// Looked at once: a run after it looks at nothing again.
+	before := b.count("SELECT count(*) FROM ops")
+	b.prune()
+	if got := b.count("SELECT count(*) FROM ops"); got != before {
+		t.Errorf("%d operations more", got-before)
 	}
 }
 

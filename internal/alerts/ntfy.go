@@ -66,14 +66,19 @@ func Channels(c *config.Config) []Channel {
 	}
 	if url, _ := effective["alerts.smtp"].(string); url != "" {
 		password, _ := effective["alerts.smtp_password_file"].(string)
-		out = append(out, &SMTP{URL: url, PasswordFile: password})
+		requireTLS, _ := effective["alerts.smtp_require_tls"].(bool)
+		out = append(out, &SMTP{URL: url, PasswordFile: password, RequireTLS: requireTLS})
 	}
 	return out
 }
 
-// readToken reads the token a file holds, on one line, at each send, so that a new token needs no reload.
+// maxToken is the most a file of a token or a password may hold: a line, with room to spare.
+const maxToken = 4 << 10
+
+// readToken reads the token a file holds, on one line, at each send, so that a new token needs no reload. It reads at
+// most maxToken bytes of a regular file.
 func readToken(file string) (string, error) {
-	data, err := fsx.ReadFile(file)
+	data, err := fsx.ReadSmallFile(file, maxToken)
 	if err != nil {
 		return "", fmt.Errorf("the token file: %w", err)
 	}

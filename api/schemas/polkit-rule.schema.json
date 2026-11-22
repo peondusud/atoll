@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/peondusud/atoll/api/schemas/polkit-rule.schema.json",
+  "title": "atoll polkit-rule --json",
+  "description": "polkit's rule for the pool: the account the daemon runs as may start the mount units of the pool's disks, which the remount after a USB reset starts, and is refused the start of any other mount unit (specs.md §15.13, §25; docs/threat-model.md, G22). From the configuration alone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["account", "units", "left_out", "rule"],
+  "properties": {
+    "account": {
+      "description": "The account the rule speaks for: atoll, as deploy/atoll.service runs the daemon, and as deploy/50-atoll.rules names it.",
+      "const": "atoll"
+    },
+    "units": {
+      "description": "The mount unit of each disk of the configuration the rule lets the account start, in configuration order: every disk but those of left_out.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["disk", "unit"],
+        "properties": {
+          "disk": {
+            "description": "The disk's id.",
+            "type": "string",
+            "minLength": 1
+          },
+          "unit": {
+            "description": "The name of the disk's mount unit, as systemd-escape --path --suffix=mount writes it for its mount point (conformance/vectors/mount_unit.json): ASCII, a byte outside the letters, the digits, ':', '_' and '.' written \\x and two hexadecimal digits.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9:_.\\\\-]+\\.mount$",
+            "maxLength": 255
+          }
+        }
+      }
+    },
+    "left_out": {
+      "description": "The disks of the configuration whose mount unit the rule does not name, so that the account is refused its start, in configuration order. failed: a disk failed, which the daemon never mounts again; no-unit-name: a mount point whose unit's name would pass 255 bytes, which systemd names by a hash that Atoll does not compute, so the daemon mounts that disk again itself.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["disk", "reason"],
+        "properties": {
+          "disk": {
+            "description": "The disk's id.",
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "enum": ["failed", "no-unit-name"]
+          }
+        }
+      }
+    },
+    "rule": {
+      "description": "The rule the command prints without --json, a JavaScript file for polkitd, in ASCII, ending with a line feed, and in English whatever the language: root installs it as /etc/polkit-1/rules.d/49-atoll-pool.rules, which polkitd reads before /usr/share/polkit-1/rules.d/50-atoll.rules (deploy/README.md).",
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

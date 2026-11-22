@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1324" height="962" viewBox="0 0 1324 962" role="img" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>Atoll test coverage</title>
+<desc>Atoll's tests in four columns, pre-production, deploy, release and post release, each test type marked covered, partial, planned, absent or not applicable.</desc>
+<rect width="1324" height="962" fill="#FFFFFF"/>
+<text x="24" y="40" font-size="22" font-weight="600" fill="#2C2C2A">Atoll test coverage</text>
+<text x="24" y="62" font-size="13" fill="#5F5E5A">As of 2026-11-19. The gaps are numbered in the order of their value.</text>
+<text x="194.0" y="92" font-size="13" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#534AB7">PRE-PRODUCTION</text>
+<line x1="24" y1="102" x2="364" y2="102" stroke="#534AB7" stroke-width="1.5"/>
+<text x="838.0" y="92" font-size="13" font-weight="600" letter-spacing="1" text-anchor="middle" fill="#0F6E56">TESTING IN PRODUCTION</text>
+<line x1="376" y1="102" x2="1300" y2="102" stroke="#0F6E56" stroke-width="1.5"/>
+<rect x="24" y="118" width="340" height="774" rx="10" fill="#EEEDFE" stroke="#3C3489" stroke-opacity="0.35"/>
+<text x="38" y="146" font-size="15" font-weight="600" fill="#3C3489">Pre-production</text>
+<text x="38" y="177" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="176" font-size="13" font-weight="600" fill="#2C2C2A">Unit tests</text>
+<text x="60" y="191" font-size="11" fill="#5F5E5A">go test ./..., conformance vectors</text>
+<text x="38" y="213" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="212" font-size="13" font-weight="600" fill="#2C2C2A">Functional tests</text>
+<text x="60" y="227" font-size="11" fill="#5F5E5A">integration: disks simulated by folders</text>
+<text x="38" y="249" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="248" font-size="13" font-weight="600" fill="#2C2C2A">Component tests</text>
+<text x="60" y="263" font-size="11" fill="#5F5E5A">daemon, view, jobs, ops, catalog</text>
+<text x="38" y="285" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="284" font-size="13" font-weight="600" fill="#2C2C2A">Fuzz tests</text>
+<text x="60" y="299" font-size="11" fill="#5F5E5A">19 targets, 5 min each nightly</text>
+<text x="38" y="321" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="320" font-size="13" font-weight="600" fill="#2C2C2A">Property-based tests</text>
+<text x="60" y="335" font-size="11" fill="#5F5E5A">rapid: solver properties, a state machine</text>
+<text x="38" y="357" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="60" y="356" font-size="13" font-weight="600" fill="#2C2C2A">Formal verification</text>
+<text x="60" y="371" font-size="11" fill="#5F5E5A">TLA+ by TLC in CI: 2 flaws found, fixed</text>
+<text x="38" y="393" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="392" font-size="13" font-weight="600" fill="#2C2C2A">Static analysis</text>
+<text x="60" y="407" font-size="11" fill="#5F5E5A">golangci-lint, depguard, govulncheck</text>
+<text x="38" y="429" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="60" y="428" font-size="13" font-weight="600" fill="#2C2C2A">Mutation tests</text>
+<text x="60" y="443" font-size="11" fill="#5F5E5A">gremlins nightly on the pure core, no gate</text>
+<text x="38" y="465" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="464" font-size="13" font-weight="600" fill="#2C2C2A">Coverage tests</text>
+<text x="60" y="479" font-size="11" fill="#5F5E5A">measured in CI by package, no gate</text>
+<text x="38" y="501" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="500" font-size="13" font-weight="600" fill="#2C2C2A">Benchmark tests</text>
+<text x="60" y="515" font-size="11" fill="#5F5E5A">BLAKE3 on arm64 and AVX-512 in CI, TestScale</text>
+<text x="38" y="537" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="536" font-size="13" font-weight="600" fill="#2C2C2A">Contract tests</text>
+<text x="60" y="551" font-size="11" fill="#5F5E5A">contracts frozen at v1, vectors, schemas</text>
+<text x="38" y="573" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="572" font-size="13" font-weight="600" fill="#2C2C2A">Lint tests</text>
+<text x="60" y="587" font-size="11" fill="#5F5E5A">golangci-lint, shellcheck, actionlint</text>
+<text x="38" y="609" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="608" font-size="13" font-weight="600" fill="#2C2C2A">Acceptance tests</text>
+<text x="60" y="623" font-size="11" fill="#5F5E5A">black-box scenarios, shared with Rust</text>
+<text x="38" y="645" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="644" font-size="13" font-weight="600" fill="#2C2C2A">Regression tests</text>
+<text x="60" y="659" font-size="11" fill="#5F5E5A">a failing test before every fix</text>
+<text x="38" y="681" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="60" y="680" font-size="13" font-weight="600" fill="#2C2C2A">Smoke tests</text>
+<text x="60" y="695" font-size="11" fill="#5F5E5A">the .deb installed in debian:13, by hand</text>
+<text x="38" y="717" font-size="15" font-weight="600" fill="#A32D2D">✗</text>
+<text x="60" y="716" font-size="13" font-weight="600" fill="#2C2C2A">Usability tests</text>
+<text x="60" y="731" font-size="11" fill="#5F5E5A">none</text>
+<text x="38" y="753" font-size="15" font-weight="600" fill="#888780">–</text>
+<text x="60" y="752" font-size="13" font-weight="600" fill="#2C2C2A">UI/UX tests</text>
+<text x="60" y="767" font-size="11" fill="#5F5E5A">a CLI only, with its French translation</text>
+<text x="38" y="789" font-size="15" font-weight="600" fill="#A32D2D">✗</text>
+<text x="60" y="788" font-size="13" font-weight="600" fill="#2C2C2A">Penetration tests</text>
+<text x="60" y="803" font-size="11" fill="#5F5E5A">none</text>
+<text x="38" y="825" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="824" font-size="13" font-weight="600" fill="#2C2C2A">Threat modeling</text>
+<text x="60" y="839" font-size="11" fill="#5F5E5A">docs/threat-model.md: medium gaps closed</text>
+<text x="38" y="861" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="60" y="860" font-size="13" font-weight="600" fill="#2C2C2A">Performance tests</text>
+<text x="60" y="875" font-size="11" fill="#5F5E5A">200,000 files a disk under 200 MB</text>
+<rect x="376" y="118" width="300" height="774" rx="10" fill="#F1EFE8" stroke="#444441" stroke-opacity="0.35"/>
+<text x="390" y="146" font-size="15" font-weight="600" fill="#444441">Deploy</text>
+<text x="390" y="177" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="412" y="176" font-size="13" font-weight="600" fill="#2C2C2A">Integration tests</text>
+<text x="412" y="191" font-size="11" fill="#5F5E5A">7 drivers, 2 kernels, qemu with KVM in CI</text>
+<text x="390" y="213" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="412" y="212" font-size="13" font-weight="600" fill="#2C2C2A">Tap compare</text>
+<text x="412" y="227" font-size="11" fill="#5F5E5A">own view against mergerfs; break glass</text>
+<text x="390" y="249" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="412" y="248" font-size="13" font-weight="600" fill="#2C2C2A">Load tests</text>
+<text x="412" y="263" font-size="11" fill="#5F5E5A">200,000 files a disk</text>
+<text x="390" y="285" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="412" y="284" font-size="13" font-weight="600" fill="#2C2C2A">Shadowing</text>
+<text x="412" y="299" font-size="11" fill="#5F5E5A">daemon --dry-run, not compared</text>
+<text x="390" y="321" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="412" y="320" font-size="13" font-weight="600" fill="#2C2C2A">Config tests</text>
+<text x="412" y="335" font-size="11" fill="#5F5E5A">configuration vectors, JSON Schema</text>
+<text x="390" y="357" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="412" y="356" font-size="13" font-weight="600" fill="#2C2C2A">Soak tests</text>
+<text x="412" y="371" font-size="11" fill="#5F5E5A">three of 12 h; one of 24 h to run</text>
+<rect x="688" y="118" width="300" height="774" rx="10" fill="#FAEEDA" stroke="#633806" stroke-opacity="0.35"/>
+<text x="702" y="146" font-size="15" font-weight="600" fill="#633806">Release</text>
+<text x="702" y="177" font-size="15" font-weight="600" fill="#185FA5">◷</text>
+<text x="724" y="176" font-size="13" font-weight="600" fill="#2C2C2A">Canarying</text>
+<text x="724" y="191" font-size="11" fill="#5F5E5A">pre-release tags v0.1.0-beta.N</text>
+<text x="702" y="213" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="724" y="212" font-size="13" font-weight="600" fill="#2C2C2A">Monitoring</text>
+<text x="724" y="227" font-size="11" fill="#5F5E5A">Prometheus, OTLP, ntfy, Gotify, SMTP</text>
+<text x="702" y="249" font-size="15" font-weight="600" fill="#888780">–</text>
+<text x="724" y="248" font-size="13" font-weight="600" fill="#2C2C2A">Traffic shaping</text>
+<text x="724" y="263" font-size="11" fill="#5F5E5A">not applicable</text>
+<text x="702" y="285" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="724" y="284" font-size="13" font-weight="600" fill="#2C2C2A">Feature flagging</text>
+<text x="724" y="299" font-size="11" fill="#5F5E5A">configuration: view, link guard, cache</text>
+<text x="702" y="321" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="724" y="320" font-size="13" font-weight="600" fill="#2C2C2A">Exception tracking</text>
+<text x="724" y="335" font-size="11" fill="#5F5E5A">alerts and events, no aggregation</text>
+<rect x="1000" y="118" width="300" height="774" rx="10" fill="#E6F1FB" stroke="#0C447C" stroke-opacity="0.35"/>
+<text x="1014" y="146" font-size="15" font-weight="600" fill="#0C447C">Post release</text>
+<text x="1014" y="177" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="1036" y="176" font-size="13" font-weight="600" fill="#2C2C2A">Teeing</text>
+<text x="1036" y="191" font-size="11" fill="#5F5E5A">read-only view beside mergerfs</text>
+<text x="1014" y="213" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="1036" y="212" font-size="13" font-weight="600" fill="#2C2C2A">Profiling</text>
+<text x="1036" y="227" font-size="11" fill="#5F5E5A">heap profiles, when needed</text>
+<text x="1014" y="249" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="1036" y="248" font-size="13" font-weight="600" fill="#2C2C2A">Logs / events</text>
+<text x="1036" y="263" font-size="11" fill="#5F5E5A">events table, OTel JSON log, OTLP</text>
+<text x="1014" y="285" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="1036" y="284" font-size="13" font-weight="600" fill="#2C2C2A">Chaos testing</text>
+<text x="1036" y="299" font-size="11" fill="#5F5E5A">dm-error, dm-flakey, kill -9 each step</text>
+<text x="1014" y="321" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="1036" y="320" font-size="13" font-weight="600" fill="#2C2C2A">Monitoring</text>
+<text x="1036" y="335" font-size="11" fill="#5F5E5A">as for the release</text>
+<text x="1014" y="357" font-size="15" font-weight="600" fill="#888780">–</text>
+<text x="1036" y="356" font-size="13" font-weight="600" fill="#2C2C2A">A/B tests</text>
+<text x="1036" y="371" font-size="11" fill="#5F5E5A">not applicable</text>
+<text x="1014" y="393" font-size="15" font-weight="600" fill="#A32D2D">✗</text>
+<text x="1036" y="392" font-size="13" font-weight="600" fill="#2C2C2A">Tracing</text>
+<text x="1036" y="407" font-size="11" fill="#5F5E5A">left out for now</text>
+<text x="1014" y="429" font-size="15" font-weight="600" fill="#A32D2D">✗</text>
+<text x="1036" y="428" font-size="13" font-weight="600" fill="#2C2C2A">Dynamic exploration</text>
+<text x="1036" y="443" font-size="11" fill="#5F5E5A">none</text>
+<text x="1014" y="465" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="1036" y="464" font-size="13" font-weight="600" fill="#2C2C2A">Real user monitoring</text>
+<text x="1036" y="479" font-size="11" fill="#5F5E5A">the maintainer's own machine</text>
+<text x="1014" y="501" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="1036" y="500" font-size="13" font-weight="600" fill="#2C2C2A">Auditing</text>
+<text x="1036" y="515" font-size="11" fill="#5F5E5A">ops journal, events, scrub, verify</text>
+<text x="1014" y="537" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="1036" y="536" font-size="13" font-weight="600" fill="#2C2C2A">On-call experience</text>
+<text x="1036" y="551" font-size="11" fill="#5F5E5A">alerts to a phone, no runbook</text>
+<text x="24" y="928" font-size="15" font-weight="600" fill="#3B6D11">✓</text>
+<text x="44" y="927" font-size="13" fill="#444441">Covered</text>
+<text x="134" y="928" font-size="15" font-weight="600" fill="#854F0B">◐</text>
+<text x="154" y="927" font-size="13" fill="#444441">Partial</text>
+<text x="244" y="928" font-size="15" font-weight="600" fill="#185FA5">◷</text>
+<text x="264" y="927" font-size="13" fill="#444441">Planned</text>
+<text x="354" y="928" font-size="15" font-weight="600" fill="#A32D2D">✗</text>
+<text x="374" y="927" font-size="13" fill="#444441">Absent</text>
+<text x="456" y="928" font-size="15" font-weight="600" fill="#888780">–</text>
+<text x="476" y="927" font-size="13" fill="#444441">Not applicable</text>
+</svg>

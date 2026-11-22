@@ -225,6 +225,13 @@ func (s *Session) stopRepair(ctx context.Context, handle *ops.Disk, op *ops.Op, 
 		if errors.Is(err, ops.ErrDiskLost) {
 			return OutcomeIOError, s.lose(ctx, op.Disk, err)
 		}
+		// A chunk that cannot be read is the copy's fault on a disk that confirms right after, and its disk's on one that
+		// does not, which Confirms records (invariant 4, specs.md §16.1).
+		if errors.Is(err, ops.ErrChunkUnreadable) {
+			if confirmed, cerr := s.Confirms(ctx, op.Disk, err); cerr != nil || !confirmed {
+				return OutcomeIOError, cerr
+			}
+		}
 		slog.Warn("an operation stays planned", "disk", op.Disk, "op", op.ID, "error", err)
 		s.lost = true
 		return OutcomeIOError, nil

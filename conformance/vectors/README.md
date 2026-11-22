@@ -24,7 +24,7 @@ One JSON file per function. Every file has this envelope:
 - Every case may carry a `note`: a short explanation for reviewers, never read by the tests.
 - Unknown fields are errors, so a typo cannot silently disable a check. Keys are lowercase ASCII and match a field exactly, and no key appears twice in one object: Go's decoder would otherwise match `Name` or `NAME` to `name`, and keep the last of two equal keys, where Rust's fails.
 - An `error` case has `"error": true` and no expected output. It only says that the input is rejected: error messages and their wording are not part of the contract.
-- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`, `first`, `reloaded`, `gone`, `back`, `check`, `hash_pending`, `read_hashes`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
+- A flag (`error`, `no_key`, `absent`, `complete`, `no_rule`, `no_entry`, `no_magic`, `other_case`, `first`, `reloaded`, `gone`, `back`, `check`, `hash_pending`, `read_hashes`, `misdirected`) is `true` or left out, never `false` or `null`, so a case has one spelling. Go's decoder would read `null` as `false` where Rust's fails. The loader checks it.
 - Integers are exact JSON integers within the signed 64-bit range, without a fraction, an exponent or `-0`; they are never written as strings or floats.
 - Paths follow `specs.md` §29.3: `path` holds a path that is valid UTF-8; otherwise `path_b64` holds its raw bytes in standard base64 (RFC 4648, with padding), written exactly as the standard encoder writes it: no line break, no other spelling. A case has exactly one of the two.
 - A file is valid UTF-8 and never holds an unpaired `\uD800`–`\uDFFF` escape; a high surrogate escape followed by a low one is a single character. Go's decoder would silently turn an unpaired escape, or an invalid byte, into U+FFFD, and Rust's would fail, so the two versions would test different names. A name that is not valid UTF-8 goes in a `*_b64` field. The loader checks both rules.
@@ -49,6 +49,45 @@ One JSON file per function. Every file has this envelope:
 | `port` | integer | the port |
 | `error` | boolean | `true` when `input` is rejected |
 
+### `listen_host.json` — the `Host` that `metrics.listen` answers (§23.1, §29.5)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `listen` | string | the address listened on, as written in the configuration, which `listen.json` takes |
+| `host` | string | the `Host` of a request, as a client sends it |
+| `misdirected` | boolean | `true` when the `Host` does not name the address, and the request is answered 421 |
+
+### `metrics.json` — the text of `/metrics` (§23.1)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `snapshot` | object | what the daemon holds: `version`; `disks`, each with `id`, `fs`, `role`, `mount`, `state`, `standby` (`true` or left out), `space` (`capacity`, `free`) and `catalog` (`copies`, `bytes`, `trash_entries`, `trash_bytes`, `scrub_due_copies`, `scrub_due_bytes`) and `smart` (`read_ns`, `failing`, `reallocated`, `pending`, `uncorrectable`, `temperature`), each left out when unknown, and `scrub_read_copies`, `scrub_read_bytes` and `scrub_corrupt`; `files`, by state, each `files` and `bytes`, left out before a pass; `passes`, `pass_failures` and `copied_bytes`; `last_pass` (`end_ns`, `duration_ns`, `partial`, `held`) and `waiting`, left out before a pass; `operations` (`kind`, `outcome`, `count`) and `alerts` (`key`, `count`), in any order; `ups` (`power`, `unreachable`), left out without `ups.enabled`. A flag inside is `true` or left out |
+| `text` | string | what `/metrics` writes: the metrics of `api/metrics.json` that have a sample, in that file's order, each with its `# HELP` and `# TYPE` lines, its samples by their label values in byte order, every line ending in a line feed |
+
+### `log_record.json` — a line of the log (§23.2)
+
+A record of the log as `log_format = "json"` writes it on standard error: one line of OpenTelemetry's log data model. The input is a record as slog gives it, groups already dotted into its keys.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `timestamp_ns` | integer | when it happened, in Unix nanoseconds; left out for no time |
+| `level` | integer | slog's level: −4 DEBUG, 0 INFO, 4 WARN, 8 ERROR, or one in between |
+| `body`, `body_b64` | string | the message, as it is or in base64 when it is not valid UTF-8 |
+| `attributes`, `resource` | array | each `{key, <value>}` in its order, the value one of `string`, `string_b64` (bytes that are not valid UTF-8, in base64), `int`, `float` (decimal text, as vectors hold no float), `bool`, `strings` and `strings_b64` (a list) |
+| `scope` | string | the package that logged, the instrumentation scope; left out for none |
+| `line` | string | the line written, its line feed included |
+
+### `otel_names.json` — OpenTelemetry names to Prometheus names (§23.1)
+
+OpenTelemetry's Prometheus compatibility translation, with its suffixes, as the OpenTelemetry Collector and Prometheus apply it. Each metric of `api/metrics.json` gives its own `name` back from its `otel_name` and `unit` so, which a unit test checks over every entry.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | the OpenTelemetry name |
+| `unit` | string | its unit of UCUM, `""` for none |
+| `type` | string | `gauge`, or `counter` for a monotonic sum |
+| `prometheus` | string | the Prometheus name the translation gives |
+
 ### `size.json` — sizes (§29.5)
 
 | Field | Type | Meaning |
@@ -66,8 +105,9 @@ A percentage is checked through its use: the share of a total, such as `min_free
 | `input` | string | the value as written in the configuration |
 | `of` | integer | the total, in bytes |
 | `result` | integer | the share of `of` that `input` gives, in bytes |
-| `count` | integer | with `below`: a count to compare with that share |
+| `count` | integer | with `below` and `exceeded`: a count to compare with that share |
 | `below` | boolean | whether `count` is below `input` of `of`, compared exactly: `count` × 100 < percentage × `of`. The share of bytes correctly placed falls below `[balance].trigger.ratio_below` so (`specs.md` §13.3) |
+| `exceeded` | boolean | whether `count` is above `input` of `of`, compared exactly: `count` × 100 > percentage × `of`. The mass guards' `percent`, `trash.max_size` and `cache.max_fill` are exceeded so (`specs.md` §15.6, §17, §19) |
 | `error` | boolean | `true` when `input` is rejected |
 
 ### `window.json` — time windows (§29.5)
@@ -248,7 +288,7 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `entries` | array of objects | the trash, in any order: `disk`, `op`, `reason`, `size` (null when unknown), `deleted_ns`, `expires_ns`, and `held` for an entry that reached the trash in this run's reprise |
 | `purge` | array of objects | what goes, by operation: `op` and `why`, one of `expired`, `older-than` and `max-size` |
 | `full` | array of strings | the disks whose trash still holds more than `max_size` of their capacity once those are gone, by id in byte order |
-| `error` | boolean | `true` when a reason is unknown, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
+| `error` | boolean | `true` when a reason is outside the closed list, a size, a capacity or the age is negative, an operation id is below 1 or appears twice, or a disk is unlisted or listed twice |
 
 ### `link_guard.json` — what the link guard does with a disk's links (§17)
 
@@ -279,6 +319,43 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `reading` | object | `asleep`, the disk left asleep, nothing read; `needs_sat`, the answer asks for a device type, as behind a USB bridge; `failing`, its health check failed or an NVMe disk raised a critical warning; `reallocated`, `pending` and `uncorrectable`, ATA attributes 5, 197 and 198, or an NVMe disk's media errors; `temperature`, in degrees Celsius, 0 when none is given |
 | `error` | boolean | `true` for an answer with no exit status, or that holds no reading while the disk is neither asleep nor asking for a device type |
 
+### `power_mode.json` — a disk's answer to CHECK POWER MODE (§10)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `sense` | string | the sense data the ATA PASS-THROUGH (16) returned, in hexadecimal; `""` for none |
+| `mode` | string or null | `standby`, `spinning`, or null when the answer says nothing |
+
+### `block_stat.json` — a whole disk's I/O counters (§10)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `stat` | string | the content of `/sys/block/<name>/stat` |
+| `completed` | integer | the reads, writes, discards and flushes completed |
+| `in_flight` | integer | the requests under way |
+| `error` | boolean | `true` when the content cannot be read so; `completed` and `in_flight` are left out then |
+
+### `spin.json` — whether a disk is in standby (§10)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disks` | array of objects | the whole disks below its mount, in byte order of their names: `name`; `rotational`, whether it has a spindle, null when that cannot be read; `before` and `now`, its completed I/O at the last check and now, null when there is no earlier count or it cannot be read; `busy`, requests under way now; `refused`, it gave no answer to an earlier check; `answer`, what it answers if asked: `standby`, `spinning`, or null for none |
+| `asked` | array of strings | the whole disks asked their power mode, in the order given |
+| `standby` | boolean | whether the disk is in standby |
+
+### `cache_residency.json` — which files leave the SSD cache now (§19)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `now_ns` | integer | the time |
+| `enabled` | boolean | `cache.enabled`; `true` when left out |
+| `window_open` | boolean | whether `replication.window` is open at `now_ns`; `false` when left out |
+| `max_fill` | string | `cache.max_fill`, as in the configuration |
+| `disks` | array of objects | the cache disks: `id`, `position`, and `capacity` and `free` in bytes, as the catalog last recorded them, left out when not known |
+| `files` | array of objects | the files with a copy on a cache disk: `path` or `path_b64`, `size`, `disks` (the cache disks that hold a copy), `since_ns` (when its residency began), `min_age_ns` (its policy's `cache_min_age`); `cache` (its policy's `cache`, `true` when left out), `held` (mode `manual`, waiting for `atoll replicate`), `released` (`atoll replicate` names it), each `false` when left out |
+| `leave` | array of objects | the files that leave now, by path in byte order: `path` or `path_b64`, and `why`: `due`, `full` or `released`. Every other file is resident |
+| `error` | boolean | `true` for a file on an unknown disk or on none, two files with one path, two disks with one id, a negative size or `min_age_ns`, or a free space above the capacity |
+
 ### `path_map.json` — the path a media server sees (§21.5)
 
 | Field | Type | Meaning |
@@ -294,12 +371,34 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 |---|---|---|
 | `kind` | string | `trash`, `restore`, `rename`, `unlink` for a purge, `mkdir`, or `rmdir` |
 | `source`, `target` | string | `absent`, `same` or `other`, compared with `ops.file_key`, and for `mkdir` with being a folder. An `unlink` or an `rmdir` has no target, and a `mkdir` no source |
-| `changed` | boolean | optional: for `trash`, whether the file is no longer what its row says |
+| `changed` | boolean | optional: for `trash`, whether the file at the target, by its inode, is no longer what the copy's row says, by its size or its modification time: with the source holding that inode too, one file with two names, edited in place since; alone, not the copy, whatever has its inode number, so `other` (§17.2). With no row of that inode, true when both names lead to the file, as nothing says it is as it was, and false when the target alone does, whose inode is then all there is to go by; never for a link of the guard, which has no row |
 | `action` | string | `finish` or `undo` |
 | `remove_source`, `remove_target` | boolean | which name must go |
 | `move_back` | boolean | whether the file at the target goes back to the source |
 | `warn` | boolean | whether it gets an `op-undone` event |
 | `error` | boolean | `true` on an unknown word or kind, or a name that kind does not have or lacks |
+
+### `create_row.json` — what the row of a copy made records (§14.2, §17.2)
+
+A look is an object of `size`, `mtime_ns`, `ctime_ns`, `btime_ns`, left out where the filesystem gives no creation time, `mode`, the permission bits with setuid, setgid and sticky, `uid`, `gid` and `nlink`, as a job's `payload` holds it in `part_look` (§9).
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verified` | object | what the part was when it was verified, before the rename |
+| `found` | object | what a look at its name found once the copy was there: right after the rename, or in a reprise, however long after a crash or a disk lost, as `create_reprise.json` says when |
+| `row` | object | what the copy's row records: `verified`, with the change time `found` gives when the two differ in nothing else, a creation time present on one alone being a difference |
+
+### `create_reprise.json` — what a reprise records of a copy it finds at its name (§14.2, §17.2)
+
+A look is as in `create_row.json`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verified` | object | optional: what the part was when it was verified, `part_look`; left out for a job an earlier version verified, which recorded none |
+| `placed_ctime_ns` | integer | optional: the change time the job recorded right after the rename of this operation, in a commit of its own (`placed`, §9); left out when the crash or the disk lost came between the rename and that commit |
+| `found` | object | what the reprise's look at its name found once the names are durable, however long after |
+| `row` | object | what the copy's row records: with `placed_ctime_ns`, what `create_row.json` gives when `found` has that change time, and `verified` otherwise, a write since the rename that the next look reads as an edit; without it, what `create_row.json` gives; with no `verified`, `found` |
+| `unverified` | boolean | `true` when the copy is recorded unverified, `verified_ns` NULL: with no `placed_ctime_ns` and a change time found other than `verified`'s, or with no `verified`. Left out otherwise |
 
 ### `copy_verdict.json` — what a look found of one copy (§15.1, §15.12)
 
@@ -320,9 +419,9 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `direct` | string | `deletes.direct` |
-| `files` | array of objects | `path`, `state` (one of §4), `follow` when a folder renamed gives it a new path, and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held` and `size`, 0 when absent |
+| `files` | array of objects | `path`, `state` (one of §4), `conflict_held`, `true` for a corrupt file that holds a conflict (§4), `follow` when a folder renamed gives it a new path, `running`, `true` for a file with a job running, which waits for every decision and holds its path (§14.1), and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held`, `size`, 0 when absent, and `through_view`, `true` for a copy that went through Atoll's own view to the trash, which propagates whatever `direct` says (§21.2) |
 | `taken` | array of strings | optional: the paths held by files outside this step |
-| `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone` or `trash`), with `target` for `other-target` |
+| `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone`, `trash` or `restore`), with `target` for `other-target`; `restore`, with `deletes.direct = "restore"`, makes a copy gone again in its place, from the copy `src` names |
 | `error` | boolean | `true` on an unknown word, a path that appears twice, a disk or a position that appears twice in one file, or a `moved` with no target |
 
 ### `modification.json` — what a pass decides about a file a copy of which changed (§15.4)
@@ -338,7 +437,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 
 | Field | Type | Meaning |
 |---|---|---|
-| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, `reachable` when it is on a disk the pass can write to, where its look reached it, and `precision_ns`, its disk's `time_precision_ns`, absent when unknown, which compares exactly (§9); `row_mode`, the mode its row says, absent when it has none, and for a changed copy `look_mode`, the mode its look found; both integers, and a mode absent is unknown; `row_owner` and `look_owner` likewise, each an object of `uid` and `gid`. Booleans are `false` when absent |
+| `copies` | array of objects | in any order, pending copies left out: `disk`, `position`, `changed` when it is a changed copy, `state`, `row_mtime` what its row says, `mtime` and `ctime` what its look found, for a changed copy only, `reachable` when it is on a disk the pass can write to, where its look reached it, and `precision_ns`, its disk's `time_precision_ns`, absent when unknown, which compares exactly (§9); `row_mode`, the mode its row says, absent when it has none, and for a changed copy `look_mode`, the mode its look found; both integers, and a mode absent is unknown; `row_owner` and `look_owner` likewise, each an object of `uid` and `gid`; `mount_owner` when its disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do, so that neither is the copy's own and neither goes to the others. Booleans are `false` when absent |
 | `plan` | object | `mtime`, the time applied, and `from`, the changed copy that gives it, both absent when no time moved; `apply`, the copies that get it through an operation `utimens`; `mode` and `mode_from`, the same for the mode, and `chmod`, the copies that get it through an operation `chmod`; `owner` and `owner_from`, the same for the owner, an object of `uid` and `gid`, and `chown`, the copies that get it through an operation `chown`; `stale`, those that go stale instead, once whatever they lack; each by position, absent when empty |
 | `error` | boolean | `true` on an unknown state, a pending copy, a disk or a position that appears twice, a mode outside 0 to 4095 (`07777`), or an id outside 0 to 4294967295 |
 
@@ -360,6 +459,86 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `previous` | string | optional: the previous original, given for a file in conflict only |
 | `original` | string | the disk of the original; empty when no copy is eligible |
 | `error` | boolean | `true` when a state is unknown, a disk has no name, or a disk or position appears twice |
+
+### `view_node.json` — what a path of Atoll's own view presents (§21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `cache_in_view` | boolean | whether the view presents the cache disks, as Atoll's own view does; `false` when left out, as with mergerfs, whose line leaves them out (`specs.md` §19) |
+| `disks` | array of objects | the disks: `id`, `position` and `state`, as `original.json` has them; `role`, `data` when left out |
+| `file` | object | optional: the file at the path, as its row holds it: `state`, `size`, `mtime_ns` and `copies`, all required; `original`, the disk `files.original_disk` names, when it names one; and `conflict_held`, `true` when the file holds a conflict (§4) |
+| `file.copies` | array of objects | its copies: `disk`, `state` and `first_seen_ns`, required; `size`, `mtime_ns`, `mode`, `uid`, `gid`, `nlink` and `creation_ns`, each left out when its row holds none; `gone_kind`, what the last look found when the copy's clock runs (`moved`, `gone`, `uncertain` or `own`), and `old_path`, the name it sits at when it has not followed its file's rename, each left out otherwise |
+| `entries` | array of objects | optional: the entries at the path, one a disk: `disk` and `kind` (`dir`, `symlink` or `ignored`), required; `mode`, `uid`, `gid`, `size`, `mtime_ns` and `target`, each left out when its row holds none |
+| `node` | object or null | what the path presents, null when it is absent: `kind` (`file`, `dir` or `symlink`), `disk`, the disk whose copy or entry it presents, `mode`, `uid`, `gid`, `size`, `mtime_ns` and `nlink`; `target` for a symlink, and `ignored`, `true` for an ignored file. The view's own process is owned by 4242:4343 in every case |
+
+### `view_resolve.json` — the view's own operations over the catalog (§21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ops` | array of objects | the view's operations no pass has taken in, oldest first: `kind` (`create`, `mkdir`, `symlink`, `write`, `xattr`, `rename`, `replace`, `link`, `unlink` or `rmdir`), `disk` and `path`, required; `path2`, the new path of a `rename` or a `replace`, or the new name a `link` gives the file at `path`; `folder`, `true` for one that names a folder, left out otherwise |
+| `path` | string | a case of resolution: the logical path asked |
+| `source` | object | what it resolves to: `kind` `disk`, with `disk`, what that disk holds at the path; `absent`; or `catalog`, with `paths`, the catalog's rows at the first of them that presents something |
+| `dir` | string | a case of listing, instead of `path`: the folder listed, `""` for the root |
+| `catalog_dirs` | array of strings | the folders of the catalog whose names the listing may hold |
+| `names` | array of strings | the names the operations made, renamed or hard-linked directly below `dir`, in byte order |
+
+### `xattrs.json` — the extended attributes Atoll keeps and gives a copy (§14, §21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | string | a case of the namespace: the name of an attribute |
+| `kept` | boolean | whether Atoll keeps it: one of the `user.` namespace, a name past `user.`, compared byte for byte |
+| `want` | array of objects | a case of a plan, instead of `name`: the attributes of the copy given from, each a `name` and its `value` as text |
+| `have` | array of objects | the attributes the copy given to holds, likewise |
+| `set` | array of strings | the kept names it lacks or holds with another value, in byte order |
+| `remove` | array of strings | the kept names `want` does not hold, in byte order |
+
+### `view_statfs.json` — `statfs` of Atoll's own view (§21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `cache_in_view` | boolean | whether the view presents the cache disks, as Atoll's own view does; `false` when left out, as with mergerfs, whose line leaves them out (`specs.md` §19) |
+| `disks` | array of objects | the disks: `id`, `position` and `state`; `role`, `data` when left out; `capacity` and `free`, in bytes, each left out when the catalog holds none |
+| `statfs` | object | `bsize`, `blocks`, `bfree`, `bavail` and `namemax` |
+
+### `view_read.json` — which copy Atoll's own view reads (§7, §21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `cache_in_view` | boolean | whether the view presents the cache disks, as Atoll's own view does; `false` when left out, as with mergerfs, whose line leaves them out (`specs.md` §19) |
+| `disks` | array of objects | the disks: `id`, `position` and `state`, as `view_node.json` has them; `role`, `data` when left out; `tags`, none when left out |
+| `copies` | array of objects | the file's copies: `disk` and `state`, required; `gone_kind` and `old_path`, as `view_node.json` has them, each left out when the copy has none |
+| `presented` | string | the disk whose copy the path presents, the original (`view_node.json`) |
+| `policy` | string | `read.policy`: `oldest` or `prefer-spinning` |
+| `classes` | array of strings | `read.classes` |
+| `read` | array of strings | the disks whose copy the view opens, best first |
+
+### `view_access.json` — what Atoll's own view checks on a disk before it acts there for a caller (§21.2)
+
+The kernel checked the caller against what the view presents. Where the disk holds what a check reads as presented, its mode with setuid (`04000`), setgid (`02000`) and sticky (`01000`), its owner and its group, and for `delete` those of the folder too, nothing more is checked, and `chmod` applies the mode asked. Otherwise the caller is checked against what the disk holds, as Linux checks it without ACLs: the owner's bits for its owner, the group's for a member of its group, its own or another of its groups, the others' for any other; `dac_override` reads and writes any file and searches any folder, `dac_read_search` reads any file and reads and searches any folder.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `asks` | string | what the operation asks: `write`, to write a file or a folder's own entry, refused `EPERM` too for a file that holds setuid, or setgid with the group's execution (`0010`), that the view does not present, to a caller without `fsetid`; `xattr`, an extended attribute of the `user.` namespace, of a file or a folder alone, of a sticky folder its owner or `fowner` alone, then `write`; `create`, a name made in the folder given; `delete`, a name removed from its folder, which needs writing and searching it, and of a sticky folder the owner of the name or of the folder, or `fowner`; `chmod`, its owner or `fowner`, but a mode that changes nothing but takes setuid or setgid off, never refused; `chown`, with `chown` anything, otherwise its owner, the owner it has, and one of its own groups; `times`, its owner or `fowner`; `touch`, the times now, its owner, `fowner` or `write`; `link`, with `fs.protected_hardlinks` on, its owner, `fowner`, or a regular file neither setuid nor setgid with the group's execution, that it may read and write |
+| `caller` | object | `uid` and `gid`, the account and group it acts on files as; `groups`, its other groups, none when left out; `caps`, its effective capabilities among `chown`, `dac_override`, `dac_read_search`, `fowner` and `fsetid`, none when left out |
+| `presented`, `disk` | object | what the operation acts on, as the view presents it and as the disk holds it, for `create` the folder the name is made in: `kind` (`file`, `dir` or `symlink`), `mode` with setuid, setgid and sticky, `uid`, `gid` |
+| `presented_folder`, `disk_folder` | object | for `delete` alone: the folder the name is removed from, likewise |
+| `mode` | integer | for `chmod` alone: the mode asked |
+| `uid`, `gid` | integer | for `chown`, the owner and the group asked, each left out when it is left as it is; for `chmod`, `gid`, the group given with the mode, if any |
+| `refused` | string | `EACCES` or `EPERM`, as Linux answers on the disk; left out when it allows the operation |
+| `applied` | integer | for `chmod` allowed: the mode applied, without setgid when the caller is in neither the file's group, the one given with the mode if any, nor holds `fsetid` |
+
+### `proc_status.json` — what Atoll's own view reads of the thread that asks it (§21.2)
+
+The text of `/proc/<pid>/task/<pid>/status`, one `Name:\tvalue` line each. `Uid`, `Gid`, `Groups` and `CapEff` are required, each once, and every other line is left as it is.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `status` | string | the text |
+| `fsuid`, `fsgid` | integer | the fourth of the four ids of `Uid` and `Gid`, the filesystem's |
+| `groups` | array of integers | the ids of `Groups`, unsigned 32-bit, in their order, separated by spaces |
+| `cap_eff` | integer | `CapEff`, a hexadecimal mask of 64 bits whose bit n is capability n |
+| `error` | boolean | `true` when the text cannot be read |
 
 ### `creation_time.json` — a creation time into `btime_ns` (§7)
 
@@ -408,7 +587,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `pass_due_ns` | integer | the last pass's `next_due`; left out when none |
 | `group_due_ns` | integer | when a waiting group of the watcher ripens; left out when none |
 | `ripe_origins` | array of strings | who made the groups ripe now; left out when none is |
-| `last_pass_end_ns` | integer | when the last pass ended; left out before the first |
+| `last_pass_end_ns` | integer | when the last pass that walked every disk ended (specs.md §15.13); left out before the first |
 | `rescan_every_ns` | integer | `maintenance.rescan_every` |
 | `window`, `timezone` | string | `maintenance.window`, and the IANA zone its wall clock is in |
 | `reloaded` | boolean | the configuration was read again since the last pass |
@@ -425,6 +604,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `notify_due_ns` | integer | when a media server may next be told of a folder; left out when none is waiting |
 | `alert_retry_due_ns` | integer | when the alerts that could not be sent are next tried again, alone (§23); left out when none waits |
 | `balance_due_ns` | integer | when the daemon next balances; left out when it never does |
+| `on_battery` | boolean | the UPS runs on battery (§20): nothing that reads or moves data in bulk starts, so `read_changed`, `read_hashes`, `backup`, `scrub` and `balance` stay false, `rescan` is never a reason, and none of their times is one to wake at |
 | `check` | boolean | `true` when the mount check is due |
 | `because` | array of strings | why a pass is due, in the order `start`, `reload`, `gone`, `back`, `events`, `due`, `rescan`; empty when none is, or when `after_pass` makes it wait |
 | `read_changed` | boolean | `true` when the changed copies are to be read now: `changed_pending`, inside the window or not, before every other step |
@@ -439,6 +619,63 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | `scrub_opened_ns` | integer | with `scrub_pending`, inside `scrub_window`, when this stretch of it began; left out otherwise |
 | `wake_ns` | integer | when to look again: `now_ns` when something is due |
 | `error` | boolean | `true` for a window the grammar refuses, an origin outside the list, a `rescan_every_ns` that is not positive, or a scrub budget that is not, with `scrub_pending` |
+
+### `ups_address.json` — where the daemon reads the UPS (§20)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `nut` | string | `ups.nut`, `<ups>@<host>[:<port>]` |
+| `ups`, `host` | string | the UPS's name, and the host of its `upsd`, an IPv6 address without its brackets |
+| `port` | integer | the port, 3493 when `nut` names none |
+| `error` | boolean | `true` when the daemon cannot read a UPS there: `ups`, `host` and `port` are left out then |
+
+### `ups_answer.json` — one line of upsd's answer (§20)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ups` | string | the name of the UPS asked about |
+| `line` | string | the line `upsd` answered `GET VAR <ups> ups.status` with, its line feed taken off |
+| `status` | string or null | the value of `ups.status`, unescaped; null when the line gives none |
+| `err` | string | the code of an `ERR` line; left out otherwise |
+
+### `heard_names.json` — what the watcher asks a pass of the daemon to look at (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `max_names` | integer | how many names a disk is looked at by at most, before it is walked whole: 10,000 in the daemon |
+| `groups` | array of objects | the ripe groups, as `event_grouping.json` gives them: `disk`, `path` (`""` for the root), `folder` (`true` or left out), `kinds` and `origins` |
+| `disks` | array of objects | for each disk asked for, in any order: `disk`, and `whole` (`true` for a walk of the whole disk) or `names`, each with `path`, `folder` and `deleted` (`true` or left out), in byte order, each once |
+
+### `view_names.json` — what a pass looks at for the operations of Atoll's own view (§15.13, §21.2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `max_names` | integer | how many names a disk is looked at by at most, before it is walked whole: 10,000 in the daemon |
+| `ops` | array of objects | the operations of the view no pass has taken in: `kind`, as `view_ops` holds it, `disk`, `path`, `path2` (left out when it has none), `folder` (`true` or left out), and `holders`, the disks whose catalog holds a folder at either path, for a folder (left out otherwise) |
+| `disks` | array of objects | for each disk looked at, in any order: `disk`, and `whole` (`true` for a walk of the whole disk) or `names`, each with `path`, `folder` and `deleted` (`true` or left out), in byte order, each once |
+
+### `named_verdict.json` — what a look limited to names concludes of a copy (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verdict` | string | what a walk of the whole disk would say of the copy, as `copy_verdict.json` gives it |
+| `deleted` | boolean | `true` when an event said the copy's name, or a folder above it, was deleted; left out otherwise |
+| `row_kind` | string | the `gone_kind` of the copy's row, `""` when its clock does not run |
+| `next` | string | what the look says of the copy |
+| `whole` | boolean | `true` when the look concluded nothing of a copy it no longer found, so that the next pass walks the disk whole; left out otherwise |
+
+### `ups_power.json` — what a reading of the UPS says (§20)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `power` | string | what the daemon made of the UPS before this reading: `online`, `battery` or `low` |
+| `answered_ns` | integer | when the last reading that said something came; the daemon's start until one does |
+| `now_ns` | integer | the time of this reading |
+| `dead_ns` | integer | how long the UPS may go unheard: 15 s, upsmon's `DEADTIME` |
+| `status` | string or null | the value of `ups.status` this reading gave; null when it gave none |
+| `next` | string | what the daemon makes of the UPS now |
+| `answered` | boolean | this reading said something: the time of the last answer becomes `now_ns` |
+| `unreachable` | boolean | the UPS has said nothing for `dead_ns` or longer: the alert `ups-unreachable` holds |
 
 ### `event_grouping.json` — the watcher's events grouped per path (§15.1)
 
@@ -486,7 +723,7 @@ A case holds the text of a file, and says what loading it gives. Keys are writte
 | `effective` | array of objects | values the file must load to, each `{"key": …, "value": …}` with the value as in the file: a string, an integer, a boolean, a list of these, or an empty table. A value in a non-empty `path_map` has its own key. A list of tables is listed item by item (`rule[0].label`), and is the value `[]` when empty |
 | `complete` | boolean | `true` when `effective` lists every key the configuration has a value for |
 | `not_set` | array of strings | keys that must have no value |
-| `warnings` | array of strings | the keys of the warnings about names no disk carries (§24.4), in byte order |
+| `warnings` | array of strings | the keys of the warnings of no later phase (§24.4), in byte order: names no disk carries, and settings of no effect, as `read.classes` with `read.policy = "oldest"`, or the SSD cache with mergerfs |
 
 A case has `error`, or `errors`, or at least one of `effective`, `not_set` and `warnings`, and loads in the last case. `path`, `filename` and `ext` are shown as written, not compiled. A rule's keys hold what the file sets, plus `action` and `ignore_case`: its pool-wide values (§24.2) apply when it gives a file its policy, which these vectors do not cover.
 
@@ -515,6 +752,17 @@ A case has `error`, or `errors`, or at least one of `effective`, `not_set` and `
 | `drop` | array of strings | the keys of the conditions that ended, in byte order |
 | `error` | boolean | `true` for a key held twice, a negative count, or a `remind_ns` that is not positive |
 
+### `rules_check.json` — the rules no file reaches, and the rules an earlier one hides (§11.3, §25)
+
+A case loads a configuration and the files the catalog has, then tells of its rules, each by `label`, in the configuration's order.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `toml` | string | the text of the configuration |
+| `files` | array of objects | the catalog's files and the files a rule ignores: `path` or `path_b64`, and `size`, left out when it is not known, as for a file a rule ignores |
+| `unreached` | array of strings | the rules no file reaches: a file reaches the first rule that matches it, as in `policy.json`; with no size known, each rule that may match it, up to and including the first that has no size condition |
+| `hidden` | array of objects | `rule` and `by`: a rule that an earlier one hides whole, and the first that does. Simple cases only: each condition of the earlier rule holds for every file, as a path `**` or a filename `*` does, or is one the later rule has too, written the same with the same `ignore_case`, or for `ext` lists every extension the later lists; and its size range holds the later's. A rule with no size condition is never hidden by one that has one |
+
 ### `policy.json` — the effective policy of a file (§11.3, §12.2, §24.2)
 
 A case loads a configuration, then asks for the policy of one file. The values are the ones the configuration asks for: the fallbacks of a phase not yet implemented (§12.2) are not applied.
@@ -536,14 +784,17 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 
 | Field | Type | Meaning |
 |---|---|---|
-| `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`) |
-| `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `leaving` (`false`), for a file whose deletion is decided and waits for a trash job (`specs.md` §13.4); `policy` (below) |
-| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source |
-| `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`) |
+| `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`), `physical` (none): the physical disk it lives on, which two disks share when a start found them on one (R-06); the plan counts them as one, so that no two copies of a file are on it |
+| `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `leaving` (`false`), for a file whose deletion is decided and waits for a trash job (`specs.md` §13.4); `cache` (none), `resident` or `transfer` for a file on the SSD cache that stays or leaves it (`specs.md` §19), which must hold a copy on a cache disk; `policy` (below) |
+| `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source; `unverified` (`false`): `true` for a copy not read back since it last changed (`copies.verified_ns` NULL), on which no transfer leans; `running` (`false`): `true` for a `pending` copy whose job is running, its operation left planned (`specs.md` §14.1), which counts as an `ok` copy there would, holds no room and is never canceled, and an error on any other copy |
+| `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`), `colocate` (`none`) |
 | `entries` | array of objects | `disk`, `path`, `kind`: `dir`, `symlink` or `ignored` |
 | `taken` | array of objects | `disk`, `path`: what the catalog answers when the plan asks whether a disk has another name with the collision key of that path (`specs.md` §15.7). Taken for the names listed, free for every other; none when left out. The plan asks of an NTFS disk alone, of each folder above a file, then of the file. The files and the entries of the case do not answer: a case whose collision is with a name on the disk lists it here |
 | `min_free` | array of strings | as in the configuration; `["0%"]` when left out |
-| `jobs` | array of objects | `kind` (`refresh` or `replicate`), `path` or `path_b64`, `src`, `dst` |
+| `new_files`, `fill_to` | strings | `placement.new_files` (`most-free`) and `placement.fill_to` (`90%`), as in the configuration |
+| `equalize` | string | `balance.equalize` (`off`): with `percent`, the plan places each copy by the most free share of capacity, whatever `new_files` says |
+| `cache_mirror`, `cache_early` | booleans | `cache.mirror` and `cache.replicate_early` (`false`) |
+| `jobs` | array of objects | `kind` (`refresh`, `replicate` or `transfer`), `path` or `path_b64`, `src`, `dst`, which a `transfer` leaves out: it removes its copy on the cache disk `src` |
 | `results` | array of objects | for each file with something to say: `path` or `path_b64`; `states`, `surplus`, `back`, `cancel`, `misplaced` (disks by position), `overflow`. What is left out is empty or false |
 | `balance` | boolean | `true` for the plan of `atoll balance` (`specs.md` §13.3): an Atoll copy that breaks a strict setting of its file counts for nothing, and its result lists its disk in `misplaced` |
 | `move_originals` | boolean | with `balance`, the plan of `atoll balance --move-originals`: a user copy breaks a setting as an Atoll copy does. Without `balance`, nothing |
@@ -593,6 +844,36 @@ The text of `/proc/self/mountinfo`, one line per mount: `id parent major:minor r
 | `dirty` | boolean | whether the flag `VOLUME_IS_DIRTY` (0x0001) of `$VOLUME_INFORMATION` is set, in the fourth record of the MFT (`$Volume`): at the MFT's cluster, from the boot sector, plus three records. Bytes per sector at 0x0B; sectors per cluster at 0x0D, `2^(256 - n)` above 0x80; the MFT's cluster at 0x30; at 0x40, clusters per record, or `2^-n` bytes when negative. The record's update sequence is applied first |
 | `error` | boolean | `true` for a device that is no NTFS, a geometry that is not powers of two or is past what a volume has (more than 2^12 sectors a cluster, a record given as a power past 2^20 bytes: 0xC1 at 0x0D and 0x80 at 0x40 are refused as any other), a record that is not `FILE`, torn (a block whose end is not the update number) or whose update sequence does not fit it, or with no resident `$VOLUME_INFORMATION` |
 
+### `logfile.json` — whether NTFS's journal says Windows left its volume in use (§10, §22)
+
+What the first bytes of `$LogFile` say, by ntfs-3g's rules (`libntfs-3g/logfile.c`, `docs/research/ntfs-logfile.md`). Little-endian throughout; a restart page holds, at 0, `RSTR` or `CHKD`; at 4, the offset of its update sequence array; at 6, its count; at 8, the chkdsk LSN; at 16, its system page size; at 20, its log page size; at 24, the offset of its restart area; at 26 and 28, its minor and major version. The restart area holds, at 0, its LSN; at 8, its count of clients; at 10, the first free client; at 12, the first client in use (`0xFFFF` for none); at 14, its flags; at 16, its sequence number bits; at 20, its length; at 22, the offset of its clients from it; at 24, the file's size; at 36 and 38, the log record header length and the log page data offset. A client is 160 bytes: at 16 and 18, the one before and after it.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `size` | integer | the file's size |
+| `length` | integer | how many of its first bytes a read gave: 131072, all of it when it is smaller |
+| `fill` | string | the byte those bytes hold but for `bytes`, in hexadecimal: `00` when left out |
+| `bytes` | array of objects | applied in their order over `fill`: `at` an offset, and `hex` the bytes there, or `zeros` that many zeros |
+| `journal` | string | `empty`: every block looked at begins with `FF FF FF FF`. `clean`: the restart page that counts has no client in use, or the flag `RESTART_VOLUME_IS_CLEAN` (`0x0002`). `unclean`: a client in use and that flag clear. `version-2`: clean, but of version 2.0, which ntfs-3g refuses to mount read-write ("Metadata kept in Windows cache"). `invalid`: nothing proves it clean: a file under 200 KiB once its size is rounded down to 4 KiB (two restart pages and 48 log pages), a read that gave fewer than `min(size, 131072)` bytes, no restart page that holds though a block looked at is not empty, a restart page that runs past what was read, or the one that counts torn |
+
+The blocks looked at are those at 0 and at each power of two from 512, below the rounded size and within what was read, until one that begins with `RCRD`, a block that begins with `FF FF FF FF` after one that does not, or a second restart page. One that begins with `RSTR` or `CHKD` is a restart page that holds when: its page sizes are powers of two of 512 or more; it is at 0 or at its system page size; its version is 1.1 or 2.0; it has an update sequence array (a `CHKD` page may have a count of 0, and then none) whose count is 1 plus its system page size over 512, at an offset of 30 or more and ending by 510; its restart area is aligned to 8, after that array (or at 30 or more), within its page, and ends its 48 bytes by 510; a page that is no `CHKD` has a chkdsk LSN of 0; the clients' offset is aligned to 8 and within the first 510 bytes from the page; the clients and the restart area's length fit its system page, and the clients fit that length; the lists' first clients are `0xFFFF` or below the count; the sequence number bits are 67 less the bit length of the area's file size; the two lengths at 36 and 38 are multiples of 8; its system page is no larger than the file; and, with a client in use on a page that is no `CHKD`, the free list then the list in use go through no more clients in all than the count, each below it and within the page, the first of each with `0xFFFF` before it. Its update sequence is applied, each sector of 512 bytes ending with the number at the array's start; a page where one does not, or whose array is at an odd offset, is torn, and is no restart page when its restart area runs past 510 bytes. Of two restart pages, the second counts when its LSN is greater (a `CHKD` page's is its chkdsk LSN), and the first otherwise.
+
+### `mount_unit.json` — the mount unit of a mount point (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path` | string | a disk's `mount`, as the configuration gives it |
+| `unit` | string | the name of the mount unit systemd gives that path, which the remount after a USB reset starts: what `systemd-escape --path --suffix=mount` writes, and `systemd-fstab-generator` names the unit of an `/etc/fstab` entry (measured with systemd 257) |
+| `error` | boolean | `true` for a path that is not absolute, holds a `..` component, or whose unit would be longer than 255 bytes, which systemd names by a hash Atoll does not compute: the daemon then mounts the disk itself |
+
+### `device_left.json` — whether a disk's device left (§15.13)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `before` | object | the device the mount table named at the last check that found the disk online: `there` (the name leads somewhere, through its symbolic links), `block` (to a block device), `major` and `minor` (its numbers), `seq` (the kernel's sequence number of its disk, `diskseq`, its disk's for a partition; `0` when the kernel gives none) |
+| `now` | object | what that same name leads to when the disk is found `not-mounted`, the same fields |
+| `left` | boolean | `true` when the device left, as after a USB reset whose mount systemd took away itself: the name leads nowhere, to no block device, to other numbers, or to the same numbers with another `seq`, both known. Then `not-mounted` counts as a reason a USB reset gives, and the remount follows |
+
 ### `time_precision.json` — how finely a filesystem holds a time (§9, §10)
 
 | Field | Type | Meaning |
@@ -618,8 +899,16 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `no_journal` | boolean | the head says that the ext4 keeps no journal |
 | `root_folder` | string | `ok` (when left out), `absent`, `not-a-folder`, `other-mount` or `io-error`: question 10 |
 | `other_case` | boolean | `<root>` also answers in the other case, with the same inode |
+| `hiberfil` | string | what the top of the mount holds at `hiberfil.sys`, which a check asks of a disk of `fs` `ntfs` alone, once questions 1 to 10 pass and the reasons before `hibernated` leave it online (§10): `absent` (when left out), `file`, `not-a-file`, `io-error` for an error that makes the disk unknown, as `EIO`, or `unreadable` for any other |
+| `hiberfil_size` | integer | the size of that `file` |
+| `hiberfil_bytes` | array of objects | the bytes of its content that are not zero, each `at` an offset and `hex`, as `bytes` in `superblock.json`; the rest is zeros |
+| `hiberfil_read` | integer | how many bytes of its start a read gave: its first 4096, or all of it when it is smaller, when left out |
+| `logfile` | string | what the top of the mount holds at `$LogFile`, which a check asks of a disk of `fs` `ntfs` alone, once `hiberfil.sys` leaves it online (§10): `file` (when left out), `absent`, `not-a-file`, `io-error` for an error that makes the disk unknown, or `unreadable` for any other |
+| `journal` | string | what that `file` says, as `logfile.json` reads it: `empty` (when left out), `clean`, `unclean`, `version-2` or `invalid` |
+| `marker` | object or string | what `<workdir>/disk.toml` holds, which a confirmation reads (§10): an object of `pool_id`, `disk_id` and `fs_uuid`, the pool being `p`, or `not-a-marker` for a file there that this version does not read; none when left out |
 | `state` | string | `online`, `readonly` or `missing` |
 | `reason` | string | the reason; left out when `online` |
+| `mount_owner` | boolean | the disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do (`fuseblk`), so that neither is a file's own (§15.4); `false` when absent, and always for a disk `missing` |
 
 ### `capacity.json` — capacity of a pool (§13.1)
 

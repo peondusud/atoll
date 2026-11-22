@@ -15,13 +15,15 @@
         "required": ["disk", "kind", "tripped", "count", "paths"],
         "if": { "properties": { "tripped": { "const": false } } },
         "then": { "properties": { "paths": { "maxItems": 0 } } },
+        "dependentSchemas": { "window": { "properties": { "kind": { "const": "modifications" }, "tripped": { "const": true } } } },
         "properties": {
           "disk": { "type": "string", "minLength": 1 },
           "kind": { "enum": ["deletions", "modifications"] },
           "tripped": { "type": "boolean" },
-          "count": { "type": "integer", "minimum": 0 },
+          "count": { "description": "What its window counts; with window, what its day counts.", "type": "integer", "minimum": 0 },
+          "window": { "description": "Only for a mass-modification guard that stands as its day tripped it, modifies.day_guard (specs.md §15.6): count and paths are then the day's. Left out otherwise.", "enum": ["day"] },
           "paths": {
-            "description": "What it holds, in byte order; for modifications, the files it counted.",
+            "description": "What it holds, in byte order; for modifications, the files it counted, over its day with window.",
             "type": "array",
             "items": {
               "type": "object",

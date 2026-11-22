@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // ListenSocket makes a Unix socket of the system disk with mode 0660, never wider for a moment, in a folder that must
@@ -43,20 +44,44 @@ func ListenSocket(ctx context.Context, path string) (net.Listener, error) {
 	return l, nil
 }
 
-// ReadSmallFile reads a file of the system disk that holds at most limit bytes, such as a token: a larger one is an
-// error, and is not read whole.
-func ReadSmallFile(path string, limit int64) (data []byte, err error) {
-	f, err := os.Open(path)
+// Peer is who connected to a Unix socket, as the kernel recorded it when the connection was made (SO_PEERCRED): the
+// effective account and group, and the process, which may have ended since, its number then free for another.
+type Peer struct {
+	UID, GID uint32
+	PID      int32
+}
+
+// maxWrappers is how many connections PeerOf looks through for a Unix one.
+const maxWrappers = 8
+
+// PeerOf gives who connected to a Unix socket, through the wrappers that give the connection they wrap (NetConn), as
+// the kernel recorded it (specs.md §25.1). It says nothing of another kind of connection, or when the kernel does not
+// say.
+func PeerOf(c net.Conn) (Peer, bool) {
+	for range maxWrappers {
+		switch conn := c.(type) {
+		case *net.UnixConn:
+			return peerOfUnix(conn)
+		case interface{ NetConn() net.Conn }:
+			c = conn.NetConn()
+		default:
+			return Peer{}, false
+		}
+	}
+	return Peer{}, false
+}
+
+func peerOfUnix(conn *net.UnixConn) (Peer, bool) {
+	raw, err := conn.SyscallConn()
 	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
+		return Peer{}, false
 	}
-	defer func() { err = errors.Join(err, f.Close()) }()
-	data, err = io.ReadAll(io.LimitReader(f, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+	var cred *unix.Ucred
+	var credErr error
+	if err := raw.Control(func(fd uintptr) {
+		cred, credErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED) //nolint:gosec // a descriptor, small
+	}); err != nil || credErr != nil {
+		return Peer{}, false
 	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("read %s: more than %d bytes", path, limit)
-	}
-	return data, nil
+	return Peer{UID: cred.Uid, GID: cred.Gid, PID: cred.Pid}, true
 }

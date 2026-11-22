@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 )
 
@@ -36,16 +38,21 @@ const (
 	NoRoot          Reason = "no-root"
 )
 
-// The reasons of a disk that is read-only.
+// The reasons of a disk that is read-only. UnsupportedDriver is a driver whose name rules were never measured: no type
+// a check allows has been one since 2026-11-19, when the type ntfs was measured, and the value stays, as every value of
+// format version 1 does (specs.md §10, §29.3).
 const (
 	UnsupportedDriver Reason = "unsupported-driver"
 	ADS               Reason = "ads"
 	NoCase            Reason = "nocase"
 	IOCharset         Reason = "iocharset"
+	ErrorsContinue    Reason = "errors-continue"
+	Hibernated        Reason = "hibernated"
 	IgnoreCase        Reason = "ignore-case"
 	Casefold          Reason = "casefold"
 	ASCIICI           Reason = "ascii-ci"
 	NoJournal         Reason = "no-journal"
+	OtherMarker       Reason = "other-marker"
 	ReadOnlyMount     Reason = "read-only-mount"
 )
 
@@ -56,6 +63,12 @@ type Verdict struct {
 	Reason          Reason
 	Message         string
 	TimePrecisionNS int64
+	// MountOwner says that the disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do,
+	// through FUSE (specs.md §15.4): neither is a file's own. Never for a missing disk.
+	MountOwner bool
+	// Source is the device the mount table says the disk was mounted from, as /dev/sdb1, for what tells later whether
+	// that device left (specs.md §15.13). Never for a missing disk.
+	Source string
 }
 
 // PathAnswer is what the mount path gave.
@@ -118,6 +131,14 @@ type Observer interface {
 	Mount(mount string) MountSeen
 	Device(fs names.Filesystem, entry *MountEntry) DeviceSeen
 	Root(mount, root string) RootSeen
+	// Hiberfil answers what hiberfil.sys at the top of the mount holds, through a handle whose mount is entry's: asked of
+	// an NTFS disk that passed questions 1 to 10, and no other (specs.md §10). A machine that runs for long reads it once
+	// per mount.
+	Hiberfil(mount string, entry *MountEntry) HiberfilSeen
+	// LogFile answers what $LogFile, NTFS's journal, at the top of the mount says, through a handle whose mount is
+	// entry's: asked of an NTFS disk whose hiberfil.sys left it online, and no other (specs.md §10). A machine that runs
+	// for long reads it once per mount.
+	LogFile(mount string, entry *MountEntry) LogFileSeen
 }
 
 // Machine is what the rest of Atoll asks of the machine it runs on, about its disks and the time.
@@ -166,6 +187,9 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	switch {
 	case e == nil:
 		return missing(NotMounted, "nothing is mounted at that path")
+	case e.MountPoint != d.Mount && below(e.MountPoint, d.Mount):
+		// An empty mount point gives the entry of the mount that holds it.
+		return missing(NotMounted, fmt.Sprintf("nothing is mounted at that path: it is part of the mount at %q", e.MountPoint))
 	case e.MountPoint != d.Mount:
 		return missing(NotMounted, fmt.Sprintf("the mount is at %q: write that path, not one through a symlink", e.MountPoint))
 	case e.Root != "/":
@@ -201,9 +225,35 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	case FolderIOError:
 		return missing(IOError, fmt.Sprintf("%q does not answer: %s", d.Root, root.Note))
 	}
-	verdict := judgeWrites(e, device.Identity, root.OtherCase, d.Root)
+	// hiberfil.sys, then $LogFile, are the only files of the disk a check reads: once the mount is confirmed as the disk,
+	// and only when what comes before them in the second table leaves the disk online.
+	verdict := judgeWrites(e, device.Identity, root.OtherCase, d.Root, func() Verdict {
+		if d.FS != names.NTFS {
+			return Verdict{State: Online}
+		}
+		if v := judgeHiberfil(observer.Hiberfil(d.Mount, e)); v.State != Online {
+			return v
+		}
+		return judgeLogFile(observer.LogFile(d.Mount, e))
+	})
+	if verdict.State == Missing {
+		return verdict
+	}
 	verdict.TimePrecisionNS = device.Identity.TimePrecisionNS
+	// ntfs3 and the type ntfs keep an owner and a mode for each file, measured, the latter as WSL attributes; through
+	// FUSE, NTFS keeps none, and every file shows what the mount gives, which a mount by another account changes for all
+	// of them at once.
+	verdict.MountOwner = e.FSType == "fuseblk"
+	verdict.Source = e.Source
 	return verdict
+}
+
+// below says whether path lies below the mount point mount, by whole components.
+func below(mount, path string) bool {
+	if mount == "/" {
+		return path != "/" && strings.HasPrefix(path, "/")
+	}
+	return strings.HasPrefix(path, mount+"/")
 }
 
 // Confirm runs a mount check, then reads the head past the page cache, so that a disk whose answers
@@ -258,19 +308,44 @@ func typeAllowed(fs names.Filesystem, fstype string) bool {
 	}
 }
 
+// RenameTellsNames says whether EINVAL from renameat2 with RENAME_NOREPLACE is, on a mount of that type, a name its
+// driver refuses, so that link is not tried (specs.md §17.1). It is on the type ntfs, which always knows the flag, and
+// does not apply windows_names to link while it does to unlink: link would give the file a second name, and the unlink
+// after it would fail (measured, docs/research/ntfs-driver.md). ntfs-3g and lowntfs-3g give EINVAL whatever the name,
+// and only link tells there; the other drivers keep that too.
+func RenameTellsNames(fstype string) bool {
+	return fstype == "ntfs"
+}
+
+// LinkMovesTimes says whether link, on a mount of that type, sets every time of its file to now, the modification time
+// included: the type ntfs does, an upstream bug, where ntfs3 and the others move the change time alone (measured,
+// specs.md §22).
+func LinkMovesTimes(fstype string) bool {
+	return fstype == "ntfs"
+}
+
 // judgeWrites decides whether Atoll may write to a disk it has identified: the second table of
-// specs.md §10, in its order.
-func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string) Verdict {
+// specs.md §10, in its order. ntfs3 and the type ntfs, the two NTFS drivers of the kernel, show their options among the
+// superblock options; the type ntfs has no ads. windows, what hiberfil.sys and $LogFile say of Windows on an NTFS disk,
+// is asked only once what a driver's options say leaves the disk online, and an error it meets may make the disk
+// missing.
+func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string, windows func() Verdict) Verdict {
 	ntfs3, variant := e.FSType == "ntfs3", id.Variant
+	kernelNTFS := ntfs3 || e.FSType == "ntfs"
 	switch {
-	case e.FSType == "ntfs":
-		return readOnly(UnsupportedDriver, "mounted with a driver whose name rules were never measured: use ntfs3 or ntfs-3g")
 	case ntfs3 && slices.Contains(e.SuperOptions, "ads"):
 		return readOnly(ADS, "ntfs3 with ads can destroy another file: remount with ads=0")
-	case ntfs3 && slices.Contains(e.SuperOptions, "nocase"):
-		return readOnly(NoCase, "ntfs3 with nocase changes name rules: remount without it")
-	case ntfs3 && !slices.Contains(e.SuperOptions, "iocharset=utf8"):
-		return readOnly(IOCharset, "ntfs3 without iocharset=utf8 does not keep names as they are: remount with it")
+	case kernelNTFS && slices.Contains(e.SuperOptions, "nocase"):
+		return readOnly(NoCase, e.FSType+" with nocase changes name rules: remount without it")
+	case kernelNTFS && !slices.Contains(e.SuperOptions, "iocharset=utf8"):
+		return readOnly(IOCharset, e.FSType+" without iocharset=utf8 does not keep names as they are: remount with it")
+	case e.FSType == "ntfs" && !slices.Contains(e.SuperOptions, "errors=remount-ro"):
+		return readOnly(ErrorsContinue, "ntfs without errors=remount-ro writes to a volume Windows left hibernated, or one marked dirty: remount with it")
+	}
+	if v := windows(); v.State != Online {
+		return v
+	}
+	switch {
 	case variant == VariantCasefold:
 		return readOnly(Casefold, "this ext4 has the casefold feature, which changes name rules")
 	case variant == VariantASCIICI:
@@ -284,4 +359,31 @@ func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string) Verdi
 	default:
 		return Verdict{State: Online}
 	}
+}
+
+// MarkerVerdict is what a confirmation makes of the disk's marker, <workdir>/disk.toml (specs.md §10): one that names
+// another pool, another disk of this pool or another filesystem, or a file there this version does not read, as disk
+// add refuses each, makes a disk online readonly, other-marker. What the check said otherwise stays: a missing disk is
+// missing, and a readonly one keeps its reason. No marker, or one that says the same, changes nothing.
+func MarkerVerdict(v Verdict, text []byte, found bool, poolID string, d *config.Disk) Verdict {
+	if !found || v.State != Online {
+		return v
+	}
+	m, err := layout.ParseMarker(text)
+	var why string
+	switch {
+	case err != nil:
+		why = fmt.Sprintf("its %s is not a marker this version reads: %v", layout.MarkerName, err)
+	case m.PoolID != poolID:
+		why = fmt.Sprintf("its marker says it is a disk of the pool %q", m.PoolID)
+	case m.DiskID != d.ID:
+		why = fmt.Sprintf("its marker says it is the disk %q of this pool", m.DiskID)
+	case m.FSUUID != d.UUID:
+		why = fmt.Sprintf("its marker names the filesystem %s, copied from another disk", m.FSUUID)
+	default:
+		return v
+	}
+	verdict := readOnly(OtherMarker, why)
+	verdict.TimePrecisionNS, verdict.MountOwner = v.TimePrecisionNS, v.MountOwner
+	return verdict
 }

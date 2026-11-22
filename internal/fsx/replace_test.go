@@ -160,3 +160,62 @@ func TestReplaceFileSaysWhenTheFileIsInPlace(t *testing.T) {
 		t.Errorf("the file holds %q", got)
 	}
 }
+
+// A file that is not there, or a folder at its path, is never replaced, and nothing is left beside it; a folder that
+// is not there cannot be synced.
+func TestReplaceFileOfWhatIsNoFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "folder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("none", filepath.Join(dir, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"none", "dangling", "folder"} {
+		err := ReplaceFile(filepath.Join(dir, name), nil, []byte("new\n"))
+		if err == nil || errors.Is(err, ErrNotSynced) || errors.Is(err, ErrChangedMeanwhile) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if names, _ := os.ReadDir(dir); len(names) != 2 {
+		t.Errorf("left behind: %v", names)
+	}
+	if err := syncFolder(filepath.Join(dir, "none")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a folder that is not there: %v", err)
+	}
+	if err := syncFolder(dir); err != nil {
+		t.Error(err)
+	}
+}
+
+// RenameFileNoReplace renames a file of the system disk to a free name, and refuses a name taken, leaving both files
+// as they were.
+func TestRenameFileNoReplace(t *testing.T) {
+	dir := t.TempDir()
+	from, to, taken := filepath.Join(dir, "a"), filepath.Join(dir, "b"), filepath.Join(dir, "c")
+	for name, text := range map[string]string{from: "a", taken: "c"} {
+		if err := os.WriteFile(name, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RenameFileNoReplace(from, taken); !errors.Is(err, os.ErrExist) {
+		t.Errorf("a name taken: %v", err)
+	}
+	for name, want := range map[string]string{from: "a", taken: "c"} {
+		if data, err := os.ReadFile(name); err != nil || string(data) != want {
+			t.Errorf("%s: %q, %v", name, data, err)
+		}
+	}
+	if err := RenameFileNoReplace(from, to); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(to); err != nil || string(data) != "a" {
+		t.Errorf("%q, %v", data, err)
+	}
+	if _, err := os.Stat(from); !os.IsNotExist(err) {
+		t.Errorf("%s is still there: %v", from, err)
+	}
+	if err := RenameFileNoReplace(from, filepath.Join(dir, "d")); !IsAbsent(err) {
+		t.Errorf("nothing to rename: %v", err)
+	}
+}

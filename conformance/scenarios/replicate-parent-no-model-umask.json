@@ -1,0 +1,216 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §14.2, §15.12, §17.4",
+  "description": "A copy read from a copy behind at its old path, whose disk holds no folder at the file's new path, finds none on the other disks either: the disk the catalog says holds it is there, and no longer holds it, as no walk ran since. So no disk holds it, and it is made with no model: 0755 whatever the umask, here the units' 0027, which left it 0750 and closed to a media server running under another account. Its event mkdir holds the mode 0755 and no owner.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "1m"
+    },
+    {
+      "do": "mkdir",
+      "disk": "t1",
+      "path": "media/new"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/a",
+      "to": "media/new/a"
+    },
+    {
+      "do": "unmount",
+      "disk": "t2"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "advance",
+      "by": "1h"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, CAST(f.lpath AS TEXT), CAST(c.old_lpath AS TEXT) FROM copies c JOIN files f ON f.id = c.file_id ORDER BY c.disk_id",
+      "rows": [
+        [
+          "t1",
+          "new/a",
+          null
+        ],
+        [
+          "t2",
+          "new/a",
+          "a"
+        ]
+      ]
+    },
+    {
+      "do": "mount",
+      "disk": "t2"
+    },
+    {
+      "do": "rename",
+      "disk": "t1",
+      "path": "media/new/a",
+      "to": "media/b"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/new"
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nreplicas = 2\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "replicate",
+        "new",
+        "--now",
+        "--json"
+      ],
+      "umask": "0027",
+      "stdout_json": {
+        "applied": true,
+        "bytes": 1024,
+        "copies": [
+          {
+            "path": "new/a",
+            "disk": "t3",
+            "source": "t2",
+            "size": 1024,
+            "outcome": "replicated"
+          }
+        ]
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, state FROM ops WHERE disk_id = 't3' ORDER BY id",
+      "rows": [
+        [
+          "create",
+          "done"
+        ],
+        [
+          "mkdir",
+          "done"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/new",
+          "kind": "dir",
+          "mode": "0755"
+        },
+        {
+          "path": "media/new/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT json_extract(data, '$.disk'), json_extract(data, '$.path'), json_extract(data, '$.mode'), json_type(data, '$.uid'), json_type(data, '$.gid') FROM events WHERE kind = 'mkdir'",
+      "rows": [
+        [
+          "t3",
+          "new",
+          493,
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), mode, created_by FROM entries WHERE disk_id = 't3'",
+      "rows": [
+        [
+          "new",
+          493,
+          "atoll"
+        ]
+      ]
+    }
+  ]
+}

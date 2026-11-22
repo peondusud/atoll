@@ -1,0 +1,13 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §21.2",
+  "description": "statfs of Atoll's own view, from the catalog: blocks of 4096 bytes; the size and the free space are the sums of capacity and free over the data disks that present, each rounded down to whole blocks, the free space also the space available; names of up to 255 bytes; no count of inodes.",
+  "cases": [
+    {"disks": [], "statfs": {"bsize": 4096, "blocks": 0, "bfree": 0, "bavail": 0, "namemax": 255}, "note": "no disk"},
+    {"disks": [{"id": "t1", "position": 0, "state": "online", "capacity": 1000000, "free": 12293}, {"id": "t2", "position": 1, "state": "online", "capacity": 8192, "free": 4096}], "statfs": {"bsize": 4096, "blocks": 246, "bfree": 4, "bavail": 4, "namemax": 255}, "note": "each disk rounded down, then summed"},
+    {"disks": [{"id": "t1", "position": 0, "state": "missing", "capacity": 8192, "free": 8192}, {"id": "t2", "position": 1, "state": "retired", "capacity": 8192, "free": 8192}, {"id": "t3", "position": 2, "state": "failed", "capacity": 8192, "free": 4096}, {"id": "t4", "position": 3, "state": "standby", "capacity": 4096, "free": 0}], "statfs": {"bsize": 4096, "blocks": 3, "bfree": 1, "bavail": 1, "namemax": 255}, "note": "missing and retired disks count for nothing; failed and standby ones do"},
+    {"disks": [{"id": "t1", "position": 0, "state": "online", "role": "cache", "capacity": 8192, "free": 8192}, {"id": "t2", "position": 1, "state": "online", "capacity": 8192, "free": 8192}], "statfs": {"bsize": 4096, "blocks": 2, "bfree": 2, "bavail": 2, "namemax": 255}, "note": "with mergerfs, a cache disk is no part of the view"},
+    {"disks": [{"id": "t1", "position": 0, "state": "online"}, {"id": "t2", "position": 1, "state": "online", "capacity": 8192}], "statfs": {"bsize": 4096, "blocks": 2, "bfree": 0, "bavail": 0, "namemax": 255}, "note": "what is not recorded yet counts for 0"},
+    {"cache_in_view": true, "disks": [{"id": "t1", "position": 0, "state": "online", "role": "cache", "capacity": 8192, "free": 8192}, {"id": "t2", "position": 1, "state": "online", "capacity": 8192, "free": 8192}], "statfs": {"bsize": 4096, "blocks": 4, "bfree": 4, "bavail": 4, "namemax": 255}, "note": "with Atoll's own view, a cache disk is part of the view, as of mergerfs's line"}
+  ]
+}

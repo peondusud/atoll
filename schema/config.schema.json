@@ -90,7 +90,18 @@
       "required": ["mount"],
       "properties": {
         "engine": { "enum": ["mergerfs", "atoll"], "default": "mergerfs" },
-        "mount": { "$ref": "#/$defs/absolute_path" }
+        "mount": { "$ref": "#/$defs/absolute_path" },
+        "readonly_mount": { "$ref": "#/$defs/absolute_path" },
+        "omv_min_free": {
+          "description": "The one minimum free space of the openmediavault mergerfs plugin's pool, which atoll mergerfs-config --omv gives (specs.md §21.1): largest, the largest of the branches' own among those that take new files; same, none when they differ, with exit code 4. It changes nothing else.",
+          "enum": ["largest", "same"],
+          "default": "largest"
+        },
+        "move_on_enospc": {
+          "description": "With view.engine = \"atoll\": a write through Atoll's own view that its disk answers with ENOSPC or EDQUOT moves the new file being written to another disk, which has room for it, and is made there, as mergerfs's moveonenospc does; the copy left on the full disk goes to that disk's trash and is purged at once (specs.md §21.2). Only a file the view made, still open through the handle that made it, at a path the catalog holds no file at. false: the write answers ENOSPC.",
+          "type": "boolean",
+          "default": false
+        }
       }
     },
     "read": {
@@ -116,6 +127,25 @@
         }
       }
     },
+    "walk": {
+      "description": "How deep a walk of a disk goes (specs.md §15.8, §15.10).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "long_paths": {
+          "description": "skip: a walk neither records nor goes below a name whose path through its disk's mount is past 4095 bytes, the limit of a mergerfs branch, and reports it. walk: every path, with at most max_open folders open at once.",
+          "enum": ["skip", "walk"],
+          "default": "skip"
+        },
+        "max_open": {
+          "description": "With long_paths = \"walk\": the most folders a walk holds open at once, its root included: at least the root, the folder it reads and one it opens below it. Past it, a walk opens a folder again from one it holds when it comes back to it.",
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 4096,
+          "default": 64
+        }
+      }
+    },
     "replication": {
       "type": "object",
       "additionalProperties": false,
@@ -126,6 +156,20 @@
           "$ref": "#/$defs/window"
         },
         "max_parallel_per_disk": {
+          "description": "Copies at once that read or write each disk, whatever its kind. Left out: max_parallel_per_hdd or max_parallel_per_ssd, by the disk's kind (specs.md §14).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "max_parallel_per_hdd": {
+          "description": "Copies at once that read or write a disk with a spindle, or whose kind is unknown, when max_parallel_per_disk is left out.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 1
+        },
+        "max_parallel_per_ssd": {
+          "description": "Copies at once that read or write a disk with no spindle under it, a SATA SSD or an NVMe drive, when max_parallel_per_disk is left out.",
           "type": "integer",
           "minimum": 1,
           "maximum": 16,
@@ -170,6 +214,20 @@
               "default": "5%"
             },
             "window": { "$ref": "#/$defs/positive_duration", "default": "10m" }
+          }
+        },
+        "day_guard": {
+          "description": "The second window of the mass-modification guard, a day long: what a tool that rewrites a library more slowly than mass_guard allows changes in a day (specs.md §15.6).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "files": { "description": "Files modified from a copy on a disk within the window.", "type": "integer", "minimum": 0, "default": 1000 },
+            "percent": {
+              "description": "Of a disk's copies.",
+              "$ref": "#/$defs/percent",
+              "default": "10%"
+            },
+            "window": { "$ref": "#/$defs/positive_duration", "default": "24h" }
           }
         }
       }
@@ -322,6 +380,11 @@
           "description": "A file that holds the password of the user alerts.smtp names (specs.md §23).",
           "$ref": "#/$defs/optional_path",
           "default": ""
+        },
+        "smtp_require_tls": {
+          "description": "Send a mail only over TLS: with smtp://, only once STARTTLS succeeded, even with no user. false, the default, sends in clear when the server offers no STARTTLS and alerts.smtp names no user (specs.md §23).",
+          "type": "boolean",
+          "default": false
         }
       }
     },
@@ -343,6 +406,62 @@
         },
         "token_file": {
           "description": "A file that holds the Bearer token HTTP over TCP asks for; listen needs it.",
+          "$ref": "#/$defs/optional_path",
+          "default": ""
+        }
+      }
+    },
+    "metrics": {
+      "description": "Prometheus metrics (specs.md §23.1), which the local API gives too, on /metrics.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "listen": {
+          "description": "An address and a port where /metrics alone is given over HTTP with no token, a loopback one or one of the Tailscale network (specs.md §29.5), never api.listen's; empty for none.",
+          "type": "string",
+          "format": "atoll-optional-listen",
+          "default": ""
+        }
+      }
+    },
+    "telemetry": {
+      "description": "The log of each process and the export over OpenTelemetry's protocol (specs.md §23.1, §23.2). Left out: the log in JSON, nothing exported.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "log_format": {
+          "description": "How each process writes its log on standard error: json, one record a line in OpenTelemetry's log data model; text, as Go's slog writes key=value.",
+          "enum": ["json", "text"],
+          "default": "json"
+        },
+        "otlp_endpoint": {
+          "description": "An OTLP/HTTP collector, http(s)://host[:port][/path], with no user, query or fragment: the metrics go to <endpoint>/v1/metrics, the log to <endpoint>/v1/logs; empty for none.",
+          "type": "string",
+          "pattern": "^(https?://[^/?#@ \\t\\r\\n]+(/[^?#@ \\t\\r\\n]*)?)?$",
+          "default": ""
+        },
+        "otlp_metrics": {
+          "description": "The daemon sends the metrics of /metrics to the endpoint; it needs otlp_endpoint.",
+          "type": "boolean",
+          "default": false
+        },
+        "otlp_logs": {
+          "description": "The daemon and atoll mount send their log records to the endpoint; it needs otlp_endpoint.",
+          "type": "boolean",
+          "default": false
+        },
+        "otlp_interval": {
+          "description": "How often the metrics are sent.",
+          "$ref": "#/$defs/positive_duration",
+          "default": "1m"
+        },
+        "otlp_timeout": {
+          "description": "How long a request to the endpoint may take.",
+          "$ref": "#/$defs/positive_duration",
+          "default": "10s"
+        },
+        "otlp_headers_file": {
+          "description": "A file of HTTP headers sent with each request, one Name: value a line, such as an Authorization; read at each request, never logged. It needs an https:// endpoint.",
           "$ref": "#/$defs/optional_path",
           "default": ""
         }

@@ -34,6 +34,20 @@ func StatPath(path string) (PathInfo, error) {
 	return PathInfo{MountID: st.Mnt_id, Dev: unix.Mkdev(st.Dev_major, st.Dev_minor), IsDir: st.Mode&unix.S_IFMT == unix.S_IFDIR, Ino: st.Ino}, nil
 }
 
+// UniqueMountID gives the id of the mount a path leads to, without following a last symlink, that no other mount is
+// given while the system runs: STATX_MNT_ID_UNIQUE, of Linux 6.8 and later. The id of the mount table may be given
+// again to a mount made once this one is gone. ok is false on a kernel that has none.
+func UniqueMountID(path string) (id uint64, ok bool, err error) {
+	var st unix.Statx_t
+	if err := unix.Statx(unix.AT_FDCWD, path, unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID_UNIQUE, &st); err != nil {
+		return 0, false, fmt.Errorf("statx %q: %w", path, err)
+	}
+	if st.Mask&unix.STATX_MNT_ID_UNIQUE == 0 {
+		return 0, false, nil
+	}
+	return st.Mnt_id, true, nil
+}
+
 // IsAbsent says whether an error means that a path does not exist. Any other error says nothing
 // about the path (invariant 4).
 func IsAbsent(err error) bool {
@@ -53,6 +67,32 @@ func IsNotEmpty(err error) bool {
 // IsDeviceGone says whether an error from opening a device means that it is no longer there.
 func IsDeviceGone(err error) bool {
 	return IsAbsent(err) || errors.Is(err, unix.ENXIO) || errors.Is(err, unix.ENODEV)
+}
+
+// IsNotConnected says that a path is the mount of a FUSE filesystem whose process has gone: the kernel answers
+// ENOTCONN for it until it is unmounted, and Linux 7.3 ECONNREFUSED when the process never answered its first
+// request (measured).
+func IsNotConnected(err error) bool {
+	return errors.Is(err, unix.ENOTCONN) || errors.Is(err, unix.ECONNREFUSED)
+}
+
+// DetachMount detaches the mount at a path at once, as umount -l does: what is open there stays usable until closed.
+// It takes CAP_SYS_ADMIN.
+func DetachMount(path string) error {
+	if err := unix.Unmount(path, unix.MNT_DETACH); err != nil {
+		return fmt.Errorf("umount -l %q: %w", path, err)
+	}
+	return nil
+}
+
+// CanReadWrite says whether this process may open a file for reading and writing: it opens it so, and closes it.
+func CanReadWrite(path string) error {
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open %q: %w", path, err)
+	}
+	_ = unix.Close(fd)
+	return nil
 }
 
 // ReadMountTable reads the mount table of this process.

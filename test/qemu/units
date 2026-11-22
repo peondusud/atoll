@@ -1,0 +1,15 @@
+#!/bin/bash
+# The guest's second run, under systemd as PID 1, which init execs once the first is over (README.md beside this
+# file): the tests that start deploy/'s units as they are, through atoll-qemu-units.service. Then a line that says how
+# both runs ended, the worst of the two, and off.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin ATOLL_QEMU=1 ATOLL_QEMU_SYSTEMD=1
+mapfile -t args </opt/atoll/units-args
+first=$(cat /opt/atoll/first-exit 2>/dev/null || echo 2)
+echo "systemd: $(systemctl --version | head -1)"
+cd /opt/atoll/repo/test/loopdev && /opt/atoll/loopdev.test "${args[@]}"
+code=$?
+[ "$first" -gt "$code" ] && code=$first
+echo "ATOLL-QEMU-EXIT=$code"
+sync
+echo o >/proc/sysrq-trigger
+sleep 10

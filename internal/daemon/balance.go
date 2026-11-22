@@ -99,7 +99,7 @@ func (l *loop) balance(ctx context.Context) {
 	_, err := l.locked(ctx, func(db *sql.DB) (*jobs.Outcome, error) {
 		var err error
 		// No setting moves a user copy: only atoll balance --move-originals does (specs.md §12.4).
-		sum, err = jobs.BalanceAtoll(ctx, db, l.opt.Config, l.opt.Machine, start+slice.Nanoseconds(), func(item *jobs.BalanceItem) error {
+		sum, err = jobs.BalanceAtoll(ctx, db, l.opt.Config, l.opt.Machine, start+slice.Nanoseconds(), l.power.onBattery, func(item *jobs.BalanceItem) error {
 			l.log.Info("a copy was balanced", "path", item.Path, "from", item.From, "to", item.To, "outcome", item.Outcome)
 			return nil
 		})

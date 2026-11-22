@@ -18,12 +18,27 @@ import (
 // NewMachine gives what the delivered binary sees, which is the machine. Taking a folder for a
 // disk takes another build (specs.md §29.4), so nothing here can skip a check.
 func NewMachine() (Machine, error) {
-	return machine{}, nil
+	return machine{hiberfil: &hiberfilCache{}, logFile: &logFileCache{}}, nil
 }
 
-type machine struct{}
+// machine keeps what it read of hiberfil.sys and of $LogFile on each mount, for as long as it runs.
+type machine struct {
+	hiberfil *hiberfilCache
+	logFile  *logFileCache
+}
 
-func (machine) Mount(mount string) MountSeen {
+// Mount answers questions 1 and 2. A path at which no mount of its own is found forgets what was read of hiberfil.sys
+// and $LogFile there: what is mounted there next is another mount, whatever id the kernel gives it.
+func (m machine) Mount(mount string) MountSeen {
+	seen := lookAtMount(mount)
+	if seen.Path != PathOK || seen.Entry == nil || seen.Entry.MountPoint != mount {
+		m.hiberfil.forget(mount)
+		m.logFile.forget(mount)
+	}
+	return seen
+}
+
+func lookAtMount(mount string) MountSeen {
 	info, err := fsx.StatPath(mount)
 	switch {
 	case fsx.IsAbsent(err):
@@ -81,6 +96,46 @@ func (machine) Root(mount, root string) RootSeen {
 	return lookAtRoot(mount, root)
 }
 
+// Hiberfil reads hiberfil.sys once per mount (specs.md §10): the daemon checks every 30 s, and must wake no disk for it.
+// The read goes through a handle on the top whose mount is the one the check found at the path.
+func (m machine) Hiberfil(mount string, entry *MountEntry) HiberfilSeen {
+	return m.hiberfil.answer(mount, entry, fsx.UniqueMountID, func() HiberfilSeen {
+		top, err := fsx.OpenDir(mount)
+		if err != nil {
+			return hiberfilError(err)
+		}
+		defer func() { _ = top.Close() }()
+		info, err := top.Info()
+		switch {
+		case err != nil:
+			return hiberfilError(err)
+		case info.MountID != entry.ID:
+			return mountChanged
+		}
+		return ReadHiberfil(top)
+	})
+}
+
+// LogFile reads $LogFile once per mount, as hiberfil.sys is read (specs.md §10), through a handle on the top whose
+// mount is the one the check found at the path.
+func (m machine) LogFile(mount string, entry *MountEntry) LogFileSeen {
+	return m.logFile.answer(mount, entry, fsx.UniqueMountID, func() LogFileSeen {
+		top, err := fsx.OpenDir(mount)
+		if err != nil {
+			return logFileError(err)
+		}
+		defer func() { _ = top.Close() }()
+		info, err := top.Info()
+		switch {
+		case err != nil:
+			return logFileError(err)
+		case info.MountID != entry.ID:
+			return LogFileSeen{}.changedMount()
+		}
+		return ReadLogFile(top)
+	})
+}
+
 // PhysicalDisks reads them from /sys: a btrfs mount holds an anonymous device number, so its devices come from
 // its UUID.
 func (machine) PhysicalDisks(fs names.Filesystem, entry *MountEntry, uuid string) ([]string, error) {
@@ -97,6 +152,11 @@ func (machine) MountPointImmutable(mount string) (bool, error) {
 // ReadDevice reads a few bytes of a device that holds no mounted filesystem (specs.md §22).
 func (machine) ReadDevice(path string, off int64, n int) ([]byte, error) {
 	return fsx.ReadAt(path, off, n) //nolint:wrapcheck // fsx says what it read
+}
+
+// DeviceNode says what a device's name leads to (specs.md §15.13).
+func (machine) DeviceNode(path string) (fsx.DeviceNode, error) {
+	return fsx.DeviceNodeOf(path) //nolint:wrapcheck // fsx says what it looked at
 }
 
 // Smartctl runs smartctl from the PATH (specs.md §23). Its exit status is in its output too, so only a failure to
@@ -130,4 +190,31 @@ func (machine) OpenRoot(mount, root string) (fsx.Dir, error) {
 		return nil, fmt.Errorf("root: %w", err)
 	}
 	return dir, nil
+}
+
+// powerTimeout is how long a whole disk has to answer CHECK POWER MODE: a USB bridge that hangs must not hold the
+// daemon's check.
+const powerTimeout = 5 * time.Second
+
+func (machine) Rotational(name string) (bool, error) {
+	return fsx.Rotational(name) //nolint:wrapcheck // fsx says what it read
+}
+
+func (machine) BlockStat(name string) (BlockStat, error) {
+	text, err := fsx.ReadBlockStat(name)
+	if err != nil {
+		return BlockStat{}, err //nolint:wrapcheck // likewise
+	}
+	return ParseBlockStat(text)
+}
+
+func (machine) PowerMode(name string) (Power, error) {
+	sense, err := fsx.CheckPowerMode("/dev/"+name, powerTimeout)
+	if err != nil {
+		return PowerUnknown, err //nolint:wrapcheck // likewise
+	}
+	if p := PowerModeOf(sense); p != PowerUnknown {
+		return p, nil
+	}
+	return PowerUnknown, fmt.Errorf("/dev/%s: %w (sense %x)", name, ErrNoPowerMode, sense)
 }

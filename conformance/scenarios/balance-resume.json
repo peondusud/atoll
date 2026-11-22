@@ -93,7 +93,8 @@
      }
     ],
     "applied": false,
-    "bytes": 1024
+    "bytes": 1024,
+    "originals": 1
    }
   },
   {
@@ -113,7 +114,8 @@
      }
     ],
     "applied": true,
-    "bytes": 1024
+    "bytes": 1024,
+    "originals": 1
    }
   },
   {

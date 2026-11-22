@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §23.1",
+  "description": "The Prometheus name OpenTelemetry's compatibility translation gives a metric (its specification, Prometheus and OpenMetrics Compatibility, with the suffixes): the name's words, split at any character but a letter, a digit or a colon, then the unit's word unless the name has it, per_ and the unit after a slash, _total for a monotonic sum, _ratio for a gauge of unit 1, joined by underscores. A unit in braces adds nothing. Each metric of api/metrics.json gives its own Prometheus name back so.",
+  "cases": [
+    {"name": "system.cpu.time", "unit": "s", "type": "counter", "prometheus": "system_cpu_time_seconds_total"},
+    {"name": "process.memory.usage", "unit": "By", "type": "gauge", "prometheus": "process_memory_usage_bytes"},
+    {"name": "system.memory.utilization", "unit": "1", "type": "gauge", "prometheus": "system_memory_utilization_ratio"},
+    {"name": "cpu.load", "unit": "1", "type": "counter", "prometheus": "cpu_load_total", "note": "_ratio is for a gauge alone"},
+    {"name": "ratio.cpu", "unit": "1", "type": "gauge", "prometheus": "cpu_ratio", "note": "a word already there moves to the end, once"},
+    {"name": "system.network.packets", "unit": "{packet}", "type": "counter", "prometheus": "system_network_packets_total"},
+    {"name": "atoll.disk.copies", "unit": "{copy}", "type": "gauge", "prometheus": "atoll_disk_copies"},
+    {"name": "atoll.disk.copy", "unit": "By", "type": "gauge", "prometheus": "atoll_disk_copy_bytes"},
+    {"name": "foo.bytes", "unit": "By", "type": "gauge", "prometheus": "foo_bytes", "note": "the unit's word is in the name already"},
+    {"name": "foo.bytes.read", "unit": "By", "type": "gauge", "prometheus": "foo_bytes_read", "note": "anywhere in it"},
+    {"name": "requests_total", "unit": "", "type": "counter", "prometheus": "requests_total"},
+    {"name": "requests.total.count", "unit": "{request}", "type": "counter", "prometheus": "requests_count_total"},
+    {"name": "network.io", "unit": "By/s", "type": "gauge", "prometheus": "network_io_bytes_per_second"},
+    {"name": "http.requests", "unit": "{request}/s", "type": "gauge", "prometheus": "http_requests_per_second"},
+    {"name": "disk.temperature", "unit": "Cel", "type": "gauge", "prometheus": "disk_temperature_celsius"},
+    {"name": "disk.time", "unit": "ms", "type": "counter", "prometheus": "disk_time_milliseconds_total"},
+    {"name": "widgets", "unit": "widget", "type": "gauge", "prometheus": "widgets_widget", "note": "a unit of no table is kept as written"},
+    {"name": "a..b__c-d", "unit": "", "type": "gauge", "prometheus": "a_b_c_d"},
+    {"name": "2xx.requests", "unit": "", "type": "counter", "prometheus": "_2xx_requests_total"},
+    {"name": "build.info", "unit": "", "type": "gauge", "prometheus": "build_info"},
+    {"name": "atoll.last_pass.end_timestamp", "unit": "s", "type": "gauge", "prometheus": "atoll_last_pass_end_timestamp_seconds"}
+  ]
+}

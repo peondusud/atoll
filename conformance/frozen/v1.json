@@ -1,0 +1,3966 @@
+{
+  "format_version": 1,
+  "frozen": "2026-11-16",
+  "migrations": {
+    "0001_initial.sql": "b3b0238337e8b9b6417708139b57c331906069877f4803b0784c3dd121eede1d",
+    "0002_propagation.sql": "c5eb6393abdf4608070ffeba8fbf84e1e64ea79536a1fcfdadae8c80438821a4",
+    "0003_copy_mode.sql": "e3e329d0affe14911f67f4a00a4b8c9b273f3aaca4f3213b5b3e3813b98037ae",
+    "0004_alerts.sql": "fdfc19c7e466233dae95eba0b69b199156ee03c7a31d03adfe1d42919e6edc13",
+    "0005_scrub.sql": "24de376e7a2611e38213efd073ab4f98883d232b3d75b089c2d01f282e4ae570",
+    "0006_owner.sql": "3ad709467339545eb277abbb5726dafc11c659de5cadab59bb0f891f04b0955a",
+    "0007_events_by_kind.sql": "4e7fe3efe83100417dc0b6db6e1585abada57935143c61343f9fd5d2a83de3e7",
+    "0008_link_guard.sql": "1cda6e55355f215c469105659013d46cd916eaf2c45e0afe712a0be6f1c02402",
+    "0009_copies_by_inode.sql": "2ec8e0f161a1d83fb2ec962c4c3dc11db463ef5a8e4b581341057eca5d3f5441",
+    "0010_trash_by_path.sql": "c5fff36b05517f7d0d219414790b780b652031392b230589aae44d2db406e5f3",
+    "0011_copies_stale.sql": "abe4fa7a06d05cb075fe3c6759d825eafaa32ff76cfc36e8b0552224ecd5a50f",
+    "0012_ops_by_key.sql": "74de1250412b545a9ef824b6dc52038e7be48f2dd7e95785682bdc029916451d",
+    "0013_trash_unknown.sql": "bee820ac49f0462c1604c73d33303814458a91283d8a486f60f92f9876133d9f",
+    "0014_names_disagree.sql": "0c541a00e4e10b55dcf1ad1d3a104bc05103a3e2a2e6b14fce58554238dc3ceb",
+    "0015_links_unnamed.sql": "da918914c28c5aac8d3fe9cd52d186a5d6ad6468752632a113122a46767d2082",
+    "0016_folders_tidied.sql": "1f3827ec835d386f8e52de94dd763c43bfe136199adbc46453f71ad623fd4e1c",
+    "0017_conflict_held.sql": "f3d5fb1f94e779c8ded5bb22e59f97ac590423ac27a137904b4dde5537e7234f",
+    "0018_entry_attributes.sql": "1d9f739d0ecc080edc545553456aecabb382c2b88d30989b2e1b4ccf541ffad4",
+    "0019_view_ops.sql": "148c1f34cf0b43fe637bde158592c08b98bfb9ef7952d2a9b4a12bb089a79265"
+  },
+  "configuration": {
+    "": {
+      "types": [
+        "object"
+      ],
+      "required": true
+    },
+    "alerts": {
+      "types": [
+        "object"
+      ]
+    },
+    "alerts.gotify": {
+      "types": [
+        "string"
+      ]
+    },
+    "alerts.gotify_token_file": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-path"
+    },
+    "alerts.ntfy": {
+      "types": [
+        "string"
+      ]
+    },
+    "alerts.ntfy_token_file": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-path"
+    },
+    "alerts.smtp": {
+      "types": [
+        "string"
+      ]
+    },
+    "alerts.smtp_password_file": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-path"
+    },
+    "api": {
+      "types": [
+        "object"
+      ]
+    },
+    "api.listen": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-listen"
+    },
+    "api.socket": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-path"
+    },
+    "api.token_file": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-path"
+    },
+    "balance": {
+      "types": [
+        "object"
+      ]
+    },
+    "balance.budget": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "balance.equalize": {
+      "types": null,
+      "enum": [
+        "\"off\"",
+        "\"percent\""
+      ]
+    },
+    "balance.schedule": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-schedule"
+    },
+    "balance.trigger": {
+      "types": [
+        "object"
+      ]
+    },
+    "balance.trigger.or_more_than": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-size"
+    },
+    "balance.trigger.ratio_below": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-percent"
+    },
+    "cache": {
+      "types": [
+        "object"
+      ]
+    },
+    "cache.enabled": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "cache.max_fill": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-percent"
+    },
+    "cache.min_age": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "cache.mirror": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "cache.replicate_early": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "catalog": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-absolute-path"
+    },
+    "defaults": {
+      "types": [
+        "object"
+      ]
+    },
+    "defaults.manual_alert_after": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "defaults.mode": {
+      "types": null,
+      "enum": [
+        "\"deferred\"",
+        "\"immediate\"",
+        "\"manual\"",
+        "\"scheduled\""
+      ]
+    },
+    "defaults.priority": {
+      "types": [
+        "integer"
+      ]
+    },
+    "defaults.replicas": {
+      "types": [
+        "integer"
+      ]
+    },
+    "defaults.settle": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "deletes": {
+      "types": [
+        "object"
+      ]
+    },
+    "deletes.debounce": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "deletes.direct": {
+      "types": null,
+      "enum": [
+        "\"propagate\"",
+        "\"restore\""
+      ]
+    },
+    "deletes.mass_guard": {
+      "types": [
+        "object"
+      ]
+    },
+    "deletes.mass_guard.files": {
+      "types": [
+        "integer"
+      ]
+    },
+    "deletes.mass_guard.percent": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-percent"
+    },
+    "deletes.mass_guard.window": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "disk": {
+      "types": [
+        "array"
+      ]
+    },
+    "disk[]": {
+      "types": [
+        "object"
+      ]
+    },
+    "disk[].domain": {
+      "types": [
+        "string"
+      ]
+    },
+    "disk[].fs": {
+      "types": null,
+      "enum": [
+        "\"btrfs\"",
+        "\"ext4\"",
+        "\"ntfs\"",
+        "\"xfs\""
+      ],
+      "required": true
+    },
+    "disk[].id": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "disk[].mount": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-absolute-path",
+      "required": true
+    },
+    "disk[].role": {
+      "types": null,
+      "enum": [
+        "\"cache\"",
+        "\"data\""
+      ]
+    },
+    "disk[].root": {
+      "types": [
+        "string"
+      ]
+    },
+    "disk[].state": {
+      "types": null,
+      "enum": [
+        "\"draining\"",
+        "\"failed\""
+      ]
+    },
+    "disk[].tags": {
+      "types": [
+        "array"
+      ]
+    },
+    "disk[].tags[]": {
+      "types": [
+        "string"
+      ]
+    },
+    "disk[].uuid": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "disk[].workdir": {
+      "types": [
+        "string"
+      ]
+    },
+    "health": {
+      "types": [
+        "object"
+      ]
+    },
+    "health.avoid_hotter_than": {
+      "types": [
+        "string"
+      ]
+    },
+    "health.evacuate_on": {
+      "types": [
+        "array"
+      ]
+    },
+    "health.evacuate_on[]": {
+      "types": null,
+      "enum": [
+        "\"pending_sectors\"",
+        "\"smart_failing\""
+      ]
+    },
+    "health.missing_grace": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "health.remount_after_reset": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "integrity": {
+      "types": [
+        "object"
+      ]
+    },
+    "integrity.auto_repair": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "integrity.manifest": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "integrity.repair_mode": {
+      "types": null,
+      "enum": [
+        "\"chunk\"",
+        "\"file\""
+      ]
+    },
+    "integrity.scrub_budget": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "integrity.scrub_every": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "integrity.window": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-window"
+    },
+    "layout": {
+      "types": [
+        "object"
+      ]
+    },
+    "layout.marker": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "layout.root": {
+      "types": [
+        "string"
+      ]
+    },
+    "layout.workdir": {
+      "types": [
+        "string"
+      ]
+    },
+    "maintenance": {
+      "types": [
+        "object"
+      ]
+    },
+    "maintenance.catalog_on_disks": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "maintenance.rescan_every": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "maintenance.window": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-window"
+    },
+    "modifies": {
+      "types": [
+        "object"
+      ]
+    },
+    "modifies.mass_guard": {
+      "types": [
+        "object"
+      ]
+    },
+    "modifies.mass_guard.files": {
+      "types": [
+        "integer"
+      ]
+    },
+    "modifies.mass_guard.percent": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-percent"
+    },
+    "modifies.mass_guard.window": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "notify": {
+      "types": [
+        "object"
+      ]
+    },
+    "notify.emby": {
+      "types": [
+        "object"
+      ]
+    },
+    "notify.emby.api_key_file": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-path"
+    },
+    "notify.emby.path_map": {
+      "types": [
+        "object"
+      ]
+    },
+    "notify.emby.url": {
+      "types": [
+        "string"
+      ]
+    },
+    "notify.jellyfin": {
+      "types": [
+        "object"
+      ]
+    },
+    "notify.jellyfin.api_key_file": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-path"
+    },
+    "notify.jellyfin.path_map": {
+      "types": [
+        "object"
+      ]
+    },
+    "notify.jellyfin.url": {
+      "types": [
+        "string"
+      ]
+    },
+    "notify.plex": {
+      "types": [
+        "object"
+      ]
+    },
+    "notify.plex.path_map": {
+      "types": [
+        "object"
+      ]
+    },
+    "notify.plex.token_file": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-optional-path"
+    },
+    "notify.plex.url": {
+      "types": [
+        "string"
+      ]
+    },
+    "placement": {
+      "types": [
+        "object"
+      ]
+    },
+    "placement.colocate": {
+      "types": null,
+      "enum": [
+        "\"folder\"",
+        "\"none\"",
+        "\"season\"",
+        "\"show\""
+      ]
+    },
+    "placement.fill_to": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-percent"
+    },
+    "placement.min_free": {
+      "types": [
+        "array"
+      ],
+      "format": "atoll-min-free"
+    },
+    "placement.min_free[]": {
+      "types": [
+        "string"
+      ]
+    },
+    "placement.new_files": {
+      "types": null,
+      "enum": [
+        "\"most-free\"",
+        "\"ordered\"",
+        "\"percent\""
+      ]
+    },
+    "placement.overflow": {
+      "types": null,
+      "enum": [
+        "\"allow\"",
+        "\"deny\""
+      ]
+    },
+    "placement.spread": {
+      "types": null,
+      "enum": [
+        "\"domain\"",
+        "\"none\""
+      ]
+    },
+    "placement.spread_mode": {
+      "types": null,
+      "enum": [
+        "\"prefer\"",
+        "\"strict\""
+      ]
+    },
+    "placement.tags_mode": {
+      "types": null,
+      "enum": [
+        "\"prefer\"",
+        "\"strict\""
+      ]
+    },
+    "pool_id": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "read": {
+      "types": [
+        "object"
+      ]
+    },
+    "read.classes": {
+      "types": [
+        "array"
+      ]
+    },
+    "read.classes[]": {
+      "types": [
+        "string"
+      ]
+    },
+    "read.policy": {
+      "types": null,
+      "enum": [
+        "\"oldest\"",
+        "\"prefer-spinning\""
+      ]
+    },
+    "replication": {
+      "types": [
+        "object"
+      ]
+    },
+    "replication.enabled": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "replication.max_parallel_per_disk": {
+      "types": [
+        "integer"
+      ]
+    },
+    "replication.window": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-window"
+    },
+    "rule": {
+      "types": [
+        "array"
+      ]
+    },
+    "rule[]": {
+      "types": [
+        "object"
+      ]
+    },
+    "rule[].action": {
+      "types": null,
+      "enum": [
+        "\"ignore\"",
+        "\"manage\""
+      ]
+    },
+    "rule[].cache": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "rule[].cache_min_age": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "rule[].colocate": {
+      "types": null,
+      "enum": [
+        "\"folder\"",
+        "\"none\"",
+        "\"season\"",
+        "\"show\""
+      ]
+    },
+    "rule[].domains": {
+      "types": [
+        "array"
+      ]
+    },
+    "rule[].domains[]": {
+      "types": [
+        "string"
+      ]
+    },
+    "rule[].ext": {
+      "types": [
+        "array"
+      ]
+    },
+    "rule[].ext[]": {
+      "types": [
+        "string"
+      ]
+    },
+    "rule[].filename": {
+      "types": [
+        "string"
+      ]
+    },
+    "rule[].ignore_case": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "rule[].label": {
+      "types": [
+        "string"
+      ],
+      "required": true
+    },
+    "rule[].mode": {
+      "types": null,
+      "enum": [
+        "\"deferred\"",
+        "\"immediate\"",
+        "\"manual\"",
+        "\"scheduled\""
+      ]
+    },
+    "rule[].overflow": {
+      "types": null,
+      "enum": [
+        "\"allow\"",
+        "\"deny\""
+      ]
+    },
+    "rule[].path": {
+      "types": [
+        "string"
+      ]
+    },
+    "rule[].priority": {
+      "types": [
+        "integer"
+      ]
+    },
+    "rule[].replicas": {
+      "types": [
+        "integer"
+      ]
+    },
+    "rule[].settle": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "rule[].size_max": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-size"
+    },
+    "rule[].size_min": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-size"
+    },
+    "rule[].spread": {
+      "types": null,
+      "enum": [
+        "\"domain\"",
+        "\"none\""
+      ]
+    },
+    "rule[].spread_mode": {
+      "types": null,
+      "enum": [
+        "\"prefer\"",
+        "\"strict\""
+      ]
+    },
+    "rule[].tags": {
+      "types": [
+        "array"
+      ]
+    },
+    "rule[].tags[]": {
+      "types": [
+        "string"
+      ]
+    },
+    "rule[].tags_mode": {
+      "types": null,
+      "enum": [
+        "\"prefer\"",
+        "\"strict\""
+      ]
+    },
+    "strategy": {
+      "types": null,
+      "enum": [
+        "\"capacity\"",
+        "\"energy\"",
+        "\"safety\""
+      ]
+    },
+    "timezone": {
+      "types": [
+        "string"
+      ]
+    },
+    "trash": {
+      "types": [
+        "object"
+      ]
+    },
+    "trash.link_guard": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "trash.max_size": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-percent"
+    },
+    "trash.retention": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-duration"
+    },
+    "ups": {
+      "types": [
+        "object"
+      ]
+    },
+    "ups.enabled": {
+      "types": [
+        "boolean"
+      ]
+    },
+    "ups.nut": {
+      "types": [
+        "string"
+      ]
+    },
+    "view": {
+      "types": [
+        "object"
+      ],
+      "required": true
+    },
+    "view.engine": {
+      "types": null,
+      "enum": [
+        "\"atoll\"",
+        "\"mergerfs\""
+      ]
+    },
+    "view.mount": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-absolute-path",
+      "required": true
+    },
+    "view.readonly_mount": {
+      "types": [
+        "string"
+      ],
+      "format": "atoll-absolute-path"
+    }
+  },
+  "outputs": {
+    "balance.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "applied": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "bytes": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "moves": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "moves[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "moves[].from": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "moves[].outcome": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "moves[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "moves[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "moves[].size": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "moves[].to": {
+        "types": [
+          "string"
+        ]
+      },
+      "originals": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      }
+    },
+    "capacity.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "levels": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "levels[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "levels[].copies": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "levels[].reachable": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "levels[].short": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "levels[].stored": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "levels[].theoretical": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "spread_mode": {
+        "types": null,
+        "enum": [
+          "\"prefer\"",
+          "\"strict\""
+        ],
+        "required": true
+      }
+    },
+    "catalog-backup.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "backup": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].written": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "removed": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "removed[]": {
+        "types": [
+          "string"
+        ]
+      }
+    },
+    "catalog-rebuild.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "catalog": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "conflicts": {
+        "types": null,
+        "required": true
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": null
+      },
+      "done": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "ops_after": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "set_aside": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "trash_listed": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      }
+    },
+    "catalog-verify.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": null
+      },
+      "problems": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "problems[]": {
+        "types": [
+          "string"
+        ]
+      }
+    },
+    "conflicts-list.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "files": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "files[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "files[].copies": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "files[].copies[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "files[].copies[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "files[].copies[].mtime_ns": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "files[].copies[].size": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "files[].corrupt": {
+        "types": [
+          "boolean"
+        ],
+        "enum": [
+          "true"
+        ]
+      },
+      "files[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "files[].path_b64": {
+        "types": [
+          "string"
+        ]
+      }
+    },
+    "conflicts-resolve.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "applied": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "bytes": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "copies": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "copies[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "copies[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "copies[].mtime_ns": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "copies[].outcome": {
+        "types": null,
+        "enum": [
+          "\"changed\"",
+          "\"disk-unavailable\"",
+          "\"gone\"",
+          "\"io-error\"",
+          "\"kept\"",
+          "\"name-refused\"",
+          "\"not-moved\"",
+          "\"to-trash\"",
+          "\"trashed\""
+        ],
+        "required": true
+      },
+      "copies[].size": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "keep": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "path": {
+        "types": [
+          "string"
+        ]
+      },
+      "path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "resolved": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      }
+    },
+    "daemon.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "decisions": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "decisions[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "decisions[].decision": {
+        "types": null,
+        "enum": [
+          "\"conflict\"",
+          "\"deleted\"",
+          "\"gone\"",
+          "\"kept\"",
+          "\"metadata\"",
+          "\"modified\"",
+          "\"path-taken\"",
+          "\"renamed\""
+        ],
+        "required": true
+      },
+      "decisions[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "decisions[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "decisions[].to": {
+        "types": [
+          "string"
+        ]
+      },
+      "decisions[].to_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].message": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].reason": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].state": {
+        "types": null,
+        "enum": [
+          "\"missing\"",
+          "\"online\"",
+          "\"readonly\""
+        ],
+        "required": true
+      },
+      "disks[].walked": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "dry_run": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "guards": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "guards[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "guards[].count": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "guards[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "guards[].kind": {
+        "types": null,
+        "enum": [
+          "\"deletions\"",
+          "\"modifications\""
+        ],
+        "required": true
+      },
+      "next_due": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "operations": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "operations[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "operations[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "operations[].kind": {
+        "types": null,
+        "enum": [
+          "\"chmod\"",
+          "\"chown\"",
+          "\"folder\"",
+          "\"rename\"",
+          "\"replicate\"",
+          "\"trash\"",
+          "\"utimens\""
+        ],
+        "required": true
+      },
+      "operations[].outcome": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "operations[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "operations[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "operations[].reason": {
+        "types": null,
+        "enum": [
+          "\"deleted\"",
+          "\"overwritten\"",
+          "\"renamed\""
+        ]
+      },
+      "operations[].source": {
+        "types": [
+          "string"
+        ]
+      },
+      "operations[].to": {
+        "types": [
+          "string"
+        ]
+      },
+      "operations[].to_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "waiting": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      }
+    },
+    "disk-add.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "disk": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "disk.domain": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disk.fs": {
+        "types": null,
+        "enum": [
+          "\"btrfs\"",
+          "\"ext4\"",
+          "\"ntfs\"",
+          "\"xfs\""
+        ],
+        "required": true
+      },
+      "disk.id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disk.mount": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disk.reason": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disk.state": {
+        "types": null,
+        "enum": [
+          "\"online\"",
+          "\"readonly\""
+        ],
+        "required": true
+      },
+      "disk.tags": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disk.tags[]": {
+        "types": [
+          "string"
+        ]
+      },
+      "disk.uuid": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "dry_run": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "physical_disks": {
+        "types": [
+          "array",
+          "null"
+        ],
+        "required": true
+      },
+      "physical_disks[]": {
+        "types": [
+          "string"
+        ]
+      },
+      "warnings": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "warnings[]": {
+        "types": null,
+        "enum": [
+          "\"catalog-not-updated\"",
+          "\"config-not-synced\"",
+          "\"daemon-not-told\"",
+          "\"immutable-unchecked\"",
+          "\"marker-not-written\"",
+          "\"not-immutable\"",
+          "\"readonly\"",
+          "\"topology-unchecked\""
+        ]
+      }
+    },
+    "disk-change.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "change": {
+        "types": null,
+        "enum": [
+          "\"drain\"",
+          "\"fail\"",
+          "\"remove\""
+        ],
+        "required": true
+      },
+      "depending": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "depending_first": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "depending_first[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "depending_first[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "depending_first[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "done": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "only_there": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "planned_operations": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "state_was": {
+        "types": null,
+        "enum": [
+          "\"draining\"",
+          "\"failed\"",
+          "\"in-service\""
+        ],
+        "required": true
+      },
+      "warnings": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "warnings[]": {
+        "types": null,
+        "enum": [
+          "\"catalog-not-updated\"",
+          "\"config-not-synced\"",
+          "\"daemon-not-told\""
+        ]
+      }
+    },
+    "disk-list.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].fs": {
+        "types": null,
+        "enum": [
+          "\"btrfs\"",
+          "\"ext4\"",
+          "\"ntfs\"",
+          "\"xfs\""
+        ],
+        "required": true
+      },
+      "disks[].id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].message": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].mount": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].reason": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].role": {
+        "types": null,
+        "enum": [
+          "\"cache\"",
+          "\"data\""
+        ],
+        "required": true
+      },
+      "disks[].state": {
+        "types": null,
+        "enum": [
+          "\"missing\"",
+          "\"online\"",
+          "\"readonly\""
+        ],
+        "required": true
+      },
+      "disks[].uuid": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      }
+    },
+    "disk-replace.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "disk": {
+        "types": null,
+        "required": true
+      },
+      "dry_run": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "physical_disks": {
+        "types": null,
+        "required": true
+      },
+      "replaces": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "replaces.id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "replaces.state": {
+        "types": null,
+        "enum": [
+          "\"draining\"",
+          "\"failed\""
+        ],
+        "required": true
+      },
+      "warnings": {
+        "types": null,
+        "required": true
+      }
+    },
+    "disk-show.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "capacity_bytes": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "configured": {
+        "types": null,
+        "enum": [
+          "\"draining\"",
+          "\"failed\"",
+          "\"in-service\""
+        ],
+        "required": true
+      },
+      "copies": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "depending": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "depending_first": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "depending_first[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "depending_first[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "depending_first[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "domain": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "free_bytes": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "fs": {
+        "types": null,
+        "enum": [
+          "\"btrfs\"",
+          "\"ext4\"",
+          "\"ntfs\"",
+          "\"xfs\""
+        ],
+        "required": true
+      },
+      "id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "marker": {
+        "types": [
+          "null",
+          "object"
+        ],
+        "required": true
+      },
+      "marker.disk_id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "marker.fs_uuid": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "marker.pool_id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "mount": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "only_there": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "planned_operations": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "reason": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "role": {
+        "types": null,
+        "enum": [
+          "\"cache\"",
+          "\"data\""
+        ],
+        "required": true
+      },
+      "root": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "state": {
+        "types": null,
+        "enum": [
+          "\"draining\"",
+          "\"failed\"",
+          "\"missing\"",
+          "\"online\"",
+          "\"readonly\""
+        ],
+        "required": true
+      },
+      "tags": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "tags[]": {
+        "types": [
+          "string"
+        ]
+      },
+      "time_precision_ns": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "uuid": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "workdir": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      }
+    },
+    "dupes.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "files": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "groups": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "groups[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "groups[].blake3": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "groups[].paths": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "groups[].paths[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "groups[].paths[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "groups[].paths[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "groups[].size": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "groups[].wasted": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "unhashed": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "wasted": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      }
+    },
+    "guard-answer.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "done": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "kind": {
+        "types": null,
+        "enum": [
+          "\"deletions\"",
+          "\"modifications\""
+        ],
+        "required": true
+      },
+      "up_to": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      }
+    },
+    "guard-list.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].count": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].kind": {
+        "types": null,
+        "enum": [
+          "\"deletions\"",
+          "\"modifications\""
+        ],
+        "required": true
+      },
+      "disks[].paths": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].paths[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].paths[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].paths[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].tripped": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      }
+    },
+    "init.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "catalog": {
+        "types": null,
+        "enum": [
+          "\"created\"",
+          "\"kept\""
+        ],
+        "required": true
+      },
+      "configuration": {
+        "types": null,
+        "enum": [
+          "\"created\"",
+          "\"kept\""
+        ],
+        "required": true
+      }
+    },
+    "mergerfs-config.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "branches": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "branches[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "branches[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "branches[].minfreespace_bytes": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "branches[].mode": {
+        "types": null,
+        "enum": [
+          "\"NC\"",
+          "\"RO\"",
+          "\"RW\""
+        ],
+        "required": true
+      },
+      "branches[].path": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "fstab": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "largest_file_bytes": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "mount": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "options": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "options[]": {
+        "types": [
+          "string"
+        ]
+      }
+    },
+    "names-check.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "checked": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "findings": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "findings[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "findings[].disk": {
+        "types": [
+          "string"
+        ]
+      },
+      "findings[].fs": {
+        "types": null,
+        "enum": [
+          "\"ext4\"",
+          "\"ntfs\""
+        ]
+      },
+      "findings[].kind": {
+        "types": null,
+        "enum": [
+          "\"branch-path-too-long\"",
+          "\"collision\"",
+          "\"incompatible\"",
+          "\"invalid-utf8\"",
+          "\"not-nfc\"",
+          "\"windows-path-too-long\""
+        ],
+        "required": true
+      },
+      "findings[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "findings[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "findings[].reasons": {
+        "types": [
+          "array"
+        ]
+      },
+      "findings[].reasons[]": {
+        "types": null,
+        "enum": [
+          "\"control-character\"",
+          "\"forbidden-character\"",
+          "\"invalid-utf8\"",
+          "\"reserved-name\"",
+          "\"too-long\"",
+          "\"trailing-dot-or-space\""
+        ]
+      },
+      "findings[].with": {
+        "types": [
+          "array"
+        ]
+      },
+      "findings[].with[]": {
+        "types": [
+          "string"
+        ]
+      }
+    },
+    "notify-test.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "channels": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "channels[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "channels[].channel": {
+        "types": null,
+        "enum": [
+          "\"alerts.gotify\"",
+          "\"alerts.ntfy\"",
+          "\"alerts.smtp\"",
+          "\"notify.emby\"",
+          "\"notify.jellyfin\"",
+          "\"notify.plex\""
+        ],
+        "required": true
+      },
+      "channels[].error": {
+        "types": [
+          "string"
+        ]
+      },
+      "channels[].sent": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      }
+    },
+    "prune.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "applied": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "bytes": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "copies": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "copies[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "copies[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "copies[].outcome": {
+        "types": null,
+        "enum": [
+          "\"below-level\"",
+          "\"changed\"",
+          "\"conflict\"",
+          "\"corrupt\"",
+          "\"disk-unavailable\"",
+          "\"io-error\"",
+          "\"last-user-copy\"",
+          "\"name-refused\"",
+          "\"to-trash\"",
+          "\"trashed\"",
+          "\"unverified\""
+        ],
+        "required": true
+      },
+      "copies[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "copies[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "copies[].size": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      }
+    },
+    "repair.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "applied": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "copies": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "copies[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "copies[].chunks": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "copies[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "copies[].mode": {
+        "types": null,
+        "enum": [
+          "\"chunk\"",
+          "\"file\""
+        ],
+        "required": true
+      },
+      "copies[].outcome": {
+        "types": null,
+        "enum": [
+          "\"changed\"",
+          "\"conflict\"",
+          "\"disk-unavailable\"",
+          "\"io-error\"",
+          "\"name-refused\"",
+          "\"no-healthy-copy\"",
+          "\"no-room\"",
+          "\"repaired\"",
+          "\"to-repair\"",
+          "\"verified\""
+        ],
+        "required": true
+      },
+      "copies[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "copies[].path_b64": {
+        "types": [
+          "string"
+        ]
+      }
+    },
+    "replicate.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "applied": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "bytes": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "copies": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "copies[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "copies[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "copies[].outcome": {
+        "types": null,
+        "enum": [
+          "\"changed\"",
+          "\"conflict\"",
+          "\"disk-unavailable\"",
+          "\"io-error\"",
+          "\"name-refused\"",
+          "\"no-room\"",
+          "\"path-taken\"",
+          "\"queued\"",
+          "\"replicated\"",
+          "\"to-replicate\""
+        ],
+        "required": true
+      },
+      "copies[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "copies[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "copies[].size": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "copies[].source": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      }
+    },
+    "rules-check.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "hidden": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "hidden[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "hidden[].by": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "hidden[].rule": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "problems": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "problems[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "problems[].key": {
+        "types": [
+          "string"
+        ]
+      },
+      "problems[].message": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "unreached": {
+        "types": [
+          "array",
+          "null"
+        ],
+        "required": true
+      },
+      "unreached[]": {
+        "types": [
+          "string"
+        ]
+      },
+      "valid": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "warnings": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "warnings[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "warnings[].key": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "warnings[].later_phase": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "warnings[].message": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      }
+    },
+    "rules-explain.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "path": {
+        "types": [
+          "string"
+        ]
+      },
+      "path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "policy": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "policy.action": {
+        "types": null,
+        "enum": [
+          "\"ignore\"",
+          "\"manage\""
+        ],
+        "required": true
+      },
+      "policy.cache": {
+        "types": [
+          "boolean"
+        ]
+      },
+      "policy.cache_min_age_ns": {
+        "types": [
+          "integer"
+        ]
+      },
+      "policy.colocate": {
+        "types": null,
+        "enum": [
+          "\"folder\"",
+          "\"none\"",
+          "\"season\"",
+          "\"show\""
+        ]
+      },
+      "policy.domains": {
+        "types": [
+          "array"
+        ]
+      },
+      "policy.domains[]": {
+        "types": [
+          "string"
+        ]
+      },
+      "policy.mode": {
+        "types": null,
+        "enum": [
+          "\"deferred\"",
+          "\"immediate\"",
+          "\"manual\"",
+          "\"scheduled\""
+        ]
+      },
+      "policy.overflow": {
+        "types": null,
+        "enum": [
+          "\"allow\"",
+          "\"deny\""
+        ]
+      },
+      "policy.priority": {
+        "types": [
+          "integer"
+        ]
+      },
+      "policy.replicas": {
+        "types": [
+          "integer"
+        ]
+      },
+      "policy.settle_ns": {
+        "types": [
+          "integer"
+        ]
+      },
+      "policy.spread": {
+        "types": null,
+        "enum": [
+          "\"domain\"",
+          "\"none\""
+        ]
+      },
+      "policy.spread_mode": {
+        "types": null,
+        "enum": [
+          "\"prefer\"",
+          "\"strict\""
+        ]
+      },
+      "policy.tags": {
+        "types": [
+          "array"
+        ]
+      },
+      "policy.tags[]": {
+        "types": [
+          "string"
+        ]
+      },
+      "policy.tags_mode": {
+        "types": null,
+        "enum": [
+          "\"prefer\"",
+          "\"strict\""
+        ]
+      },
+      "rule": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "size": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "sources": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      }
+    },
+    "scan.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "conflicts": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "conflicts[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "conflicts[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "conflicts[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].absent": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].absent[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].absent[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].absent[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].bytes": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].changed": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].changed[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].changed[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].changed[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].files": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].folders": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].hashed": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].ignored": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].known": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].message": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].moved": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].moved[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].moved[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].moved[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].moved[].to": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].moved[].to_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].new": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].other_mounts": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].other_mounts[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].other_mounts[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].other_mounts[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].path_taken": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].path_taken[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].path_taken[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].path_taken[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].reason": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].state": {
+        "types": null,
+        "enum": [
+          "\"missing\"",
+          "\"online\"",
+          "\"readonly\""
+        ],
+        "required": true
+      },
+      "disks[].symlinks": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].unreadable": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].unreadable[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].unreadable[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].unreadable[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].walked": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      }
+    },
+    "scrub.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "applied": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].bytes_read": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].changed": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].changed[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].changed[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].changed[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].conflict": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].conflict[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].conflict[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].conflict[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].copies_read": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].corrupt": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].corrupt[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].corrupt[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].corrupt[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].kept": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].kept[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].kept[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].kept[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].left": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "disks[].quarantined": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].quarantined[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].quarantined[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].quarantined[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].repaired": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[].repaired[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].repaired[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].repaired[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "disks[].scrubbed": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      }
+    },
+    "status.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "by_state": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "by_state.conflict": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "by_state.corrupt": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "by_state.degraded": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "by_state.name-collision": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "by_state.name-incompatible": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "by_state.ok": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "by_state.pending": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "by_state.unavailable": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "by_state.unprotected": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "bytes_at_level": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "bytes_placed": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "bytes_total": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "disks[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "disks[].bytes": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].capacity_bytes": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "disks[].copies": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "disks[].free_bytes": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "disks[].fs": {
+        "types": null,
+        "enum": [
+          "\"btrfs\"",
+          "\"ext4\"",
+          "\"ntfs\"",
+          "\"xfs\""
+        ],
+        "required": true
+      },
+      "disks[].id": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].last_seen": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].links_unnamed": {
+        "types": [
+          "integer"
+        ]
+      },
+      "disks[].mount": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "disks[].names_disagree": {
+        "types": [
+          "integer"
+        ]
+      },
+      "disks[].role": {
+        "types": null,
+        "enum": [
+          "\"cache\"",
+          "\"data\""
+        ],
+        "required": true
+      },
+      "disks[].state": {
+        "types": null,
+        "enum": [
+          "\"draining\"",
+          "\"failed\"",
+          "\"missing\"",
+          "\"online\"",
+          "\"readonly\"",
+          "\"retired\"",
+          "\"standby\""
+        ],
+        "required": true
+      },
+      "files": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "files[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "files[].blake3": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "files[].copies": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "files[].copies[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "files[].copies[].created": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "files[].copies[].created_by": {
+        "types": null,
+        "enum": [
+          "\"atoll\"",
+          "\"user\""
+        ],
+        "required": true
+      },
+      "files[].copies[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "files[].copies[].first_seen": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "files[].copies[].mtime": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "files[].copies[].old_path": {
+        "types": [
+          "string"
+        ]
+      },
+      "files[].copies[].old_path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "files[].copies[].size": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "files[].copies[].state": {
+        "types": null,
+        "enum": [
+          "\"corrupt\"",
+          "\"ok\"",
+          "\"pending\"",
+          "\"stale\"",
+          "\"surplus\"",
+          "\"unavailable\""
+        ],
+        "required": true
+      },
+      "files[].copies[].verified": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "files[].first_seen": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "files[].mode": {
+        "types": null,
+        "enum": [
+          "\"deferred\"",
+          "\"immediate\"",
+          "\"manual\"",
+          "\"scheduled\""
+        ],
+        "required": true
+      },
+      "files[].mtime": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "files[].original": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "files[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "files[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "files[].replicas": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "files[].rule": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "files[].size": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "files[].state": {
+        "types": null,
+        "enum": [
+          "\"conflict\"",
+          "\"corrupt\"",
+          "\"degraded\"",
+          "\"name-collision\"",
+          "\"name-incompatible\"",
+          "\"ok\"",
+          "\"pending\"",
+          "\"unavailable\"",
+          "\"unprotected\""
+        ],
+        "required": true
+      },
+      "files_at_level": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "files_total": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      }
+    },
+    "trash-list.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "entries": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "entries[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "entries[].blake3": {
+        "types": [
+          "null",
+          "string"
+        ],
+        "required": true
+      },
+      "entries[].deleted": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "entries[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "entries[].expires": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "entries[].op": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "entries[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "entries[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "entries[].reason": {
+        "types": null,
+        "enum": [
+          "\"deleted\"",
+          "\"overwritten\"",
+          "\"quarantined\"",
+          "\"rebalance\"",
+          "\"renamed\"",
+          "\"repaired\"",
+          "\"surplus\"",
+          "\"unknown\""
+        ],
+        "required": true
+      },
+      "entries[].size": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      }
+    },
+    "trash-purge.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "applied": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "bytes": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "entries": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "entries[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "entries[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "entries[].op": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "entries[].outcome": {
+        "types": null,
+        "enum": [
+          "\"changed\"",
+          "\"disk-unavailable\"",
+          "\"io-error\"",
+          "\"purged\"",
+          "\"to-purge\""
+        ],
+        "required": true
+      },
+      "entries[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "entries[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "entries[].size": {
+        "types": [
+          "integer",
+          "null"
+        ],
+        "required": true
+      },
+      "entries[].why": {
+        "types": null,
+        "enum": [
+          "\"expired\"",
+          "\"max-size\"",
+          "\"older-than\""
+        ],
+        "required": true
+      },
+      "full": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "full[]": {
+        "types": [
+          "string"
+        ]
+      }
+    },
+    "trash-restore.schema.json": {
+      "": {
+        "types": [
+          "object"
+        ],
+        "required": true
+      },
+      "applied": {
+        "types": [
+          "boolean"
+        ],
+        "required": true
+      },
+      "entries": {
+        "types": [
+          "array"
+        ],
+        "required": true
+      },
+      "entries[]": {
+        "types": [
+          "object"
+        ]
+      },
+      "entries[].disk": {
+        "types": [
+          "string"
+        ],
+        "required": true
+      },
+      "entries[].op": {
+        "types": [
+          "integer"
+        ],
+        "required": true
+      },
+      "entries[].outcome": {
+        "types": null,
+        "enum": [
+          "\"changed\"",
+          "\"disk-unavailable\"",
+          "\"io-error\"",
+          "\"name-collision\"",
+          "\"name-refused\"",
+          "\"not-a-copy\"",
+          "\"path-taken\"",
+          "\"restored\"",
+          "\"to-restore\""
+        ],
+        "required": true
+      },
+      "entries[].path": {
+        "types": [
+          "string"
+        ]
+      },
+      "entries[].path_b64": {
+        "types": [
+          "string"
+        ]
+      },
+      "entries[].to": {
+        "types": [
+          "string"
+        ]
+      }
+    }
+  },
+  "api": [
+    "GET /v1/disks",
+    "GET /v1/disks/{id}",
+    "GET /v1/guards",
+    "GET /v1/health",
+    "GET /v1/status",
+    "GET /v1/trash"
+  ],
+  "exit_codes": {
+    "confirm": 3,
+    "error": 1,
+    "partial": 4,
+    "success": 0,
+    "usage": 2
+  },
+  "layout": {
+    "catalog": "catalog",
+    "chunk_part": "7.3.part",
+    "chunks_path": "2025-11-16/7.chunks/Films/a.mkv",
+    "link": "5",
+    "links": "links",
+    "marker": "disk.toml",
+    "marker_format": "1",
+    "part": "7.part",
+    "tmp": "tmp",
+    "trash": "trash",
+    "trash_path": "2025-11-16/7/Films/a.mkv"
+  }
+}

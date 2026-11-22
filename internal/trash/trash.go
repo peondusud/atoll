@@ -79,8 +79,12 @@ type Session struct {
 	reprised map[string]int64
 	// repriseTrashed holds the operations whose copy reached the trash in this run's reprise.
 	repriseTrashed map[int64]bool
-	// emptied holds, by disk, the folders a copy left in this run through Atoll's own operation (specs.md §17.5).
+	// emptied holds, by disk, the folders a copy left in this run through Atoll's own operation, and those a run stopped
+	// before its end left, as the journal says (specs.md §17.5).
 	emptied map[string]map[string]bool
+	// tidying says that this run took in the folders earlier runs left, so that its look at them may be recorded, and
+	// untidy that a folder of a disk it could not write to was left unlooked at, by any of its looks.
+	tidying, untidy bool
 	// full holds the disks that had no room for a move to their trash in this run (Full).
 	full map[string]bool
 }
@@ -129,6 +133,12 @@ func openSession(ctx context.Context, db *sql.DB, c *config.Config, m disks.Mach
 			s.Close()
 			return nil, err
 		}
+		if apply {
+			if err := s.leftByEarlierRuns(ctx); err != nil {
+				s.Close()
+				return nil, err
+			}
+		}
 	}
 	return s, nil
 }
@@ -155,6 +165,23 @@ func (s *Session) TimePrecision(id string) int64 {
 		return sl.precision
 	}
 	return 0
+}
+
+// MountOwner says whether a disk of the configuration gives every file the owner and the mode of its mount, as its
+// mount check found it (specs.md §15.4).
+func (s *Session) MountOwner(id string) bool {
+	for i := range s.config.Disks {
+		if s.config.Disks[i].ID == id && i < len(s.verdicts) {
+			return s.verdicts[i].MountOwner
+		}
+	}
+	return false
+}
+
+// Opened says that this session opened a handle on a disk, to read or write it: the disk is awake.
+func (s *Session) Opened(id string) bool {
+	sl := s.slots[id]
+	return sl != nil && sl.handle != nil
 }
 
 // Handle gives a handle on a disk, confirmed if this session writes, and nil when it cannot be reached.
@@ -267,6 +294,11 @@ func (s *Session) recoverAll(ctx context.Context) error {
 		}
 		recovered, err := handle.Recover(ctx, s.db, planned, s.now, s.retention)
 		s.changed = s.changed || recovered.Finished
+		if !errors.Is(err, ops.ErrDiskLost) && !errors.Is(err, context.Canceled) {
+			if err := catalog.SetNamesDisagree(ctx, s.db, id, recovered.Disagree); err != nil {
+				return fmt.Errorf("catalog: %w", err)
+			}
+		}
 		for _, r := range recovered.Restored {
 			s.reprised[r.Path] = max(s.reprised[r.Path], r.Op)
 		}
@@ -283,6 +315,17 @@ func (s *Session) recoverAll(ctx context.Context) error {
 			return fmt.Errorf("%w", err)
 		case err != nil:
 			s.lost = true
+			// The reprise of a repair that could not read a chunk of its copy: the copy's fault while the disk confirms,
+			// which is written to as before; the disk's otherwise (invariant 4, specs.md §16.1).
+			if errors.Is(err, ops.ErrChunkUnreadable) {
+				confirmed, cerr := s.Confirms(ctx, id, err)
+				if cerr != nil {
+					return cerr
+				}
+				if !confirmed {
+					continue
+				}
+			}
 		}
 		// What the reprise resolved keeps its parts no more: tmp/ is cleaned after it, as it was when the disk was
 		// opened for what earlier runs had resolved (specs.md §14.2).
@@ -320,6 +363,12 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 			handle.Close()
 			return nil, s.lose(ctx, id, fmt.Errorf("%s: %s", verdict.Reason, verdict.Message))
 		}
+		// A disk whose marker names another pool, disk or filesystem is written to no more (specs.md §10).
+		if text, found, err := handle.ReadMarker(); err != nil {
+			slog.Warn("the marker of a disk could not be read", "disk", id, "error", err)
+		} else if verdict = disks.MarkerVerdict(verdict, text, found, s.config.PoolID, sl.config); verdict.Reason == disks.OtherMarker {
+			slog.Warn("a disk is written to no more", "disk", id, "reason", verdict.Reason, "message", verdict.Message)
+		}
 		if err := handle.Verify(); err != nil {
 			handle.Close()
 			return nil, s.lose(ctx, id, err)
@@ -335,6 +384,12 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 			if err := s.cleanTmp(ctx, id, handle); err != nil {
 				handle.Close()
 				return nil, err
+			}
+			// A disk that failed there is lost, and whoever asked gets no handle on it, as for one that does not
+			// confirm: the session writes to it no more (specs.md §17.1).
+			if !readable(sl.state) {
+				handle.Close()
+				return nil, nil //nolint:nilnil // a disk lost is one that cannot be reached
 			}
 		}
 	}
@@ -656,17 +711,50 @@ func (s *Session) unchanged(ctx context.Context, path string, c *catalog.CopyRow
 
 // Send sends one copy to the trash, and says what became of it (specs.md §17.1).
 func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, error) {
-	place := c.Place(f)
-	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
-	if !s.writable(c.Disk) {
-		return outcomeUnavailable, nil
+	outcome, _, err := s.send(ctx, f, c, reason)
+	return outcome, err
+}
+
+// Transfer removes a file's copy on a cache disk, once the data disks hold it (specs.md §19): it goes to that disk's
+// trash as surplus, a move checked against its row, so that a file just written there is never the one sent, then is
+// purged from there at once, which gives its space back. It says what became of the copy, as Send does: trashed once
+// it left its place, purged or not. One the purge leaves stays in the trash, which its retention or trash.max_size
+// empties.
+func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow) (string, error) {
+	outcome, op, err := s.send(ctx, f, c, reasonSurplus)
+	if err != nil || outcome != OutcomeTrashed || op == nil {
+		return outcome, err
 	}
-	handle, err := s.open(ctx, c.Disk)
+	e, found, err := catalog.TrashEntryOfOp(ctx, s.db, op.Path, op.ID)
+	if err != nil {
+		return "", fmt.Errorf("catalog: %w", err)
+	}
+	if !found {
+		return outcome, nil
+	}
+	purged, err := s.purgeEntry(ctx, &e)
 	if err != nil {
 		return "", err
 	}
+	if purged != OutcomePurged {
+		slog.Warn("a copy the SSD cache sent stays in its trash", "disk", e.Disk, "path", e.Path, "outcome", purged)
+	}
+	return outcome, nil
+}
+
+// send is Send, which also gives the operation that moved the copy, when one did.
+func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, *ops.Op, error) {
+	place := c.Place(f)
+	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
+	if !s.writable(c.Disk) {
+		return outcomeUnavailable, nil, nil
+	}
+	handle, err := s.open(ctx, c.Disk)
+	if err != nil {
+		return "", nil, err
+	}
 	if handle == nil {
-		return outcomeUnavailable, nil
+		return outcomeUnavailable, nil, nil
 	}
 	// A stale copy holds a version that came before the file's hash, and a corrupt one holds none.
 	hash := f.Hash
@@ -678,22 +766,23 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention),
 	})
 	if err != nil {
-		return "", fmt.Errorf("catalog: %w", err)
+		return "", nil, fmt.Errorf("catalog: %w", err)
 	}
 	s.machine.Checkpoint("journaled")
 	moved, moveErr := handle.ToTrash(op, &catalog.KnownCopy{Path: place, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey})
 	if moveErr == nil {
 		if err := catalog.FinishTrash(ctx, s.db, op, nil, moved.Links()); err != nil {
-			return "", fmt.Errorf("catalog: %w", err)
+			return "", nil, fmt.Errorf("catalog: %w", err)
 		}
 		s.changed = true
 		s.Left(c.Disk, place)
-		return OutcomeTrashed, nil
+		return OutcomeTrashed, op, nil
 	}
 	if fsx.IsNoRoom(moveErr) {
 		s.full[c.Disk] = true
 	}
-	return s.afterFailedMove(ctx, handle, op, moveErr)
+	outcome, err := s.afterFailedMove(ctx, handle, op, moveErr)
+	return outcome, op, err
 }
 
 // Full says that a disk had no room for a move to its trash in this run, as each takes a folder there: what else would
@@ -1277,10 +1366,11 @@ func (s *Session) purgeEntry(ctx context.Context, e *catalog.TrashEntry) (string
 		return outcomeUnavailable, nil
 	}
 	if !layout.IsChunks(e.TrashPath) {
-		if err := s.dropLinksOf(ctx, handle, e); err != nil {
+		known, err := s.dropLinksOf(ctx, handle, e)
+		if err != nil {
 			return "", err
 		}
-		if !s.writable(e.Disk) {
+		if !known || !s.writable(e.Disk) {
 			return OutcomeIOError, nil
 		}
 	}

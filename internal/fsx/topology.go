@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -106,4 +108,59 @@ func MountPointImmutable(mount string) (bool, error) {
 		return false, ErrNoImmutableFlag
 	}
 	return st.Attributes&unix.STATX_ATTR_IMMUTABLE != 0, nil
+}
+
+// DeviceNode is what a device's name leads to (specs.md §15.13): whether it leads anywhere, through its symbolic
+// links, whether to a block device, that device's numbers, and the kernel's sequence number of its disk, which a disk
+// plugged again gets anew under the same name and numbers; 0 where the kernel gives none.
+type DeviceNode struct {
+	There, Block bool
+	Major, Minor uint32
+	Seq          uint64
+}
+
+// DeviceNodeOf says what a device's name leads to. A name that leads nowhere is no error; one that cannot be told is.
+func DeviceNodeOf(path string) (DeviceNode, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTDIR) {
+			return DeviceNode{}, nil
+		}
+		return DeviceNode{}, fmt.Errorf("stat %q: %w", path, err)
+	}
+	node := DeviceNode{There: true}
+	if st.Mode&unix.S_IFMT != unix.S_IFBLK {
+		return node, nil
+	}
+	node.Block, node.Major, node.Minor = true, unix.Major(st.Rdev), unix.Minor(st.Rdev)
+	dir, err := filepath.EvalSymlinks(fmt.Sprintf("%s/%d:%d", sysBlock, node.Major, node.Minor))
+	if err != nil {
+		return DeviceNode{}, fmt.Errorf("block device %d:%d: %w", node.Major, node.Minor, err)
+	}
+	if node.Seq, err = diskSeqIn(dir); err != nil {
+		return DeviceNode{}, fmt.Errorf("block device %d:%d: %w", node.Major, node.Minor, err)
+	}
+	return node, nil
+}
+
+// diskSeqIn reads the sequence number of the disk a block device's folder of /sys/devices describes: its own for a
+// whole disk, its disk's, the folder above, for a partition; 0 when there is none.
+func diskSeqIn(dir string) (uint64, error) {
+	if _, err := os.Stat(filepath.Join(dir, "partition")); err == nil {
+		dir = filepath.Dir(dir)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("partition: %w", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "diskseq"))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("diskseq: %w", err)
+	}
+	seq, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("diskseq %q: %w", strings.TrimSpace(string(data)), err)
+	}
+	return seq, nil
 }

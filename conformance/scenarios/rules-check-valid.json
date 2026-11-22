@@ -14,7 +14,9 @@
       "stdout_json": {
         "valid": true,
         "problems": [],
-        "warnings": []
+        "warnings": [],
+        "hidden": [],
+        "unreached": null
       }
     },
     {

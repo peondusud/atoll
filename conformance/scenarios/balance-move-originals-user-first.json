@@ -121,7 +121,8 @@
           }
         ],
         "applied": false,
-        "bytes": 2048
+        "bytes": 2048,
+        "originals": 0
       }
     },
     {
@@ -150,7 +151,8 @@
           }
         ],
         "applied": true,
-        "bytes": 2048
+        "bytes": 2048,
+        "originals": 0
       }
     },
     {

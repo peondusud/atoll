@@ -8,7 +8,8 @@
   "required": [
     "moves",
     "applied",
-    "bytes"
+    "bytes",
+    "originals"
   ],
   "properties": {
     "moves": {
@@ -25,6 +26,11 @@
       "type": "integer",
       "minimum": 0,
       "description": "The sizes of the files moved, or to move."
+    },
+    "originals": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The user copies that break a strict setting too, which only --move-originals moves (specs.md §13.3): 0 with --move-originals, which lists them among the moves."
     }
   },
   "$defs": {

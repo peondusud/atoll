@@ -3,7 +3,7 @@
   "title": "atoll rules check --json",
   "description": "Whether the configuration loads, with its problems and warnings (specs.md §24.3, §24.4, §25). The wording of a message is not part of the contract.",
   "type": "object",
-  "required": ["valid", "problems", "warnings"],
+  "required": ["valid", "problems", "warnings", "hidden", "unreached"],
   "additionalProperties": false,
   "properties": {
     "valid": { "type": "boolean" },
@@ -40,6 +40,24 @@
           "message": { "type": "string", "minLength": 1 }
         }
       }
+    },
+    "hidden": {
+      "description": "The rules an earlier one hides whole, in simple cases, each with the first that does, in the configuration's order (specs.md §11.3, conformance/vectors/rules_check.json). Empty when valid is false.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule", "by"],
+        "additionalProperties": false,
+        "properties": {
+          "rule": { "type": "string", "minLength": 1 },
+          "by": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "unreached": {
+      "description": "The labels of the rules no file of the catalog reaches, in the configuration's order; null when the catalog cannot be read, as before atoll init, or when valid is false.",
+      "type": ["array", "null"],
+      "items": { "type": "string", "minLength": 1 }
     }
   },
   "if": { "properties": { "valid": { "const": true } } },

@@ -51,8 +51,16 @@ func Capacity(ctx context.Context, db *sql.DB, c *config.Config, now int64) ([]L
 	}
 	taken, done := catalog.KeysTaken(ctx, db)
 	defer done()
-	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Taken: taken}
-	if _, err := filesForPlan(ctx, db, c, diskList, &input, nil); err != nil {
+	newFiles, fillTo, err := NewFilesOf(c)
+	if err != nil {
+		return nil, err
+	}
+	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Taken: taken, NewFiles: newFiles, FillTo: fillTo, Equalize: EqualizeOf(c)}
+	leave, err := allLeave(ctx, db, c)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := filesForPlan(ctx, db, c, diskList, &input, nil, leave); err != nil {
 		return nil, err
 	}
 	strict := c.Pool.SpreadMode == solver.ModeStrict
@@ -136,13 +144,22 @@ func levelOf(input *solver.Input, minFree value.MinFree, strict bool, k int) (Le
 			return Level{}, fmt.Errorf("disk %q: %w", d.ID, err)
 		}
 		reserved := d.Capacity - usable
-		whole[d.ID] = usable
-		left[d.ID] = max(d.Free-planned[d.ID]-reserved, 0)
+		// Disks on one physical disk hold no two copies of a file: the formula sees one disk of all their room, in the
+		// failure domain of the first of them it meets (R-06).
+		unit := d.ID
+		if d.Physical != "" {
+			unit = d.Physical
+		}
+		whole[unit] += usable
+		left[unit] += max(d.Free-planned[d.ID]-reserved, 0)
+		if _, ok := domainOf[unit]; ok {
+			continue
+		}
 		domain := d.Domain
 		if domain == "" {
 			domain = "\x00" + d.ID
 		}
-		domainOf[d.ID] = domain
+		domainOf[unit] = domain
 		if !slices.Contains(domains, domain) {
 			domains = append(domains, domain)
 		}

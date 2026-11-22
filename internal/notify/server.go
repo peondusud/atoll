@@ -67,9 +67,13 @@ func Within(path, folder string) bool {
 	return path == folder || strings.HasPrefix(path, folder+"/") || folder == "/"
 }
 
-// readSecret reads the token or key a file holds, on one line, at each request, so that a new one needs no reload.
+// maxSecret is the most a file of a token or a key may hold: a line, with room to spare.
+const maxSecret = 4 << 10
+
+// readSecret reads the token or key a file holds, on one line, at each request, so that a new one needs no reload. It
+// reads at most maxSecret bytes of a regular file.
 func readSecret(file string) (string, error) {
-	data, err := fsx.ReadFile(file)
+	data, err := fsx.ReadSmallFile(file, maxSecret)
 	if err != nil {
 		return "", fmt.Errorf("the secret file: %w", err)
 	}

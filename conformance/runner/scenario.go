@@ -60,6 +60,7 @@ type disk struct {
 	// Said of a disk, so that a folder can behave as a driver does.
 	Renameat2 *bool    `json:"renameat2"`
 	Refuses   []string `json:"refuses"`
+	Driver    string   `json:"driver"`
 	// Said of a disk for atoll disk add: the whole disk it stands for, and whether the folder under its mount point
 	// is immutable.
 	Device    string `json:"device"`
@@ -80,6 +81,14 @@ type entry struct {
 	// UID and GID are a file's owner, which only a scenario that needs root may give.
 	UID *int64 `json:"uid"`
 	GID *int64 `json:"gid"`
+	// Xattrs are a file's extended attributes of the user. namespace, compared as a whole set when given.
+	Xattrs []xattrEntry `json:"xattrs"`
+}
+
+// xattrEntry is one extended attribute: its name and its value, as text.
+type xattrEntry struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
 }
 
 type step struct {
@@ -89,6 +98,7 @@ type step struct {
 	StdoutJSON json.RawMessage   `json:"stdout_json"`
 	CrashAt    string            `json:"crash_at"`
 	Full       []string          `json:"full"`
+	Umask      *string           `json:"umask"` // the mask the binary runs with, as a unit's UMask= gives it
 	Disk       string            `json:"disk"`
 	Path       *string           `json:"path"`
 	PathB64    *string           `json:"path_b64"`
@@ -102,16 +112,26 @@ type step struct {
 	UID        *int64            `json:"uid"`
 	GID        *int64            `json:"gid"`
 	By         string            `json:"by"`
+	Name       *string           `json:"name"`
 	Tree       []entry           `json:"tree"`
 	Query      string            `json:"query"`
 	Rows       json.RawMessage   `json:"rows"`
+	// Files and Absent are what an expect_system step looks for in the sandbox, beside the disks.
+	Files  []systemFile `json:"files"`
+	Absent []string     `json:"absent"`
+}
+
+// systemFile is a file of the sandbox that is no disk's, as one beside the catalog, and its text.
+type systemFile struct {
+	Name string  `json:"name"`
+	Text *string `json:"text"`
 }
 
 // stepFields lists what a step may hold besides do, and reports whether the runner knows it.
 func stepFields(do string) ([]string, bool) {
 	switch do {
 	case "atoll":
-		return []string{"args", "exit", "stdout_json", "crash_at", "full"}, true
+		return []string{"args", "exit", "stdout_json", "crash_at", "full", "umask"}, true
 	case "write":
 		return []string{"disk", "path", "path_b64", "text", "size", "mtime_ns"}, true
 	case "mkdir", "delete":
@@ -126,6 +146,8 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "path", "path_b64", "mode"}, true
 	case "chown":
 		return []string{"disk", "path", "path_b64", "uid", "gid"}, true
+	case "setxattr":
+		return []string{"disk", "path", "path_b64", "name", "text"}, true
 	case "advance":
 		return []string{"by"}, true
 	case "config":
@@ -138,6 +160,10 @@ func stepFields(do string) ([]string, bool) {
 		return []string{"disk", "tree"}, true
 	case "expect_catalog":
 		return []string{"query", "rows"}, true
+	case "write_system":
+		return []string{"name", "text"}, true
+	case "expect_system":
+		return []string{"files", "absent"}, true
 	default:
 		return nil, false
 	}
@@ -167,6 +193,9 @@ func parseScenario(data []byte) (*scenario, error) {
 		if err := checkEntries(s.Disks[i].Tree); err != nil {
 			return nil, fmt.Errorf("disk %q: %w", s.Disks[i].ID, err)
 		}
+		if err := checkDriver(&s.Disks[i]); err != nil {
+			return nil, fmt.Errorf("disk %q: %w", s.Disks[i].ID, err)
+		}
 	}
 	for i := range s.Steps {
 		st := &s.Steps[i]
@@ -190,6 +219,16 @@ func parseScenario(data []byte) (*scenario, error) {
 			err = checkOwner(st.UID, st.GID, true)
 		case st.Do == "symlink" && st.Target == "":
 			err = errors.New("no target")
+		case st.Do == "write_system" && (st.Name == nil || st.Text == nil):
+			err = errors.New("no name, or no text")
+		case st.Do == "write_system":
+			err = checkSystemName(*st.Name)
+		case st.Do == "expect_system":
+			err = checkSystemFiles(st.Files, st.Absent)
+		case st.Do == "atoll" && st.Umask != nil:
+			if _, err = parseUmask(*st.Umask); err == nil {
+				err = checkFull(s.Disks, st.Full)
+			}
 		case st.Do == "atoll":
 			err = checkFull(s.Disks, st.Full)
 		}
@@ -223,6 +262,22 @@ func checkSteps(data []byte) error {
 				return fmt.Errorf("step %d (%s): %q does not apply to it", i, do, field)
 			}
 		}
+	}
+	return nil
+}
+
+// checkDriver refuses a driver that means nothing for a disk: one of NTFS only, ntfs3 or ntfs, and with ntfs, which
+// always knows RENAME_NOREPLACE, no renameat2 at false. A typo would check nothing.
+func checkDriver(d *disk) error {
+	switch {
+	case d.Driver == "":
+		return nil
+	case d.Driver != "ntfs3" && d.Driver != "ntfs":
+		return fmt.Errorf("driver %q: ntfs3 or ntfs", d.Driver)
+	case d.FS != "ntfs":
+		return fmt.Errorf("driver %q on a disk of %q: only on ntfs", d.Driver, d.FS)
+	case d.Driver == "ntfs" && d.Renameat2 != nil && !*d.Renameat2:
+		return errors.New("driver ntfs knows RENAME_NOREPLACE: no renameat2 at false")
 	}
 	return nil
 }
@@ -272,8 +327,13 @@ func checkEntry(e *entry) error {
 			return err
 		}
 	case "dir":
-		if e.Text != nil || e.Size != nil || e.Target != "" || e.MtimeNS != nil || e.Mode != nil || e.UID != nil || e.GID != nil {
-			return errors.New("a folder has only a path")
+		if e.Text != nil || e.Size != nil || e.Target != "" || e.MtimeNS != nil || e.UID != nil || e.GID != nil {
+			return errors.New("a folder has only a path, and a mode")
+		}
+		if e.Mode != nil {
+			if _, err := parseMode(*e.Mode); err != nil {
+				return err
+			}
 		}
 	case "symlink":
 		if e.Text != nil || e.Size != nil || e.MtimeNS != nil || e.Mode != nil || e.UID != nil || e.GID != nil {
@@ -291,6 +351,7 @@ func checkEntry(e *entry) error {
 // sandbox is one run of a scenario, in its own temporary folder.
 type sandbox struct {
 	bin    string
+	env    []string // what each run of the binary gets besides the runner's environment: GOCOVERDIR, for make cover
 	dir    string
 	s      *scenario
 	now    time.Time
@@ -305,7 +366,7 @@ type sandbox struct {
 // errNeedsRoot says that a scenario gives files away, which only root may.
 var errNeedsRoot = errors.New("it needs root")
 
-func runFile(bin, file string) error {
+func runFile(bin, file string, env []string) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return fmt.Errorf("read: %w", err)
@@ -322,7 +383,7 @@ func runFile(bin, file string) error {
 		return fmt.Errorf("sandbox: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	box := &sandbox{bin: bin, dir: dir, s: s, tops: map[string]map[string]bool{}, hidden: map[string]bool{}, away: map[string]bool{}}
+	box := &sandbox{bin: bin, env: env, dir: dir, s: s, tops: map[string]map[string]bool{}, hidden: map[string]bool{}, away: map[string]bool{}}
 	if err := box.setUp(); err != nil {
 		return fmt.Errorf("set up: %w", err)
 	}
@@ -423,6 +484,7 @@ func (b *sandbox) writeControl() error {
 		Capacity  int64    `json:"capacity"`
 		Renameat2 *bool    `json:"renameat2,omitempty"`
 		Refuses   []string `json:"refuses,omitempty"`
+		Driver    string   `json:"driver,omitempty"`
 		Device    string   `json:"device,omitempty"`
 		Immutable bool     `json:"immutable,omitempty"`
 		Full      bool     `json:"full,omitempty"`
@@ -435,8 +497,8 @@ func (b *sandbox) writeControl() error {
 	for i := range b.s.Disks {
 		d := &b.s.Disks[i]
 		if !b.away[d.ID] {
-			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses, d.Device, d.Immutable,
-				slices.Contains(b.full, d.ID)})
+			control.Disks = append(control.Disks, controlDisk{d.ID, d.UUID, d.FS, b.diskPath(d.ID), d.Capacity, d.Renameat2, d.Refuses, d.Driver, d.Device,
+				d.Immutable, slices.Contains(b.full, d.ID)})
 		}
 	}
 	data, err := json.MarshalIndent(control, "", "  ")
@@ -484,9 +546,73 @@ func (b *sandbox) do(s *step) error {
 		return compareTree(root, s.Tree)
 	case "expect_catalog":
 		return b.compareCatalog(s)
+	case "write_system":
+		text := strings.ReplaceAll(*s.Text, sandboxToken, b.dir)
+		return os.WriteFile(filepath.Join(b.dir, *s.Name), []byte(text), 0o600)
+	case "expect_system":
+		return b.expectSystem(s)
 	default:
 		return b.fileStep(s)
 	}
+}
+
+// runnersNames are the names of the sandbox the runner itself makes, which no step of the system writes or looks at.
+var runnersNames = []string{"disks", "unmounted", "atoll.toml", "conformance.json"}
+
+// checkSystemName refuses what is not one name of the sandbox, or is one of the runner's.
+func checkSystemName(name string) error {
+	switch {
+	case name == "" || name == "." || name == ".." || strings.Contains(name, "/"):
+		return fmt.Errorf("%q is not a name", name)
+	case slices.Contains(runnersNames, name):
+		return fmt.Errorf("%q is one of the runner's names", name)
+	}
+	return nil
+}
+
+// checkSystemFiles refuses an expect_system step that would look for nothing, a file with no text, or a name
+// checkSystemName refuses.
+func checkSystemFiles(files []systemFile, absent []string) error {
+	if len(files)+len(absent) == 0 {
+		return errors.New("nothing to expect")
+	}
+	for _, f := range files {
+		if f.Text == nil {
+			return fmt.Errorf("%q: no text", f.Name)
+		}
+		if err := checkSystemName(f.Name); err != nil {
+			return err
+		}
+	}
+	for _, name := range absent {
+		if err := checkSystemName(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// expectSystem finds each file of files in the sandbox with its text, and none of absent.
+func (b *sandbox) expectSystem(s *step) error {
+	for _, f := range s.Files {
+		data, err := os.ReadFile(filepath.Join(b.dir, f.Name))
+		if err != nil {
+			return fmt.Errorf("expect_system: %w", err)
+		}
+		if want := strings.ReplaceAll(*f.Text, sandboxToken, b.dir); string(data) != want {
+			return fmt.Errorf("expect_system: %s holds %q, want %q", f.Name, data, want)
+		}
+	}
+	for _, name := range s.Absent {
+		_, err := os.Lstat(filepath.Join(b.dir, name))
+		switch {
+		case err == nil:
+			return fmt.Errorf("expect_system: %s is there", name)
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("expect_system: %s cannot be looked at: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // unmount leaves what a failed mount does: an empty folder where the disk was.
@@ -554,6 +680,7 @@ func (b *sandbox) fileStep(s *step) error {
 		return err
 	}
 	full := filepath.Join(root, rel)
+	at := diskAt{top: root}
 	switch s.Do {
 	case "write":
 		b.note(s.Disk, rel)
@@ -565,13 +692,16 @@ func (b *sandbox) fileStep(s *step) error {
 		return writeEntry(root, rel, &entry{Text: text, Size: s.Size, MtimeNS: s.MtimeNS})
 	case "mkdir":
 		b.note(s.Disk, rel)
-		return os.MkdirAll(full, 0o755)
+		return at.mkdirAll(rel)
 	case "rename":
 		to, err := pathOf(s.To, s.ToB64)
 		if err != nil {
 			return fmt.Errorf("to: %w", err)
 		}
 		b.note(s.Disk, to)
+		if at.long(rel) || at.long(to) {
+			return at.inRoot(func(r *os.Root) error { return r.Rename(rel, to) })
+		}
 		return os.Rename(full, filepath.Join(root, to))
 	case "link":
 		to, err := pathOf(s.To, s.ToB64)
@@ -579,8 +709,14 @@ func (b *sandbox) fileStep(s *step) error {
 			return fmt.Errorf("to: %w", err)
 		}
 		b.note(s.Disk, to)
+		if at.long(rel) || at.long(to) {
+			return at.inRoot(func(r *os.Root) error { return r.Link(rel, to) })
+		}
 		return os.Link(full, filepath.Join(root, to))
 	case "delete":
+		if at.long(rel) {
+			return at.inRoot(func(r *os.Root) error { return r.Remove(rel) })
+		}
 		return os.Remove(full)
 	case "symlink":
 		b.note(s.Disk, rel)
@@ -590,13 +726,82 @@ func (b *sandbox) fileStep(s *step) error {
 		if err != nil {
 			return err
 		}
-		return os.Chmod(full, mode)
+		return at.chmod(rel, mode)
 	case "chown":
-		return os.Lchown(full, int(*s.UID), int(*s.GID))
+		return at.lchown(rel, int(*s.UID), int(*s.GID))
+	case "setxattr":
+		if s.Name == nil || s.Text == nil {
+			return errors.New("setxattr: want a name and a text")
+		}
+		return setXattr(full, *s.Name, *s.Text)
 	default: // touch
-		when := time.Unix(0, *s.MtimeNS)
-		return os.Chtimes(full, when, when)
+		return at.chtimes(rel, time.Unix(0, *s.MtimeNS))
 	}
+}
+
+// pathMax is PATH_MAX, with its NUL: the kernel takes no path that long whole.
+const pathMax = 4096
+
+// diskAt does to a disk what a user's command would, by a path from its top, as such a command gives one. A path past
+// PATH_MAX, which a command cannot give whole, goes one name at a time through a root on the top: that is how a tree
+// deeper than PATH_MAX is made, as one is, by commands that work in a folder below.
+type diskAt struct {
+	top string
+}
+
+func (d diskAt) long(rel string) bool {
+	return len(filepath.Join(d.top, rel)) >= pathMax
+}
+
+func (d diskAt) inRoot(fn func(r *os.Root) error) error {
+	r, err := os.OpenRoot(d.top)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	return fn(r)
+}
+
+func (d diskAt) mkdirAll(rel string) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.MkdirAll(rel, 0o755) })
+	}
+	return os.MkdirAll(filepath.Join(d.top, rel), 0o755)
+}
+
+func (d diskAt) symlink(target, rel string) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.Symlink(target, rel) })
+	}
+	return os.Symlink(target, filepath.Join(d.top, rel))
+}
+
+func (d diskAt) writeFile(rel string, data []byte) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.WriteFile(rel, data, 0o644) })
+	}
+	return os.WriteFile(filepath.Join(d.top, rel), data, 0o644)
+}
+
+func (d diskAt) chmod(rel string, mode os.FileMode) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.Chmod(rel, mode) })
+	}
+	return os.Chmod(filepath.Join(d.top, rel), mode)
+}
+
+func (d diskAt) lchown(rel string, uid, gid int) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.Lchown(rel, uid, gid) })
+	}
+	return os.Lchown(filepath.Join(d.top, rel), uid, gid)
+}
+
+func (d diskAt) chtimes(rel string, when time.Time) error {
+	if d.long(rel) {
+		return d.inRoot(func(r *os.Root) error { return r.Chtimes(rel, when, when) })
+	}
+	return os.Chtimes(filepath.Join(d.top, rel), when, when)
 }
 
 // checkOwner checks an owner: both ids, from 0 to 2^32-2, as (uid_t)-1 owns nothing, or with whole false neither.
@@ -626,6 +831,16 @@ func parseMode(text string) (os.FileMode, error) {
 		}
 	}
 	return mode, nil
+}
+
+// parseUmask reads a mask written as a mode is, in octal digits with a leading 0, from 0000 to 0777: what a unit's
+// UMask= takes.
+func parseUmask(text string) (string, error) {
+	value, err := strconv.ParseUint(text, 8, 32)
+	if err != nil || len(text) != 4 || text[0] != '0' || value > 0o777 {
+		return "", fmt.Errorf("umask %q: want octal digits from 0000 to 0777", text)
+	}
+	return text, nil
 }
 
 // specialBits are the bits above the permission bits, as stat(2) and Go each write them.
@@ -670,9 +885,15 @@ func (b *sandbox) runAtoll(s *step) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), stepTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, b.bin, args...)
+	if s.Umask != nil {
+		// A mask is a process's own, which exec.Cmd cannot give the child: a shell sets it, and then becomes the binary,
+		// so that the exit code, a crash's included, is the binary's own.
+		cmd = exec.CommandContext(ctx, "/bin/sh", append([]string{"-c", `umask "$0" && exec "$@"`, *s.Umask, b.bin}, args...)...)
+	}
 	cmd.Dir = b.dir
-	// With a set time zone, what "local" means does not depend on the machine.
-	cmd.Env = append(os.Environ(), controlEnv+"="+b.controlPath(), "TZ=UTC")
+	// With a set time zone, what "local" means does not depend on the machine. The runner's own two come last, so that
+	// nothing overrides them: of a name given twice, a run gets the last.
+	cmd.Env = append(append(os.Environ(), b.env...), controlEnv+"="+b.controlPath(), "TZ=UTC")
 	cmd.WaitDelay = time.Second // a child holding the output open must not outlast the timeout
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -959,17 +1180,24 @@ func contentOf(e *entry) []byte {
 
 // writeEntry creates what an entry of a tree describes.
 func writeEntry(root, rel string, e *entry) error {
-	full := filepath.Join(root, rel)
+	at := diskAt{top: root}
 	if e.Kind == "dir" {
-		return os.MkdirAll(full, 0o755)
+		if err := at.mkdirAll(rel); err != nil || e.Mode == nil {
+			return err
+		}
+		mode, err := parseMode(*e.Mode)
+		if err != nil {
+			return err
+		}
+		return at.chmod(rel, mode)
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	if err := at.mkdirAll(filepath.Dir(rel)); err != nil {
 		return err
 	}
 	if e.Kind == "symlink" {
-		return os.Symlink(e.Target, full)
+		return at.symlink(e.Target, rel)
 	}
-	if err := os.WriteFile(full, contentOf(e), 0o644); err != nil {
+	if err := at.writeFile(rel, contentOf(e)); err != nil {
 		return err
 	}
 	if e.Mode != nil {
@@ -977,20 +1205,83 @@ func writeEntry(root, rel string, e *entry) error {
 		if err != nil {
 			return err
 		}
-		if err := os.Chmod(full, mode); err != nil {
+		if err := at.chmod(rel, mode); err != nil {
 			return err
 		}
 	}
 	if e.UID != nil {
-		if err := os.Lchown(full, int(*e.UID), int(*e.GID)); err != nil {
+		if err := at.lchown(rel, int(*e.UID), int(*e.GID)); err != nil {
+			return err
+		}
+	}
+	for _, x := range e.Xattrs {
+		if err := at.inRoot(func(r *os.Root) error {
+			return throughRoot(r, rel, func(proc string) error { return setXattr(proc, x.Name, x.Text) })
+		}); err != nil {
 			return err
 		}
 	}
 	if e.MtimeNS == nil {
 		return nil
 	}
-	when := time.Unix(0, *e.MtimeNS)
-	return os.Chtimes(full, when, when)
+	return at.chtimes(rel, time.Unix(0, *e.MtimeNS))
+}
+
+// xattrNamespace is the namespace of the extended attributes a scenario gives and compares (specs.md §14, §21.2).
+const xattrNamespace = "user."
+
+// setXattr gives a file an extended attribute of the user. namespace, as setfattr does.
+func setXattr(full, name, text string) error {
+	if !strings.HasPrefix(name, xattrNamespace) {
+		return fmt.Errorf("setxattr %q: only the %s namespace", name, xattrNamespace)
+	}
+	if err := syscall.Setxattr(full, name, []byte(text), 0); err != nil {
+		return fmt.Errorf("setxattr %q: %w", name, err)
+	}
+	return nil
+}
+
+// throughRoot opens a file through a root, one name at a time, as a path past PATH_MAX needs (the walk past a branch's
+// limit), and hands fn the path of its descriptor in /proc, which the calls on attributes take.
+func throughRoot(r *os.Root, rel string, fn func(proc string) error) error {
+	f, err := r.Open(rel)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	return fn(fmt.Sprintf("/proc/self/fd/%d", f.Fd()))
+}
+
+// userXattrs reads the extended attributes of the user. namespace of a file, as getfattr does; none where its
+// filesystem holds none.
+func userXattrs(full string) (map[string]string, error) {
+	out := map[string]string{}
+	size, err := syscall.Listxattr(full, nil)
+	switch {
+	case errors.Is(err, syscall.ENOTSUP):
+		return out, nil
+	case err != nil:
+		return nil, fmt.Errorf("listxattr: %w", err)
+	}
+	list := make([]byte, size)
+	if size, err = syscall.Listxattr(full, list); err != nil {
+		return nil, fmt.Errorf("listxattr: %w", err)
+	}
+	for _, name := range strings.Split(string(list[:size]), "\x00") {
+		if !strings.HasPrefix(name, xattrNamespace) {
+			continue
+		}
+		n, err := syscall.Getxattr(full, name, nil)
+		if err != nil {
+			return nil, fmt.Errorf("getxattr %q: %w", name, err)
+		}
+		value := make([]byte, n)
+		if n, err = syscall.Getxattr(full, name, value); err != nil {
+			return nil, fmt.Errorf("getxattr %q: %w", name, err)
+		}
+		out[name] = string(value[:n])
+	}
+	return out, nil
 }
 
 // found is what is on a disk at a path.
@@ -999,45 +1290,67 @@ type found struct {
 	content []byte
 	target  string
 	mtimeNS int64
-	mode    uint32 // for a file: the permission bits, setuid, setgid and sticky
+	mode    uint32 // for a file and a folder: the permission bits, setuid, setgid and sticky
 	uid     int64  // for a file
 	gid     int64
-	empty   bool // for a folder
+	empty   bool              // for a folder
+	xattrs  map[string]string // for a file: its extended attributes of the user. namespace
 }
 
-// listTree reads a whole disk, by path relative to its top.
+// listTree reads a whole disk, by path relative to its top, one name at a time through a root on it, following no
+// symbolic link: a tree deeper than PATH_MAX is read as any other.
 func listTree(root string) (map[string]*found, error) {
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("read the disk: %w", err)
+	}
+	defer func() { _ = r.Close() }()
 	out := map[string]*found{}
-	err := filepath.WalkDir(root, func(full string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if full == root {
-			return nil
-		}
-		rel, err := filepath.Rel(root, full)
-		if err != nil {
-			return err
-		}
-		info, err := d.Info()
+	if err := listBelow(r, ".", out); err != nil {
+		return nil, fmt.Errorf("read the disk: %w", err)
+	}
+	return out, nil
+}
+
+// names lists a folder of a root.
+func names(r *os.Root, dir string) ([]string, error) {
+	f, err := r.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return f.Readdirnames(-1)
+}
+
+func listBelow(r *os.Root, dir string, out map[string]*found) error {
+	list, err := names(r, dir)
+	if err != nil {
+		return err
+	}
+	for _, name := range list {
+		rel := path.Join(dir, name)
+		info, err := r.Lstat(rel)
 		if err != nil {
 			return err
 		}
 		switch {
-		case d.IsDir():
-			children, err := os.ReadDir(full)
+		case info.IsDir():
+			children, err := names(r, rel)
 			if err != nil {
 				return err
 			}
-			out[rel] = &found{kind: "dir", empty: len(children) == 0}
+			out[rel] = &found{kind: "dir", empty: len(children) == 0, mode: modeBits(info.Mode())}
+			if err := listBelow(r, rel, out); err != nil {
+				return err
+			}
 		case info.Mode()&os.ModeSymlink != 0:
-			target, err := os.Readlink(full)
+			target, err := r.Readlink(rel)
 			if err != nil {
 				return err
 			}
 			out[rel] = &found{kind: "symlink", target: target}
 		case info.Mode().IsRegular():
-			content, err := os.ReadFile(full)
+			content, err := r.ReadFile(rel)
 			if err != nil {
 				return err
 			}
@@ -1045,16 +1358,15 @@ func listTree(root string) (map[string]*found, error) {
 			if st, ok := info.Sys().(*syscall.Stat_t); ok {
 				f.uid, f.gid = int64(st.Uid), int64(st.Gid)
 			}
+			if err := throughRoot(r, rel, func(proc string) (err error) { f.xattrs, err = userXattrs(proc); return err }); err != nil {
+				return fmt.Errorf("%q: %w", rel, err)
+			}
 			out[rel] = f
 		default:
 			return fmt.Errorf("%q: neither a file, a folder nor a symlink", rel)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("read the disk: %w", err)
 	}
-	return out, nil
+	return nil
 }
 
 // matches reports whether a listed path, where a component * matches any one name, names a path.
@@ -1133,6 +1445,12 @@ func sameEntry(e *entry, f *found) error {
 		if f.target != e.Target {
 			return fmt.Errorf("target %q, want %q", f.target, e.Target)
 		}
+	case "dir":
+		if e.Mode != nil {
+			if want, err := parseMode(*e.Mode); err != nil || f.mode != modeBits(want) {
+				return fmt.Errorf("mode %04o, want %s", f.mode, *e.Mode)
+			}
+		}
 	case "file":
 		content := contentOf(e)
 		if !bytes.Equal(f.content, content) {
@@ -1148,6 +1466,15 @@ func sameEntry(e *entry, f *found) error {
 		}
 		if e.UID != nil && (f.uid != *e.UID || f.gid != *e.GID) {
 			return fmt.Errorf("owner %d:%d, want %d:%d", f.uid, f.gid, *e.UID, *e.GID)
+		}
+		if e.Xattrs != nil {
+			want := map[string]string{}
+			for _, x := range e.Xattrs {
+				want[x.Name] = x.Text
+			}
+			if !maps.Equal(f.xattrs, want) {
+				return fmt.Errorf("extended attributes %v, want %v", f.xattrs, want)
+			}
 		}
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -46,9 +47,10 @@ func TestHoldings(t *testing.T) {
 	f := &Facts{
 		Disks: []jobs.DiskLine{
 			{ID: "t1", Verdict: disks.Verdict{State: disks.Missing}}, {ID: "t2", Verdict: disks.Verdict{State: disks.Readonly}},
-			{ID: "t3", Verdict: disks.Verdict{State: disks.Online}, Walked: true, Refused: 2, RefusedFirst: []string{"p", "q"}},
+			{ID: "t3", Verdict: disks.Verdict{State: disks.Online}, Walked: true, Refused: 2, RefusedFirst: []string{"p", "q"}, TooLong: 4,
+				TooLongFirst: []string{"x/y"}},
 			// What a walk that did not end found says nothing.
-			{ID: "t8", Verdict: disks.Verdict{State: disks.Online}, Refused: 5},
+			{ID: "t8", Verdict: disks.Verdict{State: disks.Online}, Refused: 5, TooLong: 2},
 			{ID: "t9", Verdict: disks.Verdict{State: disks.Online}, Walked: true},
 		},
 		// The files a read could not open count with the names a walk could not reach, on a disk that was walked.
@@ -63,7 +65,12 @@ func TestHoldings(t *testing.T) {
 		Capacity:  100,
 		TrashFull: []TrashFull{{ID: "t3", Used: 6, Capacity: 100}},
 		Dirty:     []string{"t7"},
+		Disagree:  []NamesDisagree{{ID: "t8", Ops: 2}},
+		Unnamed:   []UnnamedLinks{{ID: "t9", Links: 3}},
+		Shared:    []SharedDevice{{ID: "t5", Disks: []SharedDisk{{ID: "t5", Device: "sda"}, {ID: "t6", Device: "sda"}}}},
 		Foreign:   []ForeignWorkdir{{ID: "t3", Path: "/mnt/t3/Atoll", UID: 1000, Want: 997}},
+		// Versions a modification replaced, purged for room before their retention ended (specs.md §17).
+		Versions: []VersionsPurged{{ID: "t2", Paths: Refused{Count: 12, First: []string{"a"}}}, {ID: "t4"}},
 		Smart: []SmartLine{
 			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2}}},
 			{ID: "t5", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Temperature: 50}}},
@@ -74,9 +81,9 @@ func TestHoldings(t *testing.T) {
 	for _, h := range Holdings(f) {
 		got = append(got, fmt.Sprintf("%s=%d", h.Key, h.Count))
 	}
-	want := []string{"disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
-		"guard-modifications:t3=1", "manual-waiting=1", "name-refused=2", "no-access:t3=5", "no-access:t9=1", "ntfs-dirty:t7=1", "pool-full=1", "smart-failing:t4=1",
-		"smart-sectors:t4=10", "smart-sectors:t6=3", "trash-full:t3=1", "workdir-owner:t3=1"}
+	want := []string{"branch-path-too-long:t3=4", "disk-missing:t1=1", "disk-readonly:t2=1", "files-corrupt=3", "files-name-collision=1", "guard-deletions:t3=1",
+		"guard-modifications:t3=1", "link-unnamed:t9=3", "manual-waiting=1", "name-refused=2", "no-access:t3=5", "no-access:t9=1", "ntfs-dirty:t7=1", "ntfs-names:t8=2", "pool-full=1", "shared-device:t5=1", "smart-failing:t4=1",
+		"smart-sectors:t4=10", "smart-sectors:t6=3", "trash-full:t3=1", "versions-purged:t2=12", "workdir-owner:t3=1"}
 	if !slices.Equal(got, want) {
 		t.Errorf("%q", got)
 	}
@@ -101,6 +108,12 @@ func TestGather(t *testing.T) {
 	if err := catalog.SyncDisks(t.Context(), db, list); err != nil {
 		t.Fatal(err)
 	}
+	// The physical disks a start found each on: a, c and f meet on sda, c and f through sdb too; b and h are alone.
+	for id, physical := range map[string][]string{"a": {"sda"}, "b": {"sdc"}, "c": {"sda", "sdb"}, "f": {"sdb"}, "h": {"sdh"}} {
+		if err := catalog.SetDevice(t.Context(), db, id, physical); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// The last reading of SMART of each disk that has one, but a failed disk's, and one that does not decode.
 	for id, reading := range map[string]string{"a": `{"read_ns":7,"failing":false,"reallocated":8,"pending":0,"uncorrectable":0,"temperature":41}`,
 		"e": `{"read_ns":6,"failing":true,"reallocated":0,"pending":0,"uncorrectable":0,"temperature":0}`, "f": `{"read_ns":5,"failing":true}`,
@@ -120,13 +133,16 @@ func TestGather(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f.Used != 290 || f.Capacity != 400 || f.SeenByNS != hour || f.ManualAfter != "1h" || f.Files.ByState["corrupt"] != 2 || f.Files.Manual != 1 ||
-		f.Refused.Count != 3 || len(f.Disks) != 1 || len(f.Guards) != 1 || f.MaxSize != "5%" || len(f.TrashFull) != 0 {
+		f.Refused.Count != 3 || len(f.Disks) != 1 || len(f.Guards) != 1 || f.MaxSize != "5%" || f.Retention != "30d" || len(f.TrashFull) != 0 {
 		t.Errorf("%+v, files %+v", f, f.Files)
 	}
 	smart := []SmartLine{{ID: "a", SmartRecord: disks.SmartRecord{ReadNS: 7, Smart: disks.Smart{Reallocated: 8, Temperature: 41}}},
 		{ID: "e", SmartRecord: disks.SmartRecord{ReadNS: 6, Smart: disks.Smart{Failing: true}}}}
 	if !slices.Equal(f.Smart, smart) {
 		t.Errorf("SMART %+v", f.Smart)
+	}
+	if shared := []SharedDevice{{ID: "a", Disks: []SharedDisk{{"a", "sda"}, {"c", "sda,sdb"}, {"f", "sdb"}}}}; !reflect.DeepEqual(f.Shared, shared) {
+		t.Errorf("shared %+v", f.Shared)
 	}
 	// Seen an hour ago at most: not waiting yet.
 	if f, _ := Gather(t.Context(), db, c, hour-1, outcome, &Refused{}); f.Files.Manual != 0 {
@@ -261,14 +277,19 @@ func TestDescribe(t *testing.T) {
 	f := &Facts{
 		Disks: []jobs.DiskLine{{ID: "t1", Verdict: disks.Verdict{State: disks.Missing, Message: "nothing is mounted there"}},
 			{ID: "t2", Verdict: disks.Verdict{State: disks.Readonly}, Walked: true, Refused: 12, RefusedFirst: []string{"alice", "bob/mnt"}},
-			{ID: "t7", Verdict: disks.Verdict{State: disks.Online}, Walked: true, Refused: 1, RefusedFirst: []string{"carol"}}},
+			{ID: "t7", Verdict: disks.Verdict{State: disks.Online}, Walked: true, Refused: 1, RefusedFirst: []string{"carol"}},
+			{ID: "t9", Verdict: disks.Verdict{State: disks.Online}, Walked: true, TooLong: 12, TooLongFirst: []string{"deep/a", "deep/b\xff"}}},
 		Unopened: map[string][]string{"t7": {"bob.mkv", "dave.mkv"}},
 		Foreign:  []ForeignWorkdir{{ID: "t2", Path: "/mnt/t2/Atoll/links", UID: 1000, Want: 997}},
-		Guards:   []jobs.GuardLine{{Disk: "t1", Kind: jobs.GuardDeletions, Count: 40}, {Disk: "t2", Kind: jobs.GuardModifications, Count: 7}},
+		Guards: []jobs.GuardLine{{Disk: "t1", Kind: jobs.GuardDeletions, Count: 40}, {Disk: "t2", Kind: jobs.GuardModifications, Count: 7},
+			{Disk: "t3", Kind: jobs.GuardModifications, Count: 1000, Window: jobs.WindowDay}},
 		Refused:  Refused{Count: 1, First: []string{"bad\xff"}},
 		Used:     95,
 		Capacity: 100,
 		SeenByNS: 10, ManualAfter: "7d",
+		Shared:  []SharedDevice{{ID: "t2", Disks: []SharedDisk{{"t2", "sda"}, {"t3", "sda,sdb"}, {"t4", "sdb"}}}},
+		MaxSize: "5%", Retention: "30d",
+		Versions: []VersionsPurged{{ID: "t3", Paths: Refused{Count: 12, First: []string{"Films/a.mkv", "Films/b\xff.mkv"}}}, {ID: "t4", Paths: Refused{Count: 1, First: []string{"x"}}}},
 		Smart: []SmartLine{
 			{ID: "t3", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Failing: true, Reallocated: 8, Pending: 2, Uncorrectable: 1, Temperature: 52}}},
 			{ID: "t4", SmartRecord: disks.SmartRecord{Smart: disks.Smart{Reallocated: 3}}},
@@ -286,6 +307,9 @@ func TestDescribe(t *testing.T) {
 		{"disk-readonly:t2", 1, "Atoll: disk t2 is read-only", 3, []string{"read-only."}},
 		{"guard-deletions:t1", 1, "Atoll: the mass-deletion guard of disk t1 tripped", 4, []string{"deletions it found on disk t1 (40)", "atoll guard list"}},
 		{"guard-modifications:t2", 1, "Atoll: the mass-modification guard of disk t2 tripped", 4, []string{"modifications it found on disk t2 (7)"}},
+		// Tripped on what its day counted, modifies.day_guard (specs.md §15.6).
+		{"guard-modifications:t3", 1, "Atoll: the mass-modification guard of disk t3 tripped on what a day changed", 4, []string{
+			"modifications it found on disk t3 (1000 within a day)", "atoll guard list"}},
 		{"files-corrupt", 12, "Atoll: 12 corrupt files", 4, []string{"\nc/00\nc/01\n", "\nc/09\nand 2 more"}},
 		{"files-conflict", 1, "Atoll: 1 conflict file", 3, []string{"\na/conflict"}},
 		{"manual-waiting", 1, "Atoll: 1 file in manual mode left unprotected", 3, []string{"more than 7d", "\nm/x"}},
@@ -302,11 +326,27 @@ func TestDescribe(t *testing.T) {
 			"atoll disk remove t4 --evacuate --dry-run"}},
 		{"smart-sectors:t4", 1, "Atoll: disk t4 has 1 bad sector", 3, nil},
 		{"ntfs-dirty:t6", 1, "Atoll: the NTFS volume of disk t6 is marked dirty", 4, []string{"The disk t6 is missing", "chkdsk /f on Windows"}},
+		// A volume whose names and records disagree, as ntfs3 leaves it when a device fails during a move (specs.md §17.2).
+		{"ntfs-names:t2", 2, "Atoll: the NTFS volume of disk t2 needs a repair", 4, []string{"2 operations on disk t2 stay planned",
+			"chkdsk /f on Windows"}},
+		// A link of the guard whose data nothing names (specs.md §17).
+		{"link-unnamed:t2", 3, "Atoll: 3 links of disk t2 hold data nothing names", 3, []string{"Atoll/links", "nothing is removed"}},
+		// Disks a start found on one physical disk (specs.md §10, R-06).
+		{"shared-device:t2", 1, "Atoll: disks t2, t3 and t4 share a physical disk", 4, []string{"The disks t2 (sda), t3 (sda, sdb) and t4 (sdb) live on one",
+			"goes on writing", "atoll disk remove t4 --evacuate --dry-run"}},
 		{"no-access:t2", 12, "Atoll: 12 names of disk t2 refuse the account Atoll runs as", 3, []string{"\nalice\nbob/mnt\nand 10 more",
 			"nothing there is copied or verified"}},
 		{"no-access:t2", 1, "Atoll: 1 name of disk t2 refuses the account Atoll runs as", 3, nil},
 		// The names of both, in byte order: what a walk could not reach, and the files a read could not open.
 		{"no-access:t7", 3, "Atoll: 3 names of disk t7 refuse the account Atoll runs as", 3, []string{"\nbob.mkv\ncarol\ndave.mkv", "or a read could not open them"}},
+		// Names past the limit of a mergerfs branch, which a walk does not read (specs.md §15.8).
+		{"branch-path-too-long:t9", 12, "Atoll: 12 names of disk t9 are past the limit of its mergerfs branch", 3, []string{
+			"\ndeep/a\n(base64) ZGVlcC9i/w==\nand 10 more", "mergerfs cannot present", "no copy of that disk is taken for deleted"}},
+		{"branch-path-too-long:t9", 1, "Atoll: 1 name of disk t9 is past the limit of its mergerfs branch", 3, nil},
+		// Versions a modification replaced, purged for room before their retention ended (specs.md §17).
+		{"versions-purged:t3", 12, "Atoll: the trash of disk t3 purged 12 versions of files before their time", 4, []string{
+			"trash.max_size (5%)", "before their 30d", "those versions are lost", "\nFilms/a.mkv\n(base64) RmlsbXMvYv8ubWt2\nand 10 more"}},
+		{"versions-purged:t4", 1, "Atoll: the trash of disk t4 purged 1 version of a file before its time", 4, []string{"\nx"}},
 		{"workdir-owner:t2", 1, "Atoll: a folder Atoll works in on disk t2 belongs to another account", 3, []string{
 			"The folder /mnt/t2/Atoll/links, which Atoll works in on disk t2, belongs to the account 1000", "chown -R 997 /mnt/t2/Atoll/links"}},
 	} {

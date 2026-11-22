@@ -59,7 +59,7 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 	}
 	if !on && len(entries) == 0 {
 		handle.RemoveLinksFolder()
-		return nil
+		return s.countUnnamed(ctx, id, 0)
 	}
 	in, err := s.linksInput(ctx, id, on, entries)
 	if err != nil {
@@ -67,6 +67,7 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 	}
 	plan := solver.PlanLinks(in)
 	var unlinks, makes []catalog.LinkStart
+	unnamed := 0
 	for i := range plan {
 		step := &plan[i]
 		switch step.Do {
@@ -85,11 +86,22 @@ func (s *Session) Guard(ctx context.Context, id string, on bool, report func(*Li
 			}
 		case solver.LinkUnnamed:
 			slog.Warn("a link of the guard holds data that nothing names: it stays, for the user to look at", "disk", id, "link", step.Name)
+			unnamed++
 		case solver.LinkStray:
 			slog.Warn("the links folder holds something Atoll did not make: it stays", "disk", id, "name", step.Name)
 		case solver.LinkMake:
 			makes = append(makes, catalog.LinkStart{FileID: step.FileID, Path: step.Path, FileKey: step.Inode})
 		}
+	}
+	if err := s.countUnnamed(ctx, id, unnamed); err != nil {
+		return err
+	}
+	if len(makes) > 0 && handle.LinkMovesTimes() {
+		// A link there sets its file's modification time to now (measured): the guard would change the very copy it
+		// guards, and the next pass would give that time to every other copy (specs.md §17, §22).
+		slog.Warn("the link guard makes no link on a disk mounted with the type ntfs, where a link moves its file's modification time",
+			"disk", id, "copies", len(makes))
+		makes = nil
 	}
 	if _, err := s.linkOps(ctx, handle, catalog.OpUnlink, unlinks); err != nil || s.lostDisk(id) {
 		return err
@@ -284,18 +296,34 @@ func (s *Session) dropLink(ctx context.Context, handle *ops.Disk, op *catalog.Op
 }
 
 // dropLinksOf removes the links of the guard that lead to an entry about to be purged: Atoll sent that data to the
-// trash itself, and a link left behind would keep it once purged, and send it back to the trash at the next pass.
-func (s *Session) dropLinksOf(ctx context.Context, handle *ops.Disk, e *catalog.TrashEntry) error {
+// trash itself, and a link left behind would keep it once purged, and send it back to the trash at the next pass. It
+// says false when it cannot tell which links lead there: the entry is not purged then, as one could keep its data; a
+// disk that failed is lost (invariant 4), and anything else leaves the entry for the next purge.
+func (s *Session) dropLinksOf(ctx context.Context, handle *ops.Disk, e *catalog.TrashEntry) (bool, error) {
 	ids, err := handle.OwnLinksOf(e.TrashPath, e.FileKey)
 	if err != nil {
-		return s.guardFailed(ctx, e.Disk, err)
+		if errors.Is(err, ops.ErrDiskLost) {
+			return false, s.lose(ctx, e.Disk, err)
+		}
+		slog.Warn("an entry stays in the trash: whether a link of the guard keeps its data cannot be told", "disk", e.Disk,
+			"path", e.TrashPath, "error", err)
+		return false, nil
 	}
 	list := make([]catalog.LinkStart, len(ids))
 	for i, fileID := range ids {
 		list[i] = catalog.LinkStart{FileID: fileID, Path: e.Path, FileKey: e.FileKey}
 	}
 	_, err = s.linkOps(ctx, handle, catalog.OpUnlink, list)
-	return err
+	return true, err
+}
+
+// countUnnamed records on a disk's row the links its run found whose data nothing names, for the alert link-unnamed
+// and atoll status (specs.md §17, §23).
+func (s *Session) countUnnamed(ctx context.Context, id string, links int) error {
+	if err := catalog.SetLinksUnnamed(ctx, s.db, id, links); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	return nil
 }
 
 // guardFailed loses a disk that failed, and lets anything else wait for the next pass: a link is a second name.

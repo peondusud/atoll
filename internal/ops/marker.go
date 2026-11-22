@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
@@ -295,9 +296,9 @@ func (d *Disk) PutCatalog(src io.Reader) error {
 
 // HighestOpID gives the highest operation id the disk's work folder names, 0 when it names none: a folder of its
 // trash, trash/<date>/<op id>/, the chunks a repair overwrote, trash/<date>/<op id>.chunks/, a copy in progress,
-// tmp/<op id>.part, or a chunk a repair was saving, tmp/<op id>.<index>.part, each read as Atoll writes it. A new
-// catalog starts its operations past it, so that a new one never meets an old one's folder or part (specs.md §9,
-// §17). A date of the trash that cannot be read says nothing of what it holds: that is an error, never a lower id.
+// tmp/<op id>.part, or a chunk a repair was saving, tmp/<op id>.<index>.part, each read as Atoll writes it, and none past
+// catalog.MaxID, which no catalog gives. A new catalog starts its operations past it, so that a new one never meets an
+// old one's folder or part (specs.md §9, §17). A date of the trash that cannot be read says nothing of what it holds: that is an error, never a lower id.
 func (d *Disk) HighestOpID() (int64, error) {
 	highest := int64(0)
 	trash, err := d.open(components(d.config.Workdir, layout.TrashFolder))
@@ -328,7 +329,7 @@ func (d *Disk) HighestOpID() (int64, error) {
 				return 0, classify(fmt.Errorf("list the trash: %w", err))
 			}
 			for _, name := range folders {
-				if id, _, ok := layout.TrashOp(name); ok {
+				if id, _, ok := layout.TrashOp(name); ok && id <= catalog.MaxID {
 					highest = max(highest, id)
 				}
 			}
@@ -348,7 +349,7 @@ func (d *Disk) HighestOpID() (int64, error) {
 		return 0, classify(fmt.Errorf("list tmp: %w", err))
 	}
 	for _, name := range parts {
-		if id, _, _, ok := layout.PartOp(name); ok {
+		if id, _, _, ok := layout.PartOp(name); ok && id <= catalog.MaxID {
 			highest = max(highest, id)
 		}
 	}

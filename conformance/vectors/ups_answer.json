@@ -1,0 +1,29 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a720",
+  "description": "What one line of upsd's answer to GET VAR <ups> ups.status says, the line feed taken off: the value of ups.status, or null. The line must be VAR, the UPS's name, ups.status, then the value in double quotes, one space between each, and nothing after the closing quote; one carriage return at its end is taken off first. In the value, a backslash escapes the character after it, which must be a double quote or a backslash. A line ERR <code>, where the code is what follows ERR up to the next space, gives null and that code in err; err is left out otherwise.",
+  "cases": [
+    {"note": "on line power", "ups": "ups", "line": "VAR ups ups.status \"OL\"", "status": "OL"},
+    {"note": "the whole value, flags and spaces", "ups": "ups", "line": "VAR ups ups.status \"OB DISCHRG LB\"", "status": "OB DISCHRG LB"},
+    {"note": "a carriage return before the line feed", "ups": "ups", "line": "VAR ups ups.status \"OL\"\r", "status": "OL"},
+    {"note": "an empty value", "ups": "ups", "line": "VAR ups ups.status \"\"", "status": ""},
+    {"note": "a backslash escapes a double quote and a backslash", "ups": "ups", "line": "VAR ups ups.status \"a \\\"b\\\" \\\\c\"", "status": "a \"b\" \\c"},
+    {"note": "a backslash before anything else", "ups": "ups", "line": "VAR ups ups.status \"a\\b\"", "status": null},
+    {"note": "another UPS", "ups": "ups", "line": "VAR other ups.status \"OL\"", "status": null},
+    {"note": "another variable", "ups": "ups", "line": "VAR ups ups.load \"OL\"", "status": null},
+    {"note": "a value not in quotes", "ups": "ups", "line": "VAR ups ups.status OL", "status": null},
+    {"note": "a quote not closed", "ups": "ups", "line": "VAR ups ups.status \"OL", "status": null},
+    {"note": "something after the value", "ups": "ups", "line": "VAR ups ups.status \"OL\" x", "status": null},
+    {"note": "two spaces", "ups": "ups", "line": "VAR ups  ups.status \"OL\"", "status": null},
+    {"note": "VAR in lowercase", "ups": "ups", "line": "var ups ups.status \"OL\"", "status": null},
+    {"note": "the driver gives upsd nothing fresh", "ups": "ups", "line": "ERR DATA-STALE", "status": null, "err": "DATA-STALE"},
+    {"note": "no driver", "ups": "ups", "line": "ERR DRIVER-NOT-CONNECTED", "status": null, "err": "DRIVER-NOT-CONNECTED"},
+    {"note": "upsd knows no such UPS", "ups": "ups", "line": "ERR UNKNOWN-UPS", "status": null, "err": "UNKNOWN-UPS"},
+    {"note": "upsd refuses this client", "ups": "ups", "line": "ERR ACCESS-DENIED", "status": null, "err": "ACCESS-DENIED"},
+    {"note": "an error code, then more", "ups": "ups", "line": "ERR VAR-NOT-SUPPORTED extra", "status": null, "err": "VAR-NOT-SUPPORTED"},
+    {"note": "ERR with no code", "ups": "ups", "line": "ERR", "status": null},
+    {"note": "an empty line", "ups": "ups", "line": "", "status": null},
+    {"note": "anything else", "ups": "ups", "line": "OK", "status": null},
+    {"note": "a name with a dot", "ups": "my.ups", "line": "VAR my.ups ups.status \"OB\"", "status": "OB"}
+  ]
+}
