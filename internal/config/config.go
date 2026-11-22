@@ -487,21 +487,25 @@ func quoteKey(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
 	for _, r := range s {
-		switch {
-		case r == '"' || r == '\\':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case names.Unshowable(r) && utf8.RuneLen(r) == 4:
-			// Past U+FFFF: no four digits hold it.
-			fmt.Fprintf(&b, `\U%08X`, r)
-		case names.Unshowable(r):
-			fmt.Fprintf(&b, `\u%04X`, r)
-		default:
-			b.WriteRune(r)
-		}
+		b.WriteString(quotedChar(r))
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// quotedChar writes one character of a key part in double quotes.
+func quotedChar(r rune) string {
+	if r == '"' || r == '\\' {
+		return `\` + string(r)
+	}
+	if !names.Unshowable(r) {
+		return string(r)
+	}
+	if utf8.RuneLen(r) == 4 {
+		// Past U+FFFF: no four digits hold it.
+		return fmt.Sprintf(`\U%08X`, r)
+	}
+	return fmt.Sprintf(`\u%04X`, r)
 }
 
 // loadSchema reads the embedded schema, keeping integers exact.

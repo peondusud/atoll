@@ -40,20 +40,27 @@ func ShownAsIs(name string) bool {
 func Escaped(text string) string {
 	var b strings.Builder
 	for i := 0; i < len(text); {
-		r, size := utf8.DecodeRuneInString(text[i:])
-		switch {
-		case r == utf8.RuneError && size == 1:
-			fmt.Fprintf(&b, `\x{%02X}`, text[i])
-		case Unshowable(r):
-			fmt.Fprintf(&b, `\u{%04X}`, r)
-		case r == '\\' && (strings.HasPrefix(text[i+1:], "u{") || strings.HasPrefix(text[i+1:], "x{")):
-			b.WriteString(`\u{005C}`)
-		default:
-			b.WriteString(text[i : i+size])
-		}
+		shown, size := escapedAt(text, i)
+		b.WriteString(shown)
 		i += size
 	}
 	return b.String()
+}
+
+// escapedAt gives what Escaped writes for the character, or the byte, at text[i:], and how many bytes it takes up.
+func escapedAt(text string, i int) (string, int) {
+	r, size := utf8.DecodeRuneInString(text[i:])
+	if r == utf8.RuneError && size == 1 {
+		return fmt.Sprintf(`\x{%02X}`, text[i]), size
+	}
+	if Unshowable(r) {
+		return fmt.Sprintf(`\u{%04X}`, r), size
+	}
+	rest := text[i+size:]
+	if r == '\\' && (strings.HasPrefix(rest, "u{") || strings.HasPrefix(rest, "x{")) {
+		return `\u{005C}`, size
+	}
+	return text[i : i+size], size
 }
 
 // Shown gives a name as a line of human output, and an alert, write it: as it is when ShownAsIs, and otherwise as
