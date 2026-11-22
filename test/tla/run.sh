@@ -1,7 +1,8 @@
 #!/bin/bash
 # Checks the TLA+ model of conformance/models/ with TLC (specs.md §27, §29.4): each instance there, a .cfg file,
 # against what its first line expects, "\* expect: pass", or "\* expect: <invariant>" for a flaw of specs.md the model
-# found, whose remedy is the maintainer's to decide (conformance/models/README.md). Java runs only in a container:
+# found, whose remedy is the maintainer's to decide (conformance/models/README.md). An instance checks MC.tla, or the
+# module a line "\* module: <name>.tla" of its comments names. Java runs only in a container:
 # with only Docker, this script runs itself in the image below; with --inside, it runs TLC where it is, in that image,
 # as the CI's job does.
 #
@@ -102,8 +103,10 @@ for cfg in "$@"; do
 		worst=1
 		continue
 	fi
+	# The module it checks: MC.tla, or the one a line "\* module: <name>.tla" of its comments names.
+	module=$(sed -n 's/^\\\* module: \([A-Za-z0-9]*\.tla\)$/\1/p' "$cfg" | head -n 1)
 	start=$(date +%s)
-	java -XX:+UseParallelGC -Xmx2g -cp "$jar" tlc2.TLC -workers 2 -metadir "$meta/$name" -config "$cfg" MC.tla >"$log" 2>&1
+	java -XX:+UseParallelGC -Xmx2g -cp "$jar" tlc2.TLC -workers 2 -metadir "$meta/$name" -config "$cfg" "${module:-MC.tla}" >"$log" 2>&1
 	spent=$(($(date +%s) - start))
 	got=error
 	if grep -q '^Model checking completed. No error has been found.' "$log"; then
