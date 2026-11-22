@@ -319,7 +319,7 @@ func TestEveryWriterFailsWhole(t *testing.T) {
 			return none(TakeViewOps(ctx, db, []int64{1, 2}, 100))
 		}},
 		{"BeginViewPart", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {
-			o, v, err := BeginViewPart(ctx, db, "c1", "A/b", "u1", 100)
+			o, v, err := BeginViewPart(ctx, db, "c1", "A/b", "u1", 100, nil)
 			return pair(o, v), err
 		}},
 		{"ViewPartWritten", sweepOptions{}, func(ctx context.Context, db *sql.DB) (any, error) {

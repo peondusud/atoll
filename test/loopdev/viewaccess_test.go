@@ -125,6 +125,10 @@ func TestViewAsAnotherAccount(t *testing.T) {
 	if made != 1 {
 		t.Errorf("the file it made is on %d disks, want 1", made)
 	}
+	// The journal says who made it, as the kernel named the caller of the request: its account, and a thread (G15).
+	if got := b.text("SELECT COALESCE(uid, -1) || ' ' || (pid IS NOT NULL AND pid > 0) FROM view_ops WHERE kind = 'create' AND CAST(lpath AS TEXT) = 'Open/Mine.mkv'"); got != strconv.Itoa(another)+" 1" {
+		t.Errorf("who made it, as the journal says: %q, want the account %d and a thread", got, another)
+	}
 	// The kernel takes setuid off a file a caller without CAP_FSETID writes: through the view, on its disk too, where
 	// the view writes with CAP_FSETID.
 	for _, p := range []string{in("Open/Setuid.mkv"), filepath.Join(b.keep, "media", "Open", "Setuid.mkv")} {

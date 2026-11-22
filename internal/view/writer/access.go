@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/view"
@@ -27,6 +28,17 @@ type Caller struct {
 	// Creds, when set, are its other groups and its capabilities, as a test gives them, its account and group being
 	// the Owner's; otherwise /proc gives them, when a check needs them.
 	Creds *view.Credentials
+	// InRequest says that the kernel named it, in a FUSE request: what the view journals for it says who asked, its
+	// account and its thread (specs.md §9, §21.2).
+	InRequest bool
+}
+
+// asker gives who asked, as the journal records it: nil for a caller from no request.
+func (c *Caller) asker() *catalog.ViewAsker {
+	if !c.InRequest {
+		return nil
+	}
+	return &catalog.ViewAsker{UID: c.UID, PID: c.PID}
 }
 
 // Asked is who asks a change of attributes, and how, which the kernel's checks of it read.
