@@ -931,6 +931,17 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `capacity` | integer | `U(k)` in bytes, computed exactly, then rounded down; 0 with more copies than disks |
 | `error` | boolean | `true` when the input is rejected: `k` below 1, a negative size, or a total that does not fit in a signed 64-bit integer |
 
+### `capacity_reachable.json` — what `atoll capacity` says of a pool (§13.1, §13.3)
+
+A case gives a pool and its files as `plan.json` does, and the three levels of `atoll capacity --json` (`api/schemas/capacity.schema.json`). Each level plans the pool with every file wanted at k copies, whatever its `replicas`, and none waiting for `atoll replicate` (`manual` reads as `false`); the plan moves no copy. A file on the SSD cache that leaves it, as each does in time, says `cache` `transfer`, as the caller gives it. The formula counts the data disks `online` or in `standby`, two on one physical disk as one, in the failure domain of the first of them by position, whatever the order of the list.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disks`, `files`, `entries`, `taken`, `min_free`, `new_files`, `fill_to`, `equalize`, `cache_mirror`, `cache_early` | | as in `plan.json`, with its defaults |
+| `spread_mode` | string | `[placement] spread_mode`: `prefer` when left out, or `strict`, for the formula of failure domains |
+| `levels` | array of objects | for k = 1, 2 and 3, in order, each with every field: `copies` (k); `theoretical`, the formula over each disk's capacity less `min_free`; `stored`, the bytes of the files that reach k copies in the plan, a file reaching them unless left `degraded`, `unavailable`, `name-incompatible` or `name-collision`; `short`, the count of the others; `reachable`, `stored` and the formula over each disk's free space less the copies the plan makes there and the pending copies it keeps there, less `min_free`, and never below 0 |
+| `error` | boolean | `true` when the plan refuses the input |
+
 ## Unicode versions
 
 The Go and Rust libraries do not use the same Unicode version (`specs.md` §29.5). Vectors that involve Unicode data (`nfc.json`, `match.json`, `regex.json`, `lpath_key.json`, `ntfs_collision.json`) only use characters assigned in Unicode 16.0, with expected results that no later version of the libraries' data changes. No accepted pattern and no path holds a run of non-starters long enough for Go's normalization to insert U+034F (`specs.md` §29.5); the Go tests check it. Rejected patterns may: both versions reject them before they normalize them.
