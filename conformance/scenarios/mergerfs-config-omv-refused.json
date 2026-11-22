@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a721.1, \u00a724, \u00a725",
-  "description": "The plugin refuses a path holding \", ', `, $, \\, ;, |, &, <, > or a line break, besides : and , which the line refuses already; a control character cannot be shown as it is either. With --omv such a branch is refused, with exit 1 and nothing on standard output; without it the line has it, as mergerfs takes it.",
+  "description": "The plugin refuses a path holding \", ', `, $, \\, ;, |, &, <, > or a line break, besides : and , which the line refuses already; a control character cannot be shown as it is either, nor a format character, such as U+202E RIGHT-TO-LEFT OVERRIDE (G16). With --omv such a branch is refused, with exit 1 and nothing on standard output; without it the line has it, as mergerfs takes it.",
   "disks": [
     {
       "id": "t1",
@@ -111,6 +111,33 @@
     {
       "do": "config",
       "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"/srv/mergerfs/pool\"\n[placement]\nmin_free = [\"1GiB\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"x1\"\nuuid = \"6e5d4c3b-2a19-4f8e-8d7c-6b5a4f3e2d1c\"\nmount = \"${SANDBOX}/disks/x1\\tb\"\nfs = \"xfs\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--omv",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config"
+      ]
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"/srv/mergerfs/pool\"\n[placement]\nmin_free = [\"1GiB\"]\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"x1\"\nuuid = \"6e5d4c3b-2a19-4f8e-8d7c-6b5a4f3e2d1c\"\nmount = \"${SANDBOX}/disks/x1\"\nfs = \"xfs\"\nroot = \"Films\u202eseireS\"\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "mergerfs-config",
+        "--omv"
+      ],
+      "exit": 1
     },
     {
       "do": "atoll",

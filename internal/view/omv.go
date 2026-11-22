@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
-	"unicode"
+
+	"github.com/peondusud/atoll/internal/names"
 )
 
 // The openmediavault mergerfs plugin, as docs/research/omv-mergerfs.md measured its version 8.0.5 with mergerfs 2.42.0
@@ -74,11 +75,12 @@ func (e *OMVTooLarge) Error() string {
 	return fmt.Sprintf("a minimum free space of %d bytes is more than the openmediavault mergerfs plugin's form holds, %dG", e.Bytes, OMVMaxCount)
 }
 
-// OMVRefused gives the first character of p that the plugin refuses: one of omvRefused, or a control character, line
-// breaks included, which the human output could not show as it is (specs.md §25). ':' and ',' are NewMergerfs's.
+// OMVRefused gives the first character of p that the plugin refuses: one of omvRefused, or a control or a format
+// character, line breaks and U+202E RIGHT-TO-LEFT OVERRIDE included, which the human output could not show as it is,
+// and so not as the form is to take it (names.Unshowable, specs.md §21.1, §25). ':' and ',' are NewMergerfs's.
 func OMVRefused(p string) (string, bool) {
 	for _, r := range p {
-		if strings.ContainsRune(omvRefused, r) || unicode.IsControl(r) {
+		if strings.ContainsRune(omvRefused, r) || names.Unshowable(r) {
 			return string(r), true
 		}
 	}

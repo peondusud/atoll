@@ -1,0 +1,191 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §15.11, §25, §29.3",
+  "description": "A name that holds a format character, U+202E RIGHT-TO-LEFT OVERRIDE or U+200D ZERO WIDTH JOINER, is written in base64 by the human output of status, as one with a control character is: written as it is, Films/Trailer, U+202E, vkm.exe reads as Films/Trailerexe.mkv. An accented name is written as it is. The --json output keeps each in path, its bytes as they are.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/Films/Amélie (2001).mkv",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/Films/Trailer\u202evkm.exe",
+          "text": "y",
+          "mtime_ns": 1600000000000000001
+        },
+        {
+          "path": "media/Films/👨\u200d👧.mkv",
+          "text": "z",
+          "mtime_ns": 1600000000000000002
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "Films",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "mount": "${SANDBOX}/disks/t1",
+            "fs": "ext4",
+            "role": "data",
+            "capacity_bytes": 1000000,
+            "free_bytes": 999997,
+            "last_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": 3,
+            "bytes": 3
+          }
+        ],
+        "files_total": 3,
+        "files_at_level": 0,
+        "bytes_total": 3,
+        "bytes_at_level": 0,
+        "bytes_placed": 3,
+        "by_state": {
+          "ok": 0,
+          "pending": 0,
+          "degraded": 3,
+          "unprotected": 0,
+          "unavailable": 0,
+          "corrupt": 0,
+          "conflict": 0,
+          "name-incompatible": 0,
+          "name-collision": 0
+        },
+        "files": [
+          {
+            "path": "Films/Amélie (2001).mkv",
+            "state": "degraded",
+            "size": 1,
+            "mtime": "2020-09-13T12:26:40.000000000Z",
+            "blake3": null,
+            "replicas": 1,
+            "mode": "deferred",
+            "rule": null,
+            "original": "t1",
+            "first_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": [
+              {
+                "disk": "t1",
+                "state": "ok",
+                "size": 1,
+                "mtime": "2020-09-13T12:26:40.000000000Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": null
+              }
+            ]
+          },
+          {
+            "path": "Films/Trailer\u202evkm.exe",
+            "state": "degraded",
+            "size": 1,
+            "mtime": "2020-09-13T12:26:40.000000001Z",
+            "blake3": null,
+            "replicas": 1,
+            "mode": "deferred",
+            "rule": null,
+            "original": "t1",
+            "first_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": [
+              {
+                "disk": "t1",
+                "state": "ok",
+                "size": 1,
+                "mtime": "2020-09-13T12:26:40.000000001Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": null
+              }
+            ]
+          },
+          {
+            "path": "Films/👨\u200d👧.mkv",
+            "state": "degraded",
+            "size": 1,
+            "mtime": "2020-09-13T12:26:40.000000002Z",
+            "blake3": null,
+            "replicas": 1,
+            "mode": "deferred",
+            "rule": null,
+            "original": "t1",
+            "first_seen": "2026-01-01T00:00:00.000000000Z",
+            "copies": [
+              {
+                "disk": "t1",
+                "state": "ok",
+                "size": 1,
+                "mtime": "2020-09-13T12:26:40.000000002Z",
+                "created": "${ANY_OR_NULL}",
+                "created_by": "user",
+                "first_seen": "2026-01-01T00:00:00.000000000Z",
+                "verified": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "Films"
+      ],
+      "stdout_has": [
+        "Films/Amélie (2001).mkv",
+        "(base64) RmlsbXMvVHJhaWxlcuKArnZrbS5leGU=",
+        "(base64) RmlsbXMv8J+RqOKAjfCfkacubWt2"
+      ],
+      "stdout_lacks": [
+        "\u202e",
+        "\u200d"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "status",
+        "--path",
+        "Films/Trailer\u202evkm.exe"
+      ],
+      "stdout_has": [
+        "(base64) RmlsbXMvVHJhaWxlcuKArnZrbS5leGU="
+      ],
+      "stdout_lacks": [
+        "Trailer\u202evkm.exe"
+      ]
+    }
+  ]
+}

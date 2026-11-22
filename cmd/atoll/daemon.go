@@ -23,6 +23,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/metrics"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/telemetry"
 	"github.com/peondusud/atoll/internal/value"
@@ -450,7 +451,7 @@ func (t *textDaemon) end(o *jobs.Outcome) error {
 // shownB64 is shownPath for a path as an output holds it: in path, or in base64 when it is not UTF-8.
 func shownB64(path, b64 string) string {
 	if b64 != "" {
-		return "(base64) " + b64
+		return names.Base64Shown + b64
 	}
 	return shownPath(path)
 }

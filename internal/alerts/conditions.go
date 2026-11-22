@@ -4,18 +4,16 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/value"
 )
@@ -614,12 +612,10 @@ func list(first string, paths []string, count int64) string {
 	return b.String()
 }
 
-// Shown gives a path as an alert shows it: as it is when it is UTF-8 with no control character, in base64 otherwise.
+// Shown gives a path as an alert shows it: as it is when it is UTF-8 with no control character and no format
+// character, in base64 otherwise, as the human output does (names.Shown, specs.md §23, §25).
 func Shown(p string) string {
-	if utf8.ValidString(p) && !strings.ContainsFunc(p, unicode.IsControl) {
-		return p
-	}
-	return "(base64) " + base64.StdEncoding.EncodeToString([]byte(p))
+	return names.Shown(p)
 }
 
 // andList joins names as a sentence does: "a", "a and b", "a, b and c".

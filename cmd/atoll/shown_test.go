@@ -2,19 +2,20 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/peondusud/atoll/internal/jobs"
 )
 
-// A name written to a terminal writes no line of its own, and no control character: a file may be named with a line
-// feed or an escape sequence, and a line that reads "moved to the trash" under it, or a screen cleared, is then the
-// name's doing. Such a name is shown in base64, as one that is not UTF-8 is, and as an alert shows it (specs.md §23).
-// The human output of scan, status, names check, guard list and the disk commands wrote it as it is.
-func TestANameWritesNoLineOfItsOwn(t *testing.T) {
-	const evil = "a\n  moved to the trash: every film\x1b[2J\r"
-	texts := map[string]func(name string) string{
+// humanTexts gives, for each human output that writes a name, what it writes for one: the text of each place a person
+// is shown a name, each through shownPath, shownB64 or pathText.
+func humanTexts(t *testing.T) map[string]func(name string) string {
+	t.Helper()
+	return map[string]func(name string) string{
 		"shownPath": func(name string) string { return shownPath(name) + "\n" },
 		"shownB64":  func(name string) string { return shownB64(name, "") + "\n" },
 		"pathText":  func(name string) string { return pathText(pathItem{Path: name}) + "\n" },
@@ -41,8 +42,31 @@ func TestANameWritesNoLineOfItsOwn(t *testing.T) {
 		"disk show": func(name string) string {
 			return diskShowText(&diskShowOutput{ID: "t1", DependingFirst: pathItems([]string{name})})
 		},
-		"a server's answer": func(name string) string { return shownText(name) + "\n" },
+		"dupes": func(name string) string {
+			return dupesText(&dupesOutput{Groups: []dupeGroupOutput{{Paths: []pathItem{{Path: name}}}}})
+		},
+		"daemon": func(name string) string {
+			var b bytes.Buffer
+			daemon := &textDaemon{w: &b}
+			if err := daemon.Decision(&jobs.Decision{Kind: "rename", Path: name, To: name}); err != nil {
+				t.Fatal(err)
+			}
+			if err := daemon.Operation(&jobs.Operation{Disk: "t1", Kind: "trash", Path: name, Outcome: "done"}); err != nil {
+				t.Fatal(err)
+			}
+			return b.String()
+		},
 	}
+}
+
+// A name written to a terminal writes no line of its own, and no control character: a file may be named with a line
+// feed or an escape sequence, and a line that reads "moved to the trash" under it, or a screen cleared, is then the
+// name's doing. Such a name is shown in base64, as one that is not UTF-8 is, and as an alert shows it (specs.md §23).
+// The human output of scan, status, names check, guard list and the disk commands wrote it as it is.
+func TestANameWritesNoLineOfItsOwn(t *testing.T) {
+	const evil = "a\n  moved to the trash: every film\x1b[2J\r"
+	texts := humanTexts(t)
+	texts["a server's answer"] = func(name string) string { return shownText(name) + "\n" }
 	for what, text := range texts {
 		got, plain := text(evil), text("a")
 		if strings.Count(got, "\n") != strings.Count(plain, "\n") {
@@ -64,6 +88,57 @@ func TestANameWritesNoLineOfItsOwn(t *testing.T) {
 	// A text keeps what can be read of it.
 	if got := shownText("refused: \x1b[31mno\x00"); got != "refused: �[31mno�" {
 		t.Errorf("%q", got)
+	}
+}
+
+// A name that holds a format character, which reorders what follows it or hides itself, is shown in base64 in every
+// human output, as one with a control character is (G16, the maintainer's choice of 2026-11-22): written as it is,
+// "Films/Trailer", U+202E RIGHT-TO-LEFT OVERRIDE, then "vkm.exe" reads as Films/Trailerexe.mkv. Its --json output
+// keeps it in path, as format version 1 has it (specs.md §29.3).
+func TestANameThatReordersTextIsShownInBase64(t *testing.T) {
+	const (
+		override = "Films/Trailer\xe2\x80\xaevkm.exe"
+		shown    = "(base64) RmlsbXMvVHJhaWxlcuKArnZrbS5leGU="
+	)
+	hiding := []string{
+		override,
+		"a\xe2\x81\xa6b\xe2\x81\xa9c", // U+2066 LEFT-TO-RIGHT ISOLATE, U+2069 POP DIRECTIONAL ISOLATE
+		"Films/a\xe2\x80\x8b.mkv",     // U+200B ZERO WIDTH SPACE
+		"Photos/a\xe2\x80\x8db.jpg",   // U+200D ZERO WIDTH JOINER
+		"\xef\xbb\xbfFilms.mkv",       // U+FEFF ZERO WIDTH NO-BREAK SPACE
+		"Docu\xc2\xadmentaires",       // U+00AD SOFT HYPHEN
+		"a\U000e0067\U000e007fb.png",  // tag characters, past U+FFFF
+	}
+	isFormat := func(r rune) bool { return unicode.Is(unicode.Cf, r) }
+	for what, text := range humanTexts(t) {
+		for _, name := range hiding {
+			if got := text(name); strings.ContainsFunc(got, isFormat) {
+				t.Errorf("%s: a format character reaches the terminal: %+q", what, got)
+			}
+		}
+		if got := text(override); !strings.Contains(got, shown) {
+			t.Errorf("%s: %+q, without %q", what, got, shown)
+		}
+		// U+2028 LINE SEPARATOR is Zl, U+034F COMBINING GRAPHEME JOINER and U+FE0F VARIATION SELECTOR-16 are Mn: no format
+		// character, so as they are.
+		for _, name := range []string{"a\xe2\x80\xa8b", "a\xcd\x8fb", "Photos/\xe2\x9d\xa4\xef\xb8\x8f.jpg"} {
+			if got := text(name); !strings.Contains(got, name) {
+				t.Errorf("%s: %+q, without %+q as it is", what, got, name)
+			}
+		}
+	}
+	// A server's answer has each format character replaced, as each control character is.
+	if got := shownText("refused: \xe2\x80\xaedetaler"); got != "refused: \xef\xbf\xbddetaler" {
+		t.Errorf("%+q", got)
+	}
+	// --json gives the name in path, its bytes as they are.
+	path, b64 := encodePath(override)
+	raw, err := json.Marshal(statusFile{Path: path, PathB64: b64})
+	if err != nil || b64 != "" || !strings.Contains(string(raw), `"path":"`+override+`"`) {
+		t.Errorf("%s, %q, %v", raw, b64, err)
+	}
+	if decoded, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(shown, "(base64) ")); string(decoded) != override {
+		t.Errorf("%q", decoded)
 	}
 }
 
