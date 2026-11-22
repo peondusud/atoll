@@ -3,10 +3,14 @@
 package disks
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"golang.org/x/sys/unix"
+
+	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
 )
 
@@ -69,5 +73,32 @@ func TestTheMachineReadsTheMarkerOncePerMount(t *testing.T) {
 	}
 	if got := m.Marker(top, "Atoll", entry, false); got.File != MarkerNotAFile {
 		t.Errorf("a symbolic link: %+v", got)
+	}
+}
+
+// What an error a read of the marker met says, as the machine keeps it once per mount: none there, something there
+// that is no regular file, the disk unknown, or nothing (specs.md §10, invariant 4). A mount that changed meanwhile
+// says nothing either, and neither is kept.
+func TestWhatAnErrorSaysOfTheMarker(t *testing.T) {
+	for err, want := range map[error]MarkerAnswer{
+		unix.ENOENT: MarkerAbsent, unix.ENOTDIR: MarkerAbsent, unix.ELOOP: MarkerNotAFile, fsx.ErrNotARegularFile: MarkerNotAFile,
+		unix.EIO: MarkerIOError, unix.ENOTCONN: MarkerIOError, unix.ESTALE: MarkerIOError, unix.EACCES: MarkerUnreadable,
+	} {
+		got := MarkerSeen{}.withError(fmt.Errorf("open: %w", err))
+		if got.File != want {
+			t.Errorf("%v: %s, want %s", err, got.File, want)
+		}
+		if kept := got.settled(); kept != (want == MarkerAbsent || want == MarkerNotAFile) {
+			t.Errorf("%v: kept %v", err, kept)
+		}
+	}
+	if got := (MarkerSeen{}).changedMount(); got.File != MarkerUnreadable || got.settled() {
+		t.Errorf("a mount that changed: %+v", got)
+	}
+	if got := MarkerSeenOf([]byte("x"), true, nil); got.File != MarkerFile || string(got.Text) != "x" {
+		t.Errorf("a file: %+v", got)
+	}
+	if got := MarkerSeenOf(nil, false, nil); got.File != MarkerAbsent {
+		t.Errorf("none: %+v", got)
 	}
 }

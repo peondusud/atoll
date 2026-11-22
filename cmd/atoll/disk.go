@@ -54,6 +54,11 @@ type diskListOutput struct {
 }
 
 func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
+	return diskListOn(configPath, args, disks.NewMachine, stdout, stderr)
+}
+
+// diskListOn is diskList on the machine newMachine gives, once the arguments and the configuration are read.
+func diskListOn(configPath string, args []string, newMachine func() (disks.Machine, error), stdout, stderr io.Writer) int {
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
@@ -67,7 +72,7 @@ func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	observer, err := disks.NewMachine()
+	observer, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}

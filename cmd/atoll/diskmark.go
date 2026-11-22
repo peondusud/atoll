@@ -44,6 +44,11 @@ type diskMarking struct {
 // missing for any other reason, readonly, failed, or that holds a marker of another pool, disk or filesystem, which
 // it never writes over.
 func diskMark(configPath string, args []string, stdout, stderr io.Writer) int {
+	return diskMarkOn(configPath, args, disks.NewMachine, stdout, stderr)
+}
+
+// diskMarkOn is diskMark on the machine newMachine gives, once the arguments and the configuration are read.
+func diskMarkOn(configPath string, args []string, newMachine func() (disks.Machine, error), stdout, stderr io.Writer) int {
 	parsed, err := parseDiskID(args, "--dry-run", "--yes", "--json")
 	if err != nil {
 		return usage(stderr, "disk mark: "+err.Error())
@@ -57,7 +62,7 @@ func diskMark(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk mark: %w", err))
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
