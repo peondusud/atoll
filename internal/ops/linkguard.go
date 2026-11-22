@@ -426,6 +426,13 @@ func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
 	if err := syncEntry(target.Dir, newName); err != nil {
 		return nil, err
 	}
+	// The folder the data went in takes the time of the one it stands for, while that one is still there, now that the
+	// data is in it (specs.md §17.1, step 5).
+	if last := like[len(dst)-2]; last.dated {
+		if err := restoreTime(target.Dir, last.Mtime); err != nil {
+			return nil, err
+		}
+	}
 	if err := target.Sync(); err != nil {
 		return nil, lost(err)
 	}
@@ -439,11 +446,12 @@ func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
 }
 
 // likeLogical gives, for each level of a target in the trash that stands for the root or a folder of a logical path,
-// the mode and owner of that folder below the root while it is still there. What the guard sends to the trash may
-// have lost its folders, and nothing says any more how open one that went was: it is private in the trash, and so
-// is every one below it, with the owner of the file. The last folder on the way that is still there may be open to
-// every account, as the root is, and a private folder must not come back open (specs.md §17.1).
-func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[int]fsx.Stat, error) {
+// the mode, owner and time of that folder below the root while it is still there. What the guard sends to the trash
+// may have lost its folders, and nothing says any more how open one that went was: it is private in the trash, and
+// so is every one below it, with the owner of the file, and with no time to take. The last folder on the way that is
+// still there may be open to every account, as the root is, and a private folder must not come back open (specs.md
+// §17.1).
+func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[int]standIn, error) {
 	parts := strings.Split(logical, "/")
 	folders := len(parts) - 1
 	// The last levels of dst are the operation's folder, the folders of the logical path, then its name.
@@ -457,7 +465,7 @@ func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[in
 	if err != nil {
 		return nil, classify(err)
 	}
-	like := map[int]fsx.Stat{first: last}
+	like := map[int]standIn{first: {Stat: last, dated: true}}
 	at := root.Dir
 	var opened []fsx.Dir
 	defer func() {
@@ -482,7 +490,8 @@ func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[in
 				return nil, classify(err)
 			}
 		}
-		like[first+1+i] = last
+		// One that went, and every one below it, has no time to take.
+		like[first+1+i] = standIn{Stat: last, dated: at != nil}
 	}
 	return like, nil
 }

@@ -54,10 +54,6 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - The type `ntfs` without `windows_names` (§22): `windows_names` is recommended since 2026-11-19, as the maintainer chose; whether Atoll leaves a name holding `" * < > ?` alone on a disk mounted without it, as a name refused, is still to decide, and its own trash move on such a name is still to measure there.
 - Run `test/loopdev` on the type `ntfs` in qemu (mainline 7.3), and consider booting Debian sid's 7.3.3, the kernel with no ntfs3 (point 7 of the report).. Measured in `docs/research/ntfs-driver.md`, whose last section lists the decisions it needs. Until then a disk mounted with it is `readonly`.
 
-## Pure core still without vectors (specs.md §29.4)
-
-- **Reachable capacity** (§13.3): `atoll capacity` has five scenarios and no vector. It is worked out in `internal/watch/capacity.go`, outside the pure core, from `solver.PlanEach` and `solver.Capacity`: a vector file needs that part moved into `internal/solver` first. Moving copies when rebalancing, the hysteresis of `balance.trigger`, and a file whose copies cover too few domains have their vectors (`plan.json`, `percent.json`, `daemon_wake.json`).
-
 ## GitHub Actions and releases (DONE.md, 2026-11-19)
 
 - The first release, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven and after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
@@ -131,7 +127,7 @@ What the review found costly, less what a test and a fix settled (DONE.md). None
 - What the copy pipeline leaves for later (§14): the creation time set after the rename on Windows (§7); balancing moves one file at a time. Copies at once (DONE.md, 2026-11-19) are to measure on the maintainer's SSD cache and HDDs, and their loop-device tests to run in qemu.
 - What modifications leave as limits (§15.4, §15.12): a swap of two names whose other copies are on NTFS, whose drivers cannot exchange two names, and a copy replaced by anything but a regular file, which are only reported. Two folders that swap their names stay a limit too: no walk reads them as renamed (DONE.md).
 - What pull request #3 left of renames and deletions: judge a port written from the documents on the 269 new scenarios, which needs a port of the daemon, and settle three gaps no vector reaches (specs.md §15.12): a file reaching its own path as a later target, a behind copy first seen after the file left, and whether a file both not due and held says wait or held. The decisions taken there without the maintainer, listed in [DONE.md](DONE.md), were confirmed on 2026-11-12.
-- The rest of the trash (§17): a folder Atoll makes takes the mode and owner of the one it stands for, not its modification time.
+- The rest of the trash (§17): a folder a restore makes again below the root takes the mode and owner of the one in the trash, not the modification time that one holds since 2026-11-22 (§17.4, DONE.md): it would be a write of §6.1, item 8, the maintainer's to decide.
 - The openmediavault plugin's form (`atoll mergerfs-config --omv`, §21.1, DONE.md, 2026-11-19): still to try in the form itself, in a browser, on real disks, and on openmediavault 7, whose plugin differs (`docs/research/omv-mergerfs.md`, "Not measured").
 - The link guard (§17): a command that sends a copy to the trash leaves its link to the next pass.
 - `balance` (§12.4, §13.3): `atoll status` plans the whole pool to give `bytes_placed` whenever a strict setting exists: at 200,000 files a disk that doubles its time, 1 min 9 s for 31 s in qemu without KVM, under the 200 MB (§26). The local API's `/v1/status` does the same in the daemon's own process, beside its passes.
