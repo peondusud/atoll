@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -72,5 +73,69 @@ func TestADaemonThatStartsHearsAHangup(t *testing.T) {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != exitError {
 		t.Fatalf("the daemon ended with %v, want exit 1 for a configuration that does not load (its configuration: %v): %s", err, written, stderr.String())
+	}
+}
+
+// What /proc/<pid>/status says of the account a process acts as: the second number of its Uid line, the effective one.
+func TestEffectiveUID(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		uid    uint32
+		ok     bool
+	}{
+		{"Name:\tatoll\nUid:\t998\t998\t998\t998\nGid:\t998\t998\t998\t998\n", 998, true},
+		{"Name:\tatoll\nUid:\t1000\t0\t0\t0\n", 0, true},
+		{"Uid:\t1000\t1001\t1000\t1000", 1001, true},
+		{"Name:\tatoll\nGid:\t998\t998\t998\t998\n", 0, false},
+		{"Uid:\t1000\n", 0, false},
+		{"Uid:\t1000\tx\t1000\t1000\n", 0, false},
+		{"Uid:\t1000\t-1\t1000\t1000\n", 0, false},
+		{"Uid:\t1000\t4294967296\t1000\t1000\n", 0, false},
+		{"", 0, false},
+	} {
+		uid, ok := effectiveUID([]byte(tc.status))
+		if uid != tc.uid || ok != tc.ok {
+			t.Errorf("%q: %d, %v", tc.status, uid, ok)
+		}
+	}
+}
+
+// A process of this executable that runs daemon is told only when it acts as one of the accounts a daemon of the pool
+// runs as, those Atoll takes as its own (specs.md §10, §15.13). Any account that may run the executable can start
+// one: counted, it made a disk command say the daemon was told, exit 0 and no daemon-not-told, when none ran, and a
+// guard's answer drop the line that says how long it holds (scrutineer F061, 2026-11-22).
+func TestOnlyADaemonOfThePoolsAccountsIsTold(t *testing.T) {
+	impostor := exec.CommandContext(t.Context(), os.Args[0], "daemon") //nolint:gosec // this test's own binary
+	impostor.Args[0] = os.Args[0]
+	impostor.Env = append(os.Environ(), impostorEnv+"=1")
+	if err := impostor.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = impostor.Process.Kill()
+		_ = impostor.Wait()
+	})
+	pid := strconv.Itoa(impostor.Process.Pid)
+	for range 500 {
+		if cmdline, err := os.ReadFile("/proc/" + pid + "/cmdline"); err == nil && runsForGood(cmdline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	own := uint32(os.Geteuid()) //nolint:gosec // an account's number, never negative
+	if told, err := tellDaemonsOf([]uint32{own + 1}); told != 0 || err != nil {
+		t.Errorf("a process of another account was told: %d, %v", told, err)
+	}
+	if err := impostor.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("the process ended: %v", err)
+	}
+	told, err := tellDaemonsOf([]uint32{own})
+	if told != 1 || err != nil {
+		t.Errorf("the process of the pool's account: %d told, %v", told, err)
+	}
+	err = impostor.Wait()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || !exit.Sys().(syscall.WaitStatus).Signaled() || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGHUP {
+		t.Errorf("not hung up: %v", err)
 	}
 }

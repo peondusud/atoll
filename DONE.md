@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The audit by scrutineer of 2026-11-22: three findings, two fixed on beta before, one fixed (specs.md §15.13, §25.1)
+
+The maintainer ran scrutineer on `main` (`b6c1104`, #23's merge) and exported three findings, each rated low; their `DupCheck` names two more, F020 (the catalog's id counters) and F050 (the requests to Plex), that the export did not hold. Each was checked against `beta`.
+
+- **F030, `fsx.Dir.Names()` listed a handle once**: a second listing of one handle gave an empty folder and no error, while its comment said the opposite. Fixed on `beta` by `2a6dfa9` (2026-11-20) before the audit: each listing seeks to the start, under a lock, and `TestNamesGivesEveryNameEachTime` lists one handle twice through the real and the fault layers. Nothing to do.
+- **F060, `/v1/disks/{id}` read the catalog outside the turn of one answer at a time**: fixed on `beta` by `4e4015f` (2026-11-20), the route behind `one()` and `checks()`. The audit was right that the test of the turn wrapped an answer of its own and could not see a route that left it: `TestEveryAnswerThatReadsTheCatalogWaitsItsTurn` now holds the turn and asks each route that reads the catalog, `/v1/status`, `/v1/disks/{id}`, `/v1/trash` and `/v1/guards`, which must each wait, and `/v1/disks`, which must not. With the route taken out of the turn by hand, it fails.
+- **F061, the daemon told by what a process says it runs**: open on `beta`. `tellDaemon` counted any process whose executable was Atoll's and whose arguments were `daemon`, so any account that may run the executable could start one: `disk add`, `disk remove`, `disk fail` and `disk replace` then said the daemon was told, with exit 0 and no `daemon-not-told`, when none ran, and `guard confirm` and `guard reject` dropped the line that says how long the answer holds. A process is now told only when it acts as an account Atoll takes as its own, the accounts of `ops.TrustedOwners` (§10): root, the one the command runs as, and the catalog's owner, which is the daemon's. Its effective account is read from `/proc/<pid>/status`. Tests first: `TestOnlyADaemonOfThePoolsAccountsIsTold` starts this test binary with the daemon's arguments and tells it only when its account is one of those given; `TestEffectiveUID` reads the `Uid` line.
+
+Decided without the maintainer, to confirm:
+
+- The accounts are `ops.TrustedOwners`'s, as for the work folders and the secret files, the account that runs the command among them: a process of that account deceives only that account's own command.
+- A daemon that acts as an account owning no catalog, as one of an account that writes a catalog of root's through its group, is not told any more: the command says no daemon runs. The unit's `StateDirectory=atoll` gives `/var/lib/atoll` and the catalog to the daemon's account when it starts, so the catalog's owner is the daemon's there, as §10 says.
+- What stays: the `atoll` account itself, the daemon's, can still start a process that is counted, as it can do worse; and on a machine with two pools of one account, a command of one counts the other's daemon too, as `--config` is not compared (TODO.md).
+
 ## Mutation gates by package and a floor of coverage, every mutant that lived in the pure core killed or named, 2026-11-21 (specs.md §27)
 
 The maintainer's decision of 2026-11-21 ("Seuil par paquet"): a gate per package, 95 % efficacy and 85 % mutator coverage for each pure package; `names` and `integrity`, whose switches stay switches, at the coverage measured, never lowered; the mutants that change nothing named and left out; and the floor of the `cover` job at its measured level. Commits `789ac24`, `7e8c340`, `358672e` and the one that records this, on `worktree-agent-a8b70a62853584dea`, on `beta`'s `1be6613`.

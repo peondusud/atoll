@@ -4,18 +4,29 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/ops"
 )
 
-// tellDaemon sends SIGHUP to each daemon that runs for good from this executable, so that it reads the
-// configuration again, as systemctl reload atoll would (specs.md §15.13). It gives how many it told; a daemon it
-// may not signal is an error, with the others still told.
-func tellDaemon() (int, error) {
+// tellDaemon sends SIGHUP to each daemon of the pool that runs for good from this executable, so that it reads the
+// configuration again, as systemctl reload atoll would (specs.md §15.13): one that acts as an account Atoll takes as
+// its own, root, the one this command runs as, or the catalog's owner, which is the daemon's (§10). It gives how many
+// it told; a daemon it may not signal is an error, with the others still told.
+func tellDaemon(c *config.Config) (int, error) {
+	return tellDaemonsOf(ops.TrustedOwners(catalogPath(c)))
+}
+
+// tellDaemonsOf sends SIGHUP to each process of this executable that runs the daemon for good as one of accounts. A
+// process of another account is none: any account that may run the executable can start one with those arguments, and
+// counted, it would make a command say the daemon was told when none was (scrutineer F061, 2026-11-22).
+func tellDaemonsOf(accounts []uint32) (int, error) {
 	self, err := fsx.Readlink("/proc/self/exe")
 	if err != nil {
 		return 0, fmt.Errorf("this executable: %w", err)
@@ -44,6 +55,13 @@ func tellDaemon() (int, error) {
 		}
 		cmdline, err := fsx.ReadFile("/proc/" + name + "/cmdline")
 		if err != nil || !runsForGood(cmdline) {
+			continue
+		}
+		status, err := fsx.ReadFile("/proc/" + name + "/status")
+		if err != nil {
+			continue
+		}
+		if uid, ok := effectiveUID(status); !ok || !slices.Contains(accounts, uid) {
 			continue
 		}
 		if err := unix.Kill(pid, unix.SIGHUP); err != nil {
@@ -80,4 +98,21 @@ func runsForGood(cmdline []byte) bool {
 		args = args[1:]
 	}
 	return len(args) > 0 && args[0] == "daemon" && !bytes.Contains(cmdline, []byte("\x00--until-idle"))
+}
+
+// effectiveUID reads, of what /proc/<pid>/status says, the account the process acts as: the second number of its Uid
+// line, after the real one. It says false when the line is not there, or not as the kernel writes it.
+func effectiveUID(status []byte) (uint32, bool) {
+	for line := range strings.SplitSeq(string(status), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] != "Uid:" {
+			continue
+		}
+		uid, err := strconv.ParseUint(fields[2], 10, 32)
+		if err != nil {
+			return 0, false
+		}
+		return uint32(uid), true
+	}
+	return 0, false
 }

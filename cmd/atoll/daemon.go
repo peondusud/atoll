@@ -782,7 +782,7 @@ func guardText(req *guardRequest, answer *guardAnswer) string {
 // (specs.md §15.6). The answer is recorded either way: a daemon that could not be told, or none running, is a line of
 // standard error, which says how long a pass has to start.
 func tellOfAnswer(c *config.Config, kind string, stderr io.Writer) {
-	told, err := tellDaemon()
+	told, err := tellDaemon(c)
 	if err == nil && told > 0 {
 		return
 	}

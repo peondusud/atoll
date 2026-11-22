@@ -536,6 +536,27 @@ func (m *slowMounts) Mount(mount string) disks.MountSeen {
 	return m.Machine.Mount(mount)
 }
 
+// Every answer that reads the catalog waits for the one that reads it before, through the routes themselves, not one()
+// alone: /v1/disks/{id} read it outside that turn on 2026-11-14's main (scrutineer F060, fixed on beta since). One that
+// reads no catalog, as /v1/disks, does not wait for it (specs.md §25.1).
+func TestEveryAnswerThatReadsTheCatalogWaitsItsTurn(t *testing.T) {
+	_, c := apiPool(t, "")
+	a := newTestAPI(t, c)
+	h := a.routes()
+	a.reading <- struct{}{}
+	defer func() { <-a.reading }()
+	for _, path := range []string{"/v1/status", "/v1/disks/t1", "/v1/trash", "/v1/guards"} {
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		if code := serve(ctx, h, path); code != http.StatusServiceUnavailable {
+			t.Errorf("%s answered %d while another answer read the catalog", path, code)
+		}
+		cancel()
+	}
+	if code := serve(t.Context(), h, "/v1/disks"); code != http.StatusOK {
+		t.Errorf("/v1/disks: %d", code)
+	}
+}
+
 // The answers that check the disks' mounts, /v1/disks and /v1/disks/{id}, check them one at a time: each reads the
 // mount table and every disk's device, and a client that asks again and again adds no checks at once (specs.md §25.1).
 func TestTheAPIChecksTheMountsOneAnswerAtATime(t *testing.T) {

@@ -450,7 +450,7 @@ func recordAndTell(ctx context.Context, c *config.Config, m disks.Machine, warn 
 		warn(warnCatalogNotUpdated, fmt.Sprintf(T("the catalog was not updated, %v: the next scan or pass records the disks"), err))
 		code = exitPartial
 	}
-	told, err := tellDaemon()
+	told, err := tellDaemon(c)
 	switch {
 	case err != nil:
 		warn(warnDaemonNotTold, fmt.Sprintf(T("the daemon was not told, %v: systemctl reload atoll"), err))
