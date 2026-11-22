@@ -54,7 +54,7 @@ func TestWritesLoseNothingWhereverTheyFail(t *testing.T) {
 				return swept{
 					op: func(d *Disk) error {
 						var err error
-						made, err = d.MakeRootFolder("Films/New", model)
+						made, err = d.MakeRootFolder("Films/New", model, func(string) error { return nil })
 						return err
 					},
 					done: func() bool {

@@ -480,7 +480,7 @@ func (p *pass) makeParents(ctx context.Context, d *config.Disk, handle *ops.Disk
 		if err != nil {
 			return fmt.Errorf("catalog: %w", err)
 		}
-		st, err := handle.MakeRootFolder(folder, like)
+		st, err := handle.MakeRootFolder(folder, like, func(key string) error { return catalog.SetCreateKey(ctx, p.db, op, key) })
 		switch {
 		case err == nil:
 			if err := handle.FinishMkdir(ctx, p.db, op, &st); err != nil {

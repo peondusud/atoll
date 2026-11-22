@@ -123,6 +123,12 @@ func Run(ctx context.Context, o Options) error {
 			return fmt.Errorf("%s: %w", o.Point, ErrUnmounted)
 		case <-ticker.C:
 			c.check(ctx)
+			if w != nil {
+				// What a disk lost left planned is resolved once it is there again, not at the next start alone.
+				if err := w.Recheck(ctx); err != nil {
+					o.Log.Warn("what the view left planned is not resolved now", "error", err)
+				}
+			}
 		}
 	}
 }

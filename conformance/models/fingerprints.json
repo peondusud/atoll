@@ -13,7 +13,7 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "852f6c0b08a713b5084c24ccbd32565e441eaacd7d4acbef3f65840f3e448f1d"
+      "sha256": "688722d8de543500ad553d814669c9f65ba4006093d3244debb9a1ad3ad15b50"
     },
     {
       "section": "10",
@@ -63,7 +63,7 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "ee3e9d9b31e0b23e8dfa7f93953539d14025177945fb4db74ef06326c29688d3"
+      "sha256": "44229c340fa9a3c3b39000fd5f2807dde518186884c89eb61107d3b76acb2c16"
     },
     {
       "section": "17.1",
@@ -73,12 +73,12 @@
     {
       "section": "17.2",
       "title": "### 17.2 Reprise after a crash",
-      "sha256": "1e3df5f0085d8104f02029a94640c8b60c573dbd788fa448f86398157dd13412"
+      "sha256": "c4cf1396dfdfa1783d0c5b986890ebf7162f5fa1e6ba0fb3194cdbfcbc2ffc47"
     },
     {
       "section": "17.4",
       "title": "### 17.4 `atoll trash`",
-      "sha256": "f02ea74a609ea714f0706927a5392e7f3d6c46bf9f9809a2cc10e0cb5088692e"
+      "sha256": "d474437ab93f1f8d3971f6c44a141cef09180f847aec11f5ff732eaa11f7a466"
     },
     {
       "section": "17.5",
@@ -93,7 +93,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "3b00176fd04a968f4193a6fecd46bc170d6a3e21f592c71a428cab0b14cbbc0f"
+      "sha256": "8e0e9d62bd843dc2cf18804a2d2cf46f4598d2774633eb6475459a3360a6af14"
     }
   ]
 }

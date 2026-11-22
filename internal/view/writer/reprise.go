@@ -16,13 +16,27 @@ import (
 // still does; a rename onto a name whose copy reached the trash is finished. An operation on a disk the view cannot
 // write to now stays planned, for its next start.
 func (w *Writer) Reprise(ctx context.Context) error {
+	return w.reprise(ctx, false)
+}
+
+// Recheck resolves, while the view runs, what it left planned, as its start does, under the writer's lock, so that no
+// operation of the view is under way meanwhile: what a disk that could not be relied on left planned, once the view's
+// check every 30 s finds that disk there again (specs.md §21.2). A row that work under way still answers for, a part
+// being written or closed or a move during its copy, is that work's, and stays as it is.
+func (w *Writer) Recheck(ctx context.Context) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.reprise(ctx, true)
+}
+
+func (w *Writer) reprise(ctx context.Context, running bool) error {
 	open, err := catalog.OpenViewOps(ctx, w.db)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	for i := range open {
 		v := &open[i]
-		if v.State != catalog.OpPlanned {
+		if v.State != catalog.OpPlanned || running && w.isHeld(v.ID) {
 			continue
 		}
 		if v.Kind == catalog.ViewMove {
@@ -76,12 +90,9 @@ func (w *Writer) resolve(ctx context.Context, d *ops.Disk, v *catalog.ViewOp) (s
 			_, found, err := d.StatRoot(v.Path)
 			return doneIf(!found), false, err //nolint:wrapcheck // ops says what failed
 		}
-		trashed, err := w.trashed(ctx, d, v.OpID)
-		if err != nil || trashed {
-			return catalog.OpDone, false, err
-		}
-		left, err := holdsAt(d, v.Path, v.FileKey, false)
-		return catalog.OpUndone, !left, err
+		// By the table of §17.2, as any move to the trash (specs.md §21.2): both names looked at, the copy's name
+		// removed when a link was left beside it, a file that took its name put back.
+		return w.resolveTrash(ctx, d, v.OpID)
 	case catalog.ViewReplace:
 		return w.resolveReplace(ctx, d, v)
 	case catalog.ViewPart:
@@ -101,14 +112,26 @@ func (w *Writer) resolve(ctx context.Context, d *ops.Disk, v *catalog.ViewOp) (s
 	return catalog.OpDone, false, nil
 }
 
-// resolveReplace finishes a rename onto a name whose copy reached the trash, and undoes one whose copy did not.
-func (w *Writer) resolveReplace(ctx context.Context, d *ops.Disk, v *catalog.ViewOp) (string, bool, error) {
-	trashed, err := w.trashed(ctx, d, v.OpID)
-	if err != nil {
-		return "", false, err
+// resolveTrash resolves the move to the trash of a deletion or a replacement of the view by the table of §17.2, the
+// copy's row in the catalog its look, or its inode alone for a copy no row records (ops.ResolveViewTrash).
+func (w *Writer) resolveTrash(ctx context.Context, d *ops.Disk, opID int64) (string, bool, error) {
+	op, found, err := catalog.OpByID(ctx, w.db, opID)
+	if err != nil || !found {
+		return catalog.OpUndone, false, err //nolint:wrapcheck // the catalog says what failed
 	}
-	if !trashed {
-		return catalog.OpUndone, false, nil
+	done, warn, err := d.ResolveViewTrash(ctx, w.db, &op, nil)
+	if err != nil {
+		return "", false, fmt.Errorf("%w", err)
+	}
+	return doneIf(done), warn, nil
+}
+
+// resolveReplace finishes a rename onto a name whose copy reached the trash, by the table of §17.2, and undoes one whose
+// copy did not.
+func (w *Writer) resolveReplace(ctx context.Context, d *ops.Disk, v *catalog.ViewOp) (string, bool, error) {
+	state, warn, err := w.resolveTrash(ctx, d, v.OpID)
+	if err != nil || state != catalog.OpDone {
+		return state, warn, err
 	}
 	if moved, err := holdsAt(d, v.Path2, v.FileKey, false); err != nil || moved {
 		return catalog.OpDone, false, err

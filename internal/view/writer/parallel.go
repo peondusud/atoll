@@ -198,6 +198,8 @@ func (w *Writer) startPart(ctx context.Context, disk, source, path string, who C
 		w.log.Warn("no copy in parallel: the journal cannot be written", "disk", disk, "path", path, "error", err)
 		return nil
 	}
+	// Its row is this part's until it is handed over or dropped: no check while the view runs resolves it meanwhile.
+	w.hold(v.ID)
 	var file *ops.Part
 	err = w.handles.Use(disk, func(h *ops.Disk) error {
 		var err error
@@ -402,6 +404,7 @@ func (par *parallel) finish(parts []*part, size int64) {
 				w.log.Warn("a copy written in parallel stays planned: the journal cannot be written", "disk", p.disk, "path", par.path, "error", err)
 			}
 			w.closePart(p.disk)
+			w.release(p.view.ID)
 		}
 	}()
 }
@@ -425,6 +428,7 @@ func (p *part) seal(size int64) error {
 // dropPart removes a part and undoes its operations; on a disk that cannot be relied on they stay planned, for the
 // view's reprise at its next start (specs.md §17.2).
 func (w *Writer) dropPart(ctx context.Context, p *part, why error) {
+	defer w.release(p.view.ID)
 	if p.file != nil {
 		_ = p.file.Close()
 	}

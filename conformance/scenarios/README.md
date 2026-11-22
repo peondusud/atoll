@@ -113,10 +113,13 @@ After each `atoll` step, on each disk (`specs.md` §6):
 | `copied` | once a `create` has copied the whole source into its `.part` and recorded every chunk hash, before the source is looked at again and the times are restored |
 | `verified` | once a `create` has re-read its `.part` against the chunk hashes and recorded the whole-file hash, before the target is resolved |
 | `trash-folders` | once the folders of a move to the trash are made and synced, before the copy is looked at again and moved. A restore and a purge have none |
-| `mkdir-made` | once a folder below the root is made, by `mkdir`, before it is given the mode and the owner of the folder it stands for, or the mode 0755 when it stands for none (`specs.md` §17.2, §17.4) |
+| `mkdir-journaled` | once an operation `mkdir` of a folder below the root is committed, before the folder is made (`specs.md` §17.2, §17.4) |
+| `mkdir-unkeyed` | once `mkdir` has made a folder below the root, before its inode is journaled in its operation (`specs.md` §17.2, §17.4) |
+| `mkdir-made` | once a folder below the root is made, by `mkdir`, and its inode journaled in its operation, before it is given the mode and the owner of the folder it stands for, or the mode 0755 when it stands for none (`specs.md` §17.2, §17.4) |
 | `folder-made` | once a restore has made a folder below the root, before it is synced or recorded |
 | `linked` | between `link` and the `fsync` that follows it, so only on a disk with `renameat2` at `false` |
 | `moved` | once the name has moved, a file's or a folder's, or the file of a purge is gone, before any later `fsync` of what holds it. With `renameat2` at `false`, `unlink` has run too, so the source's name is gone, which is not yet synced, and the target folder was synced once already, between `link` and `unlink`. For a `create`, once the copy is looked at right after the rename, before the change time that look found is recorded (`specs.md` §14.2) |
+| `put-back` | once what a rename brought to its target, a file that is not the copy, is moved back to the old name, before either name is synced (`specs.md` §15.12, §17.2) |
 | `placed` | once a `create` of a job has recorded the change time its copy had right after the rename, in a commit of its own, before any later `fsync` (`specs.md` §14.2). A copy restored from the trash to another disk records none, and has no such point |
 | `chunk-saved`, `chunks-saved`, `chunk-written` | in a chunk repair (`specs.md` §16.1): once a bad chunk is saved in the trash, its folder synced; once the folder of the chunks is synced, before the copy is looked at again; and once a chunk is written in place and synced, before it is read back |
 | `times-set` | once a `utimens`, or a chunk repair, has set the time on the file and synced it, before the operation is committed `done` (`specs.md` §15.4) |

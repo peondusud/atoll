@@ -9,7 +9,7 @@ Two modules hold it: `Replication.tla`, the daemon's passes, and since 2026-11-2
 ```bash
 make model-check                         # every instance, each against what it expects
 test/tla/run.sh Copy.cfg Live.cfg        # some of them
-make model-flaws                         # what shows each flaw still open on the real code: flaws 3, 4, 6 and 7 now
+make model-flaws                         # the black-box scenarios of the flaws still open, and their tests: none now
 ```
 
 `test/tla/run.sh` needs only Docker: it runs TLC in `eclipse-temurin:21.0.13_9-jre-noble`, with 2 workers, a 2 GiB heap and 2 CPUs, so that it leaves the machine to whatever else runs there. It downloads `tla2tools.jar` 1.7.4 once into `bin/tla/`, git-ignored, and checks its SHA-256. Each instance's log, with the full trace of a violation, goes to `bin/tla/<instance>.log`. With `--inside`, it runs TLC where it is, in that image, as the CI's `tla` job and `test/ci/run.sh` do.
@@ -79,22 +79,21 @@ Run again on 2026-11-22, with the view in the module, every instance above gave 
 | Instance | Expects | What it explores | States | Time |
 |---|---|---|---|---|
 | `ViewParallel` | pass | a file made through the view on one of two disks, written in parallel to the other, written once and closed; atoll mount stopped once | 130,464 | 10 s |
-| `ViewParallelLost` | pass | the same, the file made and closed with no write, with the daemon killed once and a disk lost once in place of the stop, and the remedy of flaw 5 | 2,147,883 | 1 min 52 s |
+| `ViewParallelLost` | pass | the same, the file made and closed with no write, with the daemon killed once and a disk lost once in place of the stop | 2,147,883 | 1 min 52 s |
 | `ViewParallelDelete` | pass | `ViewParallel`, the file deleted through the view too, while it is written or after | 2,911,008 | 2 min 33 s |
 | `ViewDelete` | pass | a file at its level on two disks, written then deleted through the view; atoll mount stopped once | 47,828 | 7 s |
 | `ViewDeleteLink` | pass | `ViewDelete` on disks without `RENAME_NOREPLACE` | 52,446 | 6 s |
-| `ViewDeleteLost` | pass | a deletion through the view, with atoll mount stopped once, the daemon killed once and a disk lost once, and the remedy of flaw 5 | 90,853 | 7 s |
+| `ViewDeleteLost` | pass | a deletion through the view, with atoll mount stopped once, the daemon killed once and a disk lost once | 90,853 | 7 s |
 | `ViewLive` | pass | liveness: a file made through the view and written in parallel, then deleted through it, atoll mount stopped once | 360,428 | 1 min 4 s |
-| `ViewLiveLost` | pass | liveness: a file made through the view and written in parallel, a disk lost once and mounted again in time, with the remedy of flaw 5 | 281,481 | 52 s |
-| `FlawViewRepriseLinked` | `Inv7_PipelineOrder` | flaw 3, open: a deletion through the view on disks without `RENAME_NOREPLACE`, stopped between its link and its unlink | 147 | 3 s |
-| `FlawViewEditedAtMove` | `Inv10_DeletionOnlyUnchangedToTrash` | flaw 4, open: a deletion through the view whose copy a user edits directly between the look right before the move and the move | 311 | 4 s |
-| `FlawViewPlannedForGood` | liveness | flaw 5, open: `ViewLiveLost` without its remedy | 238,941 | 1 min 4 s |
+| `ViewLiveLost` | pass | liveness: a file made through the view and written in parallel, a disk lost once and mounted again in time | 281,481 | 52 s |
+| `FlawViewRepriseLinked` | pass | flaw 3, fixed: its trace, with the remedy; a deletion through the view on disks without `RENAME_NOREPLACE`, stopped between its link and its unlink | 147 | 3 s |
+| `FlawViewEditedAtMove` | pass | flaw 4, fixed: its trace, with the remedy; a deletion through the view whose copy a user edits directly between the look right before the move and the move | 311 | 4 s |
 
-Flaws 1 and 2 are fixed, their remedies `specs.md`'s, and every instance of the daemon alone takes `specs.md` as it is: its `Fixes` is empty. The `Flaw…` instances stay, each the smallest pool that showed its flaw. Flaws 3, 4 and 5 are open: `Fixes` holds their remedies, `view-reprise`, `view-resolve` and `view-recheck`, which every view's instance that expects a pass takes, so that each remedy is checked against every invariant too, and each flaw's instance takes the others'.
+Every flaw is fixed, their remedies `specs.md`'s and, for flaws 3 to 7, the code's, chosen by the maintainer on 2026-11-22, and every instance takes `specs.md` and the code as they are: `Fixes` is empty. The `Flaw…` instances stay, each the smallest pool that showed its flaw, and the counts above are the run before the remedies; those after them are in DONE.md.
 
 ## Flaws found in specs.md and in the code
 
-Flaws 1 and 2, of `specs.md`, were real: each trace was replayed on the conformance build, and each had a black-box scenario in `flaws/` that failed (`make model-flaws`) until its remedy, the maintainer's to decide; the model's `Fixes` holds the one proposed for a flaw still open, so that the instances that expect `pass` look past it. Once a remedy is in `specs.md`, the model takes it whatever `Fixes` says, the flaw's name leaves `Fixes`, its instance expects `pass`, and its scenario moves to `../scenarios/`. Both are fixed now. Flaws 3 and 4 are of the code of Atoll's own view, which `specs.md` already says otherwise: the model takes the code as it is unless `Fixes` names the remedy, and their tests are the writer's (Files, above). Once a remedy is in the code, the model's branch for the code goes, the remedy's name leaves `Fixes`, the flaw's instance expects `pass`, and its test loses the build tag `flaws`.
+Flaws 1 and 2, of `specs.md`, were real: each trace was replayed on the conformance build, and each had a black-box scenario in `flaws/` that failed (`make model-flaws`) until its remedy, the maintainer's to decide; the model's `Fixes` holds the one proposed for a flaw still open, so that the instances that expect `pass` look past it. Once a remedy is in `specs.md`, the model takes it whatever `Fixes` says, the flaw's name leaves `Fixes`, its instance expects `pass`, and its scenario moves to `../scenarios/`. Both are fixed now. Flaws 3 and 4 were of the code of Atoll's own view, which `specs.md` already said otherwise, and 5 to 7 of `specs.md`: the model took the code as it was unless `Fixes` named the remedy, and each had a test of the code behind the build tag `flaws` (Files, above), which failed until the remedy. The maintainer chose the remedies on 2026-11-22; with them in the code, the model's branch for the code went, the remedies' names left `Fixes`, the flaws' instances expect `pass`, and the tests lost the build tag `flaws`, regular tests of the writer and of `internal/jobs` now, with a black-box scenario for flaw 6.
 
 ### Flaw 1: a write into a new replica before its row is written is recorded as verified
 
@@ -134,9 +133,9 @@ In the code: `internal/solver/plan.go` (`counts`: a pending copy on a disk `miss
 
 The remedy (`running-job`, approved by the maintainer on 2026-11-19): what §14.1 says, everywhere: a pending copy whose job is running is kept, and counts, as a copy on a disk not yet past `missing_grace` does; and a file with a job running waits for its decisions, as its modifications already do (§15.4), until the reprise concludes the operation. The other, a reprise that finds no job sending the copy to the trash, was not chosen. As it landed: the caller tells the plan which pending copies have their job running; such a copy counts as an `ok` copy on its disk would, so no longer past `missing_grace`, nor on a disk `draining`, `failed` or `retired`, holds no room, and is never canceled, by the level, the room, the file leaving or its disk; every decision of its file waits, Rename included, but not a file that only follows a folder renamed; and nothing else takes the file, the job or its pending copy away: a file whose last copy goes otherwise keeps that pending copy and its job (`catalog.dropFileIfEmpty`), as the model's `Emptied` does, and a modification keeps it too.
 
-### Flaw 3: the view's reprise calls a deletion done while its copy is still at its name
+### Flaw 3: the view's reprise called a deletion done while its copy was still at its name
 
-Open, found on 2026-11-22: a flaw of the code, not of `specs.md`, which says what the code should do. `FlawViewRepriseLinked.cfg` expects `Inv7_PipelineOrder` broken, and `TestFlawViewRepriseOfALinkedDeletion` (`internal/view/writer/flaws_test.go`) fails as below.
+Fixed on 2026-11-22, with the remedy the maintainer chose, (a) below: `specs.md` §21.2, `ops.Disk.ResolveViewTrash` (the table of §17.2, the copy keeping its row for the pass), `writer.resolveTrash` for a deletion and a replacement, `TestTheRepriseOfALinkedDeletionRemovesTheCopysName` (`internal/view/writer/viewtrash_test.go`), which failed before, and `FlawViewRepriseLinked.cfg` expecting `pass`. What it was:
 
 `specs.md` §21.2: "`atoll mount` resolves what it left `planned` at its start, before it mounts, by the table of §17.2 for what moves a name". The code (`writer.resolve`, `catalog.ViewUnlink`) calls a deletion done when the trash's name holds a file of the copy's inode (`w.trashed`), and undone otherwise, and does nothing on the disk: the source's name is never looked at nor removed, nothing is synced, and the inode alone decides, where §17.2 wants its size and modification time too.
 
@@ -148,11 +147,11 @@ Open, found on 2026-11-22: a flaw of the code, not of `specs.md`, which says wha
 
 The same happens on any disk when the view stops after the rename and before its syncs, then the power is cut once the reprise called it done: the rename was not durable, and the file is back at its name (§17.1, "An operation is never `done` on the strength of the move alone"). TLC's trace is the first: start, delete, look, link, stop, start, reprise; 158 distinct states. The test makes `renameat2` refuse its flag on the view's disk, stops the view at the crash point `linked`, starts it again and finds the copy at its name.
 
-Remedies, the maintainer's to choose: (a) what §21.2 says, the view's reprise of a row `unlink` (and of `replace`, which has the same shape in `resolveReplace`) resolved by `ops.Disk.ResolveNow` with its look in place of a row, as `ResolveTrashNow` does for a move's copy, names synced first and the table's actions taken (`view-reprise` in `Fixes`, which every instance that expects a pass takes); (b) the same, but leaving the row `planned` whenever the source still holds the copy, for a pass to see. (a) is what `specs.md` says already.
+Remedies seen then: (a) what §21.2 says, the view's reprise of a row `unlink` (and of `replace`, which has the same shape in `resolveReplace`) resolved by `ops.Disk.ResolveNow` with its look in place of a row, as `ResolveTrashNow` does for a move's copy, names synced first and the table's actions taken (`view-reprise` in `Fixes`, which every instance that expects a pass takes); (b) the same, but leaving the row `planned` whenever the source still holds the copy, for a pass to see. (a) is what `specs.md` says already.
 
-### Flaw 4: a deletion through the view gives up when the look after its move fails, and leaves a user's edit in the trash
+### Flaw 4: a deletion through the view gave up when the look after its move failed, and left a user's edit in the trash
 
-Open, found on 2026-11-22: a flaw of the code too. `FlawViewEditedAtMove.cfg` expects `Inv10_DeletionOnlyUnchangedToTrash` broken, and `TestFlawViewDeletionEditedAtTheMove` fails as below.
+Fixed on 2026-11-22, with the remedy the maintainer chose, (a) below: `specs.md` §21.2, `writer.afterFailedTrash`, called by a deletion and a replacement of the view as the daemon's session calls `ResolveNow`, `TestADeletionEditedAtTheMoveGoesBack`, which failed before, and `FlawViewEditedAtMove.cfg` expecting `pass`. What it was:
 
 `specs.md` §17.1, step 4: "Afterwards the name at the target must hold the copy, compared as that look compares it, by its inode, its size and its modification time ... a file that took the source's name since the look ... or the copy edited then, is not the copy, and goes back, as §17.2 resolves it", and "Whatever stops a move before it is done ... is resolved at once by looking at both names, by the table of §17.2". The daemon does (`trash.Session.afterFailedMove`, `ResolveNow`). The view's deletion (`writer.toTrash`) does not: any error of `ops.Disk.ToTrash` but a disk lost goes to `finish`, which undoes the row and the operation, its trash row removed, and leaves both names as they are.
 
@@ -166,9 +165,9 @@ On a disk without `RENAME_NOREPLACE` the same comes of an edit between the `link
 
 Remedies: (a) what §17.1 says, `toTrash` and `replace` calling `ResolveNow` (with the look as the copy's row, `ResolveTrashNow`) after a failed move, as the daemon's session does, then finishing the row by what it concludes (`view-resolve` in `Fixes`); (b) the view's deletion leaving its row `planned` on such an error, for its reprise to resolve, once flaw 3's remedy is in. Either way the window is the width of a `rename`, and needs a user writing directly to the disk while the view deletes the file.
 
-### Flaw 5: what the view leaves planned on a disk lost while it runs stays planned until its next start
+### Flaw 5: what the view left planned on a disk lost while it ran stayed planned until its next start
 
-Open, found on 2026-11-22, by the liveness of the view: a flaw of `specs.md`, whose §21.2 says that "`atoll mount` resolves what it left `planned` at its start, before it mounts", and of nothing else; the code does that (`readonly.Serve` calls `writer.Reprise` once, and its check every 30 s only opens the disks again). `FlawViewPlannedForGood.cfg` expects the liveness broken (`EventuallyViewTaken`, `EventuallySettled`). No test of the code shows it yet: the runner has no FUSE, and a unit test would have to call what the remedy adds.
+Fixed on 2026-11-22, with the remedy the maintainer chose, (a) below: `specs.md` §21.2, `writer.Recheck`, which `readonly.Serve` calls after its check every 30 s, the rows a part being written or closed and a move during its copy still hold left alone (`writer.hold`), `TestARecheckResolvesWhatADiskLostLeftPlanned` and `TestARecheckLeavesAPartBeingWritten`, and `ViewLiveLost.cfg`, the very instance that `FlawViewPlannedForGood.cfg` became once `Fixes` was emptied, which went. What it was:
 
 1. No file at a path yet; a user makes one through the view on disk 2, a USB disk: the row `create` journaled.
 2. Disk 2 is lost before the file is made there (a USB reset, `EIO`): the row stays `planned`, as §17.1 leaves what a disk that cannot be relied on stops.
@@ -226,14 +225,14 @@ A model of its own, `Rename.tla` with `MCRename.tla` (2026-11-22), as renames ne
 | `RenameUsers` | pass | two user actions of every kind on either disk, Atoll killed once, the power cut once, a disk lost once | 4,237,582 | 3 min 43 s |
 | `RenameLink` | pass | two disks without `RENAME_NOREPLACE`, two user actions (renames, replacements, deletions, edits), Atoll killed once, a disk lost once | 563,088 | 35 s |
 | `RenameLive` | pass | liveness: a file renamed on one disk into a folder the other lacks, Atoll killed once, a disk lost once | 18,673 | 9 s |
-| `FlawRenameFolderTaken` | `UserFolderKept` | flaw 6, open: a folder a user makes where an operation `mkdir` was journaled, Atoll killed in between | 5,468 | 4 s |
-| `FlawRenameFileTaken` | `NamesKept` | flaw 7, open: a file saved at a copy's old name between the look right before its rename and the rename | 1,604 | 4 s |
+| `FlawRenameFolderTaken` | pass | flaw 6, fixed: its trace, with the remedy; a folder a user makes where an operation `mkdir` was journaled, Atoll killed in between | 5,468 | 4 s |
+| `FlawRenameFileTaken` | pass | flaw 7, fixed: its trace, with the remedy; a file saved at a copy's old name between the look right before its rename and the rename | 1,604 | 4 s |
 
-The passing instances take the remedies of flaws 6 and 7 (`Fixes`), and each flaw's instance the other's. `NDisks` is 2: `FolderNeverOpened` compares with the other disk, as the rule chooses the model among the others.
+Flaws 6 and 7 are fixed, and `Fixes` is empty. `NDisks` is 2: `FolderNeverOpened` compares with the other disk, as the rule chooses the model among the others.
 
-### Flaw 6: the reprise of a folder made takes a user's folder for Atoll's own
+### Flaw 6: the reprise of a folder made took a user's folder for Atoll's own
 
-Open, found on 2026-11-22: a flaw of `specs.md`, whose §17.2 finishes an operation `mkdir` on "a folder there", and whose §17.4 has "one found made and not yet given them takes them first, where the driver allows it and while it holds nothing"; the code does that (`ops.recoverMkdir`). `FlawRenameFolderTaken.cfg` expects `UserFolderKept` broken; `TestFlawAFolderAUserMadeIsTakenByTheReprise` (`internal/jobs/flaws_test.go`, build tag `flaws`) fails so on the real code, through a copy's missing parent, made and resumed the same way.
+Fixed on 2026-11-22, with the remedy the maintainer chose, (a) below, within format version 1 as `ops.file_key` holds the folder's inode: `specs.md` §9, §17.2, §17.4, `ops.Disk.MakeRootFolder`, which journals the inode right after the `mkdir` and before anything is given to the folder, and `ops.recoverMkdir`, which finishes only that folder, with the crash points `mkdir-journaled` and `mkdir-unkeyed`; `TestAFolderAUserMadeIsNotTakenByTheReprise` (`internal/jobs/mkdirkey_test.go`), which failed before, `TestAFolderMadeBeforeItsInodeIsJournaledIsLeftAsMade` for what the remedy leaves, `../scenarios/replicate-crash-folder-a-user-made.json`, and `FlawRenameFolderTaken.cfg` expecting `pass`. What it was:
 
 1. A file at A/x on disks 1 and 2. A user renames it on disk 2 into B, which they make for it.
 2. A pass takes the rename to disk 1, which lacks B: the operation `mkdir` of B journaled, with the mode of disk 2's B.
@@ -243,9 +242,9 @@ Open, found on 2026-11-22: a flaw of `specs.md`, whose §17.2 finishes an operat
 
 The window is Atoll's whole time down between the journal and the `mkdir`, which a disk that fails there makes as long as it is away. Remedies: (a) the operation records the folder's inode right after the `mkdir`, in a commit of its own before it gives the mode, as a copy's part records its key (§14.2), and its reprise finishes only a folder of that inode, leaving any other as a user's, the operation `undone` (`mkdir-key` in `Fixes`); a folder Atoll made and stopped before recording it is then left as it was made, owned by Atoll's account and not tidied, the cost of keeping a user's; (b) the reprise takes the mode and owner only of a folder owned by the account Atoll runs as, which is what its own `mkdir` gives it, and records any other as a user's, which needs no new record.
 
-### Flaw 7: a file saved at a copy's old name follows Atoll's rename to the new one
+### Flaw 7: a file saved at a copy's old name followed Atoll's rename to the new one
 
-Open, found on 2026-11-22: a flaw of `specs.md`, whose table of §17.2, at once after a rename as in a reprise, leaves what a rename's target holds when it is not the copy ("For `restore` and `rename`, a logical path is anyone's, so what is there stays"). `FlawRenameFileTaken.cfg` expects `NamesKept` broken; `TestFlawAFileSavedAtTheOldNameFollowsTheRename` fails so on the real code.
+Fixed on 2026-11-22, with the remedy the maintainer chose, (a) below: `specs.md` §15.12, step 4, `ops.Disk.putBack`, called by `RenameFile` when the look after the move finds what arrived is not the copy, with the crash point `put-back`; `TestAFileSavedAtTheOldNameGoesBackAfterTheRename` (`internal/jobs/renameback_test.go`), which failed before, `TestAPassKilledOnceAFileIsPutBack`, and `FlawRenameFileTaken.cfg` expecting `pass`. What it leaves: a file a user saves at the new name in the width between the move and that look is put back at the old name too, as nothing tells the two apart. What it was:
 
 1. A file at A/x on disks 1 and 2. A user renames it to B/x on disk 2; a pass takes the rename to disk 1: the operation `rename` journaled, and the look right before finds the copy at A/x and nothing at B/x.
 2. In the moment between that look and `renameat2`, a program saves a new file at A/x on disk 1, an atomic save, as one that imports a new release at the old name does.

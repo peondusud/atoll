@@ -49,7 +49,7 @@ ASSUME /\ NDisks \in {2} /\ Start \subseteq Disks /\ Start # {}
        /\ StartB \in [Disks -> {"none", "private", "open"}]
        /\ LinkDisks \subseteq Disks
        /\ UserActs \subseteq {"rename", "create", "delete", "replace", "edit", "mkdir", "chmod", "rmdir"}
-       /\ Fixes \subseteq {"mkdir-key", "rename-back"}
+       /\ Fixes = {}    \* no flaw open: each remedy is specs.md's and the code's, and the model's whatever Fixes says
 
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 
@@ -261,10 +261,11 @@ PassStart ==
     /\ pc' = [ph |-> "reprise", d |-> NextIn(0, {d \in Disks : Up(d)})]
     /\ UNCHANGED <<disk, cf, cc, ce, ops, nextOp, cnt, nver, ghost>>
 
-(* §17.2: a rename, by the identity of §15.1 (the object); a folder made, by what is there: a folder there finishes,
-   and takes the mode its operation journaled while it holds nothing (ops.recoverMkdir), recorded Atoll's own; with
-   "mkdir-key" in Fixes, a folder that is not the one the operation made is left as it is, undone (README.md, flaw 6);
-   a folder removed, by its inode: nothing there finishes. Each in two steps, the names then the commit. *)
+(* §17.2: a rename, by the identity of §15.1 (the object); a folder made, by the inode its operation journaled right
+   after the mkdir: that folder finishes, and takes the mode its operation journaled while it holds nothing, recorded
+   Atoll's own; any other, or one met before its inode was journaled, is left as it is, undone (ops.recoverMkdir;
+   README.md, flaw 6, fixed: the reprise once took any folder there); a folder removed, by its inode: nothing there
+   finishes. Each in two steps, the names then the commit. *)
 RepOp ==
     /\ pc.ph = "reprise" /\ pc.d <= NDisks /\ Ok(pc.d) /\ PlannedOn(pc.d) # {}
     /\ LET d == pc.d
@@ -282,7 +283,7 @@ RepOp ==
                     /\ UNCHANGED <<dv, dd, ghost>>
             [] op.k = "mkdir" ->
                  LET there == dv[d][op.p]
-                     fin == there # 0 /\ ("mkdir-key" \notin Fixes \/ (op.key # 0 /\ there = op.key))
+                     fin == there # 0 /\ op.key # 0 /\ there = op.key
                      adopt == fin /\ fv[d][op.p] = 0 /\ objs[there].mode # op.mode
                  IN /\ objs' = IF adopt THEN SyncObjs([objs EXCEPT ![there].mode = op.mode], {there})
                                ELSE IF fin THEN SyncObjs(objs, {there}) ELSE objs
@@ -489,7 +490,8 @@ RenParent ==
     /\ UNCHANGED <<disk, cf, cc, ce, cdisk, sess, cnt, nver>>
 
 (* The folder made, with that mode, never replacing anything: one there since is EEXIST, undone (makeParents); its
-   inode recorded with "mkdir-key"; then synced, then the commit, its entry Atoll's own. *)
+   inode journaled, which the model takes in the same step, the stop between them being the reprise's undone; then
+   synced, then the commit, its entry Atoll's own. *)
 MkMake ==
     /\ pc.ph = "mkdir" /\ Ok(pc.d)
     /\ LET d == pc.d
@@ -502,7 +504,7 @@ MkMake ==
                /\ UNCHANGED <<objs, dv>>
           ELSE /\ objs' = Append(objs, [kind |-> "dir", d |-> d, ver |-> 0, dver |-> 0, mode |-> ops[o].mode, dmode |-> "none", by |-> "atoll"])
                /\ dv' = [dv EXCEPT ![d][q] = n]
-               /\ ops' = IF "mkdir-key" \in Fixes THEN [ops EXCEPT ![o].key = n] ELSE ops
+               /\ ops' = [ops EXCEPT ![o].key = n]
                /\ pc' = [ph |-> "mksync", d |-> d, f |-> pc.f, o |-> o, obj |-> n]
     /\ UNCHANGED <<fv, fd, dd, dstat, mgen, cf, cc, ce, cdisk, nextOp, sess, cnt, nver, ghost>>
 
@@ -589,17 +591,16 @@ RenUnlink ==
                /\ UNCHANGED ops
     /\ UNCHANGED <<objs, fd, dv, dd, dstat, mgen, cf, cc, ce, cdisk, nextOp, sess, cnt, nver, ghost>>
 
-(* The look after: the target holds the copy, by its identity; otherwise the table of §17.2, at once: for a rename, a
-   logical path is anyone's, so what is at the target stays, and the operation is undone, even when it is what the move
-   itself took from the copy's old name, a file that took that name between the look right before and the move (README,
-   flaw 7). With "rename-back" in Fixes, such a file goes back to the name it took, as §17.2 has a move to the trash
-   put back what took its source's name, synced there. *)
+(* The look after: the target holds the copy, by its identity; otherwise the table of §17.2, at once, but that what the
+   move itself took from the copy's old name, a file that took that name between the look right before and the move,
+   goes back to the old name first when that is free, without replacing anything, synced there (ops.putBack; README.md,
+   flaw 7, fixed: it once stayed at the new name). *)
 RenAfter ==
     /\ pc.ph = "rstep" /\ pc.s = "after" /\ Ok(pc.d)
     /\ LET d == pc.d
            op == ops[pc.o]
            taken == fv[d][op.q] = pc.moved /\ pc.moved # op.key /\ pc.moved # 0
-           back == taken /\ "rename-back" \in Fixes /\ fv[d][op.p] = 0
+           back == taken /\ fv[d][op.p] = 0
        IN IF fv[d][op.q] = op.key
           THEN /\ pc' = [pc EXCEPT !.s = "moved"] /\ UNCHANGED <<objs, fv, fd, ops, ghost>>
           ELSE /\ ops' = [ops EXCEPT ![pc.o].st = "undone"]

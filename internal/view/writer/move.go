@@ -44,6 +44,8 @@ func (w *Writer) move(f *File, write int) error {
 	if err != nil {
 		return err
 	}
+	// Its row is this move's until it returns, its copy outside the writer's lock: no check resolves it meanwhile.
+	defer w.release(m.v.ID)
 	w.machine.Checkpoint("move-journaled")
 	if err := m.copy(ctx, f.WritableFile, &st); err != nil {
 		w.dropMove(ctx, f, m, err)
@@ -119,6 +121,7 @@ func (w *Writer) startMove(ctx context.Context, f *File, st *fsx.Stat, need int6
 	if m.op, err = catalog.BeginViewMove(ctx, w.db, m.v); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
+	w.hold(m.v.ID)
 	err = w.handles.Use(target, func(d *ops.Disk) error {
 		var err error
 		if m.part, err = d.MakePart(m.op); err != nil {
@@ -128,6 +131,7 @@ func (w *Writer) startMove(ctx context.Context, f *File, st *fsx.Stat, need int6
 	})
 	if err != nil {
 		w.dropMove(ctx, f, m, err)
+		w.release(m.v.ID)
 		return nil, err
 	}
 	return m, nil

@@ -51,9 +51,7 @@ ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3
        /\ Phys \in [Disks -> Nat] /\ Start \in [Files -> SUBSET Disks]
        /\ LinkDisks \subseteq Disks
        /\ \A f \in Files : \A a, b \in Start[f] : a # b => Phys[a] # Phys[b]
-       \* The flaws of the view still open, by their remedies (README.md, flaws 3, 4 and 5): the others' remedies are
-       \* specs.md's, and the model's whatever Fixes says.
-       /\ Fixes \subseteq {"view-reprise", "view-resolve", "view-recheck"}
+       /\ Fixes = {}    \* no flaw open: each remedy is specs.md's and the code's, and the model's whatever Fixes says
        /\ UserActs \subseteq {"modify", "replace", "delete", "create", "rewrite"}
        /\ ViewActs \subseteq {"create", "write", "delete"}
        /\ Parallel \in BOOLEAN /\ MaxStop \in Nat /\ MaxVOps \in Nat
@@ -1297,15 +1295,15 @@ VStart ==
     /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vpart, vfile>>
 
 (* Its mount check again, every 30 s: a disk lost and mounted again is another mount, whose old handles answer EIO.
-   The code resolves nothing then, what the view left planned waiting for its next start (readonly.Serve); with
-   "view-recheck" in Fixes (README.md, flaw 5), a check that finds such an operation's disk there resolves it, as the
-   reprise of a start would, but for a part the view still writes or closes. *)
+   A check that finds there the disk of an operation the view left planned resolves it, as the reprise of a start
+   would, but for a part the view still writes or closes (writer.Recheck, the maintainer, 2026-11-22; README.md, flaw 5,
+   fixed). *)
 VHeld(v) == \E e \in Disks : vpart[e].st # "none" /\ vpart[e].v = v
 VResolvable == {v \in VIds : vops[v].st = "planned" /\ ~VHeld(v) /\ Up(vops[v].d)}
 VCheck ==
-    /\ vpc = VIdle /\ (vsess # ViewCheck \/ ("view-recheck" \in Fixes /\ VResolvable # {}))
+    /\ vpc = VIdle /\ (vsess # ViewCheck \/ VResolvable # {})
     /\ vsess' = ViewCheck
-    /\ vpc' = IF "view-recheck" \in Fixes /\ VResolvable # {} THEN [ph |-> "reprise", v |-> 1] ELSE vpc
+    /\ vpc' = IF VResolvable # {} THEN [ph |-> "reprise", v |-> 1] ELSE vpc
     /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vpart, vfile>>
 
 (* atoll mount stopped short, as by kill -9: its parts and open files go with it, its journal stays. *)
@@ -1315,22 +1313,27 @@ VStop ==
     /\ cnt' = [cnt EXCEPT !.stop = @ + 1]
     /\ UNCHANGED <<phys, cat, pc, sess, look, nver, ghost, vops, nextV>>
 
-(* §17.2's table for a deletion of the view, its look in place of a row: what "view-reprise" and "view-resolve" in
-   Fixes take (README.md, flaws 3 and 4). The trash's name alone holding the copy's object is the copy only with the
-   size and modification time the look found (gen); both names leading to it are one file, edited since or not. *)
-VTrashLook(d, v) ==
+(* §17.2's table for a deletion of the view (ops.ResolveViewTrash; README.md, flaws 3 and 4, fixed), compared with a
+   row: hasRow and rgen, what it says of the copy's size and modification time (gen). At once after a failed move, the
+   look right before it; at a reprise, the copy's row in the catalog, when one records that object. The trash's name
+   alone holding the copy's object is the copy only with that gen, and with no row its inode is all there is; both names
+   leading to it are one file, edited since or not, as no row can say otherwise. *)
+VTrashLook(d, v, hasRow, rgen) ==
     LET o == vops[v]
         sr == Seen(d, M(o.f), o.key)
-        edited == objs[o.key].gen # o.gen
+        edited == ~hasRow \/ objs[o.key].gen # rgen
         tg0 == Seen(d, X(o.p), o.key)
-        tg == IF tg0 = "same" /\ sr # "same" /\ edited THEN "other" ELSE tg0
+        tg == IF tg0 = "same" /\ sr # "same" /\ hasRow /\ edited THEN "other" ELSE tg0
     IN [tg |-> tg, sr |-> sr, edited |-> edited]
-VTrashOut(d, v) ==
-    LET s == VTrashLook(d, v) IN IF s.tg = "same" /\ ~(s.sr = "same" /\ s.edited) THEN "done" ELSE "undone"
-VTrashResolveNames(d, v) ==
+VTrashOut(d, v, hasRow, rgen) ==
+    LET s == VTrashLook(d, v, hasRow, rgen) IN IF s.tg = "same" /\ ~(s.sr = "same" /\ s.edited) THEN "done" ELSE "undone"
+(* What the catalog says of the copy a deletion of the view moves, at a reprise. *)
+VRowHas(v) == LET o == vops[v] IN crow[o.f][o.d].st \in {"ok", "stale"} /\ crow[o.f][o.d].obj = o.key
+VRowGen(v) == crow[vops[v].f][vops[v].d].gen
+VTrashResolveNames(d, v, hasRow, rgen) ==
     LET f == vops[v].f
         p == vops[v].p
-        s == VTrashLook(d, v)
+        s == VTrashLook(d, v, hasRow, rgen)
         v0 == vol[d]
         v1 == CASE s.tg = "same" /\ s.sr = "same" /\ s.edited -> [v0 EXCEPT ![X(p)] = 0]
                 [] s.tg = "same" /\ s.sr = "same" -> [v0 EXCEPT ![M(f)] = 0]
@@ -1343,10 +1346,9 @@ VTrashResolveNames(d, v) ==
 (* §21.2, The view's journal: what the view left planned, in the order of the ids, on each disk it holds a handle on;
    one on another disk stays planned, for its next start (writer.Reprise). A file made is done when something is at its
    name, and undone otherwise. A part being written is no copy of a file closed: its part goes, and it is undone. A
-   deletion, as the code reads it (writer.resolve), is done when the trash's name holds the file of its inode, and
-   undone otherwise: by the inode alone, with nothing synced or put back; §21.2 says by the table of §17.2, which
-   "view-reprise" in Fixes takes, in two steps, the names then the commit (README.md, flaw 3). A part the view still
-   holds in memory, which only a check while it runs can meet (VCheck), is its writer's. *)
+   deletion is resolved by the table of §17.2, in two steps, the names then the commit (writer.resolveTrash; README.md,
+   flaw 3, fixed: the code once called it done on the inode of the trash's name alone). A part the view still holds in
+   memory, which only a check while it runs can meet (VCheck), is its writer's. *)
 VRepriseOp ==
     /\ vpc.ph = "reprise" /\ vpc.v <= MaxVOps
     /\ LET v == vpc.v
@@ -1365,17 +1367,10 @@ VRepriseOp ==
                       /\ ops' = [ops EXCEPT ![o.p].st = "undone"]
                       /\ vops' = [vops EXCEPT ![v].st = "undone"]
                       /\ vpc' = next /\ UNCHANGED <<objs, ghost>>
-                 [] o.k = "unlink" /\ "view-reprise" \in Fixes ->
-                      /\ VTrashResolveNames(d, v)
-                      /\ vpc' = [ph |-> "vrepcommit", v |-> v, out |-> VTrashOut(d, v)]
-                      /\ UNCHANGED <<ops, vops, ghost>>
                  [] o.k = "unlink" ->
-                      LET trashed == vol[d][X(o.p)] = o.key IN
-                      /\ ops' = [ops EXCEPT ![o.p].st = IF trashed THEN "done" ELSE "undone"]
-                      /\ vops' = [vops EXCEPT ![v].st = IF trashed THEN "done" ELSE "undone"]
-                      /\ ghost' = Flag(Flag(ghost, "inv7", trashed /\ (~Durable(d, X(o.p), o.key) \/ o.key \in {vol[d][M(f)], dur[d][M(f)]})),
-                                       "inv10-replacement", trashed /\ VLatestIn(f, o.key))
-                      /\ vpc' = next /\ UNCHANGED <<objs, vol, dur>>
+                      /\ VTrashResolveNames(d, v, VRowHas(v), VRowGen(v))
+                      /\ vpc' = [ph |-> "vrepcommit", v |-> v, out |-> VTrashOut(d, v, VRowHas(v), VRowGen(v))]
+                      /\ UNCHANGED <<ops, vops, ghost>>
                  [] OTHER -> /\ vpc' = next /\ UNCHANGED <<objs, vol, dur, ops, vops, ghost>>
     /\ UNCHANGED <<dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, nextV, vsess, vpart, vfile>>
 
@@ -1647,8 +1642,8 @@ VDelUnlink ==
                    vsess, vpart, vfile>>
 
 (* §17.1, step 4: afterwards the trash's name must hold the copy, by its inode, size and modification time. Otherwise
-   the code (writer.toTrash, which calls no ResolveNow) gives up: the operation undone, both names as they are; §17.1
-   says it is resolved at once by the table of §17.2, which "view-resolve" in Fixes takes (README.md, flaw 4). *)
+   the move is resolved at once by the table of §17.2, as the daemon resolves one (writer.afterFailedTrash; README.md, flaw
+   4, fixed: the code once undid it as it was). *)
 VDelAfter ==
     /\ vpc.ph = "del" /\ vpc.s = "after"
     /\ LET v == vpc.v
@@ -1657,15 +1652,9 @@ VDelAfter ==
        IN /\ VOk(d)
           /\ IF vol[d][X(o.p)] = o.key /\ objs[o.key].gen = o.gen
              THEN /\ vpc' = [vpc EXCEPT !.s = "moved"] /\ UNCHANGED <<objs, vol, dur, ops, vops, ghost>>
-             ELSE IF "view-resolve" \in Fixes
-             THEN /\ VTrashResolveNames(d, v)
-                  /\ vpc' = [ph |-> "del", v |-> v, s |-> "resolved", out |-> VTrashOut(d, v)]
+             ELSE /\ VTrashResolveNames(d, v, TRUE, o.gen)
+                  /\ vpc' = [ph |-> "del", v |-> v, s |-> "resolved", out |-> VTrashOut(d, v, TRUE, o.gen)]
                   /\ UNCHANGED <<ops, vops, ghost>>
-             ELSE /\ ops' = [ops EXCEPT ![o.p].st = "undone"]
-                  /\ vops' = [vops EXCEPT ![v].st = "undone"]
-                  /\ ghost' = Flag(ghost, "inv10-replacement", VLatestIn(o.f, vol[d][X(o.p)]))
-                  /\ vpc' = VIdle
-                  /\ UNCHANGED <<objs, vol, dur>>
     /\ UNCHANGED <<dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, nextV, vsess, vpart, vfile>>
 
 VDelResolved ==

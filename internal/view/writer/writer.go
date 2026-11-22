@@ -67,6 +67,30 @@ type Writer struct {
 	// §21.2). writing holds, by path, each file Create made that is still open through the handle it gave, under mu.
 	moveOnENOSPC bool
 	writing      map[string]*File
+	// held holds the rows of view_ops that work under way still answers for, though the writer's lock does not cover
+	// it: a part being written or closed, a move during its copy. A check while the view runs resolves none of them
+	// (Recheck).
+	heldMu sync.Mutex
+	held   map[int64]bool
+}
+
+// hold says that work under way answers for a row of the view's journal, until release.
+func (w *Writer) hold(id int64) {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	w.held[id] = true
+}
+
+func (w *Writer) release(id int64) {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	delete(w.held, id)
+}
+
+func (w *Writer) isHeld(id int64) bool {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	return w.held[id]
 }
 
 // New makes the writer of a view.
@@ -82,7 +106,8 @@ func New(db *sql.DB, c *config.Config, m disks.Machine, tree *view.Tree, handles
 	}
 	moveOnENOSPC, _ := c.Effective()["view.move_on_enospc"].(bool)
 	return &Writer{db: db, config: c, machine: m, tree: tree, handles: handles, retention: retention, minFree: minFree, log: log,
-		par: &parts{files: map[string]*parallel{}, rooms: map[string]*roomOf{}}, moveOnENOSPC: moveOnENOSPC, writing: map[string]*File{}}, nil
+		par: &parts{files: map[string]*parallel{}, rooms: map[string]*roomOf{}}, moveOnENOSPC: moveOnENOSPC, writing: map[string]*File{},
+		held: map[int64]bool{}}, nil
 }
 
 // Tree gives what the writer looks at what the view presents through.
@@ -829,13 +854,40 @@ func (w *Writer) toTrash(ctx context.Context, v *catalog.ViewOp, path, reason st
 			return fmt.Errorf("%w", err)
 		}
 		if _, err := d.ToTrash(op, row); err != nil {
-			return w.finish(ctx, v, err)
+			if moved, err := w.afterFailedTrash(ctx, d, v, op, row, err); !moved {
+				return err
+			}
 		}
 		if err := d.TouchParent(path, fsx.TimeOf(now)); err != nil {
 			w.log.Warn("a folder keeps its time", "path", path, "error", err)
 		}
 		return w.finish(ctx, v, nil)
 	})
+}
+
+// afterFailedTrash resolves a move of the view to the trash that failed, as the daemon's session does
+// (trash.Session.afterFailedMove): a disk that cannot be relied on leaves it planned, for the view's reprise, and one
+// on another mount moved nothing; anything else is resolved at once by the table of §17.2, against the look right
+// before the move (specs.md §17.1, §21.2). It says whether the copy reached the trash after all, the operation then to
+// finish; otherwise what the program gets, the operation undone or left planned.
+func (w *Writer) afterFailedTrash(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, op *ops.Op, row *catalog.KnownCopy, moveErr error) (bool, error) {
+	if errors.Is(moveErr, ops.ErrDiskLost) || errors.Is(moveErr, ops.ErrOtherMount) {
+		return false, w.finish(ctx, v, moveErr)
+	}
+	done, warn, err := d.ResolveViewTrash(ctx, w.db, op, row)
+	switch {
+	case errors.Is(err, ops.ErrDiskLost):
+		return false, w.finish(ctx, v, err)
+	case err != nil:
+		w.log.Warn("an operation of the view stays planned", append([]any{"disk", v.Disk, "path", v.Path, "error", err}, askedBy(v)...)...)
+		return false, errors.Join(moveErr, fmt.Errorf("%w", err))
+	case done:
+		return true, nil
+	}
+	if ferr := catalog.FinishViewOp(ctx, w.db, v, catalog.OpUndone, warn, w.now()); ferr != nil {
+		return false, errors.Join(moveErr, fmt.Errorf("%w", ferr))
+	}
+	return false, moveErr
 }
 
 // knownOf is what a look found of a copy, as the row an operation compares it with right before it moves it.
@@ -1053,7 +1105,9 @@ func (w *Writer) replace(ctx context.Context, d *ops.Disk, from, to, key string,
 		return fmt.Errorf("%w", err)
 	}
 	if _, err := d.ToTrash(op, row); err != nil {
-		return w.finish(ctx, v, err)
+		if moved, err := w.afterFailedTrash(ctx, d, v, op, row, err); !moved {
+			return err
+		}
 	}
 	err = d.RenameUser(from, to, false, key, w.like(ctx))
 	if err != nil {

@@ -529,8 +529,11 @@ func (d *Disk) LookAt(logical string) (taken bool, missing []string, err error) 
 // MakeRootFolder makes one folder below the root, for a restore, a copy or a rename, and keeps the time of the folder
 // it lands in (specs.md §6.1, item 8). like is the folder it stands for, when there is one, whose mode and owner it
 // takes; with none, it takes the mode FolderMode, whatever the umask, and keeps the owner mkdir gives it (§17.4). It
-// says what it made. The root itself is never made: its absence is an error (invariant 3).
-func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) {
+// says what it made. The root itself is never made: its absence is an error (invariant 3). keyed journals the folder's
+// inode, right after the mkdir and before anything is given to it, so that a reprise can tell it from a folder someone
+// else made at that name (specs.md §17.2, §17.4).
+func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat, keyed func(key string) error) (fsx.Stat, error) {
+	d.machine.Checkpoint("mkdir-journaled")
 	if err := d.Verify(); err != nil {
 		return fsx.Stat{}, err
 	}
@@ -556,6 +559,14 @@ func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) 
 		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrNameRefused, err)
 	case err != nil:
 		return fsx.Stat{}, classify(err)
+	}
+	d.machine.Checkpoint("mkdir-unkeyed")
+	made, err := parent.Stat(name)
+	if err != nil {
+		return fsx.Stat{}, classify(err)
+	}
+	if err := keyed(keyOf(&made)); err != nil {
+		return fsx.Stat{}, err
 	}
 	d.machine.Checkpoint("mkdir-made")
 	if like != nil {
@@ -857,6 +868,37 @@ func sameFileAs(row *catalog.KnownCopy) func(*fsx.Stat) bool {
 	return func(st *fsx.Stat) bool { return isSameAsRow(row, st) }
 }
 
+// putBack moves what a rename brought to its target, when that is not the copy, back to the name it took, the old one,
+// once that is free again, without replacing anything, and syncs both names: rename(2) moves what the old name holds
+// when it runs, which a file a program saved there since the look right before may be (specs.md §15.12, step 4,
+// §17.2). What stops it leaves the file where it is, for the table of §17.2 to say, with a line of the log.
+func (d *Disk) putBack(source fsx.Dir, name string, target fsx.Dir, newName string) {
+	arrived, err := target.Stat(newName)
+	if err != nil || arrived.Kind != fsx.KindFile {
+		return
+	}
+	if _, err := source.Stat(name); !fsx.IsAbsent(err) {
+		return
+	}
+	same := func(st *fsx.Stat) bool { return st.Ino == arrived.Ino }
+	if err := d.moveNoReplace(target, newName, source, name, same); err != nil {
+		slog.Warn("a file a rename brought that is not the copy stays at the new name", "disk", d.ID, "name", newName, "error", err)
+		return
+	}
+	d.machine.Checkpoint("put-back")
+	if err := syncEntry(source, name); err != nil {
+		slog.Warn("a file put back after a rename is not synced", "disk", d.ID, "name", name, "error", err)
+		return
+	}
+	if err := source.Sync(); err != nil {
+		slog.Warn("a file put back after a rename is not synced", "disk", d.ID, "name", name, "error", err)
+		return
+	}
+	if err := target.Sync(); err != nil {
+		slog.Warn("a file put back after a rename is not synced", "disk", d.ID, "name", newName, "error", err)
+	}
+}
+
 // RenameFile moves a copy to where its operation says, both logical paths on this disk, and says once
 // that is durable (specs.md §15.12). The target's parents are there by now, each an operation of its own.
 func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, error) {
@@ -900,6 +942,9 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 	// Known at its new name as the look of the link path and the reprise know it, by the identity of §15.1, never by its
 	// inode alone (specs.md §17.2).
 	if _, err := holds(target.Dir, newName, sameFileAs(row)); err != nil {
+		if errors.Is(err, ErrGone) {
+			d.putBack(source.Dir, name, target.Dir, newName)
+		}
 		return nil, nil, err
 	}
 	d.machine.Checkpoint("moved")

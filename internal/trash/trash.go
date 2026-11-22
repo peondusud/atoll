@@ -1056,7 +1056,7 @@ func (s *Session) makeFolder(ctx context.Context, handle *ops.Disk, e *catalog.T
 	if err != nil {
 		return catalogError{fmt.Errorf("catalog: %w", err)}
 	}
-	st, err := handle.MakeRootFolder(folder, like)
+	st, err := handle.MakeRootFolder(folder, like, func(key string) error { return catalog.SetCreateKey(ctx, s.db, op, key) })
 	switch {
 	case err == nil:
 		if err := handle.FinishMkdir(ctx, s.db, op, &st); err != nil {

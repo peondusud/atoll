@@ -960,7 +960,7 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errCatalog, err)
 		}
-		st, err := c.dst.MakeRootFolder(folder, like)
+		st, err := c.dst.MakeRootFolder(folder, like, func(key string) error { return catalog.SetCreateKey(ctx, c.r.db, op, key) })
 		switch {
 		case err == nil:
 			if err := c.dst.FinishMkdir(ctx, c.r.db, op, &st); err != nil {
