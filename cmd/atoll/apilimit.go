@@ -60,6 +60,10 @@ func (p *placedConn) Close() error {
 	return err //nolint:wrapcheck // the connection's own
 }
 
+// NetConn gives the connection it holds a place for, as tls.Conn gives its own: fsx.PeerOf reads the socket's peer
+// through it.
+func (p *placedConn) NetConn() net.Conn { return p.Conn }
+
 // CloseWrite closes the connection's sending side when it has one, as the server does before it closes a connection
 // whose request it did not read whole.
 func (p *placedConn) CloseWrite() error {

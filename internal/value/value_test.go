@@ -26,6 +26,14 @@ type listenVector struct {
 	Note    string  `json:"note"`
 }
 
+// listenHostVector is a case of conformance/vectors/listen_host.json.
+type listenHostVector struct {
+	Listen      string `json:"listen"`
+	Host        string `json:"host"`
+	Misdirected bool   `json:"misdirected"`
+	Note        string `json:"note"`
+}
+
 // nutVector is a case of conformance/vectors/ups_address.json.
 type nutVector struct {
 	NUT   string  `json:"nut"`
@@ -108,6 +116,19 @@ func TestListenVectors(t *testing.T) {
 			} else if again, err := ParseListen(s); err != nil || again != got {
 				t.Errorf("ParseListen(%q) = %v, %v, want %v", s, again, err, got)
 			}
+		}
+	}
+}
+
+func TestListenHostVectors(t *testing.T) {
+	for _, v := range vectors.Load[listenHostVector](t, "listen_host.json") {
+		l, err := ParseListen(v.Listen)
+		if err != nil {
+			t.Errorf("vector %q: the address listened on: %v", v.Listen, err)
+			continue
+		}
+		if named := l.NamedBy(v.Host); named == v.Misdirected {
+			t.Errorf("ParseListen(%q).NamedBy(%q) = %v, want %v (%s)", v.Listen, v.Host, named, !v.Misdirected, v.Note)
 		}
 	}
 }

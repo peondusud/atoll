@@ -42,10 +42,33 @@ func secretFileWarnings(c *config.Config) []config.Problem {
 	return out
 }
 
-// configWarnings gives every warning of a configuration that loaded, those its text gives and those of the files of a
-// secret it names, sorted by key in byte order (specs.md §24.4).
+// tokenWarnings gives a warning when api.token_file holds a token under apiMinToken bytes, its last line break left
+// out, as the API compares it (specs.md §24.4): one that short is easier to guess through api.listen's 401s; and when
+// it holds none, which refuses every request over TCP. A warning, not a refusal: version 1 takes such a token. The
+// token is never quoted, and a file that cannot be read says nothing here: what reads it says why.
+func tokenWarnings(c *config.Config) []config.Problem {
+	file, _ := c.Effective()["api.token_file"].(string)
+	if file == "" {
+		return nil
+	}
+	token, _, err := readToken(file)
+	switch {
+	case err != nil:
+		return nil
+	case token == "":
+		return []config.Problem{{Key: "api.token_file", Message: "this file holds no token, so the API refuses every request over TCP: " +
+			"write one of 32 bytes or more, as openssl rand -hex 32 makes"}}
+	case len(token) < apiMinToken:
+		return []config.Problem{{Key: "api.token_file", Message: fmt.Sprintf("its token is %d bytes long, under 32, and so easier to guess "+
+			"over TCP: write one of 32 bytes or more, as openssl rand -hex 32 makes", len(token))}}
+	}
+	return nil
+}
+
+// configWarnings gives every warning of a configuration that loaded, those its text gives, those of the files of a
+// secret it names and that of the API's token, sorted by key in byte order (specs.md §24.4).
 func configWarnings(c *config.Config) []config.Problem {
-	out := slices.Concat(c.Warnings, secretFileWarnings(c))
+	out := slices.Concat(c.Warnings, secretFileWarnings(c), tokenWarnings(c))
 	slices.SortStableFunc(out, func(a, b config.Problem) int { return strings.Compare(a.Key, b.Key) })
 	return out
 }

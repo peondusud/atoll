@@ -51,6 +51,8 @@ scrape_configs:
     static_configs: [{ targets: ["127.0.0.1:9341"] }]
 ```
 
+`metrics.listen` answers a request that names its address, with its port, as these targets do, or `localhost` for a loopback one: a target written by a name, a Tailscale MagicDNS name too, is answered 421, as a page DNS rebinding points at the address would be (`specs.md` §23.1). `api.listen`, which asks for its token, answers any name.
+
 The log goes to the journal, one record a line, in OpenTelemetry's log data model as JSON (`specs.md` §23.2): `journalctl -u atoll -o cat | jq` reads it, and `log_format = "text"` in `[telemetry]` brings back slog's text for a terminal. Vector reads both signals without OTLP, the log from the journal and the metrics from `metrics.listen`:
 
 ```toml
@@ -105,6 +107,8 @@ sudo install -d -m 0750 -o root -g atoll /etc/atoll/secrets
 sudo install -m 0640 -o root -g atoll /dev/null /etc/atoll/secrets/api.token
 openssl rand -hex 32 | sudo tee /etc/atoll/secrets/api.token > /dev/null
 ```
+
+A token under 32 bytes gets a warning, from `atoll rules check` and in the daemon's log, and a request with a wrong token waits a quarter of a second for its 401 (specs.md §24.4, §25.1). An address of `100.64.0.0/10` that is on no interface named `tailscale*` gets a line of the log at the start, as that range is carrier-grade NAT's too.
 
 `alerts.smtp_require_tls = true` sends a mail only over TLS, smtps or STARTTLS, and otherwise not at all, which the log says.
 

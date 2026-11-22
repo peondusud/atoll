@@ -1,0 +1,92 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §24.4, §25.1",
+  "description": "rules check warns when api.token_file holds a token under 32 bytes, its last line break left out, as one that short is easier to guess, and when it holds none, as every request over TCP is then refused: the configuration loads all the same, as version 1 takes it. A token of 32 bytes gets no warning.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "secrets/api.token",
+          "text": "0123456789abcdef0123456789abcde\n",
+          "mode": "0600"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[api]\nlisten = \"127.0.0.1:7341\"\ntoken_file = \"${SANDBOX}/disks/t1/secrets/api.token\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [
+          {
+            "key": "api.token_file",
+            "later_phase": false,
+            "message": "${ANY}"
+          }
+        ],
+        "hidden": [],
+        "unreached": null
+      }
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "secrets/api.token",
+      "text": "0123456789abcdef0123456789abcdef\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [],
+        "hidden": [],
+        "unreached": null
+      }
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "secrets/api.token",
+      "text": "\n"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [
+          {
+            "key": "api.token_file",
+            "later_phase": false,
+            "message": "${ANY}"
+          }
+        ],
+        "hidden": [],
+        "unreached": null
+      }
+    }
+  ]
+}
