@@ -2,6 +2,45 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The jobs read through indexes, and `DueReader` that seeks past its last key (2026-11-22, specs.md §9, §14.1, §26)
+
+TODO.md's "The jobs are read whole", which the maintainer said to do as it recommended: an index of the jobs by disk, and a `DueReader` that seeks past its last key. Indexes and queries only: every read gives the rows it gave, in the same order. Commit `f24e518` and this record, on the branch `worktree-agent-a59f1a383b5f04e87`, from `beta`'s `156e99b`.
+
+- **Migration `0026_jobs_by_disk.sql`, three partial indexes**, each on the one kind its reads name: `jobs_folders` on `jobs(dst_disk)` where `kind = 'rename'`, `jobs_trash` on `jobs(dst_disk, file_id)` where `kind = 'trash'`, and `jobs_parts` on `jobs(dst_disk)` where `kind = 'replicate' AND payload IS NOT NULL`. Not the `jobs(kind, dst_disk)` the item named, as measured first on every query of the jobs (`EXPLAIN QUERY PLAN`, SQLite 3.54.1): with no statistics, SQLite takes such an index for `DueReader` (`SEARCH j USING INDEX (kind=?)`, then a sort of every copy still to run, for each page), for `CopiesLater`, the plan's sets and `ReplicateJobs`, and for the trash jobs of a file read by kind (`JobDisks`: every trash job, for each file, where `jobs_by_file` reads the file's own). With `file_id` third, the same. `jobs(dst_disk, kind, file_id)` leaves those as they are, but still has `JobOfPart` read every copy to make on its disk. A partial index on one kind is taken by no query of another; `jobs_trash` has the file after the disk so that the trash job of a copy is a seek of its own, never a tie with `jobs_by_file`.
+- **The reads**:
+  - the folder jobs of a disk (`FolderJobs`, `dropJobsAbove`, `dropJobOfFolder`, and `queueFolderJob`'s check of the same job): `jobs_folders (dst_disk=?)`, in the order of their ids; those of every disk (`moveFolderJobs`, at each folder renamed): `jobs_folders` alone;
+  - the trash jobs of a disk (`TrashJobs`): `jobs_trash (dst_disk=?)`, then sorted by id; the canceled ones each pass forgets (`DropStaleCanceled`) and those `guard reject` cancels: over `jobs_trash` alone; the trash job of a copy, by its file and its disk (`StaleWithoutJob`, `QueueOverwrite`, `QueuedTrash`, `TrashJobState` and six more in `modify.go`, `ops.go` and `propagate.go`, unchanged): `jobs_trash (dst_disk=? AND file_id=?)` rather than `jobs_by_file`; the jobs of a file read by kind alone stay on `jobs_by_file`;
+  - `JobOfPart` and `PartsInUse` now name `payload IS NOT NULL`, which their `json_extract` implies, so that `jobs_parts` serves them;
+  - `ReplicateJobs` below a path has a query of its own: the files by path, `f.lpath = ?1 OR` the range below it (a `MULTI-INDEX OR` on the path's index), then their jobs by `jobs_by_file`, the files first by a `CROSS JOIN`. The `?4 OR` of the empty path in the same condition had SQLite read every job for a path too. With no path, every job, as before;
+  - `DueReader`: its first page as before, read from the start of `jobs_to_do` up to its page; each next one a compound statement, the rest of the last copy's priority (`priority = ? AND id > ?`) `UNION ALL` the lower priorities (`priority < ?`), ordered and limited as one: two seeks of `jobs_to_do`, merged in its order, with no sort. One statement, so that a page is still read from one snapshot. Its page size is a field that `NewDueReader` sets to `duePage`, for the test.
+  - The queries a test explains are named constants now (`folderJobsSQL`, `trashJobsSQL`, `dueFirstSQL`, `dueNextSQL`...), their text unchanged but for the above.
+- **Measured** (`BenchmarkJobReadsAt200000`, `-benchtime 3x`, in the CI's image on the i7-12700K: 200,000 files, a copy to make of each to two disks at one priority, 100 folder jobs and 1,000 trash jobs), before and after:
+
+  | Read | Before | After |
+  |---|---|---|
+  | `DueReader`, its 200 pages | 2,559 ms | 458 ms |
+  | `FolderJobs` of a disk, 100 jobs | 15.3 ms | 0.19 ms |
+  | `TrashJobs` of a disk, 1,000 jobs | 16.2 ms | 1.15 ms |
+  | `ReplicateJobs` below a folder, 2,000 jobs | 74.7 ms | 16.4 ms |
+  | `JobOfPart` | 33.7 ms | 0.15 ms |
+  | `PartsInUse` of a disk | 21.9 ms | 0.11 ms |
+  | `DropStaleCanceled` | 13.9 ms | 0.18 ms |
+  | `CopiesLater`, unchanged | 25.6 ms | 23.6 ms |
+
+  `RunningCopies` and `RunningFiles`, unchanged: 27 and 41 ms (TODO.md, with `CopiesLater`). A second run gave `DueReader` 510 ms, the machine shared with five other runs.
+- **Tests**, seen failing before their code (the queries named as constants first, their text unchanged, and the tests run on them):
+  - `TestTheJobsAreReadThroughTheirIndexes` pins the plan of each read: its index named, no `SCAN jobs`, no walk of `jobs_by_file` or `jobs_to_do` but for `DueReader`'s first page, and no sort in `DueReader`'s. It failed on 11 of its 13 reads before (`SCAN jobs`, `SCAN j USING INDEX jobs_by_file`, `SCAN j USING INDEX jobs_to_do` for the next pages); the two others pin what stays: `DueReader`'s first page, from the start of `jobs_to_do`, and the running job of a copy, on `jobs_by_file`.
+  - `TestTheJobsReadAsBefore` compares with the queries as they were, kept in the test, on 150 queues drawn from fixed seeds: files whose ids skip at 16 paths, among them names whose bytes sort between a folder and what is below it (`a.x`, `a-b`, `a/`) or just after (`a0`); jobs of every kind and state, priorities that tie and reach both ends of int64, ids that skip, due before now, at it, after it or at any time, some owning a part. `DueReader` page by page in step with the query before, pages of 1 to 7, the queue changed between two pages as a pass changes it (a job ends, goes, runs, waits again; a file goes with its jobs; a copy is queued); `ReplicateJobs` with no path and at each path; `JobOfPart` for each part named and one none names; `PartsInUse` of each disk. It passed before the change, as it must, and passes after; with the seek's `j.id > ?3` made `>=`, or the path's `OR` made one range, it fails (seen, then put back).
+  - `catalog.json`: the indexes of §9 with the three, and 6 cases: the jobs' indexes each partial, their columns, and what each holds, read through it (`INDEXED BY`).
+- **specs.md** §9: a bullet on the jobs' indexes, as for the other indexes there. §9 is fingerprinted: `Replication.tla` holds no read of the jobs and no index, so it is unchanged, its fingerprint given anew.
+- **Verified**, each in Docker, on the last code: gofmt; `go vet ./...`, with `-tags conformance` and `-tags loopdev`; `go test -timeout 60m ./...`; `go test -race` of `catalog` and `jobs`; `make conformance`, 659 scenarios; `golangci-lint run`, with `--build-tags conformance` and `--build-tags loopdev`: 0 issues; `test/tla/run.sh`, the eleven instances each as it expects (`Copy` 3,862,283 states), on the model unchanged. Before the change, the plan of every query of the jobs in the catalog, 38 texts, those it repeats once each, listed with each index considered, and after it again: only those of a disk or of a kind's own index changed, each to a seek; the others, the plan's sets, `CopiesLater`, `GuardPaths` and the reads of a file's jobs included, have the plan they had.
+- **Not verified**: a pass of the daemon on a queue of 200,000 copies to make, timed whole (`TestScale` makes none: both its disks hold every file); the plans with statistics, which no catalog has (Atoll runs no `ANALYZE`); the plans on another SQLite than modernc's 3.54.1, which the Rust version will be (the vectors' `INDEXED BY` cases pin that each index serves its reads; the plans themselves are pinned by the Go test); mutation tests.
+- **Decided without the maintainer, to confirm**:
+  - three partial indexes, each on one kind, rather than one on `jobs(kind, dst_disk)`, for the plans above;
+  - `JobOfPart` and `PartsInUse` name `payload IS NOT NULL`, which changes no row, so that `jobs_parts` serves them: an index on the part itself (`json_extract(payload, '$.part')`) would be exact, but would have SQLite read the payload of every copy to make each time one is written, and refuse a write whose payload is not JSON, which changes what the schema accepts (§29.3): not made;
+  - `CopiesLater`, `RunningCopies`, `RunningFiles`, the plan's set of the files with a copy to make, `GuardPaths` and `ReplicateJobs` of the whole pool left as they were: each reads every job, or every job still to run, once, none a page read again (TODO.md);
+  - `DueReader`'s next pages in one statement, `UNION ALL`, rather than two queries one after the other, so that each page is still read from one snapshot of the catalog.
+
 ## The maintainer's answers of 2026-11-22 on G8, G15 and G16 (specs.md §9, §10, §21.1, §21.2, §23, §25)
 
 - **Confirmed**: every choice the two entries below listed as to confirm, each saying so now. Seven had a question of their own, each answered with the option put first ("Confirmer"), the rest together ("Tout confirmer"):
