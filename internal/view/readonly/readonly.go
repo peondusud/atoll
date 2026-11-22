@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
@@ -70,7 +71,7 @@ func Run(ctx context.Context, o Options) error {
 		c.handles = writer.NewHandles()
 		defer c.handles.Close()
 	}
-	c.check()
+	c.check(ctx)
 	tree := view.NewTree(o.DB, roots, view.Owner{UID: uint32(unix.Geteuid()), GID: uint32(unix.Getegid())}, o.Machine.Now())
 	// Which copy a file is read from (specs.md §7): read.policy and read.classes, as the configuration says at the start.
 	prefer, classes := o.Config.Read()
@@ -121,7 +122,7 @@ func Run(ctx context.Context, o Options) error {
 		case <-m.Done():
 			return fmt.Errorf("%s: %w", o.Point, ErrUnmounted)
 		case <-ticker.C:
-			c.check()
+			c.check(ctx)
 		}
 	}
 }
@@ -178,16 +179,27 @@ type checker struct {
 	handles *writer.Handles
 	// readable says which disks the last check gave a root, to log a change only.
 	readable map[string]bool
+	// seen is which disks' own marker the catalog recorded seen, as the check read it last (specs.md §10).
+	seen disks.Seen
 }
 
-// check runs the mount check of every disk (specs.md §10). Each disk found online or readonly gets its root opened
-// again, so that a disk mounted again, after a USB reset, is read from its new mount; any other has none.
-func (c *checker) check() {
+// check runs the mount check of every disk, with the question of its marker, which the machine reads once per mount
+// (specs.md §10). Each disk found online or readonly gets its root opened again, so that a disk mounted again, after a
+// USB reset, is read from its new mount; any other has none: a disk whose own marker went is missing, and nothing it
+// holds is presented.
+func (c *checker) check(ctx context.Context) {
+	seen, err := catalog.MarkersSeen(ctx, c.o.DB)
+	if err != nil {
+		c.o.Log.Warn("which disks' own marker was seen is not read now: the check takes what it read last", "error", err)
+	} else {
+		c.seen = disks.Seen(seen)
+	}
 	for i := range c.o.Config.Disks {
 		d := &c.o.Config.Disks[i]
-		root, why := c.rootOf(d)
+		v := disks.CheckKnown(c.o.Machine, d, c.o.Config.PoolID, c.seen.Of(d))
+		root, why := c.rootOf(d, v)
 		if c.handles != nil {
-			c.handleOf(d, root != nil)
+			c.handleOf(d, v, root != nil)
 		}
 		if root == nil {
 			c.roots.Drop(d.ID)
@@ -206,9 +218,10 @@ func (c *checker) check() {
 }
 
 // handleOf opens a handle on the top of a disk its check found online, and confirms it there (invariant 3); a disk the
-// view cannot write to has none, and what the view writes there fails with EROFS.
-func (c *checker) handleOf(d *config.Disk, readable bool) {
-	if !readable || d.State == config.DiskFailed || disks.Check(c.o.Machine, d).State != disks.Online {
+// view cannot write to has none, readonly by another's marker included, and what the view writes there fails with
+// EROFS.
+func (c *checker) handleOf(d *config.Disk, v disks.Verdict, readable bool) {
+	if !readable || d.State == config.DiskFailed || v.State != disks.Online {
 		c.handles.Drop(d.ID)
 		return
 	}
@@ -227,11 +240,11 @@ func (c *checker) handleOf(d *config.Disk, readable bool) {
 }
 
 // rootOf opens the root of a disk its check finds online or readonly, or says why it does not.
-func (c *checker) rootOf(d *config.Disk) (fsx.Dir, string) {
+func (c *checker) rootOf(d *config.Disk, v disks.Verdict) (fsx.Dir, string) {
 	if d.State == config.DiskFailed {
 		return nil, "failed"
 	}
-	if v := disks.Check(c.o.Machine, d); v.State != disks.Online && v.State != disks.Readonly {
+	if v.State != disks.Online && v.State != disks.Readonly {
 		return nil, v.Message
 	}
 	root, err := c.o.Machine.OpenRoot(d.Mount, d.Root)

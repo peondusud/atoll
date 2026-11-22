@@ -19,7 +19,7 @@ import (
 // diskMarkOutput is the output of api/schemas/disk-mark.schema.json.
 type diskMarkOutput struct {
 	Disk string `json:"disk"`
-	// State and Reason are what its confirmation found: online, or readonly, no-marker.
+	// State and Reason are what its confirmation found: online, or missing, no-marker.
 	State  string         `json:"state"`
 	Reason *string        `json:"reason"`
 	Marker diskShowMarker `json:"marker"`
@@ -40,8 +40,8 @@ type diskMarking struct {
 }
 
 // diskMark runs atoll disk mark: it writes a disk's marker again, as disk add writes it, on a disk whose mount check
-// passes, but for a marker gone, readonly no-marker, and records it seen (specs.md §10, §25). It refuses a disk
-// missing, readonly for any other reason, failed, or that holds a marker of another pool, disk or filesystem, which
+// passes, but for a marker gone, missing no-marker, and records it seen (specs.md §10, §25). It refuses a disk
+// missing for any other reason, readonly, failed, or that holds a marker of another pool, disk or filesystem, which
 // it never writes over.
 func diskMark(configPath string, args []string, stdout, stderr io.Writer) int {
 	parsed, err := parseDiskID(args, "--dry-run", "--yes", "--json")
@@ -127,7 +127,7 @@ func checkDiskMark(ctx context.Context, c *config.Config, m disks.Machine, d *co
 }
 
 // confirm confirms the disk and reads its marker: online with its own marker, nothing to write; online with none,
-// or readonly no-marker, the marker to write; anything else refused (specs.md §10).
+// or missing no-marker, the marker to write; anything else refused (specs.md §10).
 func (a *diskMarking) confirm(c *config.Config, m disks.Machine) error {
 	d := a.disk
 	v := disks.Confirm(m, d)
@@ -142,7 +142,8 @@ func (a *diskMarking) confirm(c *config.Config, m disks.Machine) error {
 	if err != nil {
 		return fmt.Errorf(T("its marker cannot be read: %w"), err)
 	}
-	marked, own := disks.MarkerVerdict(v, text, found, a.seen, c.PoolID, d)
+	// Missing, no-marker, is what it takes: its mount check passes but for the marker gone.
+	marked, own := disks.JudgeMarker(v, disks.MarkerSeenOf(text, found, nil), a.seen, c.PoolID, d)
 	if marked.Reason == disks.OtherMarker {
 		return fmt.Errorf(T("%s (%s): disk mark writes no marker over another"), marked.Message, marked.Reason)
 	}

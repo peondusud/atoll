@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md §9, §10, §25",
-  "description": "disk add writes a disk's marker and records it seen. A filesystem with its identifier and none of its marker, as a clone made before disk add, mounted in its place, is then readonly, no-marker, at the confirmation of the pass that would copy a file to it: nothing is written to it, and the file waits degraded. disk mark without --yes, and with --dry-run, say what they would write; with --yes the marker is written again as disk add writes it, and the next pass copies the file. A disk that holds its own marker is nothing to do, and catalog rebuild records each disk's own marker seen again.",
+  "description": "disk add writes a disk's marker and records it seen. A filesystem with its identifier and none of its marker, as a clone made before disk add, mounted in its place, is then missing, no-marker, at the check of the next pass, and in disk list: it is not walked and nothing is written to it, and the file waits degraded. disk mark without --yes, and with --dry-run, say what they would write; with --yes the marker is written again as disk add writes it, and the next pass copies the file. A disk that holds its own marker is nothing to do, and catalog rebuild records each disk's own marker seen again.",
   "clock": "2026-11-22T10:00:00Z",
   "disks": [
     {
@@ -88,7 +88,40 @@
       "args": [
         "daemon",
         "--until-idle"
-      ]
+      ],
+      "exit": 4
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "list",
+        "--json"
+      ],
+      "stdout_json": {
+        "disks": [
+          {
+            "id": "t1",
+            "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t1",
+            "role": "data",
+            "state": "online",
+            "reason": null,
+            "message": null
+          },
+          {
+            "id": "t2",
+            "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+            "fs": "ext4",
+            "mount": "${SANDBOX}/disks/t2",
+            "role": "data",
+            "state": "missing",
+            "reason": "no-marker",
+            "message": "${ANY}"
+          }
+        ]
+      }
     },
     {
       "do": "expect_tree",
@@ -110,7 +143,7 @@
         ],
         [
           "t2",
-          "readonly"
+          "missing"
         ]
       ]
     },
@@ -135,7 +168,7 @@
       "exit": 3,
       "stdout_json": {
         "disk": "t2",
-        "state": "readonly",
+        "state": "missing",
         "reason": "no-marker",
         "marker": {
           "pool_id": "p",
@@ -159,7 +192,7 @@
       ],
       "stdout_json": {
         "disk": "t2",
-        "state": "readonly",
+        "state": "missing",
         "reason": "no-marker",
         "marker": {
           "pool_id": "p",
@@ -193,7 +226,7 @@
       ],
       "stdout_json": {
         "disk": "t2",
-        "state": "readonly",
+        "state": "missing",
         "reason": "no-marker",
         "marker": {
           "pool_id": "p",

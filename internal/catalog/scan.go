@@ -885,6 +885,28 @@ func SetMarkerSeen(ctx context.Context, db *sql.DB, disk, uuid string, nowNS int
 	return nil
 }
 
+// MarkersSeen gives, by disk id, the identifier on which each disk's own marker was seen, for the disks whose own
+// marker was: what a mount check asks of the catalog (specs.md §9, §10).
+func MarkersSeen(ctx context.Context, db *sql.DB) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, "SELECT id, fs_uuid FROM disks WHERE marker_seen_ns IS NOT NULL ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("disks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	seen := map[string]string{}
+	for rows.Next() {
+		var id, uuid string
+		if err := rows.Scan(&id, &uuid); err != nil {
+			return nil, fmt.Errorf("disks: %w", err)
+		}
+		seen[id] = uuid
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("disks: %w", err)
+	}
+	return seen, nil
+}
+
 // JoinDevice gives physical disks as disks.device holds them: joined by a comma, empty for none.
 func JoinDevice(physical []string) string {
 	return strings.Join(physical, ",")

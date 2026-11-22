@@ -194,6 +194,12 @@ func (folders) Root(mount, root string) RootSeen {
 	return lookAtRoot(mount, root)
 }
 
+// Marker reads a disk's marker in the real folder, at each check: a folder is no mount, so there is no mount to read
+// it once for (specs.md §10).
+func (folders) Marker(mount, workdir string, _ *MountEntry, _ bool) MarkerSeen {
+	return ReadMarkerAt(mount, workdir)
+}
+
 // Hiberfil reads hiberfil.sys at the top of the real folder, at each check: a folder is no mount, so there is no mount
 // to read it once for.
 func (folders) Hiberfil(mount string, _ *MountEntry) HiberfilSeen {

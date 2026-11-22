@@ -2,18 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/peondusud/atoll/api/schemas/disk-mark.schema.json",
   "title": "atoll disk mark --json",
-  "description": "A disk's marker, Atoll/disk.toml, written again as disk add writes it, on a disk whose mount check passes, its own marker gone or never written (specs.md §10, §25). A disk missing, readonly for another reason than no-marker, failed, not in the configuration, or holding a marker of another pool, disk or filesystem, is refused: exit 1 and nothing on standard output.",
+  "description": "A disk's marker, Atoll/disk.toml, written again as disk add writes it, on a disk whose mount check passes, its own marker gone or never written (specs.md §10, §25). A disk missing for another reason than no-marker, readonly, failed, not in the configuration, or holding a marker of another pool, disk or filesystem, is refused: exit 1 and nothing on standard output.",
   "type": "object",
   "additionalProperties": false,
   "required": ["disk", "state", "reason", "marker", "had_marker", "written", "dry_run", "warnings"],
   "properties": {
     "disk": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
     "state": {
-      "description": "What its confirmation found before: online, or readonly with the reason no-marker, its own marker seen before and gone.",
-      "enum": ["online", "readonly"]
+      "description": "What its confirmation found before: online, or missing with the reason no-marker, its own marker seen before and gone.",
+      "enum": ["online", "missing"]
     },
     "reason": {
-      "description": "no-marker when readonly, null when online (specs.md §10).",
+      "description": "no-marker when missing, null when online (specs.md §10).",
       "enum": [null, "no-marker"]
     },
     "marker": {

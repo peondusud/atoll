@@ -100,7 +100,9 @@ func (a *apiServer) answers() map[string]apiAnswer {
 			return http.StatusOK, writeStatus(r.Context(), c, statusArgs{asJSON: true}, w)
 		}),
 		"/v1/disks": a.checks(func(r *http.Request, c *config.Config, w io.Writer) (int, error) {
-			verdicts, err := disks.CheckAll(r.Context(), a.machine, c.Disks)
+			verdicts, err := knownChecks(r.Context(), c, a.machine, func(err error) {
+				a.log.Warn("which disks' own marker was seen cannot be read: no disk is said missing for its marker gone", "error", err)
+			})
 			if err != nil {
 				return 0, fmt.Errorf("%w", err)
 			}

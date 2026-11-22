@@ -121,6 +121,12 @@ func (b *bench) OpenRoot(mount, root string) (fsx.Dir, error) {
 	return fsx.OpenDir(filepath.Join(mount, root)) //nolint:wrapcheck // a test double
 }
 
+// Marker reads a disk's marker in its folder, as the conformance build does, at each check, past the faults a test
+// gives its operations (specs.md §10).
+func (b *bench) Marker(mount, workdir string, _ *disks.MountEntry, _ bool) disks.MarkerSeen {
+	return disks.ReadMarkerAt(mount, workdir)
+}
+
 func (b *bench) OpenTop(mount string) (fsx.Dir, error) {
 	top, err := fsx.OpenDir(mount)
 	if err != nil {
@@ -3875,12 +3881,12 @@ func TestADiskOfAnotherPoolIsWrittenToNoMore(t *testing.T) {
 	}
 }
 
-// A disk whose own marker was seen, and that a confirmation then finds without one, is written to no more: readonly,
-// no-marker, as a filesystem with its identifier and none of its marker, a clone made before disk add, is not that
-// disk. One whose marker no one saw is written to as before, as in a pool from before; a confirmation that finds the
-// disk's own marker records it seen, at the session's time, once; and the marker put back, it is written to again
-// (specs.md §9, §10).
-func TestADiskWhoseMarkerWentIsWrittenToNoMore(t *testing.T) {
+// A disk whose own marker was seen, and that the session's check or its confirmation then finds without one, is
+// missing, no-marker, as a filesystem with its identifier and none of its marker, a clone made before disk add, is not
+// that disk: no handle, nothing written, nothing it holds read. One whose marker no one saw is written to as before,
+// as in a pool from before; a confirmation that finds the disk's own marker records it seen, at the session's time,
+// once; and the marker put back, it is written to again (specs.md §9, §10).
+func TestADiskWhoseMarkerWentIsMissing(t *testing.T) {
 	b := newBench(t)
 	marker := filepath.Join(b.dirs["t3"], "Atoll", layout.MarkerName)
 	text, err := layout.MarkerText(layout.Marker{PoolID: "p", DiskID: "t3", FSUUID: b.config.Disks[2].UUID})
@@ -3890,11 +3896,12 @@ func TestADiskWhoseMarkerWentIsWrittenToNoMore(t *testing.T) {
 	confirmed := func(want bool) disks.Verdict {
 		t.Helper()
 		s := b.opened()
-		if _, err := s.open(t.Context(), "t3"); err != nil {
+		handle, err := s.open(t.Context(), "t3")
+		if err != nil {
 			t.Fatal(err)
 		}
-		if got := s.writable("t3"); got != want {
-			t.Errorf("writable %v, want %v", got, want)
+		if got := s.writable("t3"); got != want || (handle != nil) != want {
+			t.Errorf("writable %v, a handle %v, want %v", got, handle != nil, want)
 		}
 		v := s.VerdictOf(2)
 		s.Close()
@@ -3925,11 +3932,32 @@ func TestADiskWhoseMarkerWentIsWrittenToNoMore(t *testing.T) {
 	if err := os.Remove(marker); err != nil {
 		t.Fatal(err)
 	}
-	if v := confirmed(false); v.State != disks.Readonly || v.Reason != disks.NoMarker {
+	if v := confirmed(false); v.State != disks.Missing || v.Reason != disks.NoMarker {
 		t.Errorf("its marker gone: %s %s", v.State, v.Reason)
 	}
-	if got := b.text("SELECT state FROM disks WHERE id = 't3'"); got != "readonly" {
+	if got := b.text("SELECT state FROM disks WHERE id = 't3'"); got != "missing" {
 		t.Errorf("its marker gone: the disk is %s", got)
+	}
+	// Gone between the session's check and its confirmation: the confirmation finds it, and the disk is lost.
+	if err := os.WriteFile(marker, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := b.opened()
+	if v := s.VerdictOf(2); v.State != disks.Online {
+		t.Fatalf("its marker back, at the check: %s %s", v.State, v.Reason)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if handle, err := s.open(t.Context(), "t3"); err != nil || handle != nil || s.Readable("t3") {
+		t.Errorf("gone before the confirmation: a handle %v, readable %v, %v", handle != nil, s.Readable("t3"), err)
+	}
+	if v := s.VerdictOf(2); v.State != disks.Missing || v.Reason != disks.NoMarker {
+		t.Errorf("gone before the confirmation: %s %s", v.State, v.Reason)
+	}
+	s.Close()
+	if got := b.text("SELECT state FROM disks WHERE id = 't3'"); got != "missing" {
+		t.Errorf("gone before the confirmation: the disk is %s", got)
 	}
 	// Its whole work folder gone, as on a clone made before disk add: the same.
 	if err := os.RemoveAll(filepath.Dir(marker)); err != nil {

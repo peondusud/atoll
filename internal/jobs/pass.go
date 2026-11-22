@@ -1682,17 +1682,22 @@ func (p *pass) finish(ctx context.Context) error {
 	return nil
 }
 
-// marked gives each disk's line what a confirmation in this pass made of its marker, which only a confirmation reads:
-// a disk its mount check found online and its marker made readonly, other-marker or no-marker, is readonly in the
-// pass's output, and its alert disk-readonly says why (specs.md §10, §23).
+// marked gives each disk's line what a confirmation in this pass made of its marker, gone or another's since the mount
+// check that began the pass read it: a disk its marker made missing, no-marker, is missing so in the pass's output,
+// rather than as a confirmation that failed, and one made readonly, other-marker, is readonly; the alert of each says
+// why (specs.md §10, §23).
 func (p *pass) marked(context.Context) error {
 	for i := range p.config.Disks {
 		v := p.session.VerdictOf(i)
-		if v.State != disks.Readonly {
-			continue
-		}
 		for j := range p.out.Disks {
-			if line := &p.out.Disks[j]; line.ID == p.config.Disks[i].ID && line.Verdict.State == disks.Online {
+			line := &p.out.Disks[j]
+			if line.ID != p.config.Disks[i].ID {
+				continue
+			}
+			switch {
+			case v.State == disks.Missing && v.Reason == disks.NoMarker:
+				line.Verdict = v
+			case v.State == disks.Readonly && v.Reason == disks.OtherMarker && line.Verdict.State == disks.Online:
 				line.Verdict = v
 			}
 		}

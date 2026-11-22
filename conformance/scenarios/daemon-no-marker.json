@@ -1,0 +1,196 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §10, §15.10, §15.12, invariant 4",
+  "description": "A disk whose own marker was seen and is gone, as a clone made before disk add and mounted in its place, which holds an older version of a file and lacks another, is missing, no-marker: neither a scan nor a pass walks it or takes what it holds for the user's, so the other disk keeps both files as they are, nothing goes to the trash, and the catalog keeps every copy as it was. Its marker written again by disk mark, it is back, and what it holds is taken in only then: the mass-deletion guard holds the deletion it now reads there.",
+  "clock": "2026-11-22T10:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "new a",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "text": "the b",
+          "mtime_ns": 1600000000000000000
+        }
+      ],
+      "immutable": true
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "new a",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "text": "the b",
+          "mtime_ns": 1600000000000000000
+        }
+      ],
+      "immutable": true
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nsettle = \"0s\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT d.id, count(c.file_id) FROM disks d LEFT JOIN copies c ON c.disk_id = d.id AND c.state = 'ok' GROUP BY d.id ORDER BY d.id",
+      "rows": [
+        [
+          "t1",
+          2
+        ],
+        [
+          "t2",
+          2
+        ]
+      ]
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "Atoll/disk.toml"
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/a",
+      "text": "old a",
+      "mtime_ns": 1500000000000000000
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/b"
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 4
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a",
+          "text": "new a",
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/b",
+          "text": "the b",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT (SELECT count(*) FROM trash), (SELECT count(*) FROM copies WHERE gone_ns IS NOT NULL OR state <> 'ok'), (SELECT state FROM disks WHERE id = 't2')",
+      "rows": [
+        [
+          0,
+          0,
+          "missing"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t2",
+        "--yes"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 3
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT state FROM disks WHERE id = 't2'",
+      "rows": [
+        [
+          "online"
+        ]
+      ]
+    }
+  ]
+}

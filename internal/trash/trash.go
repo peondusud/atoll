@@ -378,14 +378,22 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 		// A disk whose marker names another pool, disk or filesystem, or whose own marker seen before is gone, is
 		// written to no more; its own marker is recorded seen, once the handle is held to the disk (specs.md §10).
 		own := false
-		if text, found, err := handle.ReadMarker(); err != nil {
+		text, found, err := handle.ReadMarker()
+		switch marker := disks.MarkerSeenOf(text, found, err); marker.File {
+		case disks.MarkerIOError, disks.MarkerUnreadable:
+			// What the handle then says of the disk decides.
 			slog.Warn("the marker of a disk could not be read", "disk", id, "error", err)
-		} else {
-			before := verdict.State
-			if verdict, own = disks.MarkerVerdict(verdict, text, found, sl.markerSeen, s.config.PoolID, sl.config); verdict.State != before {
-				slog.Warn("a disk is written to no more", "disk", id, "reason", verdict.Reason, "message", verdict.Message)
+		case disks.MarkerAbsent, disks.MarkerFile, disks.MarkerNotAFile:
+			before := verdict
+			if verdict, own = disks.JudgeMarker(verdict, marker, sl.markerSeen, s.config.PoolID, sl.config); verdict.State != before.State {
+				slog.Warn("a disk is written to no more", "disk", id, "state", verdict.State, "reason", verdict.Reason, "message", verdict.Message)
 				s.setVerdict(id, verdict)
 			}
+		}
+		// A disk whose own marker went is not that disk: nothing it holds counts, as for another identifier (§10).
+		if verdict.State == disks.Missing {
+			handle.Close()
+			return nil, s.lose(ctx, id, fmt.Errorf("%s: %s", verdict.Reason, verdict.Message))
 		}
 		if err := handle.Verify(); err != nil {
 			handle.Close()

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 )
@@ -69,7 +71,9 @@ func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	verdicts, err := disks.CheckAll(context.Background(), observer, c.Disks)
+	verdicts, err := knownChecks(context.Background(), c, observer, func(err error) {
+		report(stderr, fmt.Sprintf(T("warning: which disks' own marker was seen cannot be read (%v): no disk is said missing for its marker gone"), err))
+	})
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -83,6 +87,35 @@ func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
 		return failure(stderr, err)
 	}
 	return exitOK
+}
+
+// knownChecks runs the mount check of every disk with the question of its marker, as a pass asks it, which takes the
+// catalog's record of which disks' own marker was seen (specs.md §10). A catalog that cannot be read is said through
+// warn, and the check then takes none as seen.
+func knownChecks(ctx context.Context, c *config.Config, m disks.Machine, warn func(error)) ([]disks.Verdict, error) {
+	seen, err := markersSeenOf(ctx, c)
+	if err != nil {
+		warn(err)
+	}
+	verdicts, err := disks.CheckAllKnown(ctx, m, c.Disks, c.PoolID, seen)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	return verdicts, nil
+}
+
+// markersSeenOf reads which disks' own marker the catalog records seen.
+func markersSeenOf(ctx context.Context, c *config.Config) (seen disks.Seen, err error) {
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	list, err := catalog.MarkersSeen(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	return disks.Seen(list), nil
 }
 
 func diskListFrom(list []config.Disk, verdicts []disks.Verdict) diskListOutput {

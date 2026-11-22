@@ -215,6 +215,8 @@ type loop struct {
 	watcher  *watch.Watcher
 	grouping *watch.Grouping
 	disks    map[string]*diskState
+	// seen is which disks' own marker the catalog recorded seen, as its check read it last (specs.md §10).
+	seen disks.Seen
 
 	first, reloaded, gone, back bool
 	// afterPass says that the last step the loop took was a pass, a check aside: another step due then runs before a
@@ -598,7 +600,7 @@ func (l *loop) check(ctx context.Context) {
 	// From its end: a check that took longer than the time between two, as one that waited for a remount, would
 	// otherwise be due again at once, and it comes before every pass.
 	defer func() { l.checkDue = l.opt.Machine.Now() + l.set.checkEvery.Nanoseconds() }()
-	verdicts, err := disks.CheckAll(ctx, l.opt.Machine, l.opt.Config.Disks)
+	verdicts, err := disks.CheckAllKnown(ctx, l.opt.Machine, l.opt.Config.Disks, l.opt.Config.PoolID, l.markersSeen(ctx))
 	if err != nil {
 		l.log.Warn("the mount check stopped", "error", err)
 		return
@@ -643,6 +645,24 @@ func (l *loop) check(ctx context.Context) {
 	}
 	l.recordSpin(ctx)
 	l.recordDisks(true)
+}
+
+// markersSeen reads which disks' own marker the catalog records seen, which the check asks of each disk (specs.md §10):
+// what it read last when the catalog cannot be read now, so that a disk whose marker went stays missing.
+func (l *loop) markersSeen(ctx context.Context) disks.Seen {
+	db, err := catalog.OpenPool(ctx, l.set.catalog, l.opt.Config.PoolID)
+	if err == nil {
+		var seen map[string]string
+		seen, err = catalog.MarkersSeen(ctx, db)
+		_ = db.Close()
+		if err == nil {
+			l.seen = disks.Seen(seen)
+		}
+	}
+	if err != nil {
+		l.log.Warn("which disks' own marker was seen is not read now: the check takes what it read last", "error", err)
+	}
+	return l.seen
 }
 
 // rearm watches again a disk whose watch ended while the disk stayed there: its reader stopped on an error, or the
@@ -951,9 +971,7 @@ func (l *loop) pass(ctx context.Context, because []string) {
 
 // withLastLines gives the outcome the alerts are worked out from (specs.md §23): a disk the pass spared says what the
 // last pass that walked it said, the names its walk could not reach among them, with the verdict of its mount check now,
-// so that an alert holds until a walk says otherwise; but for a disk that walk's pass found readonly by its marker,
-// other-marker or no-marker, which only a confirmation reads, while its mount check now finds it online (§10). It keeps
-// what each walk said of a disk for later.
+// so that an alert holds until a walk says otherwise. It keeps what each walk said of a disk for later.
 func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
 	if l.lines == nil {
 		l.lines = map[string]jobs.DiskLine{}
@@ -975,18 +993,11 @@ func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
 	for i, line := range outcome.Disks {
 		merged.Disks[i] = line
 		if last, ok := l.lines[line.ID]; ok && (line.Spared || line.Partial) {
-			if line.Verdict.State != disks.Online || !byMarker(last.Verdict) {
-				last.Verdict = line.Verdict
-			}
+			last.Verdict = line.Verdict
 			merged.Disks[i] = last
 		}
 	}
 	return &merged
-}
-
-// byMarker says that a confirmation's read of a disk's marker made it readonly (specs.md §10).
-func byMarker(v disks.Verdict) bool {
-	return v.State == disks.Readonly && (v.Reason == disks.OtherMarker || v.Reason == disks.NoMarker)
 }
 
 // passSink counts what a pass decided and did, and keeps the names a driver refused and the folders its operations

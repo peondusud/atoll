@@ -8,7 +8,6 @@ import (
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
-	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 )
 
@@ -36,6 +35,9 @@ const (
 	DeviceUnread    Reason = "device-unreadable"
 	WrongIdentifier Reason = "wrong-identifier"
 	NoRoot          Reason = "no-root"
+	// NoMarker is a disk whose own marker was seen, and that a check finds without one (specs.md §10): a filesystem with
+	// its identifier and none of its marker, as a clone made before disk add, is not that disk.
+	NoMarker Reason = "no-marker"
 )
 
 // The reasons of a disk that is read-only. UnsupportedDriver is a driver whose name rules were never measured: no type
@@ -54,8 +56,6 @@ const (
 	NoJournal         Reason = "no-journal"
 	OtherMarker       Reason = "other-marker"
 	ReadOnlyMount     Reason = "read-only-mount"
-	// NoMarker is a disk whose own marker was seen before, and that a confirmation finds without one (specs.md §10).
-	NoMarker Reason = "no-marker"
 )
 
 // Verdict is the result of a mount check. Reason and Message are empty on a disk that is online.
@@ -361,49 +361,4 @@ func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string, windo
 	default:
 		return Verdict{State: Online}
 	}
-}
-
-// MarkerVerdict is what a confirmation makes of the disk's marker, <workdir>/disk.toml (specs.md §10), and whether it
-// is the disk's own, which the catalog then records seen. One that names another pool, another disk of this pool or
-// another filesystem, or a file there this version does not read, as disk add refuses each, makes a disk online
-// readonly, other-marker; and none, on a disk whose own marker was seen before, readonly, no-marker, as a filesystem
-// with its identifier and none of its marker, a clone made before disk add, is not that disk. What the check said
-// otherwise stays: a missing disk is missing, and records nothing, and a readonly one keeps its reason. One that says
-// the same changes nothing, and nor does none on a disk whose marker no one saw, as in a pool from before.
-func MarkerVerdict(v Verdict, text []byte, found, seen bool, poolID string, d *config.Disk) (Verdict, bool) {
-	if v.State == Missing {
-		return v, false
-	}
-	var m layout.Marker
-	var err error
-	if found {
-		m, err = layout.ParseMarker(text)
-		if err == nil && m.PoolID == poolID && m.DiskID == d.ID && m.FSUUID == d.UUID {
-			return v, true
-		}
-	}
-	if v.State != Online {
-		return v, false
-	}
-	var why string
-	reason := OtherMarker
-	switch {
-	case !found && !seen:
-		return v, false
-	case !found:
-		reason = NoMarker
-		why = fmt.Sprintf("its own marker %s/%s was seen before, and is not there: a filesystem with its identifier is not taken for it, "+
-			"as a clone made before disk add; atoll disk mark %s writes it again once it is that disk", d.Workdir, layout.MarkerName, d.ID)
-	case err != nil:
-		why = fmt.Sprintf("its %s is not a marker this version reads: %v", layout.MarkerName, err)
-	case m.PoolID != poolID:
-		why = fmt.Sprintf("its marker says it is a disk of the pool %q", m.PoolID)
-	case m.DiskID != d.ID:
-		why = fmt.Sprintf("its marker says it is the disk %q of this pool", m.DiskID)
-	default:
-		why = fmt.Sprintf("its marker names the filesystem %s, copied from another disk", m.FSUUID)
-	}
-	verdict := readOnly(reason, why)
-	verdict.TimePrecisionNS, verdict.MountOwner = v.TimePrecisionNS, v.MountOwner
-	return verdict, false
 }

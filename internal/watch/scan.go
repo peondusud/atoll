@@ -105,6 +105,10 @@ func (o *Outcome) Partial() bool {
 // (specs.md §15.10).
 func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, opts Options) (*Outcome, error) {
 	now := m.Now()
+	seen, err := markersSeen(ctx, db)
+	if err != nil {
+		return nil, err
+	}
 	verdicts, err := CheckDisks(ctx, db, c, m, now)
 	if err != nil {
 		return nil, err
@@ -117,7 +121,7 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 			continue
 		}
 		// Confirmed as a pass's look is, and every time, as a scan records what it found (specs.md §10, §15.10).
-		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Write: true, Confirm: confirmPastCache(m), ConfirmEach: true})
+		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Write: true, Confirm: confirmPastCache(m, c.PoolID, seen), ConfirmEach: true})
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +152,11 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 
 // CheckDisks runs a mount check on every disk of the configuration, and records what it found.
 func CheckDisks(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, now int64) ([]disks.Verdict, error) {
-	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	seen, err := markersSeen(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	verdicts, err := disks.CheckAllKnown(ctx, m, c.Disks, c.PoolID, seen)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -223,7 +231,11 @@ type Look struct {
 // walk found is compared, as a scan's is.
 func Compare(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine) (*Outcome, error) {
 	now := m.Now()
-	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	seen, err := markersSeen(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	verdicts, err := disks.CheckAllKnown(ctx, m, c.Disks, c.PoolID, seen)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -233,7 +245,7 @@ func Compare(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine)
 		if d.State == config.DiskFailed {
 			continue
 		}
-		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Confirm: confirmPastCache(m), ConfirmEach: true})
+		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Confirm: confirmPastCache(m, c.PoolID, seen), ConfirmEach: true})
 		if err != nil {
 			return nil, err
 		}
@@ -246,10 +258,19 @@ func Compare(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine)
 
 // confirmPastCache confirms a disk as a session does before it writes: a mount check, then a read of its head past
 // the page cache, whose identifier must be the disk's (specs.md §10).
-func confirmPastCache(m disks.Machine) func(context.Context, *config.Disk) (bool, error) {
+func confirmPastCache(m disks.Machine, poolID string, seen disks.Seen) func(context.Context, *config.Disk) (bool, error) {
 	return func(_ context.Context, d *config.Disk) (bool, error) {
-		return disks.Confirm(m, d).State != disks.Missing, nil
+		return disks.ConfirmKnown(m, d, poolID, seen.Of(d)).State != disks.Missing, nil
 	}
+}
+
+// markersSeen reads which disks' own marker the catalog records seen, which a mount check asks (specs.md §9, §10).
+func markersSeen(ctx context.Context, db *sql.DB) (disks.Seen, error) {
+	seen, err := catalog.MarkersSeen(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	return disks.Seen(seen), nil
 }
 
 // LookAtDisk walks one disk and writes what it found, whole or not at all.
@@ -1329,7 +1350,11 @@ func HashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine,
 }
 
 func hashNew(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, until int64, w *hashWriter) (*HashSlice, error) {
-	verdicts, err := disks.CheckAll(ctx, m, c.Disks)
+	seen, err := markersSeen(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	verdicts, err := disks.CheckAllKnown(ctx, m, c.Disks, c.PoolID, seen)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

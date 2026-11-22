@@ -30,10 +30,10 @@ stateDiagram-v2
 | (none) | `online` | `disk add`, the identity, topology and mount point checked | §10, §18 |
 | `online` | `standby` | the daemon's check finds a whole disk in standby, waking none | §10 |
 | `standby` | `online` | its counters moved, it has requests under way, or it answers spinning | §10 |
-| `online` | `missing` | a mount check fails, or an I/O error on a disk that then does not confirm (invariant 4) | §10, §16, §17.1 |
+| `online` | `missing` | a mount check fails, its own marker gone (no-marker) included, or an I/O error on a disk that then does not confirm (invariant 4) | §10, §16, §17.1 |
 | `standby` | `missing` | a mount check fails | §10 |
 | `missing` | `online` | a mount check passes again; reconciliation first | §10, §18 |
-| `online` | `readonly` | ro, ads, nocase, iocharset, errors-continue, hibernated, casefold, ascii-ci, no-journal, ignore-case, other-marker or no-marker | §10 |
+| `online` | `readonly` | ro, ads, nocase, iocharset, errors-continue, hibernated, casefold, ascii-ci, no-journal, ignore-case or other-marker | §10 |
 | `readonly` | `online` | mounted again without what made it readonly | §10 |
 | `readonly` | `missing` | a mount check fails | §10 |
 | `online` | `draining` | `disk remove --evacuate` or `disk replace` set its state to draining | §18 |
