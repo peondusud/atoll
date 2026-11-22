@@ -146,7 +146,7 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 // §15.13), which hangups has given since before the configuration was first read. Atoll never detaches itself:
 // --foreground changes nothing.
 func runForGood(configPath string, c *config.Config, apply bool, stderr io.Writer, hangups <-chan os.Signal) int {
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -219,7 +219,7 @@ const telemetryStop = 5 * time.Second
 
 func runPass(c *config.Config, apply bool, sink jobs.Sink, stderr io.Writer) (outcome *jobs.Outcome, err error) {
 	ctx := context.Background()
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -610,7 +610,7 @@ func readModifyGuard(ctx context.Context, db *sql.DB, disk string, s *guardSetti
 // nowOf reads the clock as a command that looks at no disk does: in a conformance build, that is the
 // control file's.
 func nowOf() (int64, error) {
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return 0, fmt.Errorf("%w", err)
 	}

@@ -134,7 +134,7 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk %s: %w", change, err))
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -318,7 +318,7 @@ func diskShow(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk show: %w", err))
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -462,7 +462,7 @@ func diskReplace(configPath string, args []string, stdout, stderr io.Writer) int
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk replace: %w", err))
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}

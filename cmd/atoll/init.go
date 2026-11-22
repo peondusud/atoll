@@ -10,7 +10,6 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
-	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 )
 
@@ -173,7 +172,7 @@ func startPastTheDisks(c *config.Config, stderr io.Writer) (err error) {
 	if len(c.Disks) == 0 {
 		return nil
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

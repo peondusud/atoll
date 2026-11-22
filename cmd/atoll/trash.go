@@ -15,7 +15,6 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
-	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
@@ -67,7 +66,7 @@ func exitOf(f *writeFlags, s *trash.Summary) int {
 // included: nothing is left unsaid on an exit code that says the rest.
 func session(c *config.Config, stdout, stderr io.Writer, apply bool, run func(*trash.Session, *bufio.Writer) error) (err error) {
 	ctx := context.Background()
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

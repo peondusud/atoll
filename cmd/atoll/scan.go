@@ -171,7 +171,7 @@ func hasDisk(c *config.Config, id string) bool {
 
 func scan(c *config.Config, opts watch.Options, stderr io.Writer) (outcome *watch.Outcome, err error) {
 	ctx := context.Background()
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

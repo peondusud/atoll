@@ -17,7 +17,6 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
-	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/solver"
@@ -182,7 +181,7 @@ func misplacedFiles(ctx context.Context, db *sql.DB, c *config.Config) (map[stri
 	if !c.StrictPlacement() {
 		return nil, nil //nolint:nilnil // nothing misplaced is an answer
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

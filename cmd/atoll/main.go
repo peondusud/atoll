@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/telemetry"
 )
@@ -39,6 +40,11 @@ func main() {
 	slog.SetDefault(slog.New(processLogs))
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
+
+// newMachine gives what a command asks of the machine about its disks and the time: the machine itself, or in a
+// conformance build its control file (disks.NewMachine). Only a unit test of a command changes it, for disks as
+// folders.
+var newMachine = disks.NewMachine
 
 // processLogs is the handler of every log of the process, on standard error: JSON lines by default, in the format the
 // configuration gives once it loads (specs.md §23.2). Only main sets it: a test that runs a command in its own process

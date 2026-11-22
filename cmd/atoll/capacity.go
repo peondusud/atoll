@@ -9,7 +9,6 @@ import (
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
-	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -60,7 +59,7 @@ func runCapacity(configPath string, args []string, stdout, stderr io.Writer) int
 }
 
 func capacity(ctx context.Context, c *config.Config) (out *capacityOutput, err error) {
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

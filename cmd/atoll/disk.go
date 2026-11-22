@@ -54,7 +54,7 @@ type diskListOutput struct {
 }
 
 func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
-	return diskListOn(configPath, args, disks.NewMachine, stdout, stderr)
+	return diskListOn(configPath, args, newMachine, stdout, stderr)
 }
 
 // diskListOn is diskList on the machine newMachine gives, once the arguments and the configuration are read.
