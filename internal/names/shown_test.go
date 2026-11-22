@@ -166,7 +166,7 @@ func unescaped(s string) (string, bool) {
 			continue
 		}
 		digits, _, closed := strings.Cut(s[i+3:], "}")
-		upper := closed && digits != "" && !strings.ContainsFunc(digits, func(r rune) bool { return !('0' <= r && r <= '9' || 'A' <= r && r <= 'F') })
+		upper := closed && digits != "" && !strings.ContainsFunc(digits, func(r rune) bool { return (r < '0' || '9' < r) && (r < 'A' || 'F' < r) })
 		if !upper {
 			return "", false
 		}
