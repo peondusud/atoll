@@ -3,12 +3,14 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -158,6 +160,102 @@ func TestPlexScan(t *testing.T) {
 	}
 	if err := p.Check(t.Context()); err != nil {
 		t.Error(err)
+	}
+}
+
+// plexWith is a Plex that lists libraries, each with its folders, and answers each scan it is asked for after wait.
+func plexWith(t *testing.T, r *recorder, libraries [][]string, wait time.Duration) *Plex {
+	t.Helper()
+	var list []string
+	for i, folders := range libraries {
+		var locations []string
+		for _, f := range folders {
+			locations = append(locations, `{"path":`+strconv.Quote(f)+`}`)
+		}
+		list = append(list, `{"key":"`+strconv.Itoa(i+1)+`","Location":[`+strings.Join(locations, ",")+`]}`)
+	}
+	answer := `{"MediaContainer":{"Directory":[` + strings.Join(list, ",") + `]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.add(req, "")
+		if req.URL.Path == "/library/sections" {
+			_, _ = io.WriteString(w, answer)
+			return
+		}
+		select {
+		case <-time.After(wait):
+		case <-req.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return &Plex{URL: srv.URL, ViewMount: "/srv/pool", PathMap: map[string]string{"/srv/pool": "/data"}}
+}
+
+// What Plex answers sets no number of scans Atoll then asks for: a list of more library folders than maxLibraryFolders,
+// or a folder that changed in more libraries than maxLibrariesOfAFolder, asks for none, and is an error, tried again
+// later. A hostile answer listing thousands of libraries that each hold every folder made the daemon ask for a scan
+// in each, one after the other, its passes waiting meanwhile (scrutineer F050, 2026-11-22). What a server of many
+// libraries asks stays asked.
+func TestPlexAsksForABoundedNumberOfScans(t *testing.T) {
+	every := make([][]string, maxLibraryFolders+1)
+	for i := range every {
+		every[i] = []string{"/"}
+	}
+	var r recorder
+	if err := plexWith(t, &r, every, 0).Scan(t.Context(), []string{"tv/Show"}); err == nil || !strings.Contains(err.Error(), "library folders") {
+		t.Errorf("too many library folders: %v", err)
+	}
+	if len(r.got) != 1 {
+		t.Errorf("asked %d times", len(r.got))
+	}
+	same := make([][]string, maxLibrariesOfAFolder+1)
+	for i := range same {
+		same[i] = []string{"/data/tv"}
+	}
+	r = recorder{}
+	if err := plexWith(t, &r, same, 0).Scan(t.Context(), []string{"films/a", "tv/Show"}); err == nil || !strings.Contains(err.Error(), "is in 9 library folders") {
+		t.Errorf("a folder in too many libraries: %v", err)
+	}
+	if len(r.got) != 1 {
+		t.Errorf("asked %d times", len(r.got))
+	}
+	r = recorder{}
+	if err := plexWith(t, &r, same[:maxLibrariesOfAFolder], 0).Scan(t.Context(), []string{"tv/Show"}); err != nil {
+		t.Error(err)
+	}
+	if len(r.got) != 1+maxLibrariesOfAFolder {
+		t.Errorf("asked %d times", len(r.got))
+	}
+	many := make([][]string, maxLibraryFolders)
+	for i := range many {
+		many[i] = []string{"/data/" + strconv.Itoa(i)}
+	}
+	r = recorder{}
+	if err := plexWith(t, &r, many, 0).Scan(t.Context(), []string{""}); err != nil {
+		t.Error(err)
+	}
+	if len(r.got) != 1+maxLibraryFolders {
+		t.Errorf("the top of the view: asked %d times", len(r.got))
+	}
+}
+
+// The scans of one notification take at most plexBase, then refreshEach for each: a Plex that answers each slowly,
+// but each within its own time, no longer holds the daemon's turn for as long as it takes (scrutineer F050).
+func TestPlexScansWithinABudget(t *testing.T) {
+	base, each := plexBase, refreshEach
+	plexBase, refreshEach = 100*time.Millisecond, 50*time.Millisecond
+	defer func() { plexBase, refreshEach = base, each }()
+	var r recorder
+	p := plexWith(t, &r, [][]string{{"/data/tv"}}, 200*time.Millisecond)
+	start := time.Now()
+	err := p.Scan(t.Context(), []string{"tv/a", "tv/b", "tv/c", "tv/d", "tv/e"})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("past its budget: %v", err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("took %v", took)
+	}
+	if len(r.got) >= 6 {
+		t.Errorf("asked %d times", len(r.got))
 	}
 }
 

@@ -36,6 +36,44 @@ func TestStartOpsAfter(t *testing.T) {
 	}
 }
 
+// A counter is never moved past the ids a catalog gives, MaxID, nor an entry of the trash listed at one: at the largest
+// id, SQLite gives no other, and the catalog could record no other operation or file (scrutineer F020, 2026-11-22).
+// MaxID itself leaves room for every id a pool will ever need.
+func TestNoCounterPastTheIDsACatalogGives(t *testing.T) {
+	db, _ := newPool(t)
+	ctx := t.Context()
+	seq := func(table string) int64 {
+		t.Helper()
+		var n int64
+		if err := db.QueryRowContext(ctx, "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = ?), 0)", table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := StartOpsAfter(ctx, db, MaxID+1); err == nil {
+		t.Error("the operations' counter past MaxID")
+	}
+	if err := StartFilesAfter(ctx, db, 9223372036854775807); err == nil {
+		t.Error("the files' counter at the largest id")
+	}
+	if seq("ops") != 0 || seq("files") != 0 {
+		t.Errorf("the counters moved: %d, %d", seq("ops"), seq("files"))
+	}
+	past := []FoundTrash{{OpID: MaxID + 1, Path: "a.mkv", TrashPath: "2026-01-02/9007199254740992/a.mkv", Size: 1}}
+	if err := ListTrashAgain(ctx, db, "t1", past); err == nil {
+		t.Error("an entry of the trash past MaxID")
+	}
+	if seq("ops") != 0 {
+		t.Errorf("the operations' counter moved: %d", seq("ops"))
+	}
+	if err := StartOpsAfter(ctx, db, MaxID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES ('d', 'trash', x'61', 0, 'done')"); err != nil {
+		t.Errorf("no operation after MaxID: %v", err)
+	}
+}
+
 // The new catalog takes the old one's name, with no moment without one; the old one keeps its log beside it, under
 // its new name; with no old one, the new one is only renamed (specs.md §9).
 func TestSetAside(t *testing.T) {

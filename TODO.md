@@ -72,7 +72,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 ## The threat model after 2026-11-19 (DONE.md)
 
-- The audit by scrutineer of 2026-11-22 (DONE.md): export F020 (the catalog's id counters) and F050 (the requests to Plex), which its other findings name and its export did not hold, and check them; then run it again on `beta`, whose head the audit did not see. Two pools on one machine with one account: `tellDaemon` counts the other pool's daemon too, as it does not compare `--config`.
+- The audit by scrutineer of 2026-11-22 (DONE.md): its eight findings are checked and the real ones fixed; run it again on `beta`, whose head it did not see. Two pools on one machine with one account: `tellDaemon` counts the other pool's daemon too, as it does not compare `--config`. The media servers are told in the daemon's own turn: Plex within a budget since 2026-11-22, Jellyfin and Emby a hundred folders a request, each up to 10 s.
 - The threat model's low gaps G7 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask).
 - Measure the remount through systemd with systemd 252 (Debian 12, openmediavault 7): the polkit rule is checked there, the remount itself is not.
 - The view (experimental): a file or folder it makes takes the caller's group, not a setgid folder's; a non-owner's write to a setuid file whose presented mode differs from its disk's fails until a pass. Run `TestViewAsAnotherAccount` on Linux 7.3 too.

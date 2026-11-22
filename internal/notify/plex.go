@@ -6,10 +6,30 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // sectionsLimit bounds the answer of /library/sections, which lists libraries and their folders only.
 const sectionsLimit = 4 << 20
+
+// What Plex answers sets no number of scans Atoll asks for (scrutineer F050, 2026-11-22). A list of more library
+// folders than maxLibraryFolders, every library's together, or a folder that changed in more libraries than
+// maxLibrariesOfAFolder asks for none: no server of a home holds as many, and one that says so would have the daemon
+// ask for a scan in each, one after the other, its passes waiting meanwhile. A notification then asks for at most
+// maxLibrariesOfAFolder scans a folder, and one a library folder below one of them.
+const (
+	maxLibraryFolders     = 1024
+	maxLibrariesOfAFolder = 8
+)
+
+// plexBase and refreshEach make the time all the scans of one notification may take: plexBase, the time of one
+// request, then refreshEach for each scan asked, which Plex answers at once as it scans later. Past it, what is left
+// is not asked, and the notification is tried again later, so that a Plex that answers each slowly holds the daemon's
+// turn for that long at most. Variables, so that a test can shorten them.
+var (
+	plexBase    = requestTimeout
+	refreshEach = 100 * time.Millisecond
+)
 
 // Plex asks Plex for a partial scan of each folder that changed, in each library that holds it:
 // GET /library/sections/<id>/refresh?path=<folder> (specs.md §21.5).
@@ -34,7 +54,9 @@ type section struct {
 }
 
 // Scan reads Plex's libraries, then asks each library that holds a folder for a scan of it; a folder above a library
-// asks for a scan of that library's folder. A folder in no library asks for nothing.
+// asks for a scan of that library's folder. A folder in no library asks for nothing. What it is to ask is known
+// before it asks anything, and bounded (maxLibrariesOfAFolder), and all of it is asked within a budget (plexBase,
+// refreshEach).
 func (p *Plex) Scan(ctx context.Context, folders []string) error {
 	sections, err := p.sections(ctx)
 	if err != nil {
@@ -42,27 +64,37 @@ func (p *Plex) Scan(ctx context.Context, folders []string) error {
 	}
 	type refresh struct{ key, path string }
 	asked := map[refresh]bool{}
+	var plan []refresh
 	for _, folder := range folders {
 		seen := Seen(p.ViewMount, folder, p.PathMap)
+		within := 0
 		for _, s := range sections {
 			for _, l := range s.Location {
 				r := refresh{key: s.Key}
 				switch {
 				case Within(seen, l.Path):
 					r.path = seen
+					within++
 				case Within(l.Path, seen):
 					r.path = l.Path
 				default:
 					continue
 				}
-				if asked[r] {
-					continue
-				}
-				asked[r] = true
-				if err := p.get(ctx, "/library/sections/"+url.PathEscape(r.key)+"/refresh?path="+url.QueryEscape(r.path), nil); err != nil {
-					return err
+				if !asked[r] {
+					asked[r] = true
+					plan = append(plan, r)
 				}
 			}
+		}
+		if within > maxLibrariesOfAFolder {
+			return fmt.Errorf("plex: %s is in %d library folders, more than the %d of a server: it asked for no scan", seen, within, maxLibrariesOfAFolder)
+		}
+	}
+	ctx, cancel := context.WithTimeout(ctx, plexBase+time.Duration(len(plan))*refreshEach)
+	defer cancel()
+	for _, r := range plan {
+		if err := p.get(ctx, "/library/sections/"+url.PathEscape(r.key)+"/refresh?path="+url.QueryEscape(r.path), nil); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -83,6 +115,13 @@ func (p *Plex) sections(ctx context.Context) ([]section, error) {
 	}
 	if err := p.get(ctx, "/library/sections", &answer); err != nil {
 		return nil, err
+	}
+	folders := 0
+	for _, s := range answer.MediaContainer.Directory {
+		folders += len(s.Location)
+	}
+	if folders > maxLibraryFolders {
+		return nil, fmt.Errorf("plex: it lists %d library folders, more than the %d of a server: it is asked for no scan", folders, maxLibraryFolders)
 	}
 	return answer.MediaContainer.Directory, nil
 }

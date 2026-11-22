@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The audit's two other findings, F020 and F050, and the tools' three, 2026-11-22 (specs.md §9, §21.5)
+
+The rest of the audit by scrutineer of 2026-11-22 on `main`, from its list of findings: eight in all, the three of the entry below among them.
+
+- **F020, an id from a name on a disk moved the catalog's counter to its end** (medium): real on `beta`. `HighestOpID`, `HighestLinkID` and the trash a rebuild lists again took any id a name of the work folder gave, up to 2^63 - 1. One folder `trash/<date>/9223372036854775807/`, or a part or a link of that id, which anyone who may write the work folder can make, moved `sqlite_sequence` to SQLite's largest id at `atoll init` or `catalog rebuild`, past which it gives no other: the new catalog could record no operation or file. `catalog.MaxID`, 2^53 - 1, is now the highest id a catalog gives, the largest integer a JSON number holds exactly; the highest ids and the trash listed again leave out a name past it, the trash's told of as no entry and left, and a counter is never moved past it, nor an entry listed at one. The names Atoll writes and reads are unchanged (`conformance/vectors/work_names.json` still reads 63 bits), so is the layout of format version 1. Tests first: `TestNoIDPastThoseACatalogGivesIsTaken` (ops), `TestNoCounterPastTheIDsACatalogGives` (catalog), and the scenario `catalog-rebuild-ids-past`, which failed on the build before at `atoll init`, its counter 9223372036854775807.
+- **F050, what Plex answers set how many scans the daemon asks for** (medium): real on `beta`. The answer of `/library/sections` was read up to 4 MiB, but then each library folder that holds a folder that changed was asked for a scan, one request after the other, in the daemon's turn: a hostile answer of thousands of libraries that each hold `/` made thousands of requests a folder, each up to 10 s, the passes waiting. Plex's scans are now planned before any is asked: more than 1,024 library folders in the answer, or a folder in more than 8, asks for none, an error tried again later; and the plan is asked within 10 s and 100 ms a scan. Tests first: `TestPlexAsksForABoundedNumberOfScans` and `TestPlexScansWithinABudget`.
+- **Three findings of the tools, none a defect**: `generic-api-key` at `conformance/frozen/v1.json:16` is the SHA-256 of the migration `0012_ops_by_key.sql`; `use-of-unsafe-block` at `internal/fsx/power.go:68` is the `SG_IO` ioctl of ATA CHECK POWER MODE, its header passed as `x/sys` passes one, the buffers it points to kept alive over the call; `string-formatted-query` at `internal/catalog/view.go:201` builds its query from the table names `files` and `entries` alone, every value bound.
+
+Decided without the maintainer, to confirm:
+
+- The bound of ids, 2^53 - 1, rather than a lower one or SQLite's own: it leaves 9 × 10^15 ids, and keeps every id exact in `--json`.
+- The bounds of Plex: 1,024 library folders and 8 libraries a folder, both far past a home's server; and a budget, not a turn of the notifications outside the daemon's loop, as Jellyfin and Emby already send a hundred folders a request.
+
 ## The audit by scrutineer of 2026-11-22: three findings, two fixed on beta before, one fixed (specs.md §15.13, §25.1)
 
 The maintainer ran scrutineer on `main` (`b6c1104`, #23's merge) and exported three findings, each rated low; their `DupCheck` names two more, F020 (the catalog's id counters) and F050 (the requests to Plex), that the export did not hold. Each was checked against `beta`.

@@ -84,8 +84,9 @@ func (d *Disk) links() ([]LinkEntry, map[uint64][]int64, error) {
 	return list, own, nil
 }
 
-// HighestLinkID gives the highest file id the links folder names, 0 when there is none: a new catalog starts its files
-// past it, so that an old link never names a new file (specs.md §9, §17).
+// HighestLinkID gives the highest file id the links folder names, 0 when there is none, and none past catalog.MaxID,
+// which no catalog gives: a new catalog starts its files past it, so that an old link never names a new file (specs.md
+// §9, §17).
 func (d *Disk) HighestLinkID() (int64, error) {
 	dir, err := d.open(d.linksPlace())
 	switch {
@@ -101,7 +102,7 @@ func (d *Disk) HighestLinkID() (int64, error) {
 	}
 	highest := int64(0)
 	for _, name := range names {
-		if id, ok := layout.LinkID(name); ok {
+		if id, ok := layout.LinkID(name); ok && id <= catalog.MaxID {
 			highest = max(highest, id)
 		}
 	}

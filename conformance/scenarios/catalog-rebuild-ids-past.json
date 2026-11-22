@@ -1,0 +1,99 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §9",
+  "description": "A name of a disk's work folder whose id is past those a catalog gives, 2^53 - 1, is none of Atoll's: catalog rebuild starts its operations past the other names alone, lists no entry of the trash at it and leaves it as it is, so that the new catalog can still record operations. Taken, the largest id made SQLite give no other (scrutineer F020).",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/old.mkv",
+          "text": "gone"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/9223372036854775807/x.mkv",
+          "text": "crafted"
+        },
+        {
+          "path": "Atoll/tmp/9007199254740992.part",
+          "text": "crafted"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT seq FROM sqlite_sequence WHERE name = 'ops'",
+      "rows": [
+        [
+          7
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT seq FROM sqlite_sequence WHERE name = 'ops'",
+      "rows": [
+        [
+          7
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state, CAST(path2 AS TEXT) FROM ops ORDER BY id",
+      "rows": [
+        [
+          7,
+          "done",
+          "2026-01-01/7/old.mkv"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "same"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/7/old.mkv",
+          "text": "gone"
+        },
+        {
+          "path": "Atoll/trash/2026-01-01/9223372036854775807/x.mkv",
+          "text": "crafted"
+        },
+        {
+          "path": "Atoll/tmp/9007199254740992.part",
+          "text": "crafted"
+        }
+      ]
+    }
+  ]
+}

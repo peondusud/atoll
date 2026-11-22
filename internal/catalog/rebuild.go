@@ -12,6 +12,12 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 )
 
+// MaxID is the highest id a catalog gives an operation or a file, 2^53 - 1: the largest integer a JSON number holds
+// exactly, as --json gives ids, and far past what a pool ever needs. An id a name on a disk gives past it is none a
+// catalog gave: moved there, a table's counter would reach SQLite's largest id, past which it gives no other, and the
+// catalog could record no other row (specs.md §9; scrutineer F020, 2026-11-22).
+const MaxID = 1<<53 - 1
+
 // ReasonUnknown is the reason of an entry of the trash a catalog rebuild listed again: nothing on its disk says why it
 // went there (specs.md §9, §17).
 const ReasonUnknown = "unknown"
@@ -36,6 +42,11 @@ type FoundTrash struct {
 func ListTrashAgain(ctx context.Context, db *sql.DB, disk string, list []FoundTrash) error {
 	if len(list) == 0 {
 		return nil
+	}
+	for i := range list {
+		if id := list[i].OpID; id <= 0 || id > MaxID {
+			return fmt.Errorf("journal: operation %d: an id past those a catalog gives", id)
+		}
 	}
 	return inTransaction(ctx, db, func(tx *sql.Tx) error {
 		for i := range list {
@@ -73,8 +84,11 @@ func StartFilesAfter(ctx context.Context, db *sql.DB, id int64) error {
 	return startAfter(ctx, db, "files", id)
 }
 
-// startAfter moves the counter of a table's ids past id, never back.
+// startAfter moves the counter of a table's ids past id, never back, and never past MaxID.
 func startAfter(ctx context.Context, db *sql.DB, table string, id int64) error {
+	if id > MaxID {
+		return fmt.Errorf("%s: %d is an id past those a catalog gives", table, id)
+	}
 	return inTransaction(ctx, db, func(tx *sql.Tx) error {
 		var seq sql.NullInt64
 		err := tx.QueryRowContext(ctx, "SELECT seq FROM sqlite_sequence WHERE name = ?", table).Scan(&seq)

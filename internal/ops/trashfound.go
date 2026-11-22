@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/watch"
@@ -83,8 +84,12 @@ func foundOn(dir fsx.Dir, day string, when time.Time, left func(place, why strin
 	var list []op
 	for _, name := range names {
 		id, chunks, ok := layout.TrashOp(name)
-		if !ok {
+		switch {
+		case !ok:
 			left(day+"/"+name, "no operation's")
+			continue
+		case id > catalog.MaxID:
+			left(day+"/"+name, "an id past those a catalog gives")
 			continue
 		}
 		list = append(list, op{id, chunks, name})
