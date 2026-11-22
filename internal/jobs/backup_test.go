@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/ops"
 )
 
@@ -71,5 +73,55 @@ func TestABackupOfTheCatalogOnTheDisks(t *testing.T) {
 	out, err = BackupCatalog(t.Context(), b.db, b.config, b)
 	if err != nil || out.Disks != nil || out.Path == "" {
 		t.Errorf("%+v, %v", out, err)
+	}
+}
+
+// A disk its marker makes readonly takes no copy of the backup, which holds every path of the pool: one whose marker
+// names another pool, and one whose own marker was seen and is gone, as a clone made before disk add. One whose own
+// marker is there takes it, and its marker is recorded seen; one with none, and none seen, takes it as before
+// (specs.md §9, §10).
+func TestABackupGoesToNoDiskItsMarkerRefuses(t *testing.T) {
+	b := newBenchWith(t, "[maintenance]\ncatalog_on_disks = true\n", "t1", "t2", "t3", "t4")
+	b.write("t1", "a", "x")
+	b.scan(false)
+	mark := func(i int, pool string) {
+		t.Helper()
+		d := &b.config.Disks[i]
+		text, err := layout.MarkerText(layout.Marker{PoolID: pool, DiskID: d.ID, FSUUID: d.UUID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(b.dirs[d.ID], "Atoll"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b.dirs[d.ID], "Atoll", layout.MarkerName), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mark(0, "p")
+	mark(1, "other")
+	if err := catalog.SetMarkerSeen(t.Context(), b.db, "t3", b.config.Disks[2].UUID, 1); err != nil {
+		t.Fatal(err)
+	}
+	out, err := BackupCatalog(t.Context(), b.db, b.config, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDisk := func(id string) string { return filepath.Join(b.dirs[id], "Atoll", ops.CatalogFolder, ops.CatalogName) }
+	for i, want := range []bool{true, false, false, true} {
+		id := b.config.Disks[i].ID
+		if got := out.Disks[i].Err == nil; got != want {
+			t.Errorf("%s took a copy: %v, want %v (%v)", id, got, want, out.Disks[i].Err)
+		}
+		if _, err := os.Stat(onDisk(id)); (err == nil) != want {
+			t.Errorf("%s holds a copy: %v, want %v", id, err, want)
+		}
+	}
+	var seen string
+	if err := b.db.QueryRowContext(t.Context(), "SELECT group_concat(id, ' ') FROM (SELECT id FROM disks WHERE marker_seen_ns IS NOT NULL ORDER BY id)").Scan(&seen); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "t1 t3" {
+		t.Errorf("the disks whose own marker is recorded seen: %q", seen)
 	}
 }

@@ -3874,3 +3874,77 @@ func TestADiskOfAnotherPoolIsWrittenToNoMore(t *testing.T) {
 		}
 	}
 }
+
+// A disk whose own marker was seen, and that a confirmation then finds without one, is written to no more: readonly,
+// no-marker, as a filesystem with its identifier and none of its marker, a clone made before disk add, is not that
+// disk. One whose marker no one saw is written to as before, as in a pool from before; a confirmation that finds the
+// disk's own marker records it seen, at the session's time, once; and the marker put back, it is written to again
+// (specs.md §9, §10).
+func TestADiskWhoseMarkerWentIsWrittenToNoMore(t *testing.T) {
+	b := newBench(t)
+	marker := filepath.Join(b.dirs["t3"], "Atoll", layout.MarkerName)
+	text, err := layout.MarkerText(layout.Marker{PoolID: "p", DiskID: "t3", FSUUID: b.config.Disks[2].UUID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed := func(want bool) disks.Verdict {
+		t.Helper()
+		s := b.opened()
+		if _, err := s.open(t.Context(), "t3"); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.writable("t3"); got != want {
+			t.Errorf("writable %v, want %v", got, want)
+		}
+		v := s.VerdictOf(2)
+		s.Close()
+		return v
+	}
+	if v := confirmed(true); v.State != disks.Online {
+		t.Errorf("no marker, none seen: %s %s", v.State, v.Reason)
+	}
+	if got := b.count("SELECT count(*) FROM disks WHERE marker_seen_ns IS NOT NULL"); got != 0 {
+		t.Errorf("no marker: %d disks have one seen", got)
+	}
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seenAt := b.Now()
+	confirmed(true)
+	b.elapsed += 1e9
+	confirmed(true)
+	if got := b.count("SELECT count(*) FROM disks WHERE marker_seen_ns IS NOT NULL"); got != 1 {
+		t.Errorf("its own marker: %d disks have one seen", got)
+	}
+	if got := b.count("SELECT marker_seen_ns FROM disks WHERE id = 't3'"); int64(got) != seenAt {
+		t.Errorf("seen at %d, want the first time, %d", got, seenAt)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if v := confirmed(false); v.State != disks.Readonly || v.Reason != disks.NoMarker {
+		t.Errorf("its marker gone: %s %s", v.State, v.Reason)
+	}
+	if got := b.text("SELECT state FROM disks WHERE id = 't3'"); got != "readonly" {
+		t.Errorf("its marker gone: the disk is %s", got)
+	}
+	// Its whole work folder gone, as on a clone made before disk add: the same.
+	if err := os.RemoveAll(filepath.Dir(marker)); err != nil {
+		t.Fatal(err)
+	}
+	if v := confirmed(false); v.Reason != disks.NoMarker {
+		t.Errorf("its work folder gone: %s %s", v.State, v.Reason)
+	}
+	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(marker, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if v := confirmed(true); v.State != disks.Online {
+		t.Errorf("its marker back: %s %s", v.State, v.Reason)
+	}
+}

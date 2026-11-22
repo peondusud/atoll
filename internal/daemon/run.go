@@ -951,7 +951,9 @@ func (l *loop) pass(ctx context.Context, because []string) {
 
 // withLastLines gives the outcome the alerts are worked out from (specs.md §23): a disk the pass spared says what the
 // last pass that walked it said, the names its walk could not reach among them, with the verdict of its mount check now,
-// so that an alert holds until a walk says otherwise. It keeps what each walk said of a disk for later.
+// so that an alert holds until a walk says otherwise; but for a disk that walk's pass found readonly by its marker,
+// other-marker or no-marker, which only a confirmation reads, while its mount check now finds it online (§10). It keeps
+// what each walk said of a disk for later.
 func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
 	if l.lines == nil {
 		l.lines = map[string]jobs.DiskLine{}
@@ -973,11 +975,18 @@ func (l *loop) withLastLines(outcome *jobs.Outcome) *jobs.Outcome {
 	for i, line := range outcome.Disks {
 		merged.Disks[i] = line
 		if last, ok := l.lines[line.ID]; ok && (line.Spared || line.Partial) {
-			last.Verdict = line.Verdict
+			if line.Verdict.State != disks.Online || !byMarker(last.Verdict) {
+				last.Verdict = line.Verdict
+			}
 			merged.Disks[i] = last
 		}
 	}
 	return &merged
+}
+
+// byMarker says that a confirmation's read of a disk's marker made it readonly (specs.md §10).
+func byMarker(v disks.Verdict) bool {
+	return v.State == disks.Readonly && (v.Reason == disks.OtherMarker || v.Reason == disks.NoMarker)
 }
 
 // passSink counts what a pass decided and did, and keeps the names a driver refused and the folders its operations

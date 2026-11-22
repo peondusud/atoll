@@ -1,0 +1,305 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §9, §10, §25",
+  "description": "disk add writes a disk's marker and records it seen. A filesystem with its identifier and none of its marker, as a clone made before disk add, mounted in its place, is then readonly, no-marker, at the confirmation of the pass that would copy a file to it: nothing is written to it, and the file waits degraded. disk mark without --yes, and with --dry-run, say what they would write; with --yes the marker is written again as disk add writes it, and the next pass copies the file. A disk that holds its own marker is nothing to do, and catalog rebuild records each disk's own marker seen again.",
+  "clock": "2026-11-22T10:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        }
+      ],
+      "immutable": true
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ],
+      "immutable": true
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "add",
+        "${SANDBOX}/disks/t2"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, marker_seen_ns FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          null
+        ],
+        [
+          "t2",
+          1795341600000000000
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "Atoll/disk.toml"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "Atoll"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "online"
+        ],
+        [
+          "t2",
+          "readonly"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files",
+      "rows": [
+        [
+          "a",
+          "degraded"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t2",
+        "--json"
+      ],
+      "exit": 3,
+      "stdout_json": {
+        "disk": "t2",
+        "state": "readonly",
+        "reason": "no-marker",
+        "marker": {
+          "pool_id": "p",
+          "disk_id": "t2",
+          "fs_uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"
+        },
+        "had_marker": false,
+        "written": false,
+        "dry_run": false,
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "--dry-run",
+        "t2",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t2",
+        "state": "readonly",
+        "reason": "no-marker",
+        "marker": {
+          "pool_id": "p",
+          "disk_id": "t2",
+          "fs_uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"
+        },
+        "had_marker": false,
+        "written": false,
+        "dry_run": true,
+        "warnings": []
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t2",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t2",
+        "state": "readonly",
+        "reason": "no-marker",
+        "marker": {
+          "pool_id": "p",
+          "disk_id": "t2",
+          "fs_uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"
+        },
+        "had_marker": false,
+        "written": true,
+        "dry_run": false,
+        "warnings": []
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"p\"\ndisk_id = \"t2\"\nfs_uuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\n"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files",
+      "rows": [
+        [
+          "a",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/a",
+          "size": 1024,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"p\"\ndisk_id = \"t2\"\nfs_uuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\n"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t2",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t2",
+        "state": "online",
+        "reason": null,
+        "marker": {
+          "pool_id": "p",
+          "disk_id": "t2",
+          "fs_uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"
+        },
+        "had_marker": true,
+        "written": false,
+        "dry_run": false,
+        "warnings": []
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "catalog",
+        "rebuild",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, marker_seen_ns IS NOT NULL FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          0
+        ],
+        [
+          "t2",
+          1
+        ]
+      ]
+    }
+  ]
+}

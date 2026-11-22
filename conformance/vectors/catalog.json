@@ -308,6 +308,9 @@
     {"note": "view_ops: a copy written in parallel names the operation create of its part", "sql": ["INSERT INTO ops(id, disk_id, kind, path, path2, started_ns, state) VALUES(40, 'd1', 'create', x'66', CAST('40.part' AS BLOB), 5, 'planned')", "INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('part', 'd1', x'66', NULL, 0, NULL, 40, 'planned', 5)"], "query": "SELECT kind, op_id, state FROM view_ops", "rows": [["part", 40, "planned"]]},
     {"note": "view_ops: a copy written in parallel without its operation is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('part', 'd1', x'66', NULL, 0, NULL, NULL, 'planned', 5)"], "error": true},
     {"note": "view_ops: a copy written in parallel of a folder is refused", "sql": ["INSERT INTO ops(id, disk_id, kind, path, started_ns, state) VALUES(40, 'd1', 'create', x'66', 5, 'planned')", "INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns) VALUES('part', 'd1', x'66', NULL, 1, NULL, 40, 'planned', 5)"], "error": true},
-    {"note": "view_ops: an unknown state is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('create', 'd1', x'66', NULL, 0, NULL, 'taken', 5)"], "error": true}
+    {"note": "view_ops: an unknown state is refused", "sql": ["INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, op_id, state, at_ns) VALUES('create', 'd1', x'66', NULL, 0, NULL, 'taken', 5)"], "error": true},
+    {"note": "disks.marker_seen_ns: none until the disk's own marker is seen", "sql": [], "query": "SELECT id, marker_seen_ns FROM disks ORDER BY id", "rows": [["d1", null], ["d2", null]]},
+    {"note": "disks.marker_seen_ns: when it was first seen", "sql": ["UPDATE disks SET marker_seen_ns = 5 WHERE id = 'd1'"], "query": "SELECT marker_seen_ns FROM disks WHERE id = 'd1'", "rows": [[5]]},
+    {"note": "disks.marker_seen_ns: a text is refused", "sql": ["UPDATE disks SET marker_seen_ns = 'seen' WHERE id = 'd1'"], "error": true}
   ]
 }

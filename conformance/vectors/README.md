@@ -905,7 +905,9 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `hiberfil_read` | integer | how many bytes of its start a read gave: its first 4096, or all of it when it is smaller, when left out |
 | `logfile` | string | what the top of the mount holds at `$LogFile`, which a check asks of a disk of `fs` `ntfs` alone, once `hiberfil.sys` leaves it online (§10): `file` (when left out), `absent`, `not-a-file`, `io-error` for an error that makes the disk unknown, or `unreadable` for any other |
 | `journal` | string | what that `file` says, as `logfile.json` reads it: `empty` (when left out), `clean`, `unclean`, `version-2` or `invalid` |
-| `marker` | object or string | what `<workdir>/disk.toml` holds, which a confirmation reads (§10): an object of `pool_id`, `disk_id` and `fs_uuid`, the pool being `p`, or `not-a-marker` for a file there that this version does not read; none when left out |
+| `marker` | object or string | what `<workdir>/disk.toml` holds, which a confirmation reads (§10): an object of `pool_id`, `disk_id` and `fs_uuid`, the pool being `p`, `absent` for no file at that name, or `not-a-marker` for a file there that this version does not read; when left out, the case is the mount check alone, and no confirmation reads a marker |
+| `marker_seen` | boolean | the catalog records that the disk's own marker was seen (`disks.marker_seen_ns`, §9): a confirmation that then finds none makes it `readonly`, `no-marker`; `false` when left out |
+| `records_seen` | boolean | with a `marker`, that the confirmation records the disk's own marker seen: the disk is not `missing`, and the marker names the pool `p`, the disk and its filesystem; `false` when left out |
 | `state` | string | `online`, `readonly` or `missing` |
 | `reason` | string | the reason; left out when `online` |
 | `mount_owner` | boolean | the disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do (`fuseblk`), so that neither is a file's own (§15.4); `false` when absent, and always for a disk `missing` |

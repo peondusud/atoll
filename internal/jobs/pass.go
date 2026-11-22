@@ -351,7 +351,7 @@ func (p *pass) run(ctx context.Context) (*Outcome, error) {
 	}
 	defer session.Close()
 	p.session = session
-	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.queueStale, p.work, p.cleanJobs, p.findWaits, p.copies, p.transfers, p.finish} {
+	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.queueStale, p.work, p.cleanJobs, p.findWaits, p.copies, p.transfers, p.finish, p.marked} {
 		if err := step(ctx); err != nil {
 			return nil, err
 		}
@@ -1679,6 +1679,24 @@ func (p *pass) finish(ctx context.Context) error {
 	// The copies that wait for settle count too, so that a timer knows when to run the next pass (§15.12).
 	p.out.Waiting, p.out.NextDue = count+p.copiesWaiting, earliest(next, p.copiesDue)
 	p.out.Partial = p.out.Partial || p.session.Lost()
+	return nil
+}
+
+// marked gives each disk's line what a confirmation in this pass made of its marker, which only a confirmation reads:
+// a disk its mount check found online and its marker made readonly, other-marker or no-marker, is readonly in the
+// pass's output, and its alert disk-readonly says why (specs.md §10, §23).
+func (p *pass) marked(context.Context) error {
+	for i := range p.config.Disks {
+		v := p.session.VerdictOf(i)
+		if v.State != disks.Readonly {
+			continue
+		}
+		for j := range p.out.Disks {
+			if line := &p.out.Disks[j]; line.ID == p.config.Disks[i].ID && line.Verdict.State == disks.Online {
+				line.Verdict = v
+			}
+		}
+	}
 	return nil
 }
 

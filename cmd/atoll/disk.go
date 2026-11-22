@@ -12,9 +12,11 @@ import (
 
 func runDisk(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, T("disk: want add, list, show, remove, fail or replace"))
+		return usage(stderr, T("disk: want add, list, show, remove, fail, replace or mark"))
 	}
 	switch args[0] {
+	case "mark":
+		return diskMark(configPath, args[1:], stdout, stderr)
 	case "add":
 		return diskAdd(configPath, args[1:], stdout, stderr)
 	case "show":
