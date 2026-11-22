@@ -86,7 +86,8 @@ func (w *Writer) move(f *File, write int) error {
 		w.log.Warn("the handle a moved file left did not close cleanly", "disk", m.v.Disk2, "path", f.Path, "error", err)
 	}
 	w.machine.Checkpoint("move-swapped")
-	w.log.Info("a file whose write ran out of space moved to another disk", "from", m.v.Disk2, "to", m.v.Disk, "path", f.Path, "size", st.Size)
+	w.log.Info("a file whose write ran out of space moved to another disk",
+		append([]any{"from", m.v.Disk2, "to", m.v.Disk, "path", f.Path, "size", st.Size}, askedBy(m.v)...)...)
 	w.leave(ctx, m.v, trashed, row)
 	return nil
 }
@@ -114,7 +115,7 @@ func (w *Writer) startMove(ctx context.Context, f *File, st *fsx.Stat, need int6
 	if err := w.mayCreate(ctx, asking(f.who), target, f.Path); err != nil {
 		return nil, err
 	}
-	m := &moving{v: &catalog.ViewOp{Disk: target, Disk2: f.Disk, Path: f.Path, FileKey: fmt.Sprintf("%d", st.Ino), AtNS: w.now()}, log: w.log}
+	m := &moving{v: &catalog.ViewOp{Disk: target, Disk2: f.Disk, Path: f.Path, FileKey: fmt.Sprintf("%d", st.Ino), AtNS: w.now(), Asker: f.who.asker()}, log: w.log}
 	if m.op, err = catalog.BeginViewMove(ctx, w.db, m.v); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}

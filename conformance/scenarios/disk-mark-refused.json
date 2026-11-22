@@ -1,0 +1,195 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §10, §25",
+  "description": "disk mark writes no marker over a marker of another pool, to a disk that is missing, or to one the configuration does not have, each with exit 1 and nothing written; --dry-run with --yes, and no disk, are usage errors. A disk with no marker and none ever seen, as in a pool from before, is online, and disk mark gives it one.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"q\"\ndisk_id = \"t1\"\nfs_uuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\n"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t1",
+        "--yes",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"q\"\ndisk_id = \"t1\"\nfs_uuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\n"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t9",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t2",
+        "--dry-run",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "--yes"
+      ],
+      "exit": 2
+    },
+    {
+      "do": "unmount",
+      "disk": "t3"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t3",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "mount",
+      "disk": "t3"
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "mark",
+        "t2",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t2",
+        "state": "online",
+        "reason": null,
+        "marker": {
+          "pool_id": "p",
+          "disk_id": "t2",
+          "fs_uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d"
+        },
+        "had_marker": false,
+        "written": true,
+        "dry_run": false,
+        "warnings": []
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        },
+        {
+          "path": "Atoll/disk.toml",
+          "text": "format_version = 1\npool_id = \"p\"\ndisk_id = \"t2\"\nfs_uuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\n"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, marker_seen_ns IS NOT NULL FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          0
+        ],
+        [
+          "t2",
+          1
+        ],
+        [
+          "t3",
+          0
+        ]
+      ]
+    }
+  ]
+}

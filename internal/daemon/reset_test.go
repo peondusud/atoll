@@ -51,6 +51,16 @@ func (m *unpluggedBench) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
 
 func (m *unpluggedBench) Now() int64 { return time.Now().UnixNano() }
 
+// Marker reads the disk's marker in the folder at the mount point, where one is.
+func (m *unpluggedBench) Marker(mount, workdir string, _ *disks.MountEntry, _ bool) disks.MarkerSeen {
+	top, err := fsx.OpenDir(mount)
+	if err != nil {
+		return disks.MarkerSeen{File: disks.MarkerAbsent}
+	}
+	defer func() { _ = top.Close() }()
+	return disks.ReadMarker(top, workdir)
+}
+
 func (m *unpluggedBench) DeviceNode(path string) (fsx.DeviceNode, error) {
 	return m.nodes[path], m.err
 }

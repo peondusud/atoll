@@ -351,7 +351,7 @@ func (p *pass) run(ctx context.Context) (*Outcome, error) {
 	}
 	defer session.Close()
 	p.session = session
-	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.queueStale, p.work, p.cleanJobs, p.findWaits, p.copies, p.transfers, p.finish} {
+	for _, step := range []func(context.Context) error{p.look, p.cleanJobs, p.readGuards, p.readFolders, p.readHeld, p.decide, p.decideFolders, p.readModifyGuards, p.modify, p.sortGuards, p.queueStale, p.work, p.cleanJobs, p.findWaits, p.copies, p.transfers, p.finish, p.marked} {
 		if err := step(ctx); err != nil {
 			return nil, err
 		}
@@ -1679,6 +1679,29 @@ func (p *pass) finish(ctx context.Context) error {
 	// The copies that wait for settle count too, so that a timer knows when to run the next pass (§15.12).
 	p.out.Waiting, p.out.NextDue = count+p.copiesWaiting, earliest(next, p.copiesDue)
 	p.out.Partial = p.out.Partial || p.session.Lost()
+	return nil
+}
+
+// marked gives each disk's line what a confirmation in this pass made of its marker, gone or another's since the mount
+// check that began the pass read it: a disk its marker made missing, no-marker, is missing so in the pass's output,
+// rather than as a confirmation that failed, and one made readonly, other-marker, is readonly; the alert of each says
+// why (specs.md §10, §23).
+func (p *pass) marked(context.Context) error {
+	for i := range p.config.Disks {
+		v := p.session.VerdictOf(i)
+		for j := range p.out.Disks {
+			line := &p.out.Disks[j]
+			if line.ID != p.config.Disks[i].ID {
+				continue
+			}
+			switch {
+			case v.State == disks.Missing && v.Reason == disks.NoMarker:
+				line.Verdict = v
+			case v.State == disks.Readonly && v.Reason == disks.OtherMarker && line.Verdict.State == disks.Online:
+				line.Verdict = v
+			}
+		}
+	}
 	return nil
 }
 

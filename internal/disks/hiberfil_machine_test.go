@@ -13,7 +13,7 @@ import (
 // (specs.md §10). A folder of a test is no mount: its entry is that of the mount it is on, which is what makes the
 // machine forget it.
 func TestTheMachineReadsHiberfilOncePerMount(t *testing.T) {
-	m := machine{hiberfil: &hiberfilCache{}, logFile: &logFileCache{}}
+	m := machine{hiberfil: &hiberfilCache{}, logFile: &logFileCache{}, marker: &markerCache{}}
 	top := t.TempDir()
 	at := filepath.Join(top, HiberfilName)
 	if err := os.WriteFile(at, []byte("0123456789"), 0o644); err != nil {
@@ -65,7 +65,7 @@ func TestTheMachineReadsHiberfilOncePerMount(t *testing.T) {
 // TestTheMachineReadsLogFileOncePerMount: $LogFile likewise, through a handle whose mount is the one the check found,
 // kept for that mount and forgotten once a check finds no mount of its own at the path (specs.md §10).
 func TestTheMachineReadsLogFileOncePerMount(t *testing.T) {
-	m := machine{hiberfil: &hiberfilCache{}, logFile: &logFileCache{}}
+	m := machine{hiberfil: &hiberfilCache{}, logFile: &logFileCache{}, marker: &markerCache{}}
 	top := t.TempDir()
 	at := filepath.Join(top, LogFileName)
 	writeJournal(t, at, "unclean 1.1")

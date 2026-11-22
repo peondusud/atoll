@@ -223,6 +223,10 @@ type Disk struct {
 	// Device holds the physical disks it lives on, as the last start found them, joined by a comma: empty until one
 	// did (R-06).
 	Device string
+	// MarkerSeen says that the disk's own marker was seen, MarkerSeenNS when first: from then on, a confirmation that
+	// finds none makes the disk readonly, no-marker (specs.md §9, §10). Disks gives it; SyncDisks keeps what is there.
+	MarkerSeen   bool
+	MarkerSeenNS int64
 }
 
 // SyncDisks rewrites the disks from the configuration, which wins (specs.md §9). A disk it no longer

@@ -17,10 +17,11 @@ const ViewPart = "part"
 // BeginViewPart journals a part the view writes in parallel, before it is made: an operation create of ops on the
 // target, planned, whose part is <op id>.part, journaled with its replicate event naming the disk of the original as
 // source, and the view's row that names it, in one transaction. Neither a command's reprise nor the daemon's touches
-// it, as a view's operation; and tmp/ keeps its part while it is planned.
-func BeginViewPart(ctx context.Context, db *sql.DB, disk, path, source string, nowNS int64) (*Op, *ViewOp, error) {
+// it, as a view's operation; and tmp/ keeps its part while it is planned. by is who asked for the file the part copies,
+// nil outside a request (specs.md §9).
+func BeginViewPart(ctx context.Context, db *sql.DB, disk, path, source string, nowNS int64, by *ViewAsker) (*Op, *ViewOp, error) {
 	op := &Op{Disk: disk, Kind: OpCreate, Path: path}
-	v := &ViewOp{Kind: ViewPart, Disk: disk, Path: path, State: OpPlanned, AtNS: nowNS}
+	v := &ViewOp{Kind: ViewPart, Disk: disk, Path: path, State: OpPlanned, AtNS: nowNS, Asker: by}
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, started_ns, state) VALUES (?, 'create', ?, ?, 'planned')", disk, []byte(path), nowNS)
 		if err != nil {

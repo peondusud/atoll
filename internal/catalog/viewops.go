@@ -58,6 +58,24 @@ type ViewOp struct {
 	// OpenViewOps reads it.
 	Disk2  string
 	OpKind string
+	// Asker is who asked it, as the kernel named the caller of its FUSE request: nil for a row written outside one,
+	// and for one from before migration 0025 (specs.md §9, §21.2).
+	Asker *ViewAsker
+}
+
+// ViewAsker is who asked an operation of the view: the account, and the thread, 0 when the kernel named none.
+type ViewAsker struct {
+	UID, PID uint32
+}
+
+// askerArgs gives what view_ops.uid and view_ops.pid hold of who asked.
+func askerArgs(a *ViewAsker) (uid, pid sql.NullInt64) {
+	if a == nil {
+		return uid, pid
+	}
+	uid = sql.NullInt64{Int64: int64(a.UID), Valid: true}
+	pid = sql.NullInt64{Int64: int64(a.PID), Valid: a.PID > 0}
+	return uid, pid
 }
 
 // AtSource says that a move still presents the copy on the disk it leaves: planned, and the operation it names still
@@ -67,8 +85,8 @@ func (v *ViewOp) AtSource() bool {
 }
 
 const insertViewOpSQL = `
-	INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns, disk2_id)
-	VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, 0), ?, ?, NULLIF(?, ''))`
+	INSERT INTO view_ops(kind, disk_id, lpath, lpath2, folder, file_key, op_id, state, at_ns, disk2_id, uid, pid)
+	VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, 0), ?, ?, NULLIF(?, ''), ?, ?)`
 
 func insertViewOp(ctx context.Context, tx *sql.Tx, v *ViewOp) error {
 	var path2 any
@@ -79,7 +97,8 @@ func insertViewOp(ctx context.Context, tx *sql.Tx, v *ViewOp) error {
 	if v.Kind == ViewMove {
 		disk2 = v.Disk2
 	}
-	result, err := tx.ExecContext(ctx, insertViewOpSQL, v.Kind, v.Disk, []byte(v.Path), path2, v.Folder, v.FileKey, v.OpID, v.State, v.AtNS, disk2)
+	uid, pid := askerArgs(v.Asker)
+	result, err := tx.ExecContext(ctx, insertViewOpSQL, v.Kind, v.Disk, []byte(v.Path), path2, v.Folder, v.FileKey, v.OpID, v.State, v.AtNS, disk2, uid, pid)
 	if err != nil {
 		return fmt.Errorf("view journal: %w", err)
 	}
@@ -166,7 +185,7 @@ func (v *ViewOp) Path2OrPath() string {
 
 const openViewOpsSQL = `
 	SELECT id, kind, disk_id, lpath, COALESCE(lpath2, x''), folder, COALESCE(file_key, ''), COALESCE(op_id, 0), state, at_ns,
-		COALESCE(disk2_id, ''), COALESCE((SELECT o.kind FROM ops o WHERE o.id = view_ops.op_id), '')
+		COALESCE(disk2_id, ''), COALESCE((SELECT o.kind FROM ops o WHERE o.id = view_ops.op_id), ''), uid, pid
 	FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone' ORDER BY id`
 
 // OpenViewOps gives the operations of the view that no pass has taken in, planned or done, by id: what the view
@@ -181,10 +200,14 @@ func OpenViewOps(ctx context.Context, db *sql.DB) ([]ViewOp, error) {
 	for rows.Next() {
 		var v ViewOp
 		var path, path2 []byte
-		if err := rows.Scan(&v.ID, &v.Kind, &v.Disk, &path, &path2, &v.Folder, &v.FileKey, &v.OpID, &v.State, &v.AtNS, &v.Disk2, &v.OpKind); err != nil {
+		var uid, pid sql.NullInt64
+		if err := rows.Scan(&v.ID, &v.Kind, &v.Disk, &path, &path2, &v.Folder, &v.FileKey, &v.OpID, &v.State, &v.AtNS, &v.Disk2, &v.OpKind, &uid, &pid); err != nil {
 			return nil, fmt.Errorf("view journal: %w", err)
 		}
 		v.Path, v.Path2 = string(path), string(path2)
+		if uid.Valid {
+			v.Asker = &ViewAsker{UID: uint32(uid.Int64), PID: uint32(pid.Int64)} //nolint:gosec // the schema keeps both in range
+		}
 		list = append(list, v)
 	}
 	if err := rows.Err(); err != nil {

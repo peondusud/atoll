@@ -195,13 +195,17 @@ type checkCase struct {
 	HiberfilBytes []bytesAt `json:"hiberfil_bytes"`
 	HiberfilRead  *int      `json:"hiberfil_read"`
 	// LogFile is what the top of the mount holds at $LogFile, and Journal what that file says.
-	LogFile    *string         `json:"logfile"`
-	Journal    *string         `json:"journal"`
-	Marker     json.RawMessage `json:"marker"`
-	State      string          `json:"state"`
-	Reason     string          `json:"reason"`
-	MountOwner bool            `json:"mount_owner"`
-	Note       string          `json:"note"`
+	LogFile *string         `json:"logfile"`
+	Journal *string         `json:"journal"`
+	Marker  json.RawMessage `json:"marker"`
+	// MarkerSeen says that the catalog records the disk's own marker seen, and RecordsSeen that the confirmation
+	// records it seen.
+	MarkerSeen  bool   `json:"marker_seen"`
+	RecordsSeen bool   `json:"records_seen"`
+	State       string `json:"state"`
+	Reason      string `json:"reason"`
+	MountOwner  bool   `json:"mount_owner"`
+	Note        string `json:"note"`
 }
 
 func or[T any](p *T, fallback T) T {
@@ -335,8 +339,14 @@ func TestCheck(t *testing.T) {
 		c := &cases[i]
 		d, a := answersFor(t, c)
 		got := Check(a, d)
+		own := false
 		if c.Marker != nil {
-			got = MarkerVerdict(got, markerText(t, c.Marker), true, "p", d)
+			got, own = JudgeMarker(got, markerOf(t, c.Marker), c.MarkerSeen, "p", d)
+		} else if c.MarkerSeen || c.RecordsSeen {
+			t.Errorf("case %d: what was seen of a marker, and no marker (%s)", i, c.Note)
+		}
+		if own != c.RecordsSeen {
+			t.Errorf("case %d: records its marker seen %v, want %v (%s)", i, own, c.RecordsSeen, c.Note)
 		}
 		if string(got.State) != c.State || string(got.Reason) != c.Reason {
 			t.Errorf("case %d: got %s %q, want %s %q (%s)", i, got.State, got.Reason, c.State, c.Reason, c.Note)
@@ -492,12 +502,24 @@ func TestSwapCase(t *testing.T) {
 	}
 }
 
-// markerText writes what a case's marker says the disk.toml holds.
-func markerText(t *testing.T, raw json.RawMessage) []byte {
+// markerOf gives what a case's marker says the top of the disk holds at <workdir>/disk.toml.
+func markerOf(t *testing.T, raw json.RawMessage) MarkerSeen {
 	t.Helper()
 	var odd string
 	if json.Unmarshal(raw, &odd) == nil {
-		return []byte("format_version = 9\n")
+		switch odd {
+		case "absent":
+			return MarkerSeen{File: MarkerAbsent}
+		case "not-a-marker":
+			return MarkerSeen{File: MarkerFile, Text: []byte("format_version = 9\n")}
+		case "not-a-file":
+			return MarkerSeen{File: MarkerNotAFile, Note: "what the case says"}
+		case "io-error":
+			return MarkerSeen{File: MarkerIOError, Note: "what the case says"}
+		case "unreadable":
+			return MarkerSeen{File: MarkerUnreadable, Note: "what the case says"}
+		}
+		t.Fatalf("a marker %q", odd)
 	}
 	var m struct {
 		PoolID string `json:"pool_id"`
@@ -511,5 +533,5 @@ func markerText(t *testing.T, raw json.RawMessage) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return []byte(text)
+	return MarkerSeen{File: MarkerFile, Text: []byte(text)}
 }

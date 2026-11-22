@@ -27,10 +27,12 @@ func (w *Writer) Reprise(ctx context.Context) error {
 		}
 		if v.Kind == catalog.ViewMove {
 			if err := w.repriseMove(ctx, v); err != nil {
-				w.log.Warn("a file the view moved for room stays planned", "disk", v.Disk, "from", v.Disk2, "path", v.Path, "error", err)
+				w.log.Warn("a file the view moved for room stays planned",
+					append([]any{"disk", v.Disk, "from", v.Disk2, "path", v.Path, "error", err}, askedBy(v)...)...)
 				continue
 			}
-			w.log.Info("a file the view moved for room resolved after a stop", "disk", v.Disk, "from", v.Disk2, "path", v.Path, "state", v.State)
+			w.log.Info("a file the view moved for room resolved after a stop",
+				append([]any{"disk", v.Disk, "from", v.Disk2, "path", v.Path, "state", v.State}, askedBy(v)...)...)
 			continue
 		}
 		if !w.handles.Has(v.Disk) {
@@ -44,13 +46,14 @@ func (w *Writer) Reprise(ctx context.Context) error {
 			return err
 		})
 		if err != nil {
-			w.log.Warn("an operation of the view stays planned", "disk", v.Disk, "path", v.Path, "error", err)
+			w.log.Warn("an operation of the view stays planned", append([]any{"disk", v.Disk, "path", v.Path, "error", err}, askedBy(v)...)...)
 			continue
 		}
 		if err := catalog.FinishViewOp(ctx, w.db, v, state, warn, w.now()); err != nil {
 			return fmt.Errorf("%w", err)
 		}
-		w.log.Info("an operation of the view resolved after a stop", "kind", v.Kind, "disk", v.Disk, "path", v.Path, "state", state)
+		w.log.Info("an operation of the view resolved after a stop",
+			append([]any{"kind", v.Kind, "disk", v.Disk, "path", v.Path, "state", state}, askedBy(v)...)...)
 	}
 	return nil
 }

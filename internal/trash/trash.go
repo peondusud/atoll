@@ -55,6 +55,8 @@ type slot struct {
 	tried  bool
 	// precision is how finely the disk holds a time, as its row says (specs.md §9): 0 when no check read it.
 	precision int64
+	// markerSeen says that the disk's own marker was seen, as its row says, or this session saw it (specs.md §10).
+	markerSeen bool
 }
 
 // Session is one run of a command that writes: it confirms each disk once, before it first reads or
@@ -121,7 +123,7 @@ func openSession(ctx context.Context, db *sql.DB, c *config.Config, m disks.Mach
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	for i := range rows {
-		s.slots[rows[i].ID] = &slot{state: solver.DiskState(rows[i].State), precision: rows[i].TimePrecisionNS}
+		s.slots[rows[i].ID] = &slot{state: solver.DiskState(rows[i].State), precision: rows[i].TimePrecisionNS, markerSeen: rows[i].MarkerSeen}
 	}
 	for i := range c.Disks {
 		if sl := s.slots[c.Disks[i].ID]; sl != nil {
@@ -143,9 +145,19 @@ func openSession(ctx context.Context, db *sql.DB, c *config.Config, m disks.Mach
 	return s, nil
 }
 
-// VerdictOf says what the mount check found of a disk of the configuration, by its order there.
+// VerdictOf says what the mount check found of a disk of the configuration, by its order there, and what a
+// confirmation in this session made of its marker since: readonly, other-marker or no-marker (specs.md §10).
 func (s *Session) VerdictOf(i int) disks.Verdict {
 	return s.verdicts[i]
+}
+
+// setVerdict records what a confirmation made of a disk's marker, for VerdictOf.
+func (s *Session) setVerdict(id string, v disks.Verdict) {
+	for i := range s.config.Disks {
+		if s.config.Disks[i].ID == id && i < len(s.verdicts) {
+			s.verdicts[i] = v
+		}
+	}
 }
 
 // Readable says whether a disk can still be looked at in this session.
@@ -363,15 +375,36 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 			handle.Close()
 			return nil, s.lose(ctx, id, fmt.Errorf("%s: %s", verdict.Reason, verdict.Message))
 		}
-		// A disk whose marker names another pool, disk or filesystem is written to no more (specs.md §10).
-		if text, found, err := handle.ReadMarker(); err != nil {
+		// A disk whose marker names another pool, disk or filesystem, or whose own marker seen before is gone, is
+		// written to no more; its own marker is recorded seen, once the handle is held to the disk (specs.md §10).
+		own := false
+		text, found, err := handle.ReadMarker()
+		switch marker := disks.MarkerSeenOf(text, found, err); marker.File {
+		case disks.MarkerIOError, disks.MarkerUnreadable:
+			// What the handle then says of the disk decides.
 			slog.Warn("the marker of a disk could not be read", "disk", id, "error", err)
-		} else if verdict = disks.MarkerVerdict(verdict, text, found, s.config.PoolID, sl.config); verdict.Reason == disks.OtherMarker {
-			slog.Warn("a disk is written to no more", "disk", id, "reason", verdict.Reason, "message", verdict.Message)
+		case disks.MarkerAbsent, disks.MarkerFile, disks.MarkerNotAFile:
+			before := verdict
+			if verdict, own = disks.JudgeMarker(verdict, marker, sl.markerSeen, s.config.PoolID, sl.config); verdict.State != before.State {
+				slog.Warn("a disk is written to no more", "disk", id, "state", verdict.State, "reason", verdict.Reason, "message", verdict.Message)
+				s.setVerdict(id, verdict)
+			}
+		}
+		// A disk whose own marker went is not that disk: nothing it holds counts, as for another identifier (§10).
+		if verdict.State == disks.Missing {
+			handle.Close()
+			return nil, s.lose(ctx, id, fmt.Errorf("%s: %s", verdict.Reason, verdict.Message))
 		}
 		if err := handle.Verify(); err != nil {
 			handle.Close()
 			return nil, s.lose(ctx, id, err)
+		}
+		if own && !sl.markerSeen {
+			if err := catalog.SetMarkerSeen(ctx, s.db, id, sl.config.UUID, s.now); err != nil {
+				handle.Close()
+				return nil, fmt.Errorf("catalog: %w", err)
+			}
+			sl.markerSeen = true
 		}
 		if state := heldState(sl.config, solver.DiskState(verdict.State)); state != sl.state {
 			sl.state = state

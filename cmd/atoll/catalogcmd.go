@@ -370,7 +370,34 @@ func rebuildInto(ctx context.Context, c *config.Config, m disks.Machine, fresh s
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
+	if err := markersSeen(ctx, c, m, db, outcome, stderr); err != nil {
+		return nil, err
+	}
 	return outcome, nil
+}
+
+// markersSeen records in the new catalog each disk's own marker seen, as a confirmation would, once the scan found the
+// disk there: from then on, a confirmation that finds none makes it readonly, no-marker (specs.md §9, §10). A marker
+// that cannot be read records nothing, with a warning.
+func markersSeen(ctx context.Context, c *config.Config, m disks.Machine, db *sql.DB, outcome *watch.Outcome, stderr io.Writer) error {
+	for i := range outcome.Disks {
+		r := &outcome.Disks[i]
+		d, err := diskOfConfig(c, r.ID)
+		if err != nil || r.Verdict.State == disks.Missing {
+			continue
+		}
+		text, found, err := ops.ReadMarkerAt(d.Mount, d.Workdir)
+		if err != nil {
+			report(stderr, fmt.Sprintf(T("warning: disk %s: its marker could not be read (%v): a confirmation records it once it can"), d.ID, err))
+			continue
+		}
+		if _, own := disks.MarkerVerdict(r.Verdict, text, found, false, c.PoolID, d); own {
+			if err := catalog.SetMarkerSeen(ctx, db, d.ID, d.UUID, m.Now()); err != nil {
+				return fmt.Errorf("%w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // listTrashAgain lists again the entries of each disk's trash, which a catalog made from the disks knew none of, so that

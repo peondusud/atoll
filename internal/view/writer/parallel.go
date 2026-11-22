@@ -125,7 +125,7 @@ func (w *Writer) maxParallelOn(d *config.Disk) int {
 // part held back by a disk waking would fall behind, and holding fewer parts of the view than its limit of copies at
 // once (specs.md §14).
 // What cannot begin is left to the ordinary job.
-func (w *Writer) startParallel(ctx context.Context, disk, path string) *parallel {
+func (w *Writer) startParallel(ctx context.Context, disk, path string, who Caller) *parallel {
 	if enabled, _ := w.config.Effective()["replication.enabled"].(bool); !enabled {
 		return nil
 	}
@@ -170,7 +170,7 @@ func (w *Writer) startParallel(ctx context.Context, disk, path string) *parallel
 	}
 	par := &parallel{w: w, path: path, ctx: context.WithoutCancel(ctx)}
 	for _, id := range targets {
-		if p := w.startPart(ctx, id, disk, path); p != nil {
+		if p := w.startPart(ctx, id, disk, path, who); p != nil {
 			par.parts = append(par.parts, p)
 		}
 	}
@@ -184,7 +184,7 @@ func (w *Writer) startParallel(ctx context.Context, disk, path string) *parallel
 }
 
 // startPart journals and makes one part on a target, and starts what writes it, or says nil.
-func (w *Writer) startPart(ctx context.Context, disk, source, path string) *part {
+func (w *Writer) startPart(ctx context.Context, disk, source, path string, who Caller) *part {
 	d := w.disk(disk)
 	if d == nil || !w.writableNow(ctx, disk) {
 		return nil
@@ -192,7 +192,7 @@ func (w *Writer) startPart(ctx context.Context, disk, source, path string) *part
 	if !w.openPart(d) {
 		return nil
 	}
-	op, v, err := catalog.BeginViewPart(ctx, w.db, disk, path, source, w.now())
+	op, v, err := catalog.BeginViewPart(ctx, w.db, disk, path, source, w.now(), who.asker())
 	if err != nil {
 		w.closePart(disk)
 		w.log.Warn("no copy in parallel: the journal cannot be written", "disk", disk, "path", path, "error", err)

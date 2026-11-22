@@ -131,6 +131,12 @@ func (b *bench) OpenRoot(mount, root string) (fsx.Dir, error) {
 	return dir, nil
 }
 
+// Marker reads a disk's marker in its folder, as the conformance build does, at each check, past the faults a test
+// gives its operations (specs.md §10).
+func (b *bench) Marker(mount, workdir string, _ *disks.MountEntry, _ bool) disks.MarkerSeen {
+	return disks.ReadMarkerAt(mount, workdir)
+}
+
 func (b *bench) OpenTop(mount string) (fsx.Dir, error) {
 	top, err := fsx.OpenDir(mount)
 	if err != nil {
