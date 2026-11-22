@@ -33,7 +33,7 @@ jobs:
   mutation:
     runs-on: ubuntu-latest
     # The image of ci.yml and test/ci/run.sh.
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 240
     steps:
       # A dispatch mutates the branch it was started on.

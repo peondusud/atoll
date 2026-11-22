@@ -62,11 +62,13 @@ qemu-build:
 
 # test-loopdev as root in qemu, on Debian's kernel and a mainline one, with neither root nor ntfs3 on
 # the host: only Docker (test/qemu/README.md). QEMU_CACHE, a folder of the host, keeps the packages and
-# the kernel it downloads from one run to the next, as the CI's qemu job does.
+# the kernel it downloads from one run to the next, as the CI's qemu job does. debian:13 by its digest, as
+# test/ci/run.sh names it: a tag can be moved, a digest cannot.
+QEMU_IMAGE := debian@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
 test-qemu: qemu-build
 	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e SYSTEMD_RUN -e COUNT -e VERBOSE \
 		$(if $(QEMU_CACHE),-v "$(abspath $(QEMU_CACHE)):/var/cache/atoll-qemu" -e CACHE=/var/cache/atoll-qemu) \
-		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
+		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" $(QEMU_IMAGE) bash /src/test/qemu/run.sh
 
 # The notifications on real Plex, Jellyfin and Emby, each in a container, on the last commit: only git
 # and Docker (test/mediaservers/run.sh).
@@ -101,12 +103,12 @@ lint:
 	$(GOLANGCI_LINT) run ./...
 	$(GOLANGCI_LINT) run --build-tags conformance ./cmd/... ./internal/disks/...
 
-# A release as .github/workflows/release.yml makes one (.goreleaser.yaml), into dist/, from this checkout and
+# A release as .github/workflows/release.yml builds one (.goreleaser.yaml), into dist/, from this checkout and
 # what it holds uncommitted: no tag, no upload, only Docker. From a clone: a git worktree's .git names a
 # folder the container does not have. What the container writes goes back to whoever runs make. The image's
 # GOTOOLCHAIN is local: auto lets its go fetch go.mod's version when the image holds an older one, so the build
-# takes the Go a release takes.
-GORELEASER_IMAGE := goreleaser/goreleaser:v2.20.3
+# takes the Go a release takes. goreleaser/goreleaser:v2.20.3, the GoReleaser of release.yml, by its digest.
+GORELEASER_IMAGE := goreleaser/goreleaser@sha256:3019e0e61c99808e42ce60c9cf77f7882685ffd2bd09d18ef6da8f9c9810e71c
 release-snapshot:
 	docker run --rm -v "$(CURDIR):/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
 		-e GIT_CONFIG_VALUE_0=/src -e GOTOOLCHAIN=auto --entrypoint sh $(GORELEASER_IMAGE) -c \

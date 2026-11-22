@@ -15,10 +15,13 @@ set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
 
+# The images of .github/workflows/ci.yml, each by its digest, its tag after it: a tag can be moved, a digest cannot.
 # Its GOTOOLCHAIN is auto: its go fetches go.mod's version of Go, when newer than its own, into the module cache.
-image=golangci/golangci-lint:v2.15.0
+image=golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
 # test/tla/run.sh's image, with Java, for the TLA+ model.
-tla_image=eclipse-temurin:21.0.13_9-jre-noble
+tla_image=eclipse-temurin@sha256:b4f9d2a0bc273417cf5219b7b832bbf0493ed500b7b57d5001d9f83374659060 # 21.0.13_9-jre-noble
+# The Makefile's image for test/qemu/run.sh.
+qemu_image=debian@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 # 13
 all_jobs="race integration conformance lint qemu tla"
 jobs=$all_jobs report=0 rev=HEAD
 while [ $# -gt 0 ]; do
@@ -121,7 +124,7 @@ job_qemu() {
 	local kvm=()
 	[ -e /dev/kvm ] && kvm=(--device /dev/kvm)
 	docker run --rm --name "$id-qemu" ${kvm[@]+"${kvm[@]}"} -e KERNELS -e MAINLINE -e RUN -e SYSTEMD_RUN -e COUNT -e VERBOSE \
-		-v "$src:/src:ro" -v "$built:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
+		-v "$src:/src:ro" -v "$built:/qemu:ro" "$qemu_image" bash /src/test/qemu/run.sh
 }
 
 took() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }

@@ -1,8 +1,9 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# A release of Atoll (specs.md §26): for linux amd64 and arm64, a .tar.gz with its SBOM, a .deb, SHA256SUMS, and a GitHub
-# release drafted for the maintainer to publish. .github/workflows/release.yml runs it on a tag v*, which the maintainer
-# alone pushes; make release-snapshot runs it on this machine, without a tag and without uploading anything. GoReleaser
-# is a build tool, never shipped.
+# A release of Atoll (specs.md §26): for linux amd64 and arm64, a .tar.gz with its SBOM, a .deb, SHA256SUMS and the
+# changelog, into dist/; GoReleaser publishes nothing. .github/workflows/release.yml runs it on a tag v*, which the
+# maintainer alone pushes, in a job that may only read, then drafts the GitHub release from dist/ in a job of its own,
+# for the maintainer to publish; make release-snapshot runs it on this machine, without a tag. GoReleaser is a build
+# tool, never shipped.
 version: 2
 
 project_name: atoll
@@ -138,23 +139,11 @@ changelog:
     exclude:
       - "^Merge "
 
+# No release from GoReleaser: the job of .github/workflows/release.yml that drafts it, with the permissions the build
+# has not, drafts it with gh from what the build left in dist/ (docs/threat-model.md, G21): a draft named "Atoll <tag>",
+# which the maintainer publishes once the workflow, its attestations included, has passed; a draft of the tag from an
+# earlier run has its files and notes replaced, and a published release is never touched. The series is v0.Y.Z while
+# the core is proven, then v1.0.0 (the maintainer, 2026-11-19); a tag with a suffix, -alpha.N, -beta.N or -rc.N, is a
+# prerelease. Its notes say how to check a download, then hold the changelog above, dist/CHANGELOG.md.
 release:
-  github:
-    owner: peondusud
-    name: atoll
-  # A draft: the maintainer publishes it once the workflow, its attestations included, has passed.
-  draft: true
-  replace_existing_draft: true
-  # The series is v0.Y.Z while the core is proven, then v1.0.0 (the maintainer, 2026-11-19); a tag with a suffix,
-  # -alpha.N, -beta.N or -rc.N, would be a prerelease.
-  prerelease: auto
-  name_template: "Atoll {{ .Tag }}"
-  header: |
-    Atoll {{ .Tag }} for Linux, amd64 and arm64: a `.tar.gz` holding the static binary, the systemd units, a sample configuration, LICENSE and README, with its SBOM; and a `.deb`. Installing either enables and starts nothing (README.md, "Installing a release").
-
-    Check a download against `SHA256SUMS`, then against the provenance GitHub attested when it built it:
-
-    ```
-    sha256sum --ignore-missing -c SHA256SUMS
-    gh attestation verify atoll_{{ .Version }}_linux_amd64.tar.gz --repo peondusud/atoll
-    ```
+  disable: true

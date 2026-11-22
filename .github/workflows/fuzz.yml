@@ -37,7 +37,7 @@ jobs:
   # Every fuzz target of the module, as a matrix: a new one is fuzzed without a change here.
   targets:
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.list.outputs.matrix }}
@@ -54,7 +54,7 @@ jobs:
     needs: targets
     name: ${{ matrix.target }} (${{ matrix.package }})
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -92,7 +92,7 @@ jobs:
   # The properties of the solver (internal/solver/rapid_test.go) from a new seed, with many more checks.
   rapid:
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
