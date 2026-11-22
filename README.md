@@ -94,11 +94,11 @@ That digest is `goreleaser/goreleaser:v2.20.3`'s, the GoReleaser of `release.yml
 
 Only the maintainer may push, move or delete a tag `v*`, as a release starts from one: a ruleset of the repository says so, which only an administrator can make, and which no file of the repository can (`docs/threat-model.md`, G21). Once, on github.com:
 
-1. The repository, **Settings**, **Rules**, **Rulesets**, **New ruleset**, **New tag ruleset**.
-2. **Ruleset name**: `Release tags`; **Enforcement status**: **Active**.
-3. **Bypass list**: **Add bypass**, **Repository admin** (the maintainer), **Always allow**. No one else, and no app.
-4. **Target tags**: **Add target**, **Include by pattern**, `v*`.
-5. **Rules**: tick **Restrict creations**, **Restrict updates** and **Restrict deletions**; leave **Block force pushes** ticked. Leave the others.
+1. The repository, **Settings**, in the sidebar **Rules**, **Rulesets**, then **New ruleset**, **New tag ruleset**.
+2. **Ruleset name**: `Release tags`; **Enforcement status**: **Active** (it starts as **Disabled**).
+3. **Bypass list**: **Add bypass**, the role **Repository admin**, which only the maintainer holds, **Add Selected**; it shows **Always allow**. No one else, no app, no deploy key. Without it there, the ruleset would stop his own tags too.
+4. **Target tags**: **Add a target**, **Include by pattern**, `v*`.
+5. **Tag protections**: tick **Restrict creations** and **Restrict updates**; **Restrict deletions** and **Block force pushes** are ticked already: leave them. Leave the others.
 6. **Create**.
 
 Then check it: the ruleset is listed as **Active** with its target `v*`, and `gh api repos/peondusud/atoll/rulesets` lists it with `"target": "tag"` and `"enforcement": "active"`. A tag `v*` pushed by any other account, or by a workflow's `GITHUB_TOKEN`, is refused; the maintainer's push of `git push origin v0.1.0` still goes through.
