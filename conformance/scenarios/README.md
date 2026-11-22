@@ -35,13 +35,13 @@ Black-box cases that judge an `atoll` binary through its CLI and the filesystem 
 | `config` | string | the text of the configuration, written to `${SANDBOX}/atoll.toml`, which each `atoll` step gets through `--config`, before its `args`. Left out, no step gets it |
 | `steps` | array of objects | what happens, in order: below |
 
-`${SANDBOX}`, in `config`, in `args`, in `stdout_json`, in `rows` and in the `text` of a `write` or `config` step, is the scenario's temporary folder. An unknown field, or a field on a step it does not apply to, is an error: a typo must not disable a check.
+`${SANDBOX}`, in `config`, in `args`, in `stdout_json`, `stdout_has` and `stdout_lacks`, in `rows` and in the `text` of a `write` or `config` step, is the scenario's temporary folder. An unknown field, or a field on a step it does not apply to, is an error: a typo must not disable a check.
 
 ## Steps
 
 | `do` | Fields | Meaning |
 |---|---|---|
-| `atoll` | `args`, `exit`, `stdout_json`, `crash_at`, `full`, `umask` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input; and `GOCOVERDIR`, absolute, when the runner has `--cover-dir`, for a Go binary built with `-cover` (`make cover`, `specs.md` §27). `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, and `full` the ids of disks that have no room left, for this run only. `umask` is the mask the binary runs with, written in octal digits with a leading 0 from `"0000"` to `"0777"`, as a unit's `UMask=` gives it, `"0027"` as Atoll's units do; left out, it is the runner's own |
+| `atoll` | `args`, `exit`, `stdout_json`, `stdout_has`, `stdout_lacks`, `crash_at`, `full`, `umask` | runs the binary in `${SANDBOX}`, with `ATOLL_CONFORMANCE` and `TZ=UTC` in its environment and nothing on standard input; and `GOCOVERDIR`, absolute, when the runner has `--cover-dir`, for a Go binary built with `-cover` (`make cover`, `specs.md` §27). `exit` is the exit code, 0 when left out. `stdout_json` is its standard output, read as JSON, when given. `stdout_has` and `stdout_lacks` are texts its standard output holds, each, and holds none of: below. An item of `args` is a string, or `{"b64": "…"}` for bytes that are not UTF-8. `crash_at` names a point of the control file, and `full` the ids of disks that have no room left, for this run only. `umask` is the mask the binary runs with, written in octal digits with a leading 0 from `"0000"` to `"0777"`, as a unit's `UMask=` gives it, `"0027"` as Atoll's units do; left out, it is the runner's own |
 | `write` | `disk`, a path, `text` or `size`, `mtime_ns` | writes a file and any folders above it, replacing the content of what is there in place |
 | `mkdir` | `disk`, a path | creates a folder and its parents |
 | `rename` | `disk`, a path, `to` or `to_b64` | renames, replacing what is at the target as `rename(2)` does |
@@ -66,7 +66,9 @@ A path is `path`, or `path_b64` for bytes that are not UTF-8, relative to the to
 
 ## Comparing
 
-**`stdout_json`** must equal the output exactly: another key, a missing one, or another order in a list is a failure, and numbers compare by their text, so `3.0` is not `3`. A string `${ANY}` matches any string, for what is not part of the contract, such as the wording of a message, and `${ANY_OR_NULL}` a string or `null`, for what a filesystem may not have, such as a creation time. Only `--json` output is compared: human output and standard error are translated, and they are no contract.
+**`stdout_json`** must equal the output exactly: another key, a missing one, or another order in a list is a failure, and numbers compare by their text, so `3.0` is not `3`. A string `${ANY}` matches any string, for what is not part of the contract, such as the wording of a message, and `${ANY_OR_NULL}` a string or `null`, for what a filesystem may not have, such as a creation time. Only `--json` output is compared whole: human output and standard error are translated, and they are no contract, but for what no translation changes in them, such as the paths a human output writes.
+
+**`stdout_has`** and **`stdout_lacks`** are lists of texts, each of which the standard output must hold, byte for byte, and none of which it may hold: so a scenario can say that a human output writes a path as `(base64) ` and its bytes in base64, and never as it is (`specs.md` §25). They need no `stdout_json`, and may go with it. An empty list, and an empty text, which every output holds, are refused, as they check nothing.
 
 **`expect_tree`** covers the whole disk. An entry has a path and a `kind`: `file`, when left out, `dir` or `symlink`.
 

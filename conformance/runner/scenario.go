@@ -119,6 +119,10 @@ type step struct {
 	// Files and Absent are what an expect_system step looks for in the sandbox, beside the disks.
 	Files  []systemFile `json:"files"`
 	Absent []string     `json:"absent"`
+	// StdoutHas and StdoutLacks are texts the standard output of an atoll step holds, each, and holds none of: for what
+	// no translation changes in a human output, a path or its base64.
+	StdoutHas   []string `json:"stdout_has"`
+	StdoutLacks []string `json:"stdout_lacks"`
 }
 
 // systemFile is a file of the sandbox that is no disk's, as one beside the catalog, and its text.
@@ -131,7 +135,7 @@ type systemFile struct {
 func stepFields(do string) ([]string, bool) {
 	switch do {
 	case "atoll":
-		return []string{"args", "exit", "stdout_json", "crash_at", "full", "umask"}, true
+		return []string{"args", "exit", "stdout_json", "stdout_has", "stdout_lacks", "crash_at", "full", "umask"}, true
 	case "write":
 		return []string{"disk", "path", "path_b64", "text", "size", "mtime_ns"}, true
 	case "mkdir", "delete":
@@ -232,6 +236,9 @@ func parseScenario(data []byte) (*scenario, error) {
 		case st.Do == "atoll":
 			err = checkFull(s.Disks, st.Full)
 		}
+		if err == nil && st.Do == "atoll" {
+			err = errors.Join(checkTexts("stdout_has", st.StdoutHas), checkTexts("stdout_lacks", st.StdoutLacks))
+		}
 		if err != nil {
 			return nil, fmt.Errorf("step %d (%s): %w", i, st.Do, err)
 		}
@@ -283,6 +290,18 @@ func checkDriver(d *disk) error {
 }
 
 // checkFull refuses a disk said full that the scenario does not have, or one said twice: a typo would check nothing.
+// checkTexts refuses a list of texts to look for that would check nothing: an empty one, or an empty text, which every
+// output holds.
+func checkTexts(field string, texts []string) error {
+	if texts != nil && len(texts) == 0 {
+		return fmt.Errorf("%s: an empty list checks nothing", field)
+	}
+	if slices.Contains(texts, "") {
+		return fmt.Errorf("%s: an empty text checks nothing", field)
+	}
+	return nil
+}
+
 func checkFull(disks []disk, full []string) error {
 	ids := make([]string, len(disks))
 	for i := range disks {
@@ -911,6 +930,16 @@ func (b *sandbox) runAtoll(s *step) (err error) {
 	}
 	if code != s.Exit {
 		return fmt.Errorf("exit code %d, want %d; stdout %q; stderr %q", code, s.Exit, stdout.String(), stderr.String())
+	}
+	for _, text := range s.StdoutHas {
+		if want := strings.ReplaceAll(text, sandboxToken, b.dir); !strings.Contains(stdout.String(), want) {
+			return fmt.Errorf("stdout_has: %q is not in the standard output %q", want, stdout.String())
+		}
+	}
+	for _, text := range s.StdoutLacks {
+		if unwanted := strings.ReplaceAll(text, sandboxToken, b.dir); strings.Contains(stdout.String(), unwanted) {
+			return fmt.Errorf("stdout_lacks: %q is in the standard output %q", unwanted, stdout.String())
+		}
 	}
 	if s.StdoutJSON != nil {
 		return b.compareJSON(stdout.Bytes(), s.StdoutJSON)
