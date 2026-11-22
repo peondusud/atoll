@@ -73,7 +73,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 ## The threat model after 2026-11-19 (DONE.md)
 
 - The audit by scrutineer of 2026-11-22 (DONE.md): its eight findings are checked and the real ones fixed; run it again on `beta`, whose head it did not see. Two pools on one machine with one account: `tellDaemon` counts the other pool's daemon too, as it does not compare `--config`. The media servers are told in the daemon's own turn: Plex within a budget since 2026-11-22, Jellyfin and Emby a hundred folders a request, each up to 10 s.
-- The threat model's low gaps G7 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask).
+- The threat model's low gaps G7 to G10, G12, G15, G16 and G21. G11, G13, G17, G19 and G20 are done, and G14 documented, on 2026-11-22 (DONE.md), with what they leave: G14's alert for a file that holds an ACL, which would be a condition of its own in §23's closed list, the maintainer's; a catalog, and its folder, made before 2026-11-22 keep their mode; no scenario checks the modes `atoll init` gives, as `expect_system` compares no mode; until a pass takes it in, a folder given an extended attribute through the view presents the look of one disk, not the strictest of its folders.
 - Measure the remount through systemd with systemd 252 (Debian 12, openmediavault 7): the polkit rule is checked there, the remount itself is not.
 - The view (experimental): a file or folder it makes takes the caller's group, not a setgid folder's; a non-owner's write to a setuid file whose presented mode differs from its disk's fails until a pass. Run `TestViewAsAnotherAccount` on Linux 7.3 too.
 
