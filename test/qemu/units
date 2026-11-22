@@ -6,9 +6,23 @@ export PATH=/usr/sbin:/usr/bin:/sbin:/bin ATOLL_QEMU=1 ATOLL_QEMU_SYSTEMD=1
 mapfile -t args </opt/atoll/units-args
 first=$(cat /opt/atoll/first-exit 2>/dev/null || echo 2)
 echo "systemd: $(systemctl --version | head -1)"
+# A build made with -cover (init): the folder of the first run, given to every unit systemd starts from now on.
+if [ -f /opt/atoll/cover ]; then
+	export GOCOVERDIR=/opt/atoll/coverage
+	systemctl set-environment GOCOVERDIR="$GOCOVERDIR"
+	args+=(-test.gocoverdir="$GOCOVERDIR")
+fi
 cd /opt/atoll/repo/test/loopdev && /opt/atoll/loopdev.test "${args[@]}"
 code=$?
 [ "$first" -gt "$code" ] && code=$first
+# The counters of both runs, to run.sh through the second serial port, when it asks for them.
+if [ -f /opt/atoll/cover-send ]; then
+	{
+		echo ATOLL-COVER-BEGIN
+		tar -C /opt/atoll/coverage -czf - . | base64
+		echo ATOLL-COVER-END
+	} >/dev/ttyS1
+fi
 echo "ATOLL-QEMU-EXIT=$code"
 sync
 echo o >/proc/sysrq-trigger

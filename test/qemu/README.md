@@ -42,6 +42,8 @@ Environment variables of the second command, passed with `-e NAME=value` (`make 
 | `SOAK` | none | runs `TestDaemonSoak` for that long, such as `4h`: the daemon that runs for good under a writer, its memory logged every tenth of the run. Raise `TIMEOUT` and `QEMU_TIMEOUT` past it, by 20 minutes for the first pass |
 | `SOAK_FILES` | `2000` | the files each disk of the soak starts with; past 2,000, its volumes are sized for them, and its first pass has 10 ms a file more |
 | `SCALE` | none | runs `TestScale` with that many files a disk, such as `200000`: the first scan, `atoll status` with a strict rule, and the passes of the link guard, each timed with its memory. Raise `TIMEOUT` and `QEMU_TIMEOUT` as for a soak |
+| `COVER_OUT` | none | a folder of the container that outlives it, where each guest's coverage counters land, in `<kernel>/`: only with a build made with `-cover` (below) |
+| `COVER_OWNER` | none | `uid:gid`, who the counters in `COVER_OUT` then belong to: whoever runs `make test-qemu-cover` |
 | `CACHE` | none | a folder of the container that outlives it, such as `-v <folder>:/var/cache/atoll-qemu -e CACHE=/var/cache/atoll-qemu`: Debian's packages and the mainline kernel are kept there, and what it holds is not downloaded again. `make test-qemu QEMU_CACHE=<folder>` mounts a folder of the host there; the CI's qemu job keeps one from a run to the next |
 
 The run says whether qemu has KVM (`accelerator: KVM`) or emulates the processor.
@@ -56,4 +58,16 @@ And the daemon's soak, for four hours:
 
 ```powershell
 docker run --rm -e KERNELS=debian -e RUN=TestDaemonSoak -e VERBOSE=1 -e SOAK=4h -e TIMEOUT=16000s -e QEMU_TIMEOUT=16500 -v "${PWD}:/src:ro" -v "${PWD}/bin/qemu:/qemu:ro" debian:13 bash /src/test/qemu/run.sh
+```
+
+## Counting the coverage
+
+`make test-qemu-cover` runs the same with both builds made with `-cover`, of every package of the module (`make qemu-build QEMU_COVER=1`, which writes `bin/qemu/cover`). Each process of a guest writes its counters to one folder of the guest's memory: the tests, and the children they start of themselves, through `-test.gocoverdir`; each `atoll`, through `GOCOVERDIR`, the units under systemd included (`systemctl set-environment`). Once its tests are over, the guest sends that folder, a tar in base64, through a second serial port, which `run.sh` reads into `COVER_OUT/<kernel>/`, `bin/qemu-cover/debian/` and `bin/qemu-cover/mainline/`; a guest that sends none is exit 2. `make cover-qemu` then counts them with the unit tests and the scenarios (`test/ci/cover.sh`, `QEMU_COVERDIR`): a column of what the loop-device tests ran, and one of what any of the three ran, the floors of `make cover` unchanged. A process killed, as a test kills a view's process on purpose, writes no counters. The builds' counters slow the tests a little; the CI's qemu job builds without them.
+
+On Windows, as above, with the build of `-cover` and a folder for the counters:
+
+```powershell
+docker run --rm -v "${PWD}:/src" -w /src golangci/golangci-lint:v2.15.0 make qemu-build QEMU_COVER=1
+docker run --rm -e COVER_OUT=/cover -v "${PWD}:/src:ro" -v "${PWD}/bin/qemu:/qemu:ro" -v "${PWD}/bin/qemu-cover:/cover" debian:13 bash /src/test/qemu/run.sh
+docker run --rm -v "${PWD}:/src" -w /src golangci/golangci-lint:v2.15.0 make cover-qemu
 ```
