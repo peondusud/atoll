@@ -22,7 +22,9 @@ set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
 
-image=golangci/golangci-lint:v2.15.0
+# The image of .github/workflows/ci.yml, by its digest, its tag after it. The servers' images stay at latest, unpinned:
+# what this test watches is the vendors' images changing.
+image=golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
 keep=0 servers="" rev=HEAD
 for a in "$@"; do
 	case $a in

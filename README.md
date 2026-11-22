@@ -82,11 +82,26 @@ GitHub Actions runs the same checks on each push to `beta` and `main` and each p
 
 ## Releasing
 
-The maintainer alone pushes a tag `vX.Y.Z` on a commit the CI passed, `v0.Y.Z` while the core is proven and `v1.0.0` once it is declared solid: `git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0`. A tag is Semantic Versioning, as Go reads it; the `.deb` takes the same version with a Debian revision, `0.1.0-1`. `.github/workflows/release.yml` builds it with GoReleaser (`.goreleaser.yaml`), drafts the release, marked a prerelease for `-alpha`, `-beta` and `-rc`, and attests each archive and package. Once that run has passed, publish the draft. `make release-snapshot` tries the same on this machine, from a clone; on Windows, from PowerShell at the root of one:
+The maintainer alone pushes a tag `vX.Y.Z` on a commit the CI passed, `v0.Y.Z` while the core is proven and `v1.0.0` once it is declared solid: `git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0`. A tag is Semantic Versioning, as Go reads it; the `.deb` takes the same version with a Debian revision, `0.1.0-1`. `.github/workflows/release.yml` first checks that the CI (`ci.yml`) passed on the tag's commit, on a push to `beta` or `main` or a dispatch, waiting up to three hours for a run still going, and stops there otherwise; then builds it with GoReleaser (`.goreleaser.yaml`) in a job that may only read; then, in a job that checks nothing out, attests each archive and package and drafts the release, marked a prerelease for `-alpha`, `-beta` and `-rc`. Once that run has passed, publish the draft. When the CI did not pass on that commit, run it there (Actions, CI, Run workflow, the tag as its ref), then run the release again (Actions, the release's run, Re-run all jobs). `make release-snapshot` tries the build on this machine, from a clone; on Windows, from PowerShell at the root of one:
 
 ```powershell
-docker run --rm -v "${PWD}:/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src -e GOTOOLCHAIN=auto goreleaser/goreleaser:v2.20.0 release --snapshot --clean
+docker run --rm -v "${PWD}:/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src -e GOTOOLCHAIN=auto goreleaser/goreleaser@sha256:3019e0e61c99808e42ce60c9cf77f7882685ffd2bd09d18ef6da8f9c9810e71c release --snapshot --clean
 ```
+
+That digest is `goreleaser/goreleaser:v2.20.3`'s, the GoReleaser of `release.yml`.
+
+### Protecting the tags `v*`, on GitHub
+
+Only the maintainer may push, move or delete a tag `v*`, as a release starts from one: a ruleset of the repository says so, which only an administrator can make, and which no file of the repository can (`docs/threat-model.md`, G21). Once, on github.com:
+
+1. The repository, **Settings**, in the sidebar **Rules**, **Rulesets**, then **New ruleset**, **New tag ruleset**.
+2. **Ruleset name**: `Release tags`; **Enforcement status**: **Active** (it starts as **Disabled**).
+3. **Bypass list**: **Add bypass**, the role **Repository admin**, which only the maintainer holds, **Add Selected**; it shows **Always allow**. No one else, no app, no deploy key. Without it there, the ruleset would stop his own tags too.
+4. **Target tags**: **Add a target**, **Include by pattern**, `v*`.
+5. **Tag protections**: tick **Restrict creations** and **Restrict updates**; **Restrict deletions** and **Block force pushes** are ticked already: leave them. Leave the others.
+6. **Create**.
+
+Then check it: the ruleset is listed as **Active** with its target `v*`, and `gh api repos/peondusud/atoll/rulesets` lists it with `"target": "tag"` and `"enforcement": "active"`. A tag `v*` pushed by any other account, or by a workflow's `GITHUB_TOKEN`, is refused; the maintainer's push of `git push origin v0.1.0` still goes through.
 
 ## License
 

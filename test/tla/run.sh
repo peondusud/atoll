@@ -15,8 +15,8 @@ set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
 
-# .github/workflows/ci.yml and test/ci/run.sh name the same image.
-image=eclipse-temurin:21.0.13_9-jre-noble
+# .github/workflows/ci.yml and test/ci/run.sh name the same image, by its digest, its tag after it.
+image=eclipse-temurin@sha256:b4f9d2a0bc273417cf5219b7b832bbf0493ed500b7b57d5001d9f83374659060 # 21.0.13_9-jre-noble
 version=1.7.4
 sum=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 url=https://github.com/tlaplus/tlaplus/releases/download/v$version/tla2tools.jar

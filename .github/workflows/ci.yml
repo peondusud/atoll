@@ -1,7 +1,9 @@
 # The checks of every change (specs.md §27), on GitHub's hosted runners. They call the make targets test/ci/run.sh
 # calls on the maintainer's machine, in the same image, so that both stay in step: race, integration, conformance and
 # lint as there, govulncheck, test/loopdev in qemu on both kernels, the TLA+ model by TLC, and on arm64 the unit
-# tests. The throughput of the hashing goes to the run's summary, on arm64 and amd64.
+# tests. The throughput of the hashing goes to the run's summary, on arm64 and amd64. Each container image is pinned by
+# its digest, its tag in a comment, as test/ci/run.sh pins it: a tag can be moved, a digest cannot. A release waits for
+# this workflow to pass on its commit, which it finds by this file's name (release.yml).
 name: CI
 
 on:
@@ -33,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     # The image of test/ci/run.sh: its golangci-lint, and root, as the local CI runs the tests. Its GOTOOLCHAIN is auto:
     # its go fetches go.mod's version of Go when newer than its own, checked against sum.golang.org, and kept in the cache.
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,7 +56,7 @@ jobs:
   # test or scenario does. test/ci/run.sh leaves it out.
   cover:
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,7 +85,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +102,7 @@ jobs:
 
   conformance:
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,7 +119,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,7 +142,7 @@ jobs:
   # test/tla/run.sh, which runs it there with --inside: 2 workers, the jar's SHA-256 checked, the jar kept in the cache.
   tla:
     runs-on: ubuntu-latest
-    container: eclipse-temurin:21.0.13_9-jre-noble
+    container: eclipse-temurin@sha256:b4f9d2a0bc273417cf5219b7b832bbf0493ed500b7b57d5001d9f83374659060 # 21.0.13_9-jre-noble
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -214,7 +216,7 @@ jobs:
   # The unit tests and the conformance vectors on arm64, BLAKE3's NEON and SVE2 code included, and its throughput there.
   arm64:
     runs-on: ubuntu-24.04-arm
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -234,7 +236,7 @@ jobs:
   # The throughput of the hashing on amd64, and whether the CPU has AVX-512, which zeebo/blake3 then takes.
   blake3-amd64:
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint:v2.15.0
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
