@@ -35,6 +35,18 @@ for f in ./*.go; do
 		break
 	fi
 done
+# MUTATION_LINES, "<from>-<to>" or "<from>-", leaves this run the mutants of those lines alone (test/ci/mutation.sh): one
+# elsewhere is said not viable at once, exit code 2 to gremlins, as another part of the run tries it, which
+# test/ci/mutation-merge.sh takes it from.
+if [ -n "${MUTATION_LINES:-}" ] && [ -n "$line" ]; then
+	at=${line##*:} from=${MUTATION_LINES%-*} to=${MUTATION_LINES#*-}
+	if [ "$at" -lt "$from" ] || { [ -n "$to" ] && [ "$at" -gt "$to" ]; }; then
+		if [ -n "${MUTATION_LOG:-}" ]; then
+			echo "$line elsewhere" >>"$MUTATION_LOG"
+		fi
+		exit 2
+	fi
+fi
 run=
 if [ -n "$line" ]; then
 	run=$(awk -v key="$line" '$1 == key { print $2; exit }' "$tests")

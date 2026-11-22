@@ -15,9 +15,12 @@
 # each mutant, only the tests that reach the line it changed (test/ci/mutation-go.sh), from the coverage of each test
 # alone, which test/ci/mutation-tests.sh reads first: gremlins runs a package's every test against each mutant, and
 # jobs' take half an hour. MUTATION_FILES, an extended regexp, mutates only the files whose names, .go left out, it
-# matches whole, the others left out as generated code is: a part of a package too large for one run. The exit code is 0
-# when gremlins ran on every package and each met its gate, a package with no gate only measured; 1 when gremlins
-# failed on one or one fell under its gate; 2 for a wrong argument.
+# matches whole, the others left out as generated code is, or after a !, those it does not match: a part of a package too
+# large for one run, the last part of which takes every file no other names, a new one included. MUTATION_LINES,
+# "<from>-<to>" or "<from>-", leaves a package of by_test the mutants of those lines alone, those of the others said not
+# viable at once: a part of a file too large for one job, test/ci/mutation-merge.sh making one score of the parts
+# (.github/workflows/mutation-weekly.yml). The exit code is 0 when gremlins ran on every package and each met its gate, a
+# package with no gate only measured; 1 when gremlins failed on one or one fell under its gate; 2 for a wrong argument.
 set -u
 
 # Released 2025-12-05 (Apache-2.0); a development tool, never a dependency of the module.
@@ -44,6 +47,10 @@ if [ $# -eq 0 ]; then
 	# shellcheck disable=SC2086
 	set -- $pure_core
 fi
+if [ -n "${MUTATION_LINES:-}" ] && ! echo "$MUTATION_LINES" | grep -qxE '[1-9][0-9]*-([1-9][0-9]*)?'; then
+	echo "MUTATION_LINES: want <from>-<to> or <from>-, such as 645-965, not $MUTATION_LINES" >&2
+	exit 2
+fi
 for pkg in "$@"; do
 	case $pkg in
 	./*) ;;
@@ -69,6 +76,13 @@ GOBIN=$(pwd)/$out go install "github.com/go-gremlins/gremlins/cmd/gremlins@$grem
 # took from its cache, as for a package whose code and tests are those of a run before, timed out mutants the tests
 # kill.
 export GOFLAGS="${GOFLAGS:+$GOFLAGS }-cpu=1 -count=1"
+# MUTATION_SKIP, a regexp of test names with no space, as go test's -skip reads it, leaves those tests out of every run,
+# the map of a package of by_test included: jobs' sweeps of a whole pass, which reach most of its mutants and take more
+# than half an hour of its tests, so that its weekly parts fit in a job each (.github/workflows/mutation-weekly.yml).
+if [ -n "${MUTATION_SKIP:-}" ]; then
+	GOFLAGS="$GOFLAGS -skip=$MUTATION_SKIP"
+	export MUTATION_SKIP
+fi
 
 summary=${GITHUB_STEP_SUMMARY:-/dev/null}
 {
@@ -95,10 +109,18 @@ for pkg in "$@"; do
 	log=$out/$name.log
 	# Generated code (a table, a generator behind //go:build ignore) is not what the tests are for.
 	excludes=()
+	files=${MUTATION_FILES:-} others=
+	case $files in
+	'!'*) files=${files#!} others=1 ;;
+	esac
 	for f in "$pkg"/*.go; do
 		base=$(basename "$f" .go)
+		matched=
+		if [ -n "$files" ] && echo "$base" | grep -qxE "$files"; then
+			matched=1
+		fi
 		if grep -q -m1 -E '^// Code generated .* DO NOT EDIT\.$|^//go:build ignore$' "$f" ||
-			{ [ -n "${MUTATION_FILES:-}" ] && ! echo "$base" | grep -qxE "$MUTATION_FILES"; }; then
+			{ [ -n "$files" ] && [ "$matched" = "$others" ]; }; then
 			excludes+=(-E "$(basename "$f" | sed 's/\./\\./g')\$")
 		fi
 	done
@@ -153,7 +175,9 @@ for pkg in "$@"; do
 	-:*) cell="–, $verdict" ;;
 	*) cell="$gate, $verdict" ;;
 	esac
-	echo "| \`$pkg\` | $killed | $lived | $named_here | $uncovered | $timed | $(count 'Not viable') | $efficacy% | $coverage% | $cell | ${spent}s |" >>"$summary"
+	# A part of a package says which: a | in a cell would split it.
+	part=${MUTATION_FILES:+, $(echo "$MUTATION_FILES" | sed 's/^!/all but /; s/|/, /g')}${MUTATION_LINES:+, lines $MUTATION_LINES}
+	echo "| \`$pkg\`$part | $killed | $lived | $named_here | $uncovered | $timed | $(count 'Not viable') | $efficacy% | $coverage% | $cell | ${spent}s |" >>"$summary"
 	sed -n 's/^ *LIVED \([A-Z_]*\) at \(.*\)$/\2 \1/p' "$log" | sed "s|^|${pkg#./}/|" | grep -v -x -F -e "${named:-none}" |
 		sort -t: -k1,1 -k2,2n -k3,3n >>"$out/lived.txt"
 done
