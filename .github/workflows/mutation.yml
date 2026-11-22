@@ -2,7 +2,8 @@
 # package's code one mutant at a time and runs the package's tests against each (test/ci/mutation.sh, make mutation).
 # The score per package and the mutants that lived go to the run's summary, gremlins' logs and JSON to an artifact.
 # A package under its gate (test/ci/gates.txt), the mutants test/ci/mutation-equivalents.txt names left out, fails the
-# run; a package named on a dispatch that has no gate is only measured.
+# run; a package named on a dispatch that has no gate is only measured. ops, trash and watch, which take an hour or
+# more each, run each week in mutation-weekly.yml.
 name: Mutation
 
 on:
