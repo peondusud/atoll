@@ -22,13 +22,15 @@ const (
 	maxLibrariesOfAFolder = 8
 )
 
-// plexBase and refreshEach make the time all the scans of one notification may take: plexBase, the time of one
-// request, then refreshEach for each scan asked, which Plex answers at once as it scans later. Past it, what is left
-// is not asked, and the notification is tried again later, so that a Plex that answers each slowly holds the daemon's
-// turn for that long at most. Variables, so that a test can shorten them.
+// notifyBase, then refreshEach for each of Plex's scans or postEach for each request to Jellyfin or Emby, is the time
+// one notification of a server may take: notifyBase, the time of one request, then what each asked takes, which the
+// server answers at once as it scans later. Past it, what is left is not asked, and the notification is tried again
+// later, so that a server that answers each slowly holds the daemon's turn for that long at most. Variables, so that a
+// test can shorten them.
 var (
-	plexBase    = requestTimeout
+	notifyBase  = requestTimeout
 	refreshEach = 100 * time.Millisecond
+	postEach    = time.Second
 )
 
 // Plex asks Plex for a partial scan of each folder that changed, in each library that holds it:
@@ -55,7 +57,7 @@ type section struct {
 
 // Scan reads Plex's libraries, then asks each library that holds a folder for a scan of it; a folder above a library
 // asks for a scan of that library's folder. A folder in no library asks for nothing. What it is to ask is known
-// before it asks anything, and bounded (maxLibrariesOfAFolder), and all of it is asked within a budget (plexBase,
+// before it asks anything, and bounded (maxLibrariesOfAFolder), and all of it is asked within a budget (notifyBase,
 // refreshEach).
 func (p *Plex) Scan(ctx context.Context, folders []string) error {
 	sections, err := p.sections(ctx)
@@ -90,7 +92,7 @@ func (p *Plex) Scan(ctx context.Context, folders []string) error {
 			return fmt.Errorf("plex: %s is in %d library folders, more than the %d of a server: it asked for no scan", seen, within, maxLibrariesOfAFolder)
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, plexBase+time.Duration(len(plan))*refreshEach)
+	ctx, cancel := context.WithTimeout(ctx, notifyBase+time.Duration(len(plan))*refreshEach)
 	defer cancel()
 	for _, r := range plan {
 		if err := p.get(ctx, "/library/sections/"+url.PathEscape(r.key)+"/refresh?path="+url.QueryEscape(r.path), nil); err != nil {

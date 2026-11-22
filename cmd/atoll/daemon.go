@@ -734,7 +734,7 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 		return failure(stderr, err)
 	}
 	if answer.Done {
-		tellOfAnswer(c, kind, stderr)
+		tellOfAnswer(configPath, c, kind, stderr)
 	}
 	if asJSON {
 		err = writeJSON(stdout, answer)
@@ -781,8 +781,8 @@ func guardText(req *guardRequest, answer *guardAnswer) string {
 // its pass takes the answer at once: an answer to the mass-modification guard holds for the guard's window only
 // (specs.md §15.6). The answer is recorded either way: a daemon that could not be told, or none running, is a line of
 // standard error, which says how long a pass has to start.
-func tellOfAnswer(c *config.Config, kind string, stderr io.Writer) {
-	told, err := tellDaemon(c)
+func tellOfAnswer(configPath string, c *config.Config, kind string, stderr io.Writer) {
+	told, err := tellDaemon(configPath, c)
 	if err == nil && told > 0 {
 		return
 	}

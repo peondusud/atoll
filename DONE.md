@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Two pools' daemons told apart, a rename that no longer waits for a failed disk, and Jellyfin and Emby within a budget, 2026-11-22 (specs.md §15.12, §15.13, §21.5)
+
+Three items of TODO.md, as the maintainer asked ("après tu continue sur ça").
+
+- **Two pools of one account**: a disk command or a guard's answer told every daemon of Atoll's executable that acted as one of Atoll's accounts, so on a machine with two pools under one account, it told the other pool's daemon too, which read its own configuration again for nothing, and counted it, which hid that this pool's ran none. A daemon is now told only when its configuration is the command's, the same file by device and inode: its `--config`, or the default, read through `/proc/<pid>/root`, or `/proc/<pid>/cwd` for a relative path. `TestOnlyADaemonOfThisConfigurationIsTold` starts five processes with the daemon's arguments: its path, a path relative to its folder and a link to it are told; another configuration and the default are not. `fsx.SameFile` is new.
+- **A rename that waited for good for a failed disk** (§15.12, step 3): `folderLike` counted a `failed` disk, which no pass walks, as a disk not looked at that may hold the model of a new parent, so with one in the configuration a rename whose parent no disk present holds waited for good, its copy left behind. A failed disk is now none to wait for, as for a copy (the maintainer, 2026-11-22): the parent is made with no model, 0755. `TestAParentWhoseHolderFailedIsNotWaitedFor`, which waited before; §15.12's fingerprint updated, `Replication.tla` unchanged as it leaves folders out.
+- **Jellyfin and Emby within a budget** (§21.5): as Plex's scans are since 2026-11-22, all the requests of one notification, a hundred folders each, are sent within 10 s and 1 s more a request, the rest tried again later: a server that answered each slowly held the daemon's turn 10 s a request. The base of both budgets is one variable now, `notifyBase`. `TestMediaBrowserTellsWithinABudget`.
+
+Decided without the maintainer, to confirm:
+
+- A daemon whose configuration this command cannot look at, as one of a process it may not look into, is none of this pool's: it is not told, and the command says no daemon runs, as before a non-root command could not signal another account's daemon either.
+- The budget of Jellyfin and Emby, 1 s a request of a hundred folders, ten times Plex's for a scan, as each request names a hundred.
+- The notifications stay in the daemon's turn, as the maintainer chose for Plex on 2026-11-22.
+
 ## The maintainer's answers of 2026-11-22 (specs.md §10, §14.2, §17.2, §21.2, §21.5, §27)
 
 - **Confirmed**: every choice the entries of 2026-11-20 to 2026-11-22 listed as to confirm, each saying so now. Seven had a question of their own, each answered with the option put first ("Confirmer"), the rest together ("Tout confirmer"):

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 	"unicode/utf8"
 
 	"github.com/peondusud/atoll/internal/config"
@@ -37,7 +38,8 @@ type update struct {
 	UpdateType string `json:"UpdateType"`
 }
 
-// Scan names the folders, a hundred a request. A folder whose path is not UTF-8 cannot go in JSON, and is left out.
+// Scan names the folders, a hundred a request, all of them within a budget (notifyBase, postEach). A folder whose path
+// is not UTF-8 cannot go in JSON, and is left out.
 func (m *MediaBrowser) Scan(ctx context.Context, folders []string) error {
 	var updates []update
 	for _, folder := range folders {
@@ -45,6 +47,9 @@ func (m *MediaBrowser) Scan(ctx context.Context, folders []string) error {
 			updates = append(updates, update{Path: seen, UpdateType: "Modified"})
 		}
 	}
+	requests := (len(updates) + updatesPerRequest - 1) / updatesPerRequest
+	ctx, cancel := context.WithTimeout(ctx, notifyBase+time.Duration(requests)*postEach)
+	defer cancel()
 	for len(updates) > 0 {
 		n := min(len(updates), updatesPerRequest)
 		body, err := json.Marshal(struct {

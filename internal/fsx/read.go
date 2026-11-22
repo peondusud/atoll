@@ -41,3 +41,16 @@ func ReadAt(path string, off int64, n int) ([]byte, error) {
 	}
 	return buf[:got], nil
 }
+
+// SameFile says whether two paths of the system disk lead to one file, through their links: the same device and inode.
+func SameFile(a, b string) (bool, error) {
+	sa, err := os.Stat(a)
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", a, err)
+	}
+	sb, err := os.Stat(b)
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", b, err)
+	}
+	return os.SameFile(sa, sb), nil
+}

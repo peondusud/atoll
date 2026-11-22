@@ -2233,6 +2233,40 @@ func TestAParentWhoseHolderIsAway(t *testing.T) {
 	}
 }
 
+// A failed disk, which no pass walks and which comes back by nothing a pass does, is never waited for as the holder of a
+// folder to make one like: a rename whose new parent no disk present holds makes it with no model, 0755, as a copy
+// does, rather than wait for good, the copy left behind (specs.md §14.2, §15.12; the maintainer, 2026-11-22).
+func TestAParentWhoseHolderFailedIsNotWaitedFor(t *testing.T) {
+	b := pool(t)
+	b.rename("t1", "a", "P/a")
+	if err := os.Chmod(filepath.Join(b.dirs["t1"], "media", "P"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mount := b.dirs["t2"]
+	b.gone[mount] = true
+	b.settle()
+	b.gone[mount] = false
+	for i := range b.config.Disks {
+		if b.config.Disks[i].ID == "t1" {
+			b.config.Disks[i].State = config.DiskFailed
+		}
+	}
+	out := b.pass()
+	if got := outcomeOf(out, KindRename, "a"); got == "io-error" {
+		t.Errorf("the rename waits for the failed disk (%+v)", out.Operations)
+	}
+	st, err := os.Stat(filepath.Join(mount, "media", "P"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Mode().Perm(); got != 0o755 {
+		t.Errorf("mode %o", got)
+	}
+	if !b.exists("t2", "media/P/a") {
+		t.Error("the copy was not renamed")
+	}
+}
+
 // A folder job has one line, whatever became of it and of the disk.
 func TestAFolderJobHasOneLine(t *testing.T) {
 	t.Run("its move loses the disk", func(t *testing.T) {

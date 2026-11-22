@@ -72,7 +72,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 ## The threat model after 2026-11-19 (DONE.md)
 
-- The audit by scrutineer of 2026-11-22 (DONE.md): its eight findings are checked and the real ones fixed; run it again on `beta`, whose head it did not see. Two pools on one machine with one account: `tellDaemon` counts the other pool's daemon too, as it does not compare `--config`. The media servers are told in the daemon's own turn: Plex within a budget since 2026-11-22, Jellyfin and Emby a hundred folders a request, each up to 10 s.
+- The audit by scrutineer of 2026-11-22 (DONE.md): its eight findings are checked and the real ones fixed; run it again on `beta`, whose head it did not see.
 - The threat model's low gaps G7 to G17 and G19 to G21 (G20 only partly covered by `UMask=0027`: what root's `atoll init` makes still takes root's umask).
 - Measure the remount through systemd with systemd 252 (Debian 12, openmediavault 7): the polkit rule is checked there, the remount itself is not.
 - The view (experimental): a file or folder it makes takes the caller's group, not a setgid folder's; a non-owner's write to a setuid file whose presented mode differs from its disk's fails until a pass. Run `TestViewAsAnotherAccount` on Linux 7.3 too.
@@ -84,7 +84,6 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - An SSD-cache copy a transfer sent to the trash stays for the retention when a fault comes between its move and its purge (§19), kept rather than purged at once; and a disk lost earlier in a pass keeps its own set of the view's attributes (§21.2).
 - A guard link a purge cannot remove for an error that is not the disk's (`EACCES` on its unlink) only gets a warning, and the purge goes on: the purged data stays behind that link until the next pass (DONE.md, the four flaws).
 - Raise the coverage of `cmd/atoll`'s unit tests (50.8 %, 86.5 % with the scenarios) and of the view (`fusefs` 0 %, `readonly` 13 %, `writer` 76 %), run only in qemu: count the loop-device tests too, with `GOCOVERDIR` in the guest.
-- A pass's rename (§15.12, step 3) counts a `failed` disk, which no pass walks, as a disk not looked at that may hold the model of a new parent: with one in the configuration, a rename whose parent no disk present holds waits for good, the copy left behind. A copy waits for no failed disk (DONE.md, 2026-11-21, a copy's folder made like the one on another disk). Wait for a failed disk in neither, as a copy does, or in both: for the maintainer.
 - A copy recorded unverified after a reprise (flaw 1's limit, DONE.md) waits for `--full` or a scrub to be read; and which two drivers' renames left the change time as it was on Linux 6.12 is to measure.
 
 ## Atoll's own view, after 2026-11-19 (DONE.md)

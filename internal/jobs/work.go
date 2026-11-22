@@ -528,12 +528,13 @@ func (p *pass) holdersOf(ctx context.Context, fileID int64) (map[string]bool, er
 // folderLike finds a folder to make one like: on the first disk by position among those given that holds
 // it. A look that fails ends the search with an error that says nothing of the disk being written to: made
 // with no model, a private folder would be open there for good. For the same reason a disk not looked at, which
-// may hold it, stops a search that found no other.
+// may hold it, stops a search that found no other. A failed disk is never looked at and comes back by nothing a
+// pass does: it is none to wait for, as a copy waits for none (specs.md §14.2, §15.12; the maintainer, 2026-11-22).
 func (p *pass) folderLike(ctx context.Context, skip, folder string, holders map[string]bool) (*fsx.Stat, error) {
 	away := ""
 	for i := range p.config.Disks {
 		id := p.config.Disks[i].ID
-		if id == skip || (holders != nil && !holders[id]) {
+		if id == skip || (holders != nil && !holders[id]) || p.config.Disks[i].State == config.DiskFailed {
 			continue
 		}
 		if !p.looked(id) {
