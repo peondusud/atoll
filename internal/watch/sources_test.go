@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -148,21 +149,70 @@ func TestAFilesystemMarkGivesWhatWaits(t *testing.T) {
 	}
 }
 
-// startMergerfs starts a process that the system names mergerfs, with args on its command line, as the view's
-// mergerfs is told by those: a shell, run by a link of that name, that says it runs, then waits for its input to end.
-// Start returns as soon as the child let go of the parent's memory, before the kernel has laid out its arguments:
-// its name is already the new one there and its command line still empty, so the shell's word is waited for.
+// startMergerfs starts a process whose executable is named mergerfs, with args on its command line, as the view's
+// mergerfs is told by those: a copy of a shell under that name, that says it runs, then waits for its input to end.
 func startMergerfs(t *testing.T, args ...string) int {
+	t.Helper()
+	return startNamed(t, shellNamed(t, "mergerfs", false), nil, "run", args...)
+}
+
+// shellNamed gives the path of a shell under another name, in a folder every account may enter and run from: a copy
+// of it, whose executable /proc names by that name, or a symbolic link to it, run by which the process takes that name
+// alone, as its comm, its executable staying the shell's.
+func shellNamed(t *testing.T, name string, link bool) string {
 	t.Helper()
 	sh, err := exec.LookPath("sh")
 	if err != nil {
-		t.Skip("no sh to stand for mergerfs")
+		t.Skip("no sh to stand for another program")
 	}
-	link := filepath.Join(t.TempDir(), "mergerfs")
-	if err := os.Symlink(sh, link); err != nil {
+	dir, err := os.MkdirTemp("", "atoll-watch-")
+	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(t.Context(), link, append([]string{"-c", "echo; read x", "mergerfs"}, args...)...)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	at := filepath.Join(dir, name)
+	if link {
+		if err := os.Symlink(sh, at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	data, err := os.ReadFile(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(at, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// startNamed starts the shell at program on the script named script, with args after it, as an account when as is set,
+// so that its command line reads program, script, args: the script, in a folder of its own, says it runs, then waits
+// for its input to end. Start returns as soon as the child let go of the parent's memory, before the kernel has laid
+// out its arguments: its name is already the new one there and its command line still empty, so the shell's word is
+// waited for.
+func startNamed(t *testing.T, program string, as *syscall.Credential, script string, args ...string) int {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "atoll-script-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, script), []byte("echo\nread x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), program, append([]string{script}, args...)...)
+	cmd.Dir = dir
+	if as != nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: as}
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -182,10 +232,65 @@ func startMergerfs(t *testing.T, args ...string) int {
 		t.Fatalf("the shell did not start: %v", err)
 	}
 	pid := cmd.Process.Pid
-	if comm, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm"); err != nil || strings.TrimSpace(string(comm)) != "mergerfs" {
+	if comm, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm"); err != nil || strings.TrimSpace(string(comm)) != filepath.Base(program) {
 		t.Fatalf("the process stands as %q: %v", comm, err)
 	}
 	return pid
+}
+
+// The view's and Atoll's own events are told by the account the process runs as, and by the executable /proc names,
+// never by the name a process gives itself, where /proc lets the watcher read it (specs.md §15.1;
+// docs/threat-model.md, G17). A shell named mergerfs by a link, whose comm says mergerfs and whose command line names
+// the view, is a user's; so is a mergerfs, or a process of Atoll's own executable, run by an account none of Atoll's; a
+// process gone by the time /proc is read is a user's, the reading that loses nothing, as a user's change wakes a pass.
+// The accounts are root and the one Atoll runs as, or those the watcher is given. A process of one of them whose
+// executable /proc does not let the watcher read, as root's mergerfs to a daemon of the account atoll, is told by its
+// comm: in a container, root cannot read the executable of 65534's processes either.
+func TestOnlyTheViewAndAtollOfTheirAccountsMakeTheirEvents(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("starts processes as another account: root only")
+	}
+	view := "/srv/pool"
+	nobody := &syscall.Credential{Uid: 65534, Gid: 65534}
+	mergerfs := shellNamed(t, "mergerfs", false)
+	real := startNamed(t, mergerfs, nil, "run", "/mnt/a:/mnt/b", view)
+	named := startNamed(t, shellNamed(t, "mergerfs", true), nil, "run", "/mnt/a:/mnt/b", view)
+	other := startNamed(t, mergerfs, nobody, "run", "/mnt/a:/mnt/b", view)
+	atoll := shellNamed(t, "atoll", false)
+	own := startNamed(t, atoll, nil, "scan")
+	ownMount := startNamed(t, atoll, nil, "mount")
+	foreign := startNamed(t, atoll, nobody, "scan")
+	foreignMount := startNamed(t, atoll, nobody, "mount")
+	ended := exec.CommandContext(t.Context(), "true")
+	if err := ended.Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		accounts []uint32
+		pid      int
+		want     string
+	}{
+		{"mergerfs of root, serving the view", nil, real, OriginView},
+		{"a shell that calls itself mergerfs", nil, named, OriginUser},
+		{"mergerfs of another account", nil, other, OriginUser},
+		{"mergerfs of an account the watcher is given", []uint32{0, 65534}, other, OriginView},
+		{"Atoll's executable, of root", nil, own, OriginAtoll},
+		{"Atoll's executable, of root, atoll mount", nil, ownMount, OriginView},
+		{"Atoll's executable, of another account", nil, foreign, OriginUser},
+		{"Atoll's executable, of another account, atoll mount", nil, foreignMount, OriginUser},
+		{"Atoll's executable, of root, when the watcher is given root alone", []uint32{0}, own, OriginAtoll},
+		{"Atoll's executable, of root, when the watcher is given another", []uint32{65534}, own, OriginUser},
+		{"mergerfs of root, when the watcher is given another", []uint32{65534}, real, OriginUser},
+		{"a process gone", nil, ended.Process.Pid, OriginUser},
+	} {
+		w := NewWatcher(WatcherOptions{ViewMount: view, Now: func() int64 { return 1 }, Accounts: tc.accounts})
+		w.exe = atoll
+		if got := w.origin(tc.pid); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+		w.Close()
+	}
 }
 
 // Each event says who made it, from the process the kernel names: none, Atoll itself, the view's mergerfs, told by

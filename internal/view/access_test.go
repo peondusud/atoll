@@ -86,6 +86,7 @@ func TestAccessVectors(t *testing.T) {
 
 type procStatusVector struct {
 	Status string   `json:"status"`
+	UID    uint32   `json:"uid"`
 	FSUID  uint32   `json:"fsuid"`
 	FSGID  uint32   `json:"fsgid"`
 	Groups []uint32 `json:"groups"`
@@ -94,7 +95,8 @@ type procStatusVector struct {
 	Note   string   `json:"note"`
 }
 
-// TestProcStatusVectors: what the view reads of the thread that asks it an operation (specs.md §21.2).
+// TestProcStatusVectors: what the view reads of the thread that asks it an operation (specs.md §21.2), and the watcher
+// of the process behind an event (§15.1).
 func TestProcStatusVectors(t *testing.T) {
 	for i, v := range vectors.Load[procStatusVector](t, "proc_status.json") {
 		got, err := ParseProcStatus([]byte(v.Status))
@@ -105,8 +107,8 @@ func TestProcStatusVectors(t *testing.T) {
 			}
 		case err != nil:
 			t.Errorf("vector %d (%s): %v", i, v.Note, err)
-		case got.FSUID != v.FSUID || got.FSGID != v.FSGID || !slices.Equal(got.Groups, v.Groups) || uint64(got.CapEff) != v.CapEff:
-			t.Errorf("vector %d (%s): %+v, want %d:%d %v %#x", i, v.Note, got, v.FSUID, v.FSGID, v.Groups, v.CapEff)
+		case got.UID != v.UID || got.FSUID != v.FSUID || got.FSGID != v.FSGID || !slices.Equal(got.Groups, v.Groups) || uint64(got.CapEff) != v.CapEff:
+			t.Errorf("vector %d (%s): %+v, want %d, %d:%d %v %#x", i, v.Note, got, v.UID, v.FSUID, v.FSGID, v.Groups, v.CapEff)
 		}
 	}
 }
