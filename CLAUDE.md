@@ -47,7 +47,7 @@ make build              # go build -o bin/atoll ./cmd/atoll
 go test ./...           # unit and property tests, including conformance/vectors; no root
 go test -race ./...     # mandatory before any commit touching jobs, ops, watch, integrity or catalog
 make conformance        # black-box runner: conformance/scenarios against a conformance build
-make model-check        # the TLA+ model of conformance/models/ by TLC, 2 workers, with only Docker (test/tla/run.sh)
+make model-check        # the TLA+ models of conformance/models/ by TLC, 2 workers, with only Docker (test/tla/run.sh)
 make test-integration   # disks simulated with directories
 sudo make test-loopdev  # ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey
 make test-qemu          # the same as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host (test/qemu/README.md)
@@ -122,7 +122,7 @@ docs/research/         research reports behind open design decisions (not contra
 - Sort every output explicitly; never depend on map iteration order or random seeds.
 - Reject regexes outside the grammar of specs.md §29.5, the common Go/Rust subset, when the configuration loads; Atoll checks it itself before the engine compiles.
 - The conformance runner talks to the binary only through the CLI and the filesystem; it imports nothing from `internal/`.
-- A change to a section of specs.md that the TLA+ model formalizes (`conformance/models/fingerprints.json`) updates `conformance/models/Replication.tla`, or confirms it unchanged, and that section's fingerprint, in the same commit; `make model-check` passes.
+- A change to a section of specs.md that a TLA+ model formalizes (`conformance/models/fingerprints.json` names, for each section, the models that cite it: `Replication.tla`, `Rename.tla`, `Copies.tla`) updates those models, or confirms them unchanged, and that section's fingerprint, in the same commit; `make model-check` passes. A flaw TLC finds is recorded, never fixed without the maintainer's remedy (`conformance/models/README.md`).
 
 ## Cross-platform rules (Linux now, Windows in the Rust version)
 - Logical key: the exact relative path, `/` separator; bytes on Linux, WTF-8 on Windows (keeps unpaired UTF-16 surrogates).

@@ -64,7 +64,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - A file renamed while a job runs reappears at its old name on that disk once the reprise finishes the copy: the reprise could take `first_seen_ns` from the operation's `started_ns`.
 - `atoll scan` and `conflicts resolve` still touch a running job; `restore --to` records the look after its syncs.
 - The copy state `unavailable`: say what sets it, or say in §4 that nothing does.
-- CLAUDE.md's rule on the TLA+ model names `Replication.tla` alone, where `fingerprints.json` lists `Rename.tla` too: the maintainer's file to update. Run in qemu the loop-device tests of the view (its reprise, its check every 30 s) and of a rename's put-back on ext4 and ntfs-3g, which no test of `test/loopdev` shows yet (DONE.md, 2026-11-22).
+- Run in qemu the loop-device tests of the view (its reprise, its check every 30 s) and of a rename's put-back on ext4 and ntfs-3g, which no test of `test/loopdev` shows yet (DONE.md, 2026-11-22).
 - The remedies of flaws 8 to 12 of the TLA+ models (the SSD cache's transfer, the link guard, copies at once), the maintainer's to choose: `conformance/models/README.md`, DONE.md 2026-11-22; their tests wait behind the build tag `flaws`.
 - Next TLA+ models, by risk: folder renames across disks with their jobs, cycles and exchanges, and of Atoll's own view its rename, replacement, folders and the move of a file whose write ran out of space; then the SSD cache with the link guard (a purge drops the links that lead to its entry first), and copies at once of one file to several targets, with refreshes (`conformance/models/README.md`). tla2tools 1.8.0 once released: still a prerelease on 2026-11-22 (published 2026-11-19).
 
