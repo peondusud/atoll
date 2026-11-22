@@ -7,10 +7,12 @@
    content each holds (a version number), its change count (what size, modification and change time say) and the count
    of what moved its change time alone (a rename, or a write that kept the size and the dates), the
    names of each disk as the kernel shows them and as they would survive a power cut, the catalog's rows (files,
-   copies, jobs, the ops journal), the parts in <workdir>/tmp/ and the entries of <workdir>/trash/, and the mount
-   check. What it leaves out: names and paths (one logical path a file), renames and folders, NTFS, the bytes of the
-   hashes, the guards (a decision may always wait), the view, the SSD cache, copies at once, repair and scrub, the
-   CLI: conformance/models/README.md says more.
+   copies, jobs, the ops journal), the parts in <workdir>/tmp/, the entries of <workdir>/trash/ and the links of
+   <workdir>/links/, and the mount check; and since 2026-11-22 Atoll's own view (§21.2), the SSD cache's transfer (§19)
+   and the link guard (§17), each with constants that leave every action as it was without them. What it leaves out:
+   names and paths (one logical path a file), renames and folders (Rename.tla's), NTFS, the bytes of the hashes, the
+   guards (a decision may always wait), copies at once (Copies.tla's), repair and scrub, the CLI:
+   conformance/models/README.md says more.
 
    Atoll is one process that runs passes (specs.md §15.12), one step at a time; the user, the disks, a kill -9 and a
    power cut act between any two of its steps. Each action names the section and step of specs.md it formalizes, and
@@ -37,7 +39,10 @@ CONSTANTS
                 \* no view, which leaves every variable of the view as it starts
     Parallel,   \* TRUE: a new file the view makes is written in parallel to its replica's target (specs.md §21.2)
     MaxStop,    \* how many times atoll mount is stopped short (kill -9)
-    MaxVOps     \* how many operations the view may journal: ids never come back
+    MaxVOps,    \* how many operations the view may journal: ids never come back
+    CacheDisks, \* the disks of role cache, the SSD cache (specs.md §19); {} for none, which leaves every action as it was
+    Guard       \* the link guard, trash.link_guard (specs.md §17): "none" as before it; "on"; or "off", on at the start and
+                \* turned off by the user once, at any moment
 
 Disks == 1..NDisks
 Files == 1..NFiles
@@ -51,8 +56,11 @@ ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3
        /\ Phys \in [Disks -> Nat] /\ Start \in [Files -> SUBSET Disks]
        /\ LinkDisks \subseteq Disks
        /\ \A f \in Files : \A a, b \in Start[f] : a # b => Phys[a] # Phys[b]
-       /\ Fixes = {}    \* no flaw open: each remedy is specs.md's and the code's, and the model's whatever Fixes says
+       \* the remedies proposed for the flaws still open (README.md, flaws 8 to 11)
+       /\ Fixes \subseteq {"xfer-look", "xfer-keep", "view-fallback", "xfer-hide", "view-held", "link-keep", "link-doubt"}
        /\ UserActs \subseteq {"modify", "replace", "delete", "create", "rewrite"}
+       /\ CacheDisks \subseteq Disks /\ CacheDisks \cap LinkDisks = {}
+       /\ Guard \in {"none", "on", "off"} /\ (Guard # "none" => LinkDisks = {})
        /\ ViewActs \subseteq {"create", "write", "delete"}
        /\ Parallel \in BOOLEAN /\ MaxStop \in Nat /\ MaxVOps \in Nat
 
@@ -61,7 +69,10 @@ ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3
 M(f) == f
 T(p) == NFiles + p
 X(p) == NFiles + MaxOps + p
-Names == 1..(NFiles + 2 * MaxOps)
+(* With the link guard, the link of each file at <workdir>/links/<file id> (specs.md §17). *)
+Ln(f) == NFiles + 2 * MaxOps + f
+LinkNames == IF Guard = "none" THEN {} ELSE {Ln(f) : f \in Files}
+Names == 1..(NFiles + 2 * MaxOps + (IF Guard = "none" THEN 0 ELSE NFiles))
 WorkNames == {T(p) : p \in OpIds} \cup {X(p) : p \in OpIds}
 
 Size(v) == v % 2    \* versions 1 and 3 share a size, 2 another: a size alone cannot tell them apart
@@ -76,7 +87,7 @@ NoRow == [st |-> "none", obj |-> 0, gen |-> 0, cg |-> 0, gver |-> 0, verified |-
           doubt |-> FALSE]
 (* An operation of ops (specs.md §9): kind, disk, file (path), file_key, state, the part it names (path2 of a create:
    the op whose id names the part, as a part resumed keeps its name) and the trash entry's reason. *)
-NoOp == [k |-> "none", d |-> 0, f |-> 0, key |-> 0, st |-> "none", part |-> 0, reason |-> "none"]
+NoOp == [k |-> "none", d |-> 0, f |-> 0, key |-> 0, st |-> "none", part |-> 0, reason |-> "none", link |-> FALSE]
 (* A replicate job (specs.md §14.1): src_disk, the part it owns, the chunk hashes recorded (hver: the version they
    describe), the whole-file hash once verified (whash) with the part's change time then (vcg, of part_look), the
    change time its copy had right after the rename of operation pop (pcg, placed; pop 0 for none), and running once its
@@ -162,11 +173,21 @@ ViewNamed(p) == \E v \in VIds : vops[v].k \in {"part", "unlink"} /\ vops[v].p = 
 ViewPlannedAt(d, f) == \E v \in VIds : vops[v].st = "planned" /\ vops[v].d = d /\ vops[v].f = f /\ vops[v].k # "part"
 ViewTrashName(d, n) == \E v \in VIds : vops[v].k = "unlink" /\ vops[v].d = d /\ n = X(vops[v].p)
 PlannedOn(d) == {p \in OpIds : ops[p].st = "planned" /\ ops[p].d = d /\ ~ViewNamed(p)}
-PlannedAt(d, f) == (\E p \in PlannedOn(d) : ops[p].f = f) \/ ViewPlannedAt(d, f)
+(* What a walk waits at: an operation planned at the file's path, but for one of the link guard, which leaves the root
+   as it is (jobs.plannedOn, §15.12), or one of the view's. *)
+PlannedAt(d, f) == (\E p \in PlannedOn(d) : ops[p].f = f /\ ~ops[p].link) \/ ViewPlannedAt(d, f)
 (* A version some name holds durably, on any disk, missing or not: in the library or in a trash. A part in tmp/ is
    no copy: a file deleted while a replica of it was being made is the user's to lose (specs.md §17, Limits). *)
-Kept == {M(f) : f \in Files} \cup {X(p) : p \in OpIds}
+Kept == {M(f) : f \in Files} \cup {X(p) : p \in OpIds} \cup LinkNames
 Holds(os, ds, v) == \E d \in Disks, n \in Kept : ds[d][n] # 0 /\ os[ds[d][n]].dver = v
+(* The same without the entries of the trash a transfer of the SSD cache made, which it purges at once (§19): a version
+   a user's action leaves only there is the user's to lose, as one whose last copy they edit or delete directly; and
+   with the cache, a version the kernel no longer shows at any other name, as once the transfer moved its copy, a name
+   the source's sync is about to take away holding it durably still. *)
+Surplus(n) == \E p \in OpIds : n = X(p) /\ ops[p].k = "trash" /\ ops[p].reason = "surplus"
+HoldsKept(os, ds, v) == \E d \in Disks, n \in Kept : ds[d][n] # 0 /\ os[ds[d][n]].dver = v /\ ~Surplus(n)
+SeesKept(os, vs, v) == \E d \in Disks, n \in Kept : vs[d][n] # 0 /\ os[vs[d][n]].ver = v /\ ~Surplus(n)
+UserLost(os, ds, vs, v) == v # 0 /\ (~HoldsKept(os, ds, v) \/ (CacheDisks # {} /\ ~SeesKept(os, vs, v)))
 SyncObjs(os, S) == [o \in DOMAIN os |-> IF o \in S THEN [os[o] EXCEPT !.dver = os[o].ver] ELSE os[o]]
 OnDisk(os, d) == {o \in DOMAIN os : os[o].d = d}
 (* A name that still holds what Atoll put there is durable: a commit comes after the syncs (invariant 7). *)
@@ -175,6 +196,10 @@ Flag(g, name, cond) == IF cond THEN [g EXCEPT !.flags = @ \cup {name}] ELSE g
 (* A disk this session can no longer rely on (EIO and the like): missing, and the session ends on it (specs.md §17.1). *)
 Lose(d) == /\ sess' = [sess EXCEPT ![d] = 0]
            /\ cdisk' = [cdisk EXCEPT ![d] = "missing"]
+(* The end of a pass, its session and looks lost with it; with the link guard, its links kept in step first (GuardPick). *)
+AfterTakeIn ==
+    IF Guard = "none" THEN pc' = Idle /\ sess' = NoSess /\ look' = NoLooks
+    ELSE pc' = [ph |-> "guard", d |-> 1, f |-> 1, s |-> "link"] /\ UNCHANGED <<sess, look>>
 NextIdx(i, S) == LET c == {j \in S : j >= i} IN IF c = {} THEN NPairs + 1 ELSE Min(c)
 TrashIdx == {j \in 1..NPairs : tjob[PF(j)][PD(j)].on}
 CopyIdx == {j \in 1..NPairs : rjob[PF(j)][PD(j)].on /\ ~rjob[PF(j)][PD(j)].running}
@@ -196,6 +221,16 @@ CatDisk(f) == IF cfile[f].on /\ Presenting(f) # {}
 ViewDisk(f) == IF OpenAt(f) = {} THEN CatDisk(f)
                ELSE LET v == Max(OpenAt(f)) IN IF vops[v].k = "unlink" THEN 0 ELSE vops[v].d
 AllOnline == \A e \in Disks : Up(e) /\ cdisk[e] = "online"
+(* What the view reads a file from (view.Tree.Open, read.policy = "oldest"): the disk it presents. With the remedy
+   view-fallback of README.md's flaw 9, the next copy that holds the file at its path, in the order of §7, when the one
+   it presents from the catalog is no longer at its name, as a move of Atoll's own leaves it until its commit. *)
+HereAt(f, e) == crow[f][e].obj # 0 /\ vol[e][M(f)] = crow[f][e].obj
+ReadDisk(f) ==
+    LET d == ViewDisk(f)
+        next == {e \in Presenting(f) : HereAt(f, e)}
+    IN IF "view-fallback" \in Fixes /\ d # 0 /\ OpenAt(f) = {} /\ cfile[f].on /\ ~HereAt(f, d) /\ next # {}
+       THEN CHOOSE e \in next : \A x \in next : crow[f][e].obj <= crow[f][x].obj
+       ELSE d
 
 -----------------------------------------------------------------------------
 (* The start: each file of Start at its level or below, every copy a user's, verified. *)
@@ -222,7 +257,7 @@ Init ==
     /\ pc = Idle
     /\ sess = NoSess
     /\ look = NoLooks
-    /\ cnt = [user |-> 0, crash |-> 0, cut |-> 0, drop |-> 0, stop |-> 0]
+    /\ cnt = [user |-> 0, crash |-> 0, cut |-> 0, drop |-> 0, stop |-> 0, off |-> 0]
     /\ nver = NFiles
     \* vlast: the version a user last wrote through the view; 0 for no claim, as before any or once deleted through it
     /\ ghost = [written |-> {f \in Files : Start[f] # {}}, udest |-> {}, udel |-> {}, latest |-> [f \in Files |-> f], flags |-> {},
@@ -250,7 +285,7 @@ UserAct(d, vol1, objs1, gone, f, newv, deleted) ==
               !.written = IF newv = 0 THEN @ ELSE @ \cup {newv},
               !.latest = IF newv = 0 THEN @ ELSE [@ EXCEPT ![f] = newv],
               !.udel = IF deleted THEN @ \cup {gone} ELSE @,
-              !.udest = IF gone # 0 /\ ~Holds(objs2, dur2, gone) THEN @ \cup {gone} ELSE @,
+              !.udest = IF UserLost(objs2, dur2, vol1, gone) THEN @ \cup {gone} ELSE @,
               \* a change made directly on a disk is the passes' to take to the view: no claim on what it presents
               !.vlast = [@ EXCEPT ![f] = 0]]
        /\ UNCHANGED <<dstat, mgen, cat, pc, sess, look>>
@@ -333,10 +368,17 @@ PowerCut ==
     /\ UNCHANGED <<dur, dstat, mgen, cat, nver, ghost, vops, nextV>>
 
 (* The world but the power cut, none of which touches the view's journal or its process. *)
+(* §17: the user turns the link guard off in the configuration (trash.link_guard = false), once, at any moment. *)
+TurnOff ==
+    /\ Guard = "off" /\ cnt.off = 0
+    /\ cnt' = [cnt EXCEPT !.off = 1]
+    /\ UNCHANGED <<phys, cat, pc, sess, look, nver, ghost>>
+
 World ==
     \/ \E f \in Files, d \in Disks : UserModify(f, d) \/ UserRewrite(f, d) \/ UserReplace(f, d) \/ UserDelete(f, d) \/ UserCreate(f, d)
     \/ \E d \in Disks : Drop(d) \/ Return(d)
     \/ Crash
+    \/ TurnOff
 
 -----------------------------------------------------------------------------
 (* §15.12 steps 1 and 2: a pass begins with the mount check of every disk, recorded, and confirms each disk it may
@@ -361,35 +403,37 @@ PassStart ==
    with others it is "other", as a file that took the copy's name with its inode number would be; a row of no such
    object says nothing, and the inode is all there is. Both names leading to it are one file, edited in place since or
    not. *)
+(* The source of a move to the trash: the logical path, or for the link guard's the link (§17.2, "A kind = trash from a
+   link follows the table above with the link as its source, and nothing is ever found edited in place"). *)
+Src(p) == IF ops[p].link THEN Ln(ops[p].f) ELSE M(ops[p].f)
+
 TrashLook(d, p) ==
     LET f == ops[p].f
         key == ops[p].key
-        sr == Seen(d, M(f), key)
+        sr == Seen(d, Src(p), key)
         row == crow[f][d]
-        edited == row.obj # key \/ objs[key].gen # row.gen     \* both names lead to it, edited in place since
+        edited == ~ops[p].link /\ (row.obj # key \/ objs[key].gen # row.gen)     \* both names lead to it, edited since
         tg0 == Seen(d, X(p), key)
-        tg == IF tg0 = "same" /\ sr # "same" /\ row.obj = key /\ objs[key].gen # row.gen THEN "other" ELSE tg0
+        tg == IF ~ops[p].link /\ tg0 = "same" /\ sr # "same" /\ row.obj = key /\ objs[key].gen # row.gen THEN "other" ELSE tg0
     IN [tg |-> tg, sr |-> sr, edited |-> edited]
 
 (* What the table of §17.2 makes the two names hold, and whether the operation is done or undone. *)
 TrashNames(d, p) ==
-    LET f == ops[p].f
-        s == TrashLook(d, p)
+    LET s == TrashLook(d, p)
         v0 == vol[d]
     IN CASE s.tg = "same" /\ s.sr = "same" /\ s.edited -> [v0 EXCEPT ![X(p)] = 0]
-         [] s.tg = "same" /\ s.sr = "same" -> [v0 EXCEPT ![M(f)] = 0]
-         [] s.tg = "other" /\ s.sr = "absent" -> [v0 EXCEPT ![M(f)] = v0[X(p)], ![X(p)] = 0]
+         [] s.tg = "same" /\ s.sr = "same" -> [v0 EXCEPT ![Src(p)] = 0]
+         [] s.tg = "other" /\ s.sr = "absent" -> [v0 EXCEPT ![Src(p)] = v0[X(p)], ![X(p)] = 0]
          [] OTHER -> v0
 TrashOut(d, p) ==
     LET s == TrashLook(d, p) IN IF s.tg = "same" /\ ~(s.sr = "same" /\ s.edited) THEN "done" ELSE "undone"
 
 (* What resolving it does on the disk: the names as the table says, each made durable. *)
 TrashResolveNames(d, p) ==
-    LET f == ops[p].f
-        v1 == TrashNames(d, p)
+    LET v1 == TrashNames(d, p)
     IN /\ vol' = [vol EXCEPT ![d] = v1]
-       /\ dur' = [dur EXCEPT ![d][M(f)] = v1[M(f)], ![d][X(p)] = v1[X(p)]]
-       /\ objs' = SyncObjs(objs, {v1[M(f)], v1[X(p)]} \ {0})
+       /\ dur' = [dur EXCEPT ![d][Src(p)] = v1[Src(p)], ![d][X(p)] = v1[X(p)]]
+       /\ objs' = SyncObjs(objs, {v1[Src(p)], v1[X(p)]} \ {0})
 
 RepTrash(d, p) ==
     /\ TrashResolveNames(d, p)
@@ -414,11 +458,36 @@ RepCreate(d, p) ==
        /\ objs' = SyncObjs(objs1, {v1[M(f)], v1[T(q)]} \ {0})
        /\ pc' = [ph |-> "repcommit", d |-> d, p |-> p, out |-> IF tg = "same" THEN "done" ELSE "undone", keep |-> pt = "same"]
 
+(* §17.2: a purge (kind unlink), the transfer's of the SSD cache (§19): the file in the trash, by its inode: absent, its
+   folder synced, it finishes; same, it is undone, and the entry stays; other, undone (ops.recoverUnlink). *)
+RepUnlink(d, p) ==
+    LET n == X(ops[p].part)
+        s == Seen(d, n, ops[p].key)
+    IN /\ dur' = IF s = "absent" THEN [dur EXCEPT ![d][n] = 0] ELSE dur
+       /\ pc' = [ph |-> "repcommit", d |-> d, p |-> p, out |-> IF s = "absent" THEN "done" ELSE "undone", keep |-> FALSE]
+       /\ UNCHANGED <<objs, vol>>
+
+(* §17.2: the link guard's operations on a link: link finishes when the link is there with its inode, undone otherwise;
+   unlink finishes when nothing is there, undone otherwise; the file's names take the change time they find now, as what
+   it had before is gone with the crash (ops.recoverMakeLink, recoverDropLink), in the commit. What the link leads to is
+   synced first, as the move's names are. *)
+RepLink(d, p) ==
+    LET n == Ln(ops[p].f)
+        s == Seen(d, n, ops[p].key)
+        fin == IF ops[p].k = "link" THEN s = "same" ELSE s = "absent"
+    IN /\ dur' = [dur EXCEPT ![d][n] = vol[d][n]]
+       /\ objs' = SyncObjs(objs, {vol[d][n]} \ {0})
+       /\ pc' = [ph |-> "repcommit", d |-> d, p |-> p, out |-> IF fin THEN "done" ELSE "undone", keep |-> FALSE]
+       /\ UNCHANGED vol
+
 RepriseOp ==
     /\ pc.ph = "reprise" /\ InSess(pc.d) /\ Ok(pc.d) /\ PlannedOn(pc.d) # {}
     /\ LET d == pc.d
            p == Min(PlannedOn(d))
-       IN IF ops[p].k = "trash" THEN RepTrash(d, p) ELSE RepCreate(d, p)
+       IN CASE ops[p].k = "trash" -> RepTrash(d, p)
+            [] ops[p].k \in {"link", "unlink"} /\ ops[p].link -> RepLink(d, p)
+            [] ops[p].k = "unlink" -> RepUnlink(d, p)
+            [] OTHER -> RepCreate(d, p)
     /\ UNCHANGED <<dstat, mgen, cat, sess, look, cnt, nver, ghost>>
 
 (* A file whose last copy went: its pending copies and jobs go with it (catalog.dropFileIfEmpty), but for a pending copy
@@ -468,7 +537,8 @@ CreateFinish(d, p, cgRow, doubt) ==
        /\ crow' = IF ~cfile[f].on THEN crow
                   ELSE [crow EXCEPT ![f] = [e \in Disks |->
                           IF e = d THEN newRow
-                          ELSE IF verified /\ e = job.src THEN [crow[f][e] EXCEPT !.verified = TRUE]
+                          \* the source read against the file's hash: verified, in doubt no more (§14.2)
+                          ELSE IF verified /\ e = job.src THEN [crow[f][e] EXCEPT !.verified = TRUE, !.doubt = FALSE]
                           ELSE crow[f][e]]]
        /\ cfile' = IF cfile[f].on /\ verified /\ cfile[f].ver = 0
                    THEN [cfile EXCEPT ![f].ver = job.whash, ![f].size = Size(job.whash)] ELSE cfile
@@ -513,6 +583,22 @@ RepriseCommit ==
                     /\ UNCHANGED tick
                ELSE /\ ops' = [ops EXCEPT ![p].st = "undone"]
                     /\ UNCHANGED <<cfile, crow, rjob, tjob, tick, ghost>>
+          ELSE IF ops[p].link
+          THEN \* a link or its removal: done, the copy's row takes the change time found now (§17.2); with the remedy
+               \* link-keep of README.md's flaw 11 it keeps the one it recorded, for the next look to read the change,
+               \* and with link-doubt it takes it unverified, as a copy's reprise with no record does (§14.2)
+               LET f == ops[p].f
+                   key == ops[p].key
+                   ours == pc.out = "done" /\ crow[f][d].st \in {"ok", "stale"} /\ crow[f][d].obj = key
+               IN /\ ops' = [ops EXCEPT ![p].st = pc.out]
+                  /\ crow' = IF ~ours \/ "link-keep" \in Fixes THEN crow
+                             ELSE IF "link-doubt" \in Fixes
+                             THEN [crow EXCEPT ![f][d].cg = objs[key].cg, ![f][d].verified = FALSE, ![f][d].doubt = TRUE]
+                             ELSE [crow EXCEPT ![f][d].cg = objs[key].cg]
+                  /\ UNCHANGED <<cfile, rjob, tjob, tick, ghost>>
+          ELSE IF ops[p].k = "unlink"
+          THEN /\ ops' = [ops EXCEPT ![p].st = pc.out]
+               /\ UNCHANGED <<cfile, crow, rjob, tjob, tick, ghost>>
           ELSE IF pc.out = "done"
                THEN /\ CreateFinish(d, p, RepriseRow(d, p).cg, RepriseRow(d, p).doubt)
                     /\ ghost' = Flag(ghost, "inv7", ~Durable(d, M(ops[pc.p].f), ops[pc.p].key))
@@ -781,7 +867,7 @@ TrashPick ==
           ELSE IF nextOp > MaxOps THEN /\ pc' = nexti /\ UNCHANGED <<cat, sess>>      \* the model's bound
           ELSE \* §17.1 step 1: the ops row planned, the trash row and the event, in one transaction.
                /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "trash", d |-> d, f |-> f, key |-> crow[f][d].obj, st |-> "planned",
-                                                  part |-> 0, reason |-> job.reason]]
+                                                  part |-> 0, reason |-> job.reason, link |-> FALSE]]
                /\ nextOp' = nextOp + 1
                /\ pc' = [ph |-> "tstep", i |-> i, p |-> nextOp, s |-> "journaled"]
                /\ UNCHANGED <<cfile, crow, cdisk, rjob, tjob, tick, sess>>
@@ -924,22 +1010,32 @@ TrashLost ==
 
 Leaving(f) == \E d \in Disks : tjob[f][d].on /\ tjob[f][d].reason = "deleted"
 
+(* §19: a file with a copy on a cache disk is resident there or leaves it, which the caller tells the plan: the time of
+   its residency and replication.window, which the model leaves out, so that a plan may find it either way while
+   decisions may wait (Waits), and leaving otherwise. *)
+OnCache(f) == \E c \in CacheDisks : crow[f][c].st \in {"ok", "stale"}
+
 PlanStep ==
     /\ pc.ph = "plan"
-    /\ \E past \in SUBSET {d \in Disks : cdisk[d] = "missing"} :
+    /\ \E past \in SUBSET {d \in Disks : cdisk[d] = "missing"},
+          res \in (IF Waits THEN SUBSET {f \in Files : OnCache(f)} ELSE {{}}) :
          /\ (Grace \/ past = {})
+         \* §13.4, §19: a copy on a cache disk counts toward no level, its file resident or leaving: a resident file
+         \* gets no job (cache.mirror and cache.replicate_early left out), one that leaves its copies on data disks; and
+         \* a cache disk is never a candidate.
          /\ LET counts(f, d) ==
-                    \/ crow[f][d].st = "ok" /\ (cdisk[d] = "online" \/ d \notin past)
-                    \/ crow[f][d].st = "pending" /\ cdisk[d] = "online" /\ ~Leaving(f)
-                    \* A pending copy whose operation only a reprise can conclude counts as an ok copy there would.
-                    \/ crow[f][d].st = "pending" /\ rjob[f][d].running /\ (cdisk[d] = "online" \/ d \notin past)
+                    /\ d \notin CacheDisks
+                    /\ \/ crow[f][d].st = "ok" /\ (cdisk[d] = "online" \/ d \notin past)
+                       \/ crow[f][d].st = "pending" /\ cdisk[d] = "online" /\ ~Leaving(f)
+                       \* A pending copy whose operation only a reprise can conclude counts as an ok copy there would.
+                       \/ crow[f][d].st = "pending" /\ rjob[f][d].running /\ (cdisk[d] = "online" \/ d \notin past)
                 \* ... and is never canceled (flaw 2 of README.md, fixed).
                 cancel(f, d) == crow[f][d].st = "pending" /\ ~counts(f, d) /\ ~rjob[f][d].running
                 count(f) == Cardinality({d \in Disks : counts(f, d)})
                 sources(f) == {d \in Disks : crow[f][d].st = "ok" /\ crow[f][d].gone = "no" /\ cdisk[d] = "online"}
                 held(f) == {Phys[e] : e \in {x \in Disks : crow[f][x].st # "none"}}
-                cands(f) == {d \in Disks : cdisk[d] = "online" /\ crow[f][d].st = "none" /\ Phys[d] \notin held(f)}
-                queue(f) == /\ cfile[f].on /\ ~cfile[f].conflict /\ ~Leaving(f)
+                cands(f) == {d \in Disks \ CacheDisks : cdisk[d] = "online" /\ crow[f][d].st = "none" /\ Phys[d] \notin held(f)}
+                queue(f) == /\ cfile[f].on /\ ~cfile[f].conflict /\ ~Leaving(f) /\ f \notin res
                             /\ count(f) < Level /\ sources(f) # {} /\ cands(f) # {}
                 target(f) == Min(cands(f))
             IN /\ crow' = [f \in Files |-> [d \in Disks |->
@@ -977,8 +1073,10 @@ CopyPick ==
            r == crow[f][s]
            nexti == [ph |-> "copy", i |-> i + 1]
        IN IF i > NPairs
-          THEN \* the pass ends; with the view, once its parts are settled and its operations taken in (TakeIn)
-               /\ IF ViewActs = {} THEN pc' = Idle /\ sess' = NoSess /\ look' = NoLooks
+          THEN \* the pass ends; with the SSD cache, once its transfers ran (XferPick); with the view, once its parts are
+               \* settled and its operations taken in (TakeIn)
+               /\ IF CacheDisks # {} THEN pc' = [ph |-> "xfer", f |-> 1] /\ UNCHANGED <<sess, look>>
+                  ELSE IF ViewActs = {} THEN AfterTakeIn
                   ELSE pc' = [ph |-> "settle"] /\ UNCHANGED <<sess, look>>
                /\ UNCHANGED <<cat>>
           ELSE IF ~InSess(d) \/ ~InSess(s) THEN /\ pc' = nexti /\ UNCHANGED <<cat, sess, look>>  \* disk-unavailable
@@ -999,7 +1097,7 @@ CopyPick ==
                \* operation recorded of its rename is not this one's.
                LET q == IF job.part # 0 THEN job.part ELSE nextOp IN
                /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "create", d |-> d, f |-> f, key |-> 0, st |-> "planned",
-                                                  part |-> q, reason |-> "none"]]
+                                                  part |-> q, reason |-> "none", link |-> FALSE]]
                /\ nextOp' = nextOp + 1
                /\ rjob' = [rjob EXCEPT ![f][d].running = TRUE, ![f][d].part = q, ![f][d].pop = 0, ![f][d].pcg = 0]
                /\ pc' = [ph |-> "cstep", i |-> i, p |-> nextOp, s |-> "journaled", o |-> 0, cg |-> 0]
@@ -1184,6 +1282,378 @@ CopyLost ==
     /\ UNCHANGED <<phys, cfile, crow, ops, nextOp, rjob, tjob, tick, look, cnt, nver, ghost>>
 
 -----------------------------------------------------------------------------
+(* §19 The SSD cache's transfer (internal/jobs/transfer.go, trash.Session.Transfer): after the copies, each file that
+   leaves the cache is planned again alone, from the catalog as it stands (watch.CacheTransfers): once the copies on
+   data disks that count reach its level, each ok, verified since it last changed, at its path and on a disk online,
+   with no job and no pending copy, its copy on a cache disk, ok, at its path and on a disk online, gets a transfer.
+   It waits while an operation of the view no pass has taken in touches its path (touchedByView). Under the file's lock,
+   a user copy there hands its part to a copy on a data disk first, in one transaction (catalog.HandOver); then the copy
+   goes to the cache's trash as surplus, a move checked against its row (§17.1), and is purged from there at once, a
+   journaled unlink (§17.4). The model takes the look at the copy and its move as one step, as for the daemon's other
+   moves (README.md). *)
+
+Data == Disks \ CacheDisks
+(* The copies on data disks that count toward the file's level (§13.4), and its copies on a cache disk that may go. *)
+XCounted(f) == {d \in Data : crow[f][d].st = "ok"}
+XCached(f) == {c \in CacheDisks : crow[f][c].st = "ok" /\ crow[f][c].gone = "no" /\ cdisk[c] = "online"}
+XDue(f) ==
+    /\ cfile[f].on /\ ~cfile[f].conflict /\ ~Leaving(f)
+    /\ ~\E d \in Disks : crow[f][d].st = "pending" \/ rjob[f][d].on
+    /\ Cardinality(XCounted(f)) >= Level
+    /\ \A d \in XCounted(f) : crow[f][d].verified /\ crow[f][d].gone = "no" /\ cdisk[d] = "online"
+    /\ XCached(f) # {}
+(* transferHeir: a copy ok on a data disk that can be read, a user copy first, then the first seen, then by position. *)
+XHeirs(f) == {d \in Data : crow[f][d].st = "ok" /\ cdisk[d] = "online"}
+XHeir(f) ==
+    LET H == XHeirs(f)
+        U == {d \in H : crow[f][d].by = "user"}
+        S == IF U # {} THEN U ELSE H
+        m == Min({crow[f][d].seen : d \in S})
+    IN Min({d \in S : crow[f][d].seen = m})
+(* What the remedy xfer-look of README.md's flaw 8 sees right before the purge: each copy on a data disk that counts,
+   as its row says, by its inode, size and times, on a disk the session can read. *)
+XHeld(f) ==
+    \A d \in XCounted(f) : Ok(d) /\ vol[d][M(f)] = crow[f][d].obj /\ crow[f][d].obj # 0
+                           /\ objs[crow[f][d].obj].gen = crow[f][d].gen /\ objs[crow[f][d].obj].cg = crow[f][d].cg
+
+XferPick ==
+    /\ pc.ph = "xfer" /\ pc.f <= NFiles
+    /\ LET f == pc.f
+           next == [ph |-> "xfer", f |-> f + 1]
+       IN IF ~XDue(f) \/ OpenAt(f) # {}
+          THEN /\ pc' = next /\ UNCHANGED <<crow, sess, cdisk>>
+          ELSE LET c == Min(XCached(f)) IN
+               IF ~InSess(c) THEN /\ pc' = next /\ UNCHANGED <<crow, sess, cdisk>>       \* disk-unavailable
+               ELSE IF ~Ok(c) THEN /\ Lose(c) /\ pc' = next /\ UNCHANGED crow
+               ELSE IF crow[f][c].by = "user"
+               THEN \* no heir: changed, and the copy on the cache stays
+                    IF XHeirs(f) = {} THEN /\ pc' = next /\ UNCHANGED <<crow, sess, cdisk>>
+                    ELSE /\ crow' = [crow EXCEPT ![f][XHeir(f)].by = "user", ![f][c].by = "atoll"]
+                         /\ pc' = [ph |-> "xjournal", f |-> f, c |-> c]
+                         /\ UNCHANGED <<sess, cdisk>>
+               ELSE /\ pc' = [ph |-> "xjournal", f |-> f, c |-> c] /\ UNCHANGED <<crow, sess, cdisk>>
+    /\ UNCHANGED <<phys, cfile, ops, nextOp, rjob, tjob, tick, look, cnt, nver, ghost>>
+
+(* Not due yet: its residency, replication.window, or a battery (§20). *)
+XferSkip ==
+    /\ pc.ph = "xfer" /\ pc.f <= NFiles /\ Waits /\ XDue(pc.f)
+    /\ pc' = [ph |-> "xfer", f |-> pc.f + 1]
+    /\ UNCHANGED <<phys, cat, sess, look, cnt, nver, ghost>>
+
+XferDone ==
+    /\ pc.ph = "xfer" /\ pc.f > NFiles
+    /\ IF ViewActs = {} THEN AfterTakeIn
+       ELSE pc' = [ph |-> "settle"] /\ UNCHANGED <<sess, look>>
+    /\ UNCHANGED <<phys, cat, cnt, nver, ghost>>
+
+(* §17.1 step 1: the operation trash, surplus, planned, and its trash row, in one transaction (catalog.BeginTrash). With
+   the remedy xfer-hide of README.md's flaw 9, the same transaction starts the copy's clock, as for one a look did not
+   find at its name, so that the view presents the file from a data disk before the copy leaves its name. *)
+XferJournal ==
+    /\ pc.ph = "xjournal"
+    /\ LET f == pc.f
+           c == pc.c
+       \* with the remedy view-held of README.md's flaw 10, the view's operations are read again in this transaction
+       IN IF nextOp > MaxOps \/ ("view-held" \in Fixes /\ OpenAt(f) # {})
+          THEN /\ pc' = [ph |-> "xfer", f |-> f + 1] /\ UNCHANGED <<ops, nextOp, crow>>     \* the model's bound
+          ELSE /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "trash", d |-> c, f |-> f, key |-> crow[f][c].obj, st |-> "planned",
+                                                  part |-> 0, reason |-> "surplus", link |-> FALSE]]
+               /\ nextOp' = nextOp + 1
+               /\ crow' = IF "xfer-hide" \in Fixes THEN [crow EXCEPT ![f][c].gone = "own"] ELSE crow
+               /\ pc' = [ph |-> "xstep", f |-> f, p |-> nextOp, s |-> "journaled"]
+    /\ UNCHANGED <<phys, cfile, cdisk, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
+
+(* §17.1 steps 2 to 4: the copy compared with its row right before the move, then the move without replacing
+   anything. Invariant 2: the copy that leaves the library is an Atoll copy, and its file keeps a user copy. *)
+XferMove ==
+    /\ pc.ph = "xstep" /\ pc.s = "journaled"
+    /\ LET p == pc.p
+           f == ops[p].f
+           d == ops[p].d
+           key == ops[p].key
+           untouched == /\ vol[d][M(f)] = key /\ key # 0 /\ crow[f][d].obj = key
+                        /\ objs[key].gen = crow[f][d].gen /\ objs[key].cg = crow[f][d].cg
+       IN /\ Ok(d)
+          /\ IF ~untouched
+             THEN \* changed: nothing moved, undone at once; with xfer-hide, the copy's clock stops again
+                  /\ ops' = [ops EXCEPT ![p].st = "undone"]
+                  /\ crow' = IF "xfer-hide" \in Fixes /\ crow[f][d].st # "none" THEN [crow EXCEPT ![f][d].gone = "no"] ELSE crow
+                  /\ pc' = [ph |-> "xfer", f |-> f + 1]
+                  /\ UNCHANGED <<vol, ghost>>
+             ELSE /\ vol' = [vol EXCEPT ![d][M(f)] = 0, ![d][X(p)] = key]
+                  /\ ghost' = Flag(ghost, "inv2", crow[f][d].by = "user" \/
+                                   ~\E e \in Disks \ {d} : crow[f][e].st = "ok" /\ crow[f][e].by = "user")
+                  /\ pc' = [pc EXCEPT !.s = "moved"]
+                  /\ UNCHANGED <<ops, crow>>
+    /\ UNCHANGED <<objs, dur, dstat, mgen, cfile, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>
+
+(* §17.1 step 5: fsync of the file at its new name and of the trash's folder, then of the source's folder. *)
+XferSync ==
+    /\ pc.ph = "xstep" /\ pc.s \in {"moved", "tsynced"}
+    /\ LET p == pc.p
+           d == ops[p].d
+           n == IF pc.s = "moved" THEN X(p) ELSE M(ops[p].f)
+       IN /\ Ok(d)
+          /\ dur' = [dur EXCEPT ![d][n] = vol[d][n]]
+          /\ objs' = SyncObjs(objs, {vol[d][n]} \ {0})
+    /\ pc' = [pc EXCEPT !.s = IF pc.s = "moved" THEN "tsynced" ELSE "ssynced"]
+    /\ UNCHANGED <<vol, dstat, mgen, cat, sess, look, cnt, nver, ghost>>
+
+(* §17.1 step 6: the operation done and the copy's row removed (catalog.FinishTrash); then its purge. *)
+XferCommit ==
+    /\ pc.ph = "xstep" /\ pc.s = "ssynced"
+    /\ LET p == pc.p
+           d == ops[p].d
+       IN /\ TrashFinish(d, p)
+          /\ ghost' = Flag(ghost, "inv7", ~Durable(d, X(p), ops[p].key) \/ dur[d][M(ops[p].f)] = ops[p].key)
+    /\ pc' = IF "xfer-keep" \in Fixes THEN [ph |-> "xfer", f |-> pc.f + 1] ELSE [ph |-> "xpurge", f |-> pc.f, p |-> pc.p]
+    /\ UNCHANGED <<phys, cdisk, nextOp, tick, sess, look, cnt, nver>>
+
+(* §17.4: the purge of the entry, an operation unlink journaled (catalog.BeginFromTrash), whose file_key is the entry's. *)
+XferPurgeJournal ==
+    /\ pc.ph = "xpurge"
+    /\ LET p == pc.p
+           f == pc.f
+       IN IF nextOp > MaxOps
+          THEN /\ pc' = [ph |-> "xfer", f |-> f + 1] /\ UNCHANGED <<ops, nextOp>>     \* the model's bound
+          ELSE /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "unlink", d |-> ops[p].d, f |-> f, key |-> ops[p].key, st |-> "planned",
+                                                  part |-> p, reason |-> "surplus", link |-> FALSE]]
+               /\ nextOp' = nextOp + 1
+               /\ pc' = [ph |-> "xstep", f |-> f, p |-> nextOp, s |-> "pjournaled"]
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
+
+(* ops.PurgeEntry: the file in the trash looked at by its inode, then unlinked: another file there stays, undone. With
+   the remedy xfer-look, the copies on data disks that count are looked at too, and one that is not as its row says, or
+   on a disk that cannot be read, keeps the entry in the trash, undone. *)
+XferPurge ==
+    /\ pc.ph = "xstep" /\ pc.s = "pjournaled"
+    /\ LET q == pc.p
+           d == ops[q].d
+           n == X(ops[q].part)
+       IN /\ Ok(d)
+          /\ IF Seen(d, n, ops[q].key) = "other" \/ ("xfer-look" \in Fixes /\ ~XHeld(pc.f))
+             THEN /\ ops' = [ops EXCEPT ![q].st = "undone"]
+                  /\ pc' = [ph |-> "xfer", f |-> pc.f + 1]
+                  /\ UNCHANGED vol
+             ELSE /\ vol' = [vol EXCEPT ![d][n] = 0]
+                  /\ pc' = [pc EXCEPT !.s = "unlinked"]
+                  /\ UNCHANGED ops
+    /\ UNCHANGED <<objs, dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
+
+(* The folder of the entry synced, then the commit (catalog.FinishPurge). *)
+XferPurgeSync ==
+    /\ pc.ph = "xstep" /\ pc.s = "unlinked"
+    /\ LET q == pc.p
+           d == ops[q].d
+       IN /\ Ok(d)
+          /\ dur' = [dur EXCEPT ![d][X(ops[q].part)] = vol[d][X(ops[q].part)]]
+    /\ pc' = [pc EXCEPT !.s = "psynced"]
+    /\ UNCHANGED <<objs, vol, dstat, mgen, cat, sess, look, cnt, nver, ghost>>
+
+XferPurgeCommit ==
+    /\ pc.ph = "xstep" /\ pc.s = "psynced"
+    /\ ops' = [ops EXCEPT ![pc.p].st = "done"]
+    /\ ghost' = Flag(ghost, "inv7", dur[ops[pc.p].d][X(ops[pc.p].part)] = ops[pc.p].key)
+    /\ pc' = [ph |-> "xfer", f |-> pc.f + 1]
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>
+
+(* A disk that cannot be relied on at any step: its operation stays planned, the disk missing (§17.1). *)
+XferLost ==
+    /\ pc.ph = "xstep" /\ ~Ok(ops[pc.p].d)
+    /\ Lose(ops[pc.p].d)
+    /\ pc' = [ph |-> "xfer", f |-> pc.f + 1]
+    /\ UNCHANGED <<phys, cfile, crow, ops, nextOp, rjob, tjob, tick, look, cnt, nver, ghost>>
+
+-----------------------------------------------------------------------------
+(* §17 The link guard (trash.Session.Guard, solver.PlanLinks, ops/linkguard.go): once everything else of a pass ran,
+   on each disk it walked and can write to, each file's link at <workdir>/links/<file id> is decided against the
+   catalog: one that leads to its file's copy stays, or with the guard off goes, but for a copy the last look did not
+   find there, whose data the link may hold alone; one whose data is another copy found there, or an entry of the
+   trash, goes (kind unlink); any other's data lost every name Atoll knows, as a deletion or a replacement made around
+   Atoll leaves it, and goes to the trash from the link (kind trash), overwritten when its file still has a copy on that
+   disk, deleted otherwise, but for data the library's name still holds, as a file a rule now ignores keeps it, whose
+   link only goes. Then the copy found there without its link gets one (kind link). Each operation journaled, made, the
+   links folder synced, then committed (catalog.BeginLinks, EndLinks); a link made or removed moves its file's change
+   time, which the copy's row takes when it recorded the one just before (§17.1, step 6). The look before each and the
+   act are one step, as for the daemon's moves (README.md); the path a link goes to the trash at is the file's, as the
+   last copy-gone event of the disk gives it once the file's row went. *)
+
+GuardOn == Guard = "on" \/ (Guard = "off" /\ cnt.off = 0)
+(* The inodes of the entries of a disk's trash, as the catalog has them (catalog.TrashKeys). *)
+TrashKeys(d) == {ops[p].key : p \in {q \in OpIds : ops[q].k = "trash" /\ ops[q].d = d /\ ops[q].st = "done"}}
+(* The inodes of the copies of a disk that the last look found there. *)
+CopyKeys(d) == {crow[g][d].obj : g \in {h \in Files : crow[h][d].st \in {"ok", "stale"} /\ crow[h][d].gone = "no"}}
+(* What becomes of the link of file f on disk d (PlanLinks). *)
+LinkAct(d, f) ==
+    LET l == vol[d][Ln(f)]
+        r == crow[f][d]
+        mine == r.st \in {"ok", "stale"} /\ r.obj # 0 /\ r.obj = l
+    IN CASE l = 0 -> "none"
+         [] mine /\ (GuardOn \/ r.gone # "no") -> "keep"
+         [] mine \/ l \in CopyKeys(d) \/ l \in TrashKeys(d) -> "unlink"
+         [] OTHER -> "trash"
+(* Whether the copy of file f on disk d gets a link: the guard on, found there with its inode, and no link there. *)
+LinkMakes(d, f) ==
+    LET r == crow[f][d] IN GuardOn /\ r.st \in {"ok", "stale"} /\ r.gone = "no" /\ r.obj # 0 /\ vol[d][Ln(f)] = 0
+GuardNextFile(d, f) ==
+    IF f < NFiles THEN [ph |-> "guard", d |-> d, f |-> f + 1, s |-> "link"] ELSE [ph |-> "guard", d |-> d + 1, f |-> 1, s |-> "link"]
+GuardMake(d, f) == [ph |-> "guard", d |-> d, f |-> f, s |-> "make"]
+
+GuardPick ==
+    /\ pc.ph = "guard" /\ pc.d <= NDisks
+    /\ LET d == pc.d
+           f == pc.f
+           l == vol[d][Ln(f)]
+           act == LinkAct(d, f)
+           nextd == [ph |-> "guard", d |-> d + 1, f |-> 1, s |-> "link"]
+       IN IF ~InSess(d) \/ cdisk[d] # "online" THEN /\ pc' = nextd /\ UNCHANGED <<ops, nextOp, sess, cdisk>>
+          ELSE IF ~Ok(d) THEN /\ Lose(d) /\ pc' = nextd /\ UNCHANGED <<ops, nextOp>>
+          ELSE IF pc.s = "link" /\ act \in {"unlink", "trash"} /\ nextOp <= MaxOps
+          THEN IF act = "unlink" \/ vol[d][M(f)] = l
+               THEN /\ ops' = [ops EXCEPT ![nextOp] = [NoOp EXCEPT !.k = "unlink", !.d = d, !.f = f, !.key = l, !.st = "planned",
+                                                        !.link = TRUE]]
+                    /\ nextOp' = nextOp + 1
+                    /\ pc' = [ph |-> "gstep", d |-> d, f |-> f, p |-> nextOp, s |-> "ujournaled", pr |-> 0]
+                    /\ UNCHANGED <<sess, cdisk>>
+               ELSE /\ ops' = [ops EXCEPT ![nextOp] = [NoOp EXCEPT !.k = "trash", !.d = d, !.f = f, !.key = l, !.st = "planned",
+                                                        !.link = TRUE,
+                                                        !.reason = IF crow[f][d].st # "none" THEN "overwritten" ELSE "deleted"]]
+                    /\ nextOp' = nextOp + 1
+                    /\ pc' = [ph |-> "gstep", d |-> d, f |-> f, p |-> nextOp, s |-> "tjournaled", pr |-> 0]
+                    /\ UNCHANGED <<sess, cdisk>>
+          ELSE IF pc.s = "link" THEN /\ pc' = GuardMake(d, f) /\ UNCHANGED <<ops, nextOp, sess, cdisk>>
+          ELSE IF LinkMakes(d, f) /\ nextOp <= MaxOps
+          THEN /\ ops' = [ops EXCEPT ![nextOp] = [NoOp EXCEPT !.k = "link", !.d = d, !.f = f, !.key = crow[f][d].obj, !.st = "planned",
+                                                  !.link = TRUE]]
+               /\ nextOp' = nextOp + 1
+               /\ pc' = [ph |-> "gstep", d |-> d, f |-> f, p |-> nextOp, s |-> "mjournaled", pr |-> 0]
+               /\ UNCHANGED <<sess, cdisk>>
+          ELSE /\ pc' = GuardNextFile(d, f) /\ UNCHANGED <<ops, nextOp, sess, cdisk>>
+    /\ UNCHANGED <<phys, cfile, crow, rjob, tjob, tick, look, cnt, nver, ghost>>
+
+GuardEnd ==
+    /\ pc.ph = "guard" /\ pc.d > NDisks
+    /\ pc' = Idle /\ sess' = NoSess /\ look' = NoLooks
+    /\ UNCHANGED <<phys, cat, cnt, nver, ghost>>
+
+(* ops.DropLink: the link must lead to the operation's inode, which must have another name; one gone already is fine;
+   one that leads to another file, or that is its data's last name (ErrLastName), stays, undone. *)
+GuardDrop ==
+    /\ pc.ph = "gstep" /\ pc.s = "ujournaled"
+    /\ LET p == pc.p
+           d == pc.d
+           f == pc.f
+           key == ops[p].key
+           seen == Seen(d, Ln(f), key)
+       IN /\ Ok(d)
+          /\ IF seen = "absent"
+             THEN /\ pc' = [pc EXCEPT !.s = "unlinked", !.pr = 0] /\ UNCHANGED <<objs, vol, ops>>
+             ELSE IF seen = "other" \/ ~\E n \in Names \ {Ln(f)} : vol[d][n] = key
+             THEN /\ ops' = [ops EXCEPT ![p].st = "undone"]
+                  /\ pc' = GuardMake(d, f)
+                  /\ UNCHANGED <<objs, vol>>
+             ELSE /\ vol' = [vol EXCEPT ![d][Ln(f)] = 0]
+                  /\ objs' = [objs EXCEPT ![key].cg = @ + 1]
+                  /\ pc' = [pc EXCEPT !.s = "unlinked", !.pr = objs[key].cg + 1]
+                  /\ UNCHANGED ops
+    /\ UNCHANGED <<dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
+
+(* ops.MakeLink: the copy's name must still hold the operation's inode, and the link's be free; the link made, its
+   change time moved for every name. *)
+GuardLink ==
+    /\ pc.ph = "gstep" /\ pc.s = "mjournaled"
+    /\ LET p == pc.p
+           d == pc.d
+           f == pc.f
+           key == ops[p].key
+       IN /\ Ok(d)
+          /\ IF vol[d][M(f)] # key \/ vol[d][Ln(f)] # 0
+             THEN /\ ops' = [ops EXCEPT ![p].st = "undone"]      \* ErrGone, ErrPathTaken: nothing made
+                  /\ pc' = GuardNextFile(d, f)
+                  /\ UNCHANGED <<objs, vol>>
+             ELSE /\ vol' = [vol EXCEPT ![d][Ln(f)] = key]
+                  /\ objs' = [objs EXCEPT ![key].cg = @ + 1]
+                  /\ pc' = [pc EXCEPT !.s = "linked", !.pr = objs[key].cg + 1]
+                  /\ UNCHANGED ops
+    /\ UNCHANGED <<dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
+
+(* The file at its new name synced (syncEntry), then the links folder (LinksFolder.Sync). *)
+GuardSync ==
+    /\ pc.ph = "gstep" /\ pc.s \in {"unlinked", "linked"}
+    /\ LET d == pc.d
+           n == Ln(pc.f)
+       IN /\ Ok(d)
+          /\ dur' = [dur EXCEPT ![d][n] = vol[d][n]]
+          /\ objs' = SyncObjs(objs, {vol[d][n]} \ {0})
+    /\ pc' = [pc EXCEPT !.s = IF pc.s = "linked" THEN "lsynced" ELSE "usynced"]
+    /\ UNCHANGED <<vol, dstat, mgen, cat, sess, look, cnt, nver, ghost>>
+
+(* catalog.EndLinks: done, and the copy's row takes the change time the link gave it when it recorded the one before:
+   pr is that change time, the one before plus 1, 0 for none. *)
+GuardCommit ==
+    /\ pc.ph = "gstep" /\ pc.s \in {"usynced", "lsynced"}
+    /\ LET p == pc.p
+           d == pc.d
+           f == pc.f
+           key == ops[p].key
+       IN /\ ops' = [ops EXCEPT ![p].st = "done"]
+          /\ crow' = IF pc.pr > 0 /\ crow[f][d].st \in {"ok", "stale"} /\ crow[f][d].obj = key /\ crow[f][d].cg + 1 = pc.pr
+                     THEN [crow EXCEPT ![f][d].cg = pc.pr] ELSE crow
+          /\ ghost' = Flag(ghost, "inv7", IF pc.s = "lsynced" THEN ~Durable(d, Ln(f), key) ELSE dur[d][Ln(f)] = key)
+          /\ pc' = IF pc.s = "lsynced" THEN GuardNextFile(d, f) ELSE GuardMake(d, f)
+    /\ UNCHANGED <<phys, cfile, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>
+
+(* ops.LinkToTrash, as ToTrash moves a copy (§17.1): the link must still lead to the operation's inode, then the move
+   without replacing anything, the look after, the syncs of the target and of the links folder, and the commit
+   (catalog.FinishTrash), which records nothing of a copy. *)
+GuardTrash ==
+    /\ pc.ph = "gstep" /\ pc.s = "tjournaled"
+    /\ LET p == pc.p
+           d == pc.d
+           f == pc.f
+           key == ops[p].key
+           replacing == ops[p].reason = "deleted" /\ objs[key].ver = ghost.latest[f] /\ ghost.latest[f] \notin ghost.udel
+       IN /\ Ok(d)
+          /\ IF vol[d][Ln(f)] # key
+             THEN \* nothing moved, resolved at once by the table: undone
+                  /\ ops' = [ops EXCEPT ![p].st = "undone"]
+                  /\ pc' = GuardMake(d, f)
+                  /\ UNCHANGED <<objs, vol, ghost>>
+             ELSE /\ vol' = [vol EXCEPT ![d][Ln(f)] = 0, ![d][X(p)] = key]
+                  /\ objs' = [objs EXCEPT ![key].cg = @ + 1]
+                  /\ ghost' = Flag(ghost, "inv10-replacement", replacing)
+                  /\ pc' = [pc EXCEPT !.s = "tmoved"]
+                  /\ UNCHANGED ops
+    /\ UNCHANGED <<dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>
+
+GuardTrashSync ==
+    /\ pc.ph = "gstep" /\ pc.s \in {"tmoved", "ttsynced"}
+    /\ LET p == pc.p
+           d == pc.d
+           n == IF pc.s = "tmoved" THEN X(p) ELSE Ln(pc.f)
+       IN /\ Ok(d)
+          /\ dur' = [dur EXCEPT ![d][n] = vol[d][n]]
+          /\ objs' = SyncObjs(objs, {vol[d][n]} \ {0})
+    /\ pc' = [pc EXCEPT !.s = IF pc.s = "tmoved" THEN "ttsynced" ELSE "tssynced"]
+    /\ UNCHANGED <<vol, dstat, mgen, cat, sess, look, cnt, nver, ghost>>
+
+GuardTrashCommit ==
+    /\ pc.ph = "gstep" /\ pc.s = "tssynced"
+    /\ LET p == pc.p
+           d == pc.d
+       IN /\ ops' = [ops EXCEPT ![p].st = "done"]
+          /\ ghost' = Flag(ghost, "inv7", ~Durable(d, X(p), ops[p].key) \/ dur[d][Ln(pc.f)] = ops[p].key)
+    /\ pc' = GuardMake(pc.d, pc.f)
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>
+
+(* A disk that cannot be relied on at any step: its operation stays planned, the disk missing. *)
+GuardLost ==
+    /\ pc.ph = "gstep" /\ ~Ok(pc.d)
+    /\ Lose(pc.d)
+    /\ pc' = [ph |-> "guard", d |-> pc.d + 1, f |-> 1, s |-> "link"]
+    /\ UNCHANGED <<phys, cfile, crow, ops, nextOp, rjob, tjob, tick, look, cnt, nver, ghost>>
+
+-----------------------------------------------------------------------------
 (* §21.2, Copies written in parallel and Taken in: what a pass makes of the view's operations. The pass waits at the
    paths of those still planned (PlannedAt), and a copy the view sent to the trash is gone by the user (WalkStart,
    DecideFile); these are the steps of its own. *)
@@ -1258,10 +1728,12 @@ Agrees(f) ==
 TakeIn ==
     /\ pc.ph = "takein"
     /\ LET held(f) == LET H == {v \in OpenAt(f) : vops[v].st # "done"} IN IF H = {} THEN MaxVOps + 1 ELSE Min(H)
+           \* with the remedy view-held of README.md's flaw 10, what the view holds open to write stays open until closed
            T0 == {v \in VIds : vops[v].k \in {"create", "write", "unlink"} /\ vops[v].st = "done" /\ ~vops[v].taken
-                               /\ v < held(vops[v].f) /\ Agrees(vops[v].f)}
+                               /\ v < held(vops[v].f) /\ Agrees(vops[v].f)
+                               /\ ~("view-held" \in Fixes /\ vfile.open /\ vfile.f = vops[v].f)}
        IN vops' = [v \in VIds |-> IF v \in T0 THEN [vops[v] EXCEPT !.taken = TRUE] ELSE vops[v]]
-    /\ pc' = Idle /\ sess' = NoSess /\ look' = NoLooks
+    /\ AfterTakeIn
     /\ UNCHANGED <<phys, cat, cnt, nver, ghost, nextV, vpc, vsess, vpart, vfile>>
 
 -----------------------------------------------------------------------------
@@ -1280,7 +1752,7 @@ VUserAct(d, vol1, objs1, gone, f, newv, named) ==
        /\ nver' = newv
        /\ cnt' = [cnt EXCEPT !.user = @ + 1]
        /\ ghost' = [ghost EXCEPT !.written = @ \cup {newv}, !.latest = [@ EXCEPT ![f] = newv],
-              !.udest = IF gone # 0 /\ ~Holds(objs2, dur2, gone) THEN @ \cup {gone} ELSE @,
+              !.udest = IF UserLost(objs2, dur2, vol1, gone) THEN @ \cup {gone} ELSE @,
               !.vlast = IF named THEN [@ EXCEPT ![f] = newv] ELSE @]
 
 (* The latest version a user wrote of a file, which no user deleted, held by an object. *)
@@ -1401,7 +1873,8 @@ PartTargets(f, a) ==
 VCreate(f) ==
     /\ "create" \in ViewActs /\ vpc = VIdle /\ ~vfile.open /\ cnt.user < MaxUser /\ nextV <= MaxVOps
     /\ ViewDisk(f) = 0
-    /\ \E d \in Disks :
+    \* §19 Landing: with the SSD cache, a new file goes to a cache disk (one with room, which the model leaves out)
+    /\ \E d \in (IF CacheDisks = {} THEN Disks ELSE CacheDisks) :
          /\ cdisk[d] = "online" /\ VOk(d)
          /\ vops' = [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "create", !.d = d, !.f = f, !.st = "planned"]]
     /\ nextV' = nextV + 1
@@ -1424,7 +1897,9 @@ VCreateMake ==
                            Append(objs, [d |-> d, ver |-> e, dver |-> e, gen |-> 0, cg |-> 0, atoll |-> FALSE]), 0, f, e, TRUE)
                /\ vops' = [vops EXCEPT ![v].st = "done"]
                /\ vfile' = [open |-> TRUE, f |-> f, d |-> d, o |-> n]
-               /\ vpc' = IF Parallel /\ ~cfile[f].on THEN [ph |-> "parts", f |-> f, todo |-> PartTargets(f, d)] ELSE VIdle
+               \* a file that lands on the SSD cache is written there alone, never in parallel (§19)
+               /\ vpc' = IF Parallel /\ ~cfile[f].on /\ d \notin CacheDisks THEN [ph |-> "parts", f |-> f, todo |-> PartTargets(f, d)]
+                         ELSE VIdle
     /\ UNCHANGED <<dstat, mgen, cat, pc, sess, look, nextV, vsess, vpart>>
 
 (* §21.2 Each part journaled before it is made: an operation create of ops on the target, planned, its part
@@ -1440,7 +1915,7 @@ VPartBegin ==
           /\ IF nextOp > MaxOps \/ nextV > MaxVOps \/ ~VOk(e)
              THEN /\ vpc' = [vpc EXCEPT !.todo = @ \ {e}] /\ UNCHANGED <<ops, nextOp, vops, nextV, vpart>>
              ELSE /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "create", d |-> e, f |-> f, key |-> 0, st |-> "planned", part |-> nextOp,
-                                                      reason |-> "none"]]
+                                                      reason |-> "none", link |-> FALSE]]
                   /\ nextOp' = nextOp + 1
                   /\ vops' = [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "part", !.d = e, !.f = f, !.p = nextOp, !.st = "planned"]]
                   /\ nextV' = nextV + 1
@@ -1549,6 +2024,9 @@ VWriteOpen(f) ==
            again == latest # 0 /\ vops[latest].k \in {"create", "write"} /\ vops[latest].d = d
        IN /\ d # 0 /\ VOk(d) /\ vol[d][M(f)] # 0
           /\ again \/ nextV <= MaxVOps
+          \* with the remedy view-held of README.md's flaw 10, it waits while a move of Atoll's own of that copy is planned
+          /\ ~("view-held" \in Fixes /\ \E p \in OpIds : ops[p].k = "trash" /\ ops[p].st = "planned" /\ ops[p].d = d
+                                                          /\ ops[p].f = f /\ ~ViewNamed(p))
           /\ vops' = IF again THEN vops ELSE [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "write", !.d = d, !.f = f, !.st = "done"]]
           /\ nextV' = IF again THEN nextV ELSE nextV + 1
           /\ vfile' = [open |-> TRUE, f |-> f, d |-> d, o |-> vol[d][M(f)]]
@@ -1565,7 +2043,7 @@ VDelete(f) ==
            key == IF d = 0 THEN 0 ELSE vol[d][M(f)]
        IN /\ d # 0 /\ VOk(d) /\ key # 0
           /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "trash", d |-> d, f |-> f, key |-> key, st |-> "planned", part |-> 0,
-                                              reason |-> "deleted"]]
+                                              reason |-> "deleted", link |-> FALSE]]
           /\ vops' = [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "unlink", !.d = d, !.f = f, !.p = nextOp, !.key = key,
                                                 !.gen = objs[key].gen, !.cg = objs[key].cg, !.st = "planned"]]
           /\ vpart' = IF vfile.open /\ vfile.f = f
@@ -1719,6 +2197,10 @@ Atoll ==
     \/ PlanStep
     \/ CopyPick \/ CopyPart \/ CopyKey \/ CopySourceLost \/ CopyData \/ CopyRecheck \/ CopyVerify
     \/ CopyRename \/ CopyUnlink \/ CopyRecord \/ CopySync \/ CopyCommit \/ CopyLost
+    \/ XferPick \/ XferSkip \/ XferDone \/ XferJournal \/ XferMove \/ XferSync \/ XferCommit
+    \/ XferPurgeJournal \/ XferPurge \/ XferPurgeSync \/ XferPurgeCommit \/ XferLost
+    \/ GuardPick \/ GuardEnd \/ GuardDrop \/ GuardLink \/ GuardSync \/ GuardCommit \/ GuardTrash \/ GuardTrashSync
+    \/ GuardTrashCommit \/ GuardLost
 
 (* The daemon's passes, with what they make of the view's operations. *)
 AtollAll == (Atoll /\ UNCHANGED vw) \/ AdoptParts \/ SettleParts \/ TakeIn
@@ -1744,6 +2226,11 @@ Inv1_LastVerifiedCopyKept ==
     /\ \A f \in Files : (cfile[f].on /\ cfile[f].ver # 0 /\ \E d \in Disks : crow[f][d].verified)
                          => (cfile[f].ver \in ghost.udest \/ Holds(objs, dur, cfile[f].ver))
     /\ "inv1" \notin ghost.flags
+
+(* 2. Never remove the last user copy of a file: the one removal no command asks for, the SSD cache's transfer (§6.1,
+   §19), moves out of the library only an Atoll copy, its user part handed to a copy on a data disk first, so that the
+   file keeps a user copy (flag set by XferMove). *)
+Inv2_LastUserCopyKept == "inv2" \notin ghost.flags
 
 (* 4. EIO and an empty mount point mean "disk unknown", never "file absent": no walk is recorded from a disk that
    was not there (the confirmation after the walk, specs.md §10, §15.10). *)
@@ -1776,9 +2263,12 @@ Inv11_OwnOpsNotUsers ==
 (* 12. The journal comes first: every part in a tmp/ and every entry in a trash, visible or durable, is named by an
    operation of that disk that the catalog committed. *)
 Inv12_JournalFirst ==
-    \A d \in Disks, p \in OpIds :
+    /\ \A d \in Disks, p \in OpIds :
         /\ (vol[d][T(p)] # 0 \/ dur[d][T(p)] # 0) => (ops[p].k = "create" /\ ops[p].d = d)
         /\ (vol[d][X(p)] # 0 \/ dur[d][X(p)] # 0) => (ops[p].k = "trash" /\ ops[p].d = d)
+    \* and every link of the guard, by an operation link of that disk and file
+    /\ \A d \in Disks, f \in Files : Guard # "none" =>
+        ((vol[d][Ln(f)] # 0 \/ dur[d][Ln(f)] # 0) => \E p \in OpIds : ops[p].k = "link" /\ ops[p].d = d /\ ops[p].f = f)
 
 (* 13. Never two copies of a file on one physical disk: no plan queues one where a disk on the same physical disk
    holds a copy of it. *)
@@ -1802,9 +2292,9 @@ DoubtUnverified ==
 (* 14. Atoll's own view presents the in-sync copy with the oldest creation time, never a stale one (§21.2): a file a
    user last wrote through the view, and did not delete since, reads through it as what was written, while every disk
    is there and online in the catalog and the file is in no conflict. A change made directly on a disk is the passes' to
-   bring to the view, and leaves no claim (UserAct). *)
+   bring to the view, and leaves no claim (UserAct). What reads through the view is what ReadDisk opens. *)
 ViewPresentsLatest ==
-    \A f \in Files : LET d == ViewDisk(f) IN
+    \A f \in Files : LET d == ReadDisk(f) IN
         (ghost.vlast[f] > 0 /\ ~cfile[f].conflict /\ AllOnline)
         => (d # 0 /\ vol[d][M(f)] # 0 /\ objs[vol[d][M(f)]].ver = ghost.vlast[f])
 
@@ -1824,6 +2314,11 @@ TypeOK ==
 Settled ==
     /\ \A f \in Files : (cfile[f].on /\ ~cfile[f].conflict) => Cardinality({d \in Disks : crow[f][d].st = "ok"}) >= Level
     /\ \A p \in OpIds : ops[p].st # "planned"
+    \* with the SSD cache, every file left it, its copies on data disks (§19), but one whose copy on a data disk waits to be
+    \* read again, unverified, as a reprise may record it (§14.2): a scrub, which the model leaves out, verifies it
+    /\ \A f \in Files, c \in CacheDisks :
+           (cfile[f].on /\ ~cfile[f].conflict /\ ~\E d \in Disks \ CacheDisks : crow[f][d].st = "ok" /\ ~crow[f][d].verified)
+           => crow[f][c].st = "none"
 
 EventuallySettled == <>[]Settled
 
@@ -1831,5 +2326,11 @@ EventuallySettled == <>[]Settled
 ViewTaken == \A v \in VIds : (vops[v].k # "none" /\ vops[v].st # "undone") => vops[v].taken
 
 EventuallyViewTaken == <>[]ViewTaken
+
+(* With the link guard turned off, every link goes at last, its data to the trash first when it has no other name
+   (§17, "Turned off"). *)
+Unlinked == (Guard = "off" /\ cnt.off = 1) => \A d \in Disks, f \in Files : vol[d][Ln(f)] = 0
+
+EventuallyUnlinked == <>[]Unlinked
 
 =============================================================================

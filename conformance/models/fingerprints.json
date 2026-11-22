@@ -1,7 +1,8 @@
 {
   "models": [
     "Replication.tla",
-    "Rename.tla"
+    "Rename.tla",
+    "Copies.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -28,7 +29,7 @@
     {
       "section": "14",
       "title": "## 14. Replication",
-      "sha256": "f87f0ddce50a70c8b05fe0f676e39b14c41b2f1aa038f9af254b0860a25cfad7"
+      "sha256": "23db06005a7170d199fb5e82ddf7142e6726e5b798dac1b8b5bb20d794813a8b"
     },
     {
       "section": "14.1",
@@ -66,6 +67,11 @@
       "sha256": "44229c340fa9a3c3b39000fd5f2807dde518186884c89eb61107d3b76acb2c16"
     },
     {
+      "section": "17",
+      "title": "## 17. Trash",
+      "sha256": "063f9f640847fd1f318fca0da2c0cd9a6f0e039fb92cfc408f702ca40ecf2111"
+    },
+    {
       "section": "17.1",
       "title": "### 17.1 Sending a copy to the trash",
       "sha256": "0e9f8a3a9998197ca357b2fdff9cc23c9b1281f1f4465ac125ab7213210d8c50"
@@ -84,6 +90,11 @@
       "section": "17.5",
       "title": "### 17.5 Atoll's own empty folders",
       "sha256": "4eaed6719c827181f722af98344fbeff62c8c27a38b2634d972207097a6a2a1a"
+    },
+    {
+      "section": "19",
+      "title": "## 19. SSD cache (phase 2b)",
+      "sha256": "9c550a7b2607483619f1446275e9a898198806c8ff7219ad7ed2df3af6e7344a"
     },
     {
       "section": "20",
