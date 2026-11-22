@@ -79,7 +79,7 @@ qemu=/dev/null
 if [ -n "$qemu_dir" ]; then
 	echo "==== the loop-device tests in qemu, from $qemu_dir"
 	dirs=$(find "$qemu_dir" -name 'covmeta.*' -exec dirname {} \; | LC_ALL=C sort -u | paste -sd, -)
-	if "$go" tool covdata textfmt -i="$dirs" -o "$out/qemu.out"; then
+	if "$go" tool covdata textfmt -i="$dirs" -o "$out/qemu.out" && [ -s "$out/qemu.out" ]; then
 		qemu=$out/qemu.out
 	else
 		failed+=("go tool covdata of the loop-device tests")
