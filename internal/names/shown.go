@@ -2,6 +2,7 @@ package names
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -26,6 +27,40 @@ func Unshowable(r rune) bool {
 // an emoji sequence with U+200D ZERO WIDTH JOINER, is written in base64 too, as the maintainer chose (2026-11-22).
 func ShownAsIs(name string) bool {
 	return utf8.ValidString(name) && !strings.ContainsFunc(name, Unshowable)
+}
+
+// Escaped gives a text written for a person, an error, a warning or what a disk's line of a human output says of it, as
+// standard error and the human output write it (specs.md §25): each character that is Unshowable as \u{XXXX}, its
+// code point in uppercase hexadecimal of four digits or more, so that the text writes no line of its own and reorders
+// or hides nothing; each byte that is not UTF-8 as \x{XX}; and a backslash that u{ or x{ follows as \u{005C}, so that
+// no backslash of the text reads as one of these. Anything else is written as it is: a text with none of them is
+// unchanged, and so is what is escaped already, by Go's %q, by the quotes of a key of the configuration (§24.3), or by
+// systemd-escape, as none of them writes braces. conformance/vectors/shown_text.json pins it. The --json outputs and
+// the log do not use it: they hold the text as it is.
+func Escaped(text string) string {
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		shown, size := escapedAt(text, i)
+		b.WriteString(shown)
+		i += size
+	}
+	return b.String()
+}
+
+// escapedAt gives what Escaped writes for the character, or the byte, at text[i:], and how many bytes it takes up.
+func escapedAt(text string, i int) (string, int) {
+	r, size := utf8.DecodeRuneInString(text[i:])
+	if r == utf8.RuneError && size == 1 {
+		return fmt.Sprintf(`\x{%02X}`, text[i]), size
+	}
+	if Unshowable(r) {
+		return fmt.Sprintf(`\u{%04X}`, r), size
+	}
+	rest := text[i+size:]
+	if r == '\\' && (strings.HasPrefix(rest, "u{") || strings.HasPrefix(rest, "x{")) {
+		return `\u{005C}`, size
+	}
+	return text[i : i+size], size
 }
 
 // Shown gives a name as a line of human output, and an alert, write it: as it is when ShownAsIs, and otherwise as

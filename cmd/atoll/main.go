@@ -15,6 +15,7 @@ import (
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/telemetry"
 )
 
@@ -228,7 +229,11 @@ func failure(stderr io.Writer, err error) int {
 	return exitError
 }
 
+// report writes a line for a person on standard error: a usage error, an error, or a warning. What the message holds
+// of a path, an argument, a label or an error from below the CLI may hold a control or a format character, or bytes
+// that are not UTF-8, which are escaped (names.Escaped), so that the line writes no line of its own and reorders or
+// hides nothing (specs.md §25).
 func report(stderr io.Writer, message string) {
 	// Nothing is left to tell, should standard error fail too: the exit code still says it.
-	_, _ = fmt.Fprintf(stderr, "atoll: %s\n", message)
+	_, _ = fmt.Fprintf(stderr, "atoll: %s\n", names.Escaped(message))
 }

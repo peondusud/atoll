@@ -42,9 +42,11 @@ endif
 # The next two depend on the machine, not only on the code, so they never reuse
 # a cached result (-count=1).
 
-# Disks simulated with directories; no root.
+# Disks simulated with directories; no root: a conformance build, which takes folders for disks, run as the daemon that
+# runs for good, with its watcher, its signals and its socket, through its command line alone (test/integration).
 test-integration:
-	$(GO) test -count=1 -tags integration ./test/...
+	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
+	ATOLL_BIN="$(CURDIR)/$(BIN)-conformance" $(GO) test -count=1 -tags integration ./test/...
 
 # Needs root: ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey.
 test-loopdev:

@@ -400,7 +400,8 @@ func (t *textDaemon) Disks(list []jobs.DiskLine) error {
 	var text strings.Builder
 	for i := range list {
 		if d := daemonDiskOf(&list[i]); d.Reason != nil {
-			fmt.Fprintf(&text, "%s: %s: %s: %s\n", d.ID, d.State, *d.Reason, *d.Message)
+			// The message of a mount check may hold an error of the system, which names a path as it is (specs.md §25).
+			fmt.Fprintf(&text, "%s: %s: %s: %s\n", d.ID, d.State, *d.Reason, names.Escaped(*d.Message))
 		}
 	}
 	return writeText(t.w, text.String())
