@@ -117,7 +117,8 @@ func (d *Disk) SaveChunk(op *Op, index int64, data []byte, copyStat *fsx.Stat) e
 	if err != nil {
 		return err
 	}
-	like[len(dst)-1] = fsx.Stat{Mode: 0o700, Uid: copyStat.Uid, Gid: copyStat.Gid}
+	// Named like the file, it stands for no folder, and keeps its own time.
+	like[len(dst)-1] = standIn{Stat: fsx.Stat{Mode: 0o700, Uid: copyStat.Uid, Gid: copyStat.Gid}}
 	target, err := d.makeFolders(dst, like)
 	if err != nil {
 		return err

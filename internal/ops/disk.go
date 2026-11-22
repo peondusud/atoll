@@ -209,10 +209,20 @@ func (d *Disk) open(path []string) (*folder, error) {
 	return f, nil
 }
 
+// standIn is what a folder Atoll makes in the trash takes of the folder it stands for, as a look at that one gave it
+// (specs.md §17.1, step 3): its mode and owner, and, when dated, its modification time, once what goes in it is in
+// place. A folder made up for one that went, or one that stands for no folder, has no time to take.
+type standIn struct {
+	fsx.Stat
+	dated bool
+}
+
 // makeFolders reaches a folder of the trash, creating what is missing on the way, each with the
 // mode and owner like gives for its level (specs.md §17.1). Each is durable before anything goes
-// through it. It is never given a path below the root, whose folders are operations of their own.
-func (d *Disk) makeFolders(path []string, like map[int]fsx.Stat) (*folder, error) {
+// through it, and the folder it is made in takes the time like gives for that level then, as it
+// holds what it was made for. It is never given a path below the root, whose folders are
+// operations of their own.
+func (d *Disk) makeFolders(path []string, like map[int]standIn) (*folder, error) {
 	f := &folder{Dir: d.top}
 	for i, name := range path {
 		parent := f.Dir
@@ -238,11 +248,11 @@ func (d *Disk) makeFolders(path []string, like map[int]fsx.Stat) (*folder, error
 	return f, nil
 }
 
-func (d *Disk) makeFolder(parent fsx.Dir, name string, like map[int]fsx.Stat, level int) error {
+func (d *Disk) makeFolder(parent fsx.Dir, name string, like map[int]standIn, level int) error {
 	st, known := like[level]
 	var mode *fsx.Stat
 	if known {
-		mode = &st
+		mode = &st.Stat
 	}
 	err := parent.Mkdir(name, modeLike(mode))
 	switch {
@@ -254,13 +264,20 @@ func (d *Disk) makeFolder(parent fsx.Dir, name string, like map[int]fsx.Stat, le
 		return classify(err)
 	}
 	if known {
-		if err := adopt(parent, name, &st); err != nil {
+		if err := adopt(parent, name, &st.Stat); err != nil {
 			return err
 		}
 	}
 	// The new folder first: its own record holds its name, as a moved file's does (measured on ntfs3).
 	if err := syncEntry(parent, name); err != nil {
 		return err
+	}
+	// The folder it was made in holds what it was made for now, which moved its time: it takes that of the folder
+	// it stands for, which the sync below makes durable (specs.md §17.1, step 3).
+	if above, ok := like[level-1]; ok && above.dated {
+		if err := restoreTime(parent, above.Mtime); err != nil {
+			return err
+		}
 	}
 	if err := parent.Sync(); err != nil {
 		return lost(err)
@@ -714,6 +731,11 @@ func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
 	if err := syncEntry(target.Dir, newName); err != nil {
 		return nil, err
 	}
+	// The folder the copy went in stands for the one it left: it takes the time that one gets back below, now that
+	// the copy is in it (specs.md §17.1, step 5).
+	if err := restoreTime(target.Dir, before.Mtime); err != nil {
+		return nil, err
+	}
 	if err := target.Sync(); err != nil {
 		return nil, lost(err)
 	}
@@ -729,10 +751,10 @@ func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
 }
 
 // likeSource gives, for each level of the target that stands for a folder of the logical path, that
-// folder's mode and owner, so that a private folder stays private in the trash (specs.md §17.1). The
-// operation's own folder stands for the root.
-func (d *Disk) likeSource(source *folder, src, dst []string) (map[int]fsx.Stat, error) {
-	like := map[int]fsx.Stat{}
+// folder's mode and owner, so that a private folder stays private in the trash, and its time (specs.md
+// §17.1). The operation's own folder stands for the root.
+func (d *Disk) likeSource(source *folder, src, dst []string) (map[int]standIn, error) {
+	like := map[int]standIn{}
 	root := len(components(d.config.Root))
 	folders := len(src) - 1 - root
 	for i := -1; i < folders; i++ {
@@ -742,7 +764,7 @@ func (d *Disk) likeSource(source *folder, src, dst []string) (map[int]fsx.Stat, 
 		}
 		// The last levels of dst are the operation's folder, the parents of the logical path, then its
 		// name.
-		like[len(dst)-1-folders+i] = st
+		like[len(dst)-1-folders+i] = standIn{Stat: st, dated: true}
 	}
 	return like, nil
 }
@@ -1285,8 +1307,9 @@ func (d *Disk) FolderInfo(logical string) (*fsx.Stat, error) {
 	return &st, nil
 }
 
-// restoreTime gives a folder its time back. Only a disk that is gone makes it matter: a folder's
-// date protects nothing, and the next scan records what is there.
+// restoreTime gives a folder its time back, or a folder of the trash the time of the one it stands
+// for. Only a disk that is gone makes it matter: a folder's date protects nothing, and the next scan
+// records what is there.
 func restoreTime(f fsx.Dir, t fsx.Time) error {
 	err := f.SetMtime(t)
 	switch {
