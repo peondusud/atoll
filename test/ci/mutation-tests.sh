@@ -6,9 +6,11 @@
 #
 #   bash test/ci/mutation-tests.sh ./internal/jobs bin/mutation/internal-jobs.tests [parallel]
 #
-# The exit code is 0 when every test passed alone, 1 otherwise, as a test that fails alone would kill every mutant it
-# is chosen for; 2 for a wrong argument.
+# MUTATION_SKIP, a regexp of test names as go test's -skip reads it, runs none of those: they reach no line here, as
+# they run in no mutant's go test (test/ci/mutation.sh). The exit code is 0 when every test passed alone, 1 otherwise,
+# as a test that fails alone would kill every mutant it is chosen for; 2 for a wrong argument.
 set -u
+export MUTATION_SKIP=${MUTATION_SKIP:-}
 
 [ $# -ge 2 ] || {
 	echo "usage: $0 <package, such as ./internal/jobs> <map to write> [tests at once]" >&2
@@ -34,7 +36,8 @@ export work pkg
 # shellcheck disable=SC2329
 one() {
 	start=$(date +%s%N)
-	(cd "$pkg" && "$work/pkg.test" -test.run "^$1\$" -test.count=1 -test.cpu=1 -test.coverprofile="$work/cov/$1" >"$work/cov/$1.out" 2>&1)
+	(cd "$pkg" && "$work/pkg.test" -test.run "^$1\$" ${MUTATION_SKIP:+-test.skip "$MUTATION_SKIP"} -test.count=1 -test.cpu=1 \
+		-test.coverprofile="$work/cov/$1" >"$work/cov/$1.out" 2>&1)
 	status=$?
 	echo "$1 $status $((($(date +%s%N) - start) / 1000000))"
 }
