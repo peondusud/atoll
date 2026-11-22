@@ -245,6 +245,15 @@ Two kinds of case: a name and what is written for it; and a range of the format 
 | `shown` | string | what is written for it: the name as it is when it is valid UTF-8 with no control character (`Cc`) and no format character (`Cf`), and otherwise `(base64) ` and its bytes in standard base64 |
 | `from`, `to` | integer | the first and the last code point of a range of format characters, both included |
 
+### `shown_text.json` — an error or a warning in a line written for a person (§24.4, §25)
+
+What standard error, the human text of `atoll rules check` and the message of a disk's line of a human output write for a text, an error's above all, which may hold a path or an argument as it is. A character that `shown_name.json` writes a name in base64 for, a control character (`Cc`) or a format character (`Cf`), is written `\u{XXXX}`, its code point in uppercase hexadecimal of four digits or more; a byte that is not UTF-8 `\x{XX}`; a backslash that `u{` or `x{` follows `\u{005C}`; anything else as it is. No other form of escape uses braces, so what Go's `%q`, the quotes of a configuration's key (§24.3) or `systemd-escape` escaped already stays as it is.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `text`, `text_b64` | string | the text |
+| `shown` | string | what is written for it |
+
 ### `file_state.json` — the state a file shows (§4)
 
 | Field | Type | Meaning |

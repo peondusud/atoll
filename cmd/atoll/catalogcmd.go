@@ -16,6 +16,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/watch"
@@ -160,17 +161,7 @@ func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, s
 	if asJSON {
 		err = writeJSON(stdout, out)
 	} else {
-		var b bytes.Buffer
-		for _, p := range out.Problems {
-			fmt.Fprintf(&b, T("problem: %s\n"), p)
-		}
-		if len(out.Problems) == 0 {
-			fmt.Fprintf(&b, T("the catalog %s is in order\n"), path.Base(catalogPath(c)))
-		}
-		err = printScan(&b, scanOutput{Disks: out.Disks, Conflicts: []pathItem{}})
-		if err == nil {
-			err = writeText(stdout, b.String())
-		}
+		err = printVerify(stdout, out, path.Base(catalogPath(c)))
 	}
 	if err != nil {
 		return failure(stderr, err)
@@ -179,6 +170,22 @@ func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, s
 		return exitPartial
 	}
 	return exitOK
+}
+
+// printVerify writes catalog verify's human text: each problem SQLite found, escaped as an error is (names.Escaped,
+// specs.md §25), as it may quote what a row holds; then what each disk holds, as a scan says it.
+func printVerify(w io.Writer, out *catalogVerifyOutput, file string) error {
+	var b bytes.Buffer
+	for _, p := range out.Problems {
+		fmt.Fprintf(&b, T("problem: %s\n"), names.Escaped(p))
+	}
+	if len(out.Problems) == 0 {
+		fmt.Fprintf(&b, T("the catalog %s is in order\n"), file)
+	}
+	if err := printScan(&b, scanOutput{Disks: out.Disks, Conflicts: []pathItem{}}); err != nil {
+		return err
+	}
+	return writeText(w, b.String())
 }
 
 // differs says whether a disk was not walked, or does not hold what the catalog says: a file it does not know, a

@@ -12,6 +12,7 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -225,7 +226,8 @@ func printScan(w io.Writer, out scanOutput) error {
 		d := &out.Disks[i]
 		fmt.Fprintf(&text, "%s: %s", d.ID, d.State)
 		if d.Reason != nil {
-			fmt.Fprintf(&text, ": %s: %s", *d.Reason, *d.Message)
+			// The message of a mount check may hold an error of the system, which names a path as it is (specs.md §25).
+			fmt.Fprintf(&text, ": %s: %s", *d.Reason, names.Escaped(*d.Message))
 		}
 		text.WriteString("\n")
 		if d.Walked {

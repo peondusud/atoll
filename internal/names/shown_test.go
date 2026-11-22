@@ -2,6 +2,7 @@ package names
 
 import (
 	"encoding/base64"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -112,6 +113,100 @@ func TestFormatCharactersAreTheVectors(t *testing.T) {
 		}
 	}
 	t.Logf("Unicode %s: %d format characters in %d ranges", unicode.Version, count, len(ranges))
+}
+
+// textVector is a case of conformance/vectors/shown_text.json: a text and how a line for a person writes it.
+type textVector struct {
+	Text    *string `json:"text"`
+	TextB64 *string `json:"text_b64"`
+	Shown   *string `json:"shown"`
+	Note    string  `json:"note"`
+}
+
+// textCases gives the vector's texts and what is written for each, in its order, or fails t.
+func textCases(t testing.TB) []shownName {
+	t.Helper()
+	var out []shownName
+	seen := map[string]bool{}
+	for i, v := range vectors.Load[textVector](t, "shown_text.json") {
+		text, err := vectors.Bytes("text", v.Text, v.TextB64)
+		switch {
+		case err != nil:
+			t.Fatalf("case %d: %v", i, err)
+		case v.Shown == nil:
+			t.Fatalf("case %d, %+q: no shown", i, text)
+		case seen[text]:
+			t.Fatalf("case %d, %+q: twice", i, text)
+		}
+		seen[text] = true
+		out = append(out, shownName{text, *v.Shown})
+	}
+	if len(out) == 0 {
+		t.Fatal("no case")
+	}
+	return out
+}
+
+func TestShownTextVectors(t *testing.T) {
+	for _, c := range textCases(t) {
+		if got := Escaped(c.name); got != c.shown {
+			t.Errorf("Escaped(%+q) = %+q, want %+q", c.name, got, c.shown)
+		}
+	}
+}
+
+// unescaped reads back what Escaped wrote: \u{} with four to six uppercase hexadecimal digits, no 0 leading past the
+// fourth, a character; \x{} with two, a byte; any other backslash itself. It says whether every escape was written so.
+func unescaped(s string) (string, bool) {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '\\' || !strings.HasPrefix(s[i+1:], "u{") && !strings.HasPrefix(s[i+1:], "x{") {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		digits, _, closed := strings.Cut(s[i+3:], "}")
+		upper := closed && digits != "" && !strings.ContainsFunc(digits, func(r rune) bool { return !('0' <= r && r <= '9' || 'A' <= r && r <= 'F') })
+		if !upper {
+			return "", false
+		}
+		v, err := strconv.ParseUint(digits, 16, 32)
+		switch {
+		case err != nil:
+			return "", false
+		case s[i+1] == 'x' && len(digits) == 2:
+			b.WriteByte(byte(v))
+		case s[i+1] == 'u' && len(digits) >= 4 && (len(digits) == 4 || digits[0] != '0') && v <= unicode.MaxRune && utf8.ValidRune(rune(v)):
+			b.WriteRune(rune(v))
+		default:
+			return "", false
+		}
+		i += 3 + len(digits) + 1
+	}
+	return b.String(), true
+}
+
+// FuzzEscaped: whatever a text holds, the line gets valid UTF-8 with no control and no format character, from which
+// the text's bytes come back, each escape in its one spelling; and a text with nothing to escape is written as it is.
+func FuzzEscaped(f *testing.F) {
+	for _, c := range textCases(f) {
+		f.Add(c.name)
+	}
+	f.Fuzz(func(t *testing.T, text string) {
+		got := Escaped(text)
+		if !utf8.ValidString(got) || strings.ContainsFunc(got, func(r rune) bool { return unicode.In(r, unicode.Cc, unicode.Cf) }) {
+			t.Fatalf("Escaped(%+q) = %+q", text, got)
+		}
+		back, ok := unescaped(got)
+		if !ok || back != text {
+			t.Fatalf("Escaped(%+q) = %+q, which reads %+q, %v", text, got, back, ok)
+		}
+		plain := utf8.ValidString(text) && !strings.ContainsFunc(text, func(r rune) bool { return unicode.In(r, unicode.Cc, unicode.Cf) }) &&
+			!strings.Contains(text, `\u{`) && !strings.Contains(text, `\x{`)
+		if plain != (got == text) {
+			t.Fatalf("Escaped(%+q) = %+q", text, got)
+		}
+	})
 }
 
 // FuzzShown: whatever bytes a name holds, a line of human output gets valid UTF-8 with no control and no format

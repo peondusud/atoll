@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
+	"unicode/utf8"
 
+	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
 )
 
@@ -139,6 +143,108 @@ func TestANameThatReordersTextIsShownInBase64(t *testing.T) {
 	}
 	if decoded, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(shown, "(base64) ")); string(decoded) != override {
 		t.Errorf("%q", decoded)
+	}
+}
+
+// errorTexts gives, for each place a line for a person writes an error, a warning or what a disk's line says of it,
+// what it writes for a text: standard error, through report; the problems, warnings and labels of rules check; the
+// message of a disk's line of scan, catalog verify, disk list and the daemon's text output.
+func errorTexts(t *testing.T) map[string]func(text string) string {
+	t.Helper()
+	missing := disks.Verdict{State: disks.Missing, Reason: disks.IOError}
+	return map[string]func(text string) string{
+		"standard error": func(text string) string {
+			var b strings.Builder
+			report(&b, text)
+			return b.String()
+		},
+		"rules check": func(text string) string {
+			var b bytes.Buffer
+			out := checkOutput{Problems: []checkProblem{{Message: text}, {Key: "a", Message: text}}, Warnings: []checkWarning{{Key: "a", Message: text}},
+				Hidden: []checkHidden{{Rule: text, By: text}}, Unreached: []string{text}}
+			if err := printCheck(&b, out); err != nil {
+				t.Fatal(err)
+			}
+			return b.String()
+		},
+		"scan": func(text string) string {
+			var b bytes.Buffer
+			reason, message := string(missing.Reason), text
+			if err := printScan(&b, scanOutput{Disks: []scanDisk{{ID: "t1", State: string(missing.State), Reason: &reason, Message: &message}}}); err != nil {
+				t.Fatal(err)
+			}
+			return b.String()
+		},
+		"disk list": func(text string) string {
+			var b bytes.Buffer
+			v := missing
+			v.Message = text
+			if err := printDiskList(&b, diskListFrom([]config.Disk{{ID: "t1", Mount: "/mnt/t1", FS: "ext4"}}, []disks.Verdict{v})); err != nil {
+				t.Fatal(err)
+			}
+			return b.String()
+		},
+		"daemon": func(text string) string {
+			var b bytes.Buffer
+			v := missing
+			v.Message = text
+			if err := (&textDaemon{w: &b}).Disks([]jobs.DiskLine{{ID: "t1", Verdict: v}}); err != nil {
+				t.Fatal(err)
+			}
+			return b.String()
+		},
+		"catalog verify": func(text string) string {
+			var b bytes.Buffer
+			if err := printVerify(&b, &catalogVerifyOutput{Problems: []string{text}, Disks: []scanDisk{}}, "catalog.db"); err != nil {
+				t.Fatal(err)
+			}
+			return b.String()
+		},
+	}
+}
+
+// An error, a warning, or what a disk's line says of it, may hold a path or an argument as it is, which an error from
+// below the CLI writes with %s, or a label of the configuration: each control or format character of it, and each byte
+// that is not UTF-8, is escaped, so that the line writes no line of its own and reorders or hides nothing
+// (specs.md §25, G16). Written as it was, "Trailer", U+202E RIGHT-TO-LEFT OVERRIDE, then "vkm.exe" read as
+// Trailerexe.mkv, and a line feed began a line the error never wrote.
+func TestAnErrorIsWrittenEscaped(t *testing.T) {
+	const (
+		evil = "open /mnt/t1/media/Films/Trailer\xe2\x80\xaevkm.exe\n  moved to the trash: every film\x1b[2J\xff"
+		want = `open /mnt/t1/media/Films/Trailer\u{202E}vkm.exe\u{000A}  moved to the trash: every film\u{001B}[2J\x{FF}`
+	)
+	unshowable := func(r rune) bool { return r != '\n' && unicode.In(r, unicode.Cc, unicode.Cf) }
+	for what, text := range errorTexts(t) {
+		got, plain := text(evil), text("a")
+		if strings.Count(got, "\n") != strings.Count(plain, "\n") {
+			t.Errorf("%s: %d lines for an error with a line feed, %d for a plain one: %+q", what, strings.Count(got, "\n"), strings.Count(plain, "\n"), got)
+		}
+		if strings.ContainsFunc(got, unshowable) || !utf8.ValidString(got) {
+			t.Errorf("%s: a control or format character, or a byte that is not UTF-8, reaches the terminal: %+q", what, got)
+		}
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: %+q, without %+q", what, got, want)
+		}
+		// A plain text, accents and backslashes included, and what %q escaped already, are written as they are.
+		for _, plain := range []string{`disque t1 : sa corbeille n'a pas pu être relue`, `Films\Amélie`, `unknown argument "\u202e"`} {
+			if got := text(plain); !strings.Contains(got, plain) {
+				t.Errorf("%s: %+q, without %+q as it is", what, got, plain)
+			}
+		}
+	}
+}
+
+// An error that comes from below the CLI, here the system's, which names the configuration's path as it is, reaches
+// standard error escaped, and the exit code is the error's.
+func TestAnErrorFromBelowTheCLIIsWrittenEscaped(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "Trailer\xe2\x80\xaevkm.toml")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"--config", file, "status"}, &stdout, &stderr); code != exitError {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	got := stderr.String()
+	if strings.ContainsFunc(got, func(r rune) bool { return unicode.Is(unicode.Cf, r) }) || !strings.Contains(got, `Trailer\u{202E}vkm.toml`) {
+		t.Errorf("%+q", got)
 	}
 }
 

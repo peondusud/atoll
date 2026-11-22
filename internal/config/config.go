@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
 
@@ -477,8 +478,11 @@ func bareKey(s string) bool {
 	return true
 }
 
-// quoteKey writes a key part in double quotes. It is written by hand because the
-// quoting of Go and Rust differ, and the two versions must report the same key.
+// quoteKey writes a key part in double quotes, as TOML would write it. It is written by
+// hand because the quoting of Go and Rust differ, and the two versions must report the
+// same key. A character a name is shown in base64 for, a control or a format character
+// (names.Unshowable), is escaped: a key the file holds is its text, and a line that
+// names it must not reorder or hide what follows it (specs.md §24.3, §25).
 func quoteKey(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
@@ -487,7 +491,10 @@ func quoteKey(s string) string {
 		case r == '"' || r == '\\':
 			b.WriteByte('\\')
 			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f:
+		case names.Unshowable(r) && utf8.RuneLen(r) == 4:
+			// Past U+FFFF: no four digits hold it.
+			fmt.Fprintf(&b, `\U%08X`, r)
+		case names.Unshowable(r):
 			fmt.Fprintf(&b, `\u%04X`, r)
 		default:
 			b.WriteRune(r)

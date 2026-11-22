@@ -183,23 +183,27 @@ func unreached(c *config.Config) []string {
 	return out
 }
 
+// printCheck writes rules check's human text. A message may hold a value of the configuration, or an error from below
+// the CLI, and a label any text: each is escaped as standard error escapes it (names.Escaped, specs.md §25). A key is
+// escaped by its own quotes already (§24.3), which Escaped leaves as they are.
 func printCheck(w io.Writer, out checkOutput) error {
 	var text strings.Builder
+	shown := names.Escaped
 	for _, p := range out.Problems {
 		if p.Key == "" {
-			fmt.Fprintf(&text, T("problem: %s\n"), p.Message)
+			fmt.Fprintf(&text, T("problem: %s\n"), shown(p.Message))
 		} else {
-			fmt.Fprintf(&text, T("problem: %s: %s\n"), p.Key, p.Message)
+			fmt.Fprintf(&text, T("problem: %s: %s\n"), shown(p.Key), shown(p.Message))
 		}
 	}
 	for _, warning := range out.Warnings {
-		fmt.Fprintf(&text, T("warning: %s: %s\n"), warning.Key, warning.Message)
+		fmt.Fprintf(&text, T("warning: %s: %s\n"), shown(warning.Key), shown(warning.Message))
 	}
 	for _, h := range out.Hidden {
-		fmt.Fprintf(&text, T("warning: rule %s: rule %s, before it, matches every file it does: it never applies\n"), h.Rule, h.By)
+		fmt.Fprintf(&text, T("warning: rule %s: rule %s, before it, matches every file it does: it never applies\n"), shown(h.Rule), shown(h.By))
 	}
 	for _, label := range out.Unreached {
-		fmt.Fprintf(&text, T("note: rule %s: no file of the catalog reaches it\n"), label)
+		fmt.Fprintf(&text, T("note: rule %s: no file of the catalog reaches it\n"), shown(label))
 	}
 	if out.Valid {
 		text.WriteString(T("the configuration is valid\n"))
