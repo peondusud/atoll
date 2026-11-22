@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The tag ruleset set, and CLAUDE.md on the release and the mutation workflows, 2026-11-22 (specs.md §26, §27; threat model G21)
+
+At the maintainer's word ("go"), two of what TODO.md left him.
+
+- **The ruleset** that keeps tags `v*` to him, made through GitHub's API as `README.md`, "Protecting the tags `v*`, on GitHub", gives its steps: `Release tags`, a tag ruleset, active, on `refs/tags/v*`; rules `creation`, `update`, `deletion` and `non_fast_forward`; the bypass list the repository's admin role alone (`RepositoryRole` 5), always. Read back: `gh api repos/peondusud/atoll/rulesets` lists it, `"target": "tag"`, `"enforcement": "active"`, and for the maintainer's account `"current_user_can_bypass": "always"`. Not verified: a push of a tag `v*` by another account or a workflow's token, which this repository has none to try with. G21 is now done but its `toolchain` line, which he decided against.
+- **CLAUDE.md**, at his word: the workflows, `fuzz.yml` and `mutation.yml` each night, `mutation-weekly.yml` and `mediaservers.yml` weekly; the release in its three jobs, `ci`, `build` and `draft`, the draft by `gh`, GoReleaser publishing nothing; the ruleset; images pinned by digest; the gates in `test/ci/gates.txt`; `make mutation`'s weekly packages.
+
 ## The maintainer's answers of 2026-11-22, on the work done while he was away (specs.md §14, §15.12, §15.13, §21.2, §21.5, §23.1, §24.4, §25, §26, §27)
 
 - **Confirmed**: every choice the four entries below listed as to confirm, each saying so now. Seven had a question of their own, each answered with the option put first ("Confirmer"), the rest together ("Tout confirmer"):

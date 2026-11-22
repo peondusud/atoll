@@ -61,8 +61,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 ## GitHub Actions and releases (DONE.md, 2026-11-19)
 
 - The first release, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven and after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
-- Before it, the maintainer's: the ruleset that keeps tags `v*` to him, a setting of GitHub's no file can make (`README.md`, "Protecting the tags `v*`, on GitHub"; threat model G21). And a first run of the release's three jobs (DONE.md, 2026-11-22), which no run has tried on GitHub: a tag of a prerelease, `v0.1.0-rc.1`, on a commit the CI passed on, then its draft deleted. On 2026-11-22 the API listed no run of `ci.yml` on `main` at all, `b6c1104` (#23's merge) included: a tag there is refused until the CI runs on it, by a dispatch on the tag.
-- `CLAUDE.md`, the maintainer's to change, still says that GoReleaser drafts the release, where `release.yml`'s last job now does, and names only `mutation.yml` for the mutation tests, not `mutation-weekly.yml` (DONE.md, 2026-11-22).
+- Before it: a first run of the release's three jobs (DONE.md, 2026-11-22), which no run has tried on GitHub: a tag of a prerelease, `v0.1.0-rc.1`, on a commit the CI passed on, then its draft deleted. On 2026-11-22 the API listed no run of `ci.yml` on `main` at all, `b6c1104` (#23's merge) included: a tag there is refused until the CI runs on it, by a dispatch on the tag.
 
 ## After the two flaws TLC found, fixed on 2026-11-19 (DONE.md)
 

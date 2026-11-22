@@ -103,6 +103,8 @@ Only the maintainer may push, move or delete a tag `v*`, as a release starts fro
 
 Then check it: the ruleset is listed as **Active** with its target `v*`, and `gh api repos/peondusud/atoll/rulesets` lists it with `"target": "tag"` and `"enforcement": "active"`. A tag `v*` pushed by any other account, or by a workflow's `GITHUB_TOKEN`, is refused; the maintainer's push of `git push origin v0.1.0` still goes through.
 
+Set so on 2026-11-22, through the API at the maintainer's word (`gh api -X POST repos/peondusud/atoll/rulesets`): the ruleset `Release tags`, which lists `"current_user_can_bypass": "always"` for him.
+
 ## License
 
 SPDX-License-Identifier: GPL-3.0-or-later
