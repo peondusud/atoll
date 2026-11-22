@@ -1,11 +1,13 @@
 package ops
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/peondusud/atoll/internal/config"
@@ -109,5 +111,48 @@ func TestFoundTrash(t *testing.T) {
 	}
 	if slices.ContainsFunc(found, func(e FoundEntry) bool { return e.OpID == 9 }) || !slices.Contains(left, "2026-01-02/9: holds a place past the limit of a mergerfs branch") {
 		t.Errorf("past the limit: found %+v, left %q", found, left)
+	}
+}
+
+// The entries of a date come by operation, as numbers, whatever order the folder lists them in; a name that is no
+// date stops nothing after it; and what is no file or folder below a folder of an entry makes it no entry, however deep.
+func TestFoundTrashGoesByOperation(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, "Atoll/trash/2025-13-01/1/a", "no month 13")
+	for _, id := range []string{"12", "9", "100", "31"} {
+		put(t, mount, "Atoll/trash/2026-01-02/"+id+"/a", id)
+	}
+	put(t, mount, "Atoll/trash/2026-01-02/13/Films/b", "b")
+	if err := os.Symlink("b", filepath.Join(mount, "Atoll", "trash", "2026-01-02", "13", "Films", "link")); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	found, err := openAt(t, mount, nil).FoundTrash(func(place, why string) { left = append(left, place+": "+why) }, watch.Unbounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, e := range found {
+		ids = append(ids, e.OpID)
+	}
+	if !slices.Equal(ids, []int64{9, 12, 31, 100}) {
+		t.Errorf("found %v", ids)
+	}
+	slices.Sort(left)
+	if want := []string{"2025-13-01: not a date", "2026-01-02/13: holds what is no file or folder"}; !slices.Equal(left, want) {
+		t.Errorf("left %q", left)
+	}
+}
+
+// An entry that holds a place past the limits is told of, and what follows it in its folder is looked at still: a name
+// there that cannot be looked at stops the listing, as anywhere else in the trash (invariant 4).
+func TestFoundTrashLooksPastAPlaceTooLong(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, "Atoll/trash/2026-01-02/9/"+strings.Repeat("a", 40), "a")
+	put(t, mount, "Atoll/trash/2026-01-02/9/b", "b")
+	unread := &failingOn{call: "stat", name: "b"}
+	_, err := openAt(t, mount, unread.fail).FoundTrash(func(string, string) {}, watch.Limits{MaxPath: 30})
+	if !errors.Is(err, syscall.EIO) || unread.calls != 1 {
+		t.Errorf("%d looks at b: %v", unread.calls, err)
 	}
 }

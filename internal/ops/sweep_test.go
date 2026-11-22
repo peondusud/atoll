@@ -38,6 +38,9 @@ type sweepCase struct {
 	refusal error
 	// prepare makes what the operation needs on a new disk at mount, and gives it.
 	prepare func(t *testing.T, mount string) swept
+	// quiet names the calls, as the sweep lists them, whose failure the operation may leave unsaid, as nothing it does
+	// depends on them: any other that fails with EIO must give an error.
+	quiet map[string]bool
 }
 
 // swept is an operation a sweep runs, and what tells whether it did its work.
@@ -130,6 +133,11 @@ func sweep(t *testing.T, c sweepCase) {
 				if err == nil {
 					if !s.done() {
 						t.Errorf("%s: no error, and the operation is not done", where)
+					}
+					// A disk that fails a step is said, never taken for one that did it, but where the case
+					// names that step as one whose failure costs nothing.
+					if errors.Is(inject, syscall.EIO) && !c.quiet[call] {
+						t.Errorf("%s: no error", where)
 					}
 					continue
 				}

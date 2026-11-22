@@ -1,11 +1,15 @@
 package trash
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 
+	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -190,5 +194,72 @@ func TestARestoreToWhosePartFails(t *testing.T) {
 	}
 	if b.partsOn("t1") != 0 || b.read("t1", "a") != "x" {
 		t.Errorf("t1 holds %q, with %d parts", b.read("t1", "a"), b.partsOn("t1"))
+	}
+}
+
+// A copy from the trash is filled chunk by chunk, each chunk's hash given, and read back chunk by chunk against them:
+// a part of two chunks, the last shorter, reads back as written; one read back against fewer hashes than it has
+// chunks, against another's, or as a part of another size, does not (specs.md §14.2, step 5).
+func TestAPartOfTwoChunksIsFilledAndReadBack(t *testing.T) {
+	b := newBench(t)
+	content := append(bytes.Repeat([]byte("a"), integrity.ChunkSize), "xyz"...)
+	b.write("t3", "big", string(content))
+	size := int64(len(content))
+	handle, err := b.opened().Handle(t.Context(), "t3")
+	if err != nil || handle == nil {
+		t.Fatalf("%v, %v", handle, err)
+	}
+	dir, err := fsx.OpenDir(filepath.Join(b.dirs["t3"], "media"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	source, err := dir.OpenFile("big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = source.Close() }()
+	part, err := handle.MakePart(&catalog.Op{ID: 77, Disk: "t3", Kind: catalog.OpCreate, Path: "big", Path2: "77.part"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = part.Close() }()
+	hashes, err := fillPart(t.Context(), part, source, size)
+	first, last := integrity.ChunkSum(content[:integrity.ChunkSize]), integrity.ChunkSum(content[integrity.ChunkSize:])
+	if err != nil || !bytes.Equal(hashes, append(first[:], last[:]...)) {
+		t.Fatalf("the hashes of the chunks: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(b.dirs["t3"], "Atoll", "tmp", "77.part")); err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("the part does not hold the file: %v", err)
+	}
+	whole, ok, err := verifyPart(t.Context(), part, hashes, size)
+	want, _, _ := integrity.HashReader(t.Context(), bytes.NewReader(content))
+	if err != nil || !ok || !bytes.Equal(whole, want[:]) {
+		t.Errorf("as written: %v, %v", ok, err)
+	}
+	for _, tc := range []struct {
+		name   string
+		hashes []byte
+		size   int64
+	}{
+		{"fewer hashes", first[:], size},
+		{"another's hashes", append(last[:], first[:]...), size},
+		{"another size", first[:], integrity.ChunkSize},
+	} {
+		if _, ok, err := verifyPart(t.Context(), part, tc.hashes, tc.size); err != nil || ok {
+			t.Errorf("%s: %v, %v", tc.name, ok, err)
+		}
+	}
+}
+
+// A copy a restore made on another disk is a change of this run, which what reads the copies' rows after it takes in.
+func TestARestoreToMarksTheSessionChanged(t *testing.T) {
+	b := pruned(t)
+	s := b.opened()
+	if _, err := s.RestoreTo(t.Context(), "a", "t1", func(*EntryItem) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if b.read("t1", "a") != "x" || !s.Changed() {
+		t.Errorf("t1 holds %q; changed %v", b.read("t1", "a"), s.Changed())
 	}
 }
