@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -141,6 +142,59 @@ func TestUserOperations(t *testing.T) {
 				t.Errorf("touched: %v", info.ModTime())
 			}
 		})
+	}
+}
+
+// A file the view makes is private until it is the caller's: made 0600, given its owner, then its mode, setuid and
+// setgid included, as a copy's part is (specs.md §14.2, §21.2; docs/threat-model.md, G13). Made with the mode asked, it
+// was for that moment a file of the account atoll, setuid, that another account could open. And one whose owner the
+// driver refuses keeps neither bit, which would run it as atoll, as a replica keeps neither then (§14).
+func TestAFileTheViewMakesIsPrivateUntilItIsTheCallers(t *testing.T) {
+	for _, refused := range []bool{false, true} {
+		mount := t.TempDir()
+		media := filepath.Join(mount, "media")
+		mustMkdir(t, media)
+		made := filepath.Join(media, "Series", "e01.mkv")
+		seen := map[string]os.FileMode{}
+		look := func(call, name string) error {
+			if name != "e01.mkv" || (call != "setowner" && call != "setmode") {
+				return nil
+			}
+			if info, err := os.Lstat(made); err == nil {
+				seen[call] = info.Mode()
+			}
+			if call == "setowner" && refused {
+				return syscall.EPERM
+			}
+			return nil
+		}
+		d, err := Open(&onDisk{fail: look}, &config.Disk{ID: "t1", Mount: mount, Root: "media", Workdir: "Atoll"}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
+		like := func(string) (*fsx.Stat, error) { return &fsx.Stat{Mode: 0o755, Uid: uid, Gid: gid}, nil }
+		w, st, err := d.CreateUserFile("Series/e01.mkv", 0o6755, uid, gid, like)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = w.Close()
+		d.Close()
+		for _, call := range []string{"setowner", "setmode"} {
+			if got, ok := seen[call]; !ok || got != 0o600 {
+				t.Errorf("owner refused %v: before %s the file is %v (%v), want -rw-------", refused, call, got, ok)
+			}
+		}
+		want := os.FileMode(0o755) | os.ModeSetuid | os.ModeSetgid
+		if refused {
+			want = 0o755
+		}
+		if info := mustStat(t, made); info.Mode() != want {
+			t.Errorf("owner refused %v: the file is %v, want %v", refused, info.Mode(), want)
+		}
+		if refused && st.Mode&0o6000 != 0 || !refused && st.Mode != 0o6755 {
+			t.Errorf("owner refused %v: what it says it made: %o", refused, st.Mode)
+		}
 	}
 }
 
