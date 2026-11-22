@@ -91,7 +91,7 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}

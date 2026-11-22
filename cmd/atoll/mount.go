@@ -13,7 +13,6 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/daemon"
-	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/telemetry"
 	"github.com/peondusud/atoll/internal/view/readonly"
 )
@@ -59,7 +58,7 @@ func runMount(configPath string, args []string, stderr io.Writer) (code int) {
 	} else {
 		points = append(points, mountPoint{path: point})
 	}
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}

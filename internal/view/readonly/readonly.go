@@ -40,6 +40,24 @@ type Options struct {
 	// Writes says that the view writes on a user's behalf, at view.mount in place of mergerfs, through a handle on each
 	// disk its check finds online (specs.md §21.2).
 	Writes bool
+	// mount serves the view at the point: fusefs.Mount when nil, as in the delivered binary; a unit test's otherwise,
+	// where no FUSE device can be opened.
+	mount func(tree *view.Tree, point string, w *writer.Writer) (served, error)
+}
+
+// served is a view being served, as fusefs.Mount gives it.
+type served interface {
+	Done() <-chan struct{}
+	Unmount() error
+}
+
+// mountFUSE serves the view through the kernel's FUSE device.
+func mountFUSE(tree *view.Tree, point string, w *writer.Writer) (served, error) {
+	m, err := fusefs.Mount(tree, point, w)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // Run says where
+	}
+	return m, nil
 }
 
 // ErrUnmounted says that the view was unmounted by something else than Run.
@@ -93,7 +111,11 @@ func Run(ctx context.Context, o Options) error {
 			return fmt.Errorf("%w", err)
 		}
 	}
-	m, err := fusefs.Mount(tree, o.Point, w)
+	mount := o.mount
+	if mount == nil {
+		mount = mountFUSE
+	}
+	m, err := mount(tree, o.Point, w)
 	if err != nil {
 		return fmt.Errorf("mount at %s: %w", o.Point, err)
 	}

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -216,13 +217,23 @@ type viewProcess struct {
 	point string
 }
 
+// childFlags is what this test binary gives a child it starts of itself besides what it asks: the folder of its
+// coverage counters, when it was built with -cover and given one (test/qemu/run.sh, make test-qemu-cover), so that what
+// the child runs counts too; nothing otherwise.
+func childFlags() []string {
+	if f := flag.Lookup("test.gocoverdir"); f != nil && f.Value.String() != "" {
+		return []string{"-test.gocoverdir=" + f.Value.String()}
+	}
+	return nil
+}
+
 // startView serves the view at the point in another process, run through the command before, if any, such as
 // setpriv: the process ends at the end of the test, and the view is detached.
 func startView(t *testing.T, b *passBench, point string, before []string) *viewProcess {
 	t.Helper()
 	file := filepath.Join(filepath.Dir(b.catalog), "atoll.toml")
 	mustDo(t, os.WriteFile(file, []byte(b.configText), 0o644))
-	args := append(append([]string{}, before...), os.Args[0], "-test.run=^TestReadonlyMountChild$", "-test.v")
+	args := append(append(append([]string{}, before...), os.Args[0], "-test.run=^TestReadonlyMountChild$", "-test.v"), childFlags()...)
 	p := &viewProcess{out: &bytes.Buffer{}, exited: make(chan struct{}), point: point}
 	p.cmd = exec.CommandContext(context.Background(), args[0], args[1:]...)
 	p.cmd.Env = append(os.Environ(), childEnv+"="+file, childPointEnv+"="+point)

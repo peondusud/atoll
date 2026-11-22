@@ -191,8 +191,8 @@ var errnoLine = regexp.MustCompile(`(?m)^errno=(\d+)$`)
 func asAnother(t *testing.T, asks ...string) syscall.Errno {
 	t.Helper()
 	id := strconv.Itoa(another)
-	cmd := exec.CommandContext(t.Context(), "setpriv", "--reuid="+id, "--regid="+id, "--clear-groups", "--no-new-privs", "--",
-		os.Args[0], "-test.run=^TestViewAsAnotherChild$")
+	cmd := exec.CommandContext(t.Context(), "setpriv", append([]string{"--reuid=" + id, "--regid=" + id, "--clear-groups", "--no-new-privs", "--",
+		os.Args[0], "-test.run=^TestViewAsAnotherChild$"}, childFlags()...)...)
 	cmd.Env = append(os.Environ(), anotherEnv+"="+strings.Join(asks, "\n"))
 	out, err := cmd.CombinedOutput()
 	m := errnoLine.FindSubmatch(out)

@@ -92,7 +92,7 @@ func runCatalog(configPath string, args []string, stdout, stderr io.Writer) int 
 		return failure(stderr, err)
 	}
 	defer release()
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -150,7 +150,7 @@ func catalogBackup(ctx context.Context, c *config.Config, m disks.Machine, stder
 // catalogVerify runs SQLite's integrity and foreign key checks on the catalog, then compares each disk with it, as
 // a scan would, writing nothing (specs.md §9, §25): exit 4 with a problem, a difference, or a disk not walked.
 func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, stderr io.Writer) int {
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -238,7 +238,7 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 		}
 		return writeRebuild(&out, flags["--json"], code, stdout, stderr)
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
