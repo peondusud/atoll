@@ -685,3 +685,53 @@ func TestRepositoryScenarios(t *testing.T) {
 		}
 	}
 }
+
+// Each crash_at of a scenario of the repository is a point the table of conformance/scenarios/README.md names: a point
+// the binary does not know is never reached, and the step would judge a run that did not stop. The table is the list of
+// points a binary must know, Go's or Rust's, which TestCrashPointsAreTheTable compares with Go's code.
+func TestScenariosCrashAtAPointOfTheTable(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "scenarios", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, table, found := strings.Cut(string(readme), "\n| Point | Reached |\n|---|---|\n")
+	if !found {
+		t.Fatal("no table of crash points")
+	}
+	points := map[string]bool{}
+	for line := range strings.Lines(table) {
+		if !strings.HasPrefix(line, "| ") {
+			break
+		}
+		first, _, _ := strings.Cut(strings.TrimPrefix(line, "| "), " |")
+		for _, name := range strings.Split(first, ", ") {
+			points[strings.Trim(name, "`")] = true
+		}
+	}
+	files, err := filepath.Glob(filepath.Join("..", "scenarios", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	used := 0
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := parseScenario(data)
+		if err != nil {
+			continue // TestRepositoryScenarios says why
+		}
+		for i := range s.Steps {
+			if at := s.Steps[i].CrashAt; at != "" {
+				used++
+				if !points[at] {
+					t.Errorf("%s: step %d stops at %q, which the table of crash points does not name", file, i, at)
+				}
+			}
+		}
+	}
+	if len(points) < 20 || used == 0 {
+		t.Errorf("%d points in the table, %d steps that stop at one", len(points), used)
+	}
+}
