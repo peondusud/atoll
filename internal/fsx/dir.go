@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -978,11 +979,76 @@ func Reachable(path string) (bool, error) {
 	}
 }
 
-// MkdirAll makes a folder and its parents, for what is not on a pool disk: the configuration and
-// the catalog.
+// MkdirAll makes a folder and its parents, for what is not on a pool disk: the configuration.
 func MkdirAll(path string) error {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return fmt.Errorf("make folder: %w", err)
+	}
+	return nil
+}
+
+// Closed modes, whatever the umask, of what lists the library and is no pool disk's, the catalog and its backups: its
+// account's, and its group's to read, as the unit's StateDirectoryMode=0750 has /var/lib/atoll, so that a member of the
+// group atoll reads them and no other account does (specs.md §26).
+const (
+	closedFolder = 0o750
+	closedFile   = 0o640
+)
+
+// MkdirAllClosed makes a folder and its missing parents, for the catalog and its backups: each folder it makes is
+// 0750, whatever the umask, given its mode through a handle on it, a link put in its place left alone; one that
+// exists, a link to one included, is left as it is, as it may hold more than the catalog.
+func MkdirAllClosed(path string) error {
+	var missing []string
+	for p := filepath.Clean(path); ; p = filepath.Dir(p) {
+		_, err := os.Lstat(p)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("make folder: %w", err)
+		}
+		missing = append(missing, p)
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		err := unix.Mkdir(missing[i], closedFolder)
+		switch {
+		case errors.Is(err, unix.EEXIST):
+			// Made meanwhile, by another: its own.
+			continue
+		case err != nil:
+			return fmt.Errorf("make folder %q: %w", missing[i], err)
+		}
+		fd, err := unix.Open(missing[i], unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return fmt.Errorf("make folder %q: %w", missing[i], err)
+		}
+		err = unix.Fchmod(fd, closedFolder)
+		_ = unix.Close(fd)
+		if err != nil {
+			return fmt.Errorf("make folder %q: %w", missing[i], err)
+		}
+	}
+	return nil
+}
+
+// CreateClosed makes an empty file of mode 0640 whatever the umask, never over one, for the catalog: SQLite then gives
+// its write-ahead log and its shared memory the mode of the database, and VACUUM INTO writes a backup into an empty
+// file as it finds it. A file there already is ErrExist's.
+func CreateClosed(path string) error {
+	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, closedFile)
+	if err != nil {
+		return fmt.Errorf("create %q: %w", path, err)
+	}
+	err = unix.Fchmod(fd, closedFile)
+	if cerr := unix.Close(fd); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("create %q: %w", path, err)
 	}
 	return nil
 }
