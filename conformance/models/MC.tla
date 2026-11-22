@@ -9,4 +9,5 @@ PhysShared == <<1, 2, 2>>         \* disks 2 and 3 share a physical disk (R-06):
 StartOne == <<{1}>>               \* one file, its one copy on disk 1: to be replicated
 StartTwo == <<{1, 2}>>            \* one file at its level of two copies, on disks 1 and 2
 StartTwoFiles == <<{1}, {1, 2}>>  \* a file to replicate, and one at its level
+StartNone == <<{}>>               \* a path with no file yet: Atoll's own view makes one there
 =============================================================================

@@ -1,11 +1,14 @@
 {
-  "model": "Replication.tla",
+  "models": [
+    "Replication.tla",
+    "Rename.tla"
+  ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
     {
       "section": "6.1",
       "title": "### 6.1 Writes under `media/`",
-      "sha256": "6e54ff8b83e9cd1dbec2a2a700545e35fc597b925788320ca42131590e3c8fe4"
+      "sha256": "837b9fdb288a2f524a0d92771cc84940106234f85111a186652620daf9e13de1"
     },
     {
       "section": "9",
@@ -38,6 +41,11 @@
       "sha256": "ef898d93f0e77a5af5b8cd2bacfde4ba560489c6046dc92fc68a44812f40f98b"
     },
     {
+      "section": "15.3",
+      "title": "### 15.3 Renames directly on one disk",
+      "sha256": "7bca4ca33eb75c0e74935d468cefb1b2dbe9f5d7963be40d47035baa5fb27cac"
+    },
+    {
       "section": "15.4",
       "title": "### 15.4 Modifications",
       "sha256": "0cbcd76e8381a7cfdbce2d68166e9b5df3cfa76f7beb874932077d03c67b6e88"
@@ -55,7 +63,7 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "cdde2a2674789feeda7d85bf3e0109d4b6cdd3d4a6748c5f3e80fd35e5a948bc"
+      "sha256": "ee3e9d9b31e0b23e8dfa7f93953539d14025177945fb4db74ef06326c29688d3"
     },
     {
       "section": "17.1",
@@ -65,12 +73,27 @@
     {
       "section": "17.2",
       "title": "### 17.2 Reprise after a crash",
-      "sha256": "32a5d08b07010d6823ab79e0ce3b0cffd4e41cf8f2984964512cce3121140291"
+      "sha256": "1e3df5f0085d8104f02029a94640c8b60c573dbd788fa448f86398157dd13412"
+    },
+    {
+      "section": "17.4",
+      "title": "### 17.4 `atoll trash`",
+      "sha256": "f02ea74a609ea714f0706927a5392e7f3d6c46bf9f9809a2cc10e0cb5088692e"
+    },
+    {
+      "section": "17.5",
+      "title": "### 17.5 Atoll's own empty folders",
+      "sha256": "4eaed6719c827181f722af98344fbeff62c8c27a38b2634d972207097a6a2a1a"
     },
     {
       "section": "20",
       "title": "## 20. Power loss",
       "sha256": "6692b88fbd1ee76edabf8080f5dd21732fa73dda4888bf3263052be3744e9326"
+    },
+    {
+      "section": "21.2",
+      "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
+      "sha256": "3b00176fd04a968f4193a6fecd46bc170d6a3e21f592c71a428cab0b14cbbc0f"
     }
   ]
 }

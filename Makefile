@@ -31,13 +31,17 @@ model-check:
 
 # The black-box scenarios of the flaws the model found in specs.md and still open (conformance/models/flaws/): they
 # fail until the maintainer decides a remedy, and then move to conformance/scenarios/. With none open, the folder is gone.
+# A flaw the runner cannot reach, as one of Atoll's own view, which it has no FUSE to drive, or one in a window no crash
+# point of the conformance build opens, is a test TestFlaw… behind the build tag flaws, run here too
+# (conformance/models/README.md).
 model-flaws:
 ifeq ($(wildcard conformance/models/flaws/*.json),)
-	@echo "model-flaws: no flaw open (conformance/models/README.md)"
+	@echo "model-flaws: no black-box scenario of a flaw open (conformance/models/README.md)"
 else
 	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
 	$(GO) run ./conformance/runner --bin $(BIN)-conformance --scenarios conformance/models/flaws
 endif
+	$(GO) test -tags flaws -count=1 -run '^TestFlaw' ./internal/view/writer/ ./internal/jobs/
 
 # The next two depend on the machine, not only on the code, so they never reuse
 # a cached result (-count=1).

@@ -32,11 +32,17 @@ CONSTANTS
     Waits,      \* TRUE: a decision may wait, as for a debounce or settle (specs.md §15.12, Due); FALSE for liveness
     Grace,      \* TRUE: a plan may find a missing disk past health.missing_grace (specs.md §13.4, §18)
     Fixes,      \* the remedies proposed for the flaws it found and still open, by name (README.md); {} is specs.md as it is
-    UserActs    \* what a user may do: some of "modify", "replace", "delete", "create", "rewrite"
+    UserActs,   \* what a user may do directly on a disk: some of "modify", "replace", "delete", "create", "rewrite"
+    ViewActs,   \* what a user may do through Atoll's own view (specs.md §21.2): some of "create", "write", "delete"; {} for
+                \* no view, which leaves every variable of the view as it starts
+    Parallel,   \* TRUE: a new file the view makes is written in parallel to its replica's target (specs.md §21.2)
+    MaxStop,    \* how many times atoll mount is stopped short (kill -9)
+    MaxVOps     \* how many operations the view may journal: ids never come back
 
 Disks == 1..NDisks
 Files == 1..NFiles
 OpIds == 1..MaxOps
+VIds == 1..MaxVOps
 NPairs == NFiles * NDisks
 PF(i) == (i - 1) \div NDisks + 1     \* the file of the i-th pair (file, disk), file by file
 PD(i) == ((i - 1) % NDisks) + 1      \* its disk, by position
@@ -45,8 +51,12 @@ ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3
        /\ Phys \in [Disks -> Nat] /\ Start \in [Files -> SUBSET Disks]
        /\ LinkDisks \subseteq Disks
        /\ \A f \in Files : \A a, b \in Start[f] : a # b => Phys[a] # Phys[b]
-       /\ Fixes = {}    \* no flaw open: each remedy is specs.md's, and the model's whatever Fixes says
+       \* The flaws of the view still open, by their remedies (README.md, flaws 3, 4 and 5): the others' remedies are
+       \* specs.md's, and the model's whatever Fixes says.
+       /\ Fixes \subseteq {"view-reprise", "view-resolve", "view-recheck"}
        /\ UserActs \subseteq {"modify", "replace", "delete", "create", "rewrite"}
+       /\ ViewActs \subseteq {"create", "write", "delete"}
+       /\ Parallel \in BOOLEAN /\ MaxStop \in Nat /\ MaxVOps \in Nat
 
 (* Names on a disk: a file's logical path below <root>/, a part <op-id>.part in <workdir>/tmp/,
    and an entry <date>/<op-id>/<logical path> in <workdir>/trash/ (specs.md §6, §14.2, §17). *)
@@ -81,6 +91,20 @@ NoLook == [obj |-> 0, gen |-> 0, cg |-> 0]
 NoLooks == [f \in Files |-> [d \in Disks |-> NoLook]]
 Idle == [ph |-> "idle"]
 NoSess == [d \in Disks |-> 0]
+(* An operation of view_ops (specs.md §9, §21.2): kind (create, write, unlink or part), disk_id, lpath (the file),
+   op_id (the operation of ops it runs: the trash of a deletion, the create of a part), file_key, the look its deletion
+   compares the copy with (gen and cg, as no row says it), state, and taken_ns (taken). *)
+NoVOp == [k |-> "none", d |-> 0, f |-> 0, p |-> 0, key |-> 0, gen |-> 0, cg |-> 0, st |-> "none", taken |-> FALSE]
+(* What the view holds in memory of a part it writes in parallel (internal/view/writer, parallel.go): st none, begun
+   (journaled), live (made, taking the program's writes), failed (fell behind, or a write failed), closing (the file
+   closed), sealed (synced, its size the original's) or drop; p its operation create of ops, v its row of view_ops, o the
+   part's object, size the original's when the program closed it. *)
+NoVPart == [st |-> "none", p |-> 0, v |-> 0, o |-> 0, size |-> 0]
+NoVParts == [d \in Disks |-> NoVPart]
+(* The file a program holds open through the view: the object its handle writes, wherever its names go. *)
+NoVFile == [open |-> FALSE, f |-> 0, d |-> 0, o |-> 0]
+VDown == [ph |-> "down"]
+VIdle == [ph |-> "idle"]
 
 VARIABLES
     objs,    \* the files on the disks: [d, ver (content now), dver (content a power cut leaves), gen, cg, atoll (a part Atoll
@@ -103,11 +127,20 @@ VARIABLES
     look,    \* what this pass's walks found changed (specs.md §15.4): lost with the process
     cnt,     \* how many of each event of the world so far
     nver,    \* the last version a user wrote
-    ghost    \* for the invariants only: versions written, destroyed or deleted by users, the latest, and flags
+    ghost,   \* for the invariants only: versions written, destroyed or deleted by users, the latest, and flags
+    vops,    \* the view's journal, view_ops: [VIds -> operation of the view] (specs.md §9, §21.2)
+    nextV,   \* the next id of view_ops
+    vpc,     \* where atoll mount is: down, at its reprise, idle (mounted), or in an operation; lost with it
+    vsess,   \* [Disks -> Nat]: the mount each disk had when the view's own mount check opened it, plus 1; 0 for none
+             \* (specs.md §21.2, "It checks each disk's mount as the daemon does"): lost with the process
+    vpart,   \* [Disks -> part]: the parts of the file being written in parallel, as the view holds them: lost with it
+    vfile    \* the file a program holds open through the view: lost with the view, as its handle is
 
 phys == <<objs, vol, dur, dstat, mgen>>
 cat == <<cfile, crow, cdisk, ops, nextOp, rjob, tjob, tick>>
-vars == <<objs, vol, dur, dstat, mgen, cfile, crow, cdisk, ops, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, ghost>>
+vw == <<vops, nextV, vpc, vsess, vpart, vfile>>
+vars == <<objs, vol, dur, dstat, mgen, cfile, crow, cdisk, ops, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, ghost,
+          vops, nextV, vpc, vsess, vpart, vfile>>
 
 -----------------------------------------------------------------------------
 (* Helpers *)
@@ -123,8 +156,15 @@ ObjOf(f, d) == (f - 1) * NDisks + d
 Seen(d, n, key) == IF vol[d][n] = 0 THEN "absent" ELSE IF key # 0 /\ vol[d][n] = key THEN "same" ELSE "other"
 HoldsFile(f, d) == crow[f][d].st \in {"ok", "stale"}       \* a row whose copy sits on its disk (not pending)
 Copies(f) == {d \in Disks : HoldsFile(f, d)}
-PlannedOn(d) == {p \in OpIds : ops[p].st = "planned" /\ ops[p].d = d}
-PlannedAt(d, f) == \E p \in PlannedOn(d) : ops[p].f = f
+(* §21.2, The view's journal: an operation of ops that a row of view_ops names is the view's, which a command's or the
+   daemon's reprise leaves alone (catalog.PlannedOps); the walk of a disk waits at the paths of the view's operations
+   still planned there, but for a part, which is in tmp/ (jobs.viewPlannedOn); and what the view sent to the trash for
+   a deletion is a user's, through the view, no place of Atoll's own operations (catalog.PlacesOf, ops.OwnFiles). *)
+ViewNamed(p) == \E v \in VIds : vops[v].k \in {"part", "unlink"} /\ vops[v].p = p
+ViewPlannedAt(d, f) == \E v \in VIds : vops[v].st = "planned" /\ vops[v].d = d /\ vops[v].f = f /\ vops[v].k # "part"
+ViewTrashName(d, n) == \E v \in VIds : vops[v].k = "unlink" /\ vops[v].d = d /\ n = X(vops[v].p)
+PlannedOn(d) == {p \in OpIds : ops[p].st = "planned" /\ ops[p].d = d /\ ~ViewNamed(p)}
+PlannedAt(d, f) == (\E p \in PlannedOn(d) : ops[p].f = f) \/ ViewPlannedAt(d, f)
 (* A version some name holds durably, on any disk, missing or not: in the library or in a trash. A part in tmp/ is
    no copy: a file deleted while a replica of it was being made is the user's to lose (specs.md §17, Limits). *)
 Kept == {M(f) : f \in Files} \cup {X(p) : p \in OpIds}
@@ -141,6 +181,23 @@ NextIdx(i, S) == LET c == {j \in S : j >= i} IN IF c = {} THEN NPairs + 1 ELSE M
 TrashIdx == {j \in 1..NPairs : tjob[PF(j)][PD(j)].on}
 CopyIdx == {j \in 1..NPairs : rjob[PF(j)][PD(j)].on /\ ~rjob[PF(j)][PD(j)].running}
 NextIn(d, S) == LET c == {e \in S : e > d} IN IF c = {} THEN NDisks + 1 ELSE Min(c)
+Max(S) == CHOOSE x \in S : \A y \in S : x >= y
+
+(* §21.2 What a path presents. The catalog alone: the original (§7), the copy ok on a disk that presents, its clock not
+   running, with the oldest creation time, which the order the model makes its objects in stands for. With the view's
+   operations no pass has taken in, planned or done: the latest at the path says, a file made or written presenting its
+   disk, a deletion nothing (view.Resolve). 0 is nothing. *)
+VOk(d) == Up(d) /\ vsess[d] = mgen[d] + 1
+ViewCheck == [d \in Disks |-> IF Up(d) THEN mgen[d] + 1 ELSE 0]
+OpenAt(f) == {v \in VIds : vops[v].k \in {"create", "write", "unlink"} /\ vops[v].f = f /\ vops[v].st \in {"planned", "done"}
+                           /\ ~vops[v].taken}
+Presenting(f) == {d \in Disks : crow[f][d].st = "ok" /\ crow[f][d].gone = "no" /\ cdisk[d] = "online"}
+CatDisk(f) == IF cfile[f].on /\ Presenting(f) # {}
+              THEN CHOOSE d \in Presenting(f) : \A e \in Presenting(f) : crow[f][d].obj <= crow[f][e].obj
+              ELSE 0
+ViewDisk(f) == IF OpenAt(f) = {} THEN CatDisk(f)
+               ELSE LET v == Max(OpenAt(f)) IN IF vops[v].k = "unlink" THEN 0 ELSE vops[v].d
+AllOnline == \A e \in Disks : Up(e) /\ cdisk[e] = "online"
 
 -----------------------------------------------------------------------------
 (* The start: each file of Start at its level or below, every copy a user's, verified. *)
@@ -151,7 +208,8 @@ Init ==
     /\ dur = vol
     /\ dstat = [d \in Disks |-> "up"]
     /\ mgen = [d \in Disks |-> 0]
-    /\ cfile = [f \in Files |-> [on |-> TRUE, ver |-> f, size |-> Size(f), conflict |-> FALSE]]
+    \* A file with no copy at the start is none yet: a path the view makes a file at.
+    /\ cfile = [f \in Files |-> [on |-> Start[f] # {}, ver |-> IF Start[f] # {} THEN f ELSE 0, size |-> Size(f), conflict |-> FALSE]]
     /\ crow = [f \in Files |-> [d \in Disks |->
             IF d \in Start[f]
             THEN [st |-> "ok", obj |-> ObjOf(f, d), gen |-> 0, cg |-> 0, gver |-> f, verified |-> TRUE, by |-> "user", gone |-> "no",
@@ -166,9 +224,17 @@ Init ==
     /\ pc = Idle
     /\ sess = NoSess
     /\ look = NoLooks
-    /\ cnt = [user |-> 0, crash |-> 0, cut |-> 0, drop |-> 0]
+    /\ cnt = [user |-> 0, crash |-> 0, cut |-> 0, drop |-> 0, stop |-> 0]
     /\ nver = NFiles
-    /\ ghost = [written |-> Files, udest |-> {}, udel |-> {}, latest |-> [f \in Files |-> f], flags |-> {}]
+    \* vlast: the version a user last wrote through the view; 0 for no claim, as before any or once deleted through it
+    /\ ghost = [written |-> {f \in Files : Start[f] # {}}, udest |-> {}, udel |-> {}, latest |-> [f \in Files |-> f], flags |-> {},
+                vlast |-> [f \in Files |-> 0]]
+    /\ vops = [v \in VIds |-> NoVOp]
+    /\ nextV = 1
+    /\ vpc = VDown
+    /\ vsess = NoSess
+    /\ vpart = NoVParts
+    /\ vfile = NoVFile
 
 -----------------------------------------------------------------------------
 (* The world. A user's action reaches its disk durably, and with it what came before it on that disk, as a
@@ -186,7 +252,9 @@ UserAct(d, vol1, objs1, gone, f, newv, deleted) ==
               !.written = IF newv = 0 THEN @ ELSE @ \cup {newv},
               !.latest = IF newv = 0 THEN @ ELSE [@ EXCEPT ![f] = newv],
               !.udel = IF deleted THEN @ \cup {gone} ELSE @,
-              !.udest = IF gone # 0 /\ ~Holds(objs2, dur2, gone) THEN @ \cup {gone} ELSE @]
+              !.udest = IF gone # 0 /\ ~Holds(objs2, dur2, gone) THEN @ \cup {gone} ELSE @,
+              \* a change made directly on a disk is the passes' to take to the view: no claim on what it presents
+              !.vlast = [@ EXCEPT ![f] = 0]]
        /\ UNCHANGED <<dstat, mgen, cat, pc, sess, look>>
 
 (* §15.4: an edit in place, by a program that writes into the file: same inode, new content, and its size,
@@ -255,20 +323,22 @@ Crash ==
     /\ cnt' = [cnt EXCEPT !.crash = @ + 1]
     /\ UNCHANGED <<phys, cat, nver, ghost>>
 
-(* §20: a power cut: every disk keeps only what was durable, and Atoll starts again. *)
+(* §20: a power cut: every disk keeps only what was durable, and Atoll starts again, the daemon and atoll mount, which
+   loses what it held in memory. *)
 PowerCut ==
     /\ cnt.cut < MaxCut
     /\ vol' = dur
     /\ objs' = [o \in DOMAIN objs |-> [objs[o] EXCEPT !.ver = objs[o].dver]]
     /\ pc' = Idle /\ sess' = NoSess /\ look' = NoLooks
     /\ cnt' = [cnt EXCEPT !.cut = @ + 1]
-    /\ UNCHANGED <<dur, dstat, mgen, cat, nver, ghost>>
+    /\ vpc' = VDown /\ vsess' = NoSess /\ vpart' = NoVParts /\ vfile' = NoVFile
+    /\ UNCHANGED <<dur, dstat, mgen, cat, nver, ghost, vops, nextV>>
 
+(* The world but the power cut, none of which touches the view's journal or its process. *)
 World ==
     \/ \E f \in Files, d \in Disks : UserModify(f, d) \/ UserRewrite(f, d) \/ UserReplace(f, d) \/ UserDelete(f, d) \/ UserCreate(f, d)
     \/ \E d \in Disks : Drop(d) \/ Return(d)
     \/ Crash
-    \/ PowerCut
 
 -----------------------------------------------------------------------------
 (* §15.12 steps 1 and 2: a pass begins with the mount check of every disk, recorded, and confirms each disk it may
@@ -492,7 +562,7 @@ WalkStart ==
               snap |-> [f \in Files |-> IF Up(d) /\ vol[d][M(f)] # 0
                                         THEN [obj |-> vol[d][M(f)], gen |-> objs[vol[d][M(f)]].gen, cg |-> objs[vol[d][M(f)]].cg]
                                         ELSE NoLook],
-              own |-> IF Up(d) THEN {vol[d][n] : n \in WorkNames} \ {0} ELSE {}]
+              own |-> IF Up(d) THEN {vol[d][n] : n \in {m \in WorkNames : ~ViewTrashName(d, m)}} \ {0} ELSE {}]
     /\ UNCHANGED <<phys, cat, sess, look, cnt, nver, ghost>>
 
 (* §15.12 Verdict, for a copy whose row sits on its disk. *)
@@ -565,8 +635,9 @@ DecideFile ==
            G == {d \in R : crow[f][d].gone = "gone"}
            O == {d \in R : crow[f][d].gone = "own"}
            L == R \ (G \cup O)
-           \* invariant 11: a copy decided gone that its disk's trash/ or tmp/ holds, visibly or durably, was Atoll's own move
-           ownTaken == \E g \in G, n \in WorkNames : crow[f][g].obj \in {vol[g][n], dur[g][n]}
+           \* invariant 11: a copy decided gone that its disk's trash/ or tmp/ holds, visibly or durably, was Atoll's own
+           \* move, but for one the view sent there for a deletion, which a user asked (§21.2)
+           ownTaken == \E g \in G, n \in WorkNames : ~ViewTrashName(g, n) /\ crow[f][g].obj \in {vol[g][n], dur[g][n]}
            deletion == /\ O = {} /\ ~cfile[f].conflict /\ L # {}
                        /\ \A e \in L : look[f][e] = NoLook /\ Peer(f, e, G)
            minSeen == Min({crow[f][g].seen : g \in G \cup O})
@@ -883,7 +954,8 @@ PlanStep ==
                       ELSE rjob[f][d]]]
                /\ ghost' = Flag(ghost, "inv13", \E f \in Files : queue(f) /\
                                   \E e \in Disks : e # target(f) /\ Phys[e] = Phys[target(f)] /\ crow[f][e].st # "none")
-    /\ pc' = [ph |-> "copy", i |-> 1]
+    \* With the view, its parts are adopted before any job runs (AdoptParts).
+    /\ pc' = IF ViewActs = {} THEN [ph |-> "copy", i |-> 1] ELSE [ph |-> "adopt"]
     /\ UNCHANGED <<phys, cfile, cdisk, ops, nextOp, tjob, tick, sess, look, cnt, nver>>
 
 -----------------------------------------------------------------------------
@@ -907,7 +979,9 @@ CopyPick ==
            r == crow[f][s]
            nexti == [ph |-> "copy", i |-> i + 1]
        IN IF i > NPairs
-          THEN /\ pc' = Idle /\ sess' = NoSess /\ look' = NoLooks
+          THEN \* the pass ends; with the view, once its parts are settled and its operations taken in (TakeIn)
+               /\ IF ViewActs = {} THEN pc' = Idle /\ sess' = NoSess /\ look' = NoLooks
+                  ELSE pc' = [ph |-> "settle"] /\ UNCHANGED <<sess, look>>
                /\ UNCHANGED <<cat>>
           ELSE IF ~InSess(d) \/ ~InSess(s) THEN /\ pc' = nexti /\ UNCHANGED <<cat, sess, look>>  \* disk-unavailable
           ELSE IF ~Ok(d) THEN /\ Lose(d) /\ pc' = nexti /\ UNCHANGED <<cfile, crow, ops, nextOp, rjob, tjob, tick, look>>
@@ -1112,6 +1186,538 @@ CopyLost ==
     /\ UNCHANGED <<phys, cfile, crow, ops, nextOp, rjob, tjob, tick, look, cnt, nver, ghost>>
 
 -----------------------------------------------------------------------------
+(* §21.2, Copies written in parallel and Taken in: what a pass makes of the view's operations. The pass waits at the
+   paths of those still planned (PlannedAt), and a copy the view sent to the trash is gone by the user (WalkStart,
+   DecideFile); these are the steps of its own. *)
+
+(* Before any job runs (jobs.adoptParts): each part the view handed over, done and not taken in, whose operation create
+   is still planned, goes to the replicate job of its file on its disk that is queued with no part and no chunk yet, in
+   one transaction (catalog.AdoptViewParts): the job names the part, the view's operation is undone, the job's own
+   naming the part from then on, and the view's row is taken in; one part a job, the first. The job then runs the copy
+   pipeline from it as a resume does, every chunk compared with the original (CopyData). *)
+Adoptable(v) ==
+    LET f == vops[v].f
+        d == vops[v].d
+    IN /\ vops[v].k = "part" /\ vops[v].st = "done" /\ ~vops[v].taken /\ ops[vops[v].p].st = "planned"
+       /\ cfile[f].on /\ rjob[f][d].on /\ ~rjob[f][d].running /\ rjob[f][d].part = 0 /\ rjob[f][d].hver = 0
+
+AdoptParts ==
+    /\ pc.ph = "adopt"
+    /\ LET A == {v \in VIds : Adoptable(v) /\
+                   \A u \in VIds : (Adoptable(u) /\ vops[u].f = vops[v].f /\ vops[u].d = vops[v].d) => v <= u}
+       IN /\ rjob' = [f \in Files |-> [d \in Disks |->
+                 IF \E v \in A : vops[v].f = f /\ vops[v].d = d
+                 THEN [rjob[f][d] EXCEPT !.part = vops[CHOOSE v \in A : vops[v].f = f /\ vops[v].d = d].p]
+                 ELSE rjob[f][d]]]
+          /\ ops' = [p \in OpIds |-> IF \E v \in A : vops[v].p = p THEN [ops[p] EXCEPT !.st = "undone"] ELSE ops[p]]
+          /\ vops' = [v \in VIds |-> IF v \in A THEN [vops[v] EXCEPT !.taken = TRUE] ELSE vops[v]]
+    /\ pc' = [ph |-> "copy", i |-> 1]
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, nextOp, tjob, tick, sess, look, cnt, nver, ghost, nextV, vpc, vsess, vpart, vfile>>
+
+(* Once the jobs ran (jobs.settleParts): a part the view handed over that no job took is dropped, on a disk the pass
+   looked at and can write to, when its file is not in the catalog and no other operation of the view is open at its
+   path, or when it is and has no pending copy on that disk whose job holds no part yet: the part removed, its
+   operation undone and its row taken in (catalog.DismissViewPart). One whose file the catalog does not hold yet, while
+   the view's operations at its path are open, waits. *)
+Settleable(v) ==
+    LET f == vops[v].f
+        d == vops[v].d
+    IN /\ vops[v].k = "part" /\ vops[v].st = "done" /\ ~vops[v].taken /\ InSess(d) /\ Ok(d)
+       /\ IF ~cfile[f].on THEN OpenAt(f) = {}
+          ELSE ~(crow[f][d].st = "pending" /\ rjob[f][d].on /\ rjob[f][d].part = 0)
+
+SettleParts ==
+    /\ pc.ph = "settle"
+    /\ LET S == {v \in VIds : Settleable(v)}
+           drop(d, n) == \E v \in S : vops[v].d = d /\ n = T(vops[v].p)
+       IN /\ vol' = [d \in Disks |-> [n \in Names |-> IF drop(d, n) THEN 0 ELSE vol[d][n]]]
+          /\ dur' = [d \in Disks |-> [n \in Names |-> IF drop(d, n) THEN 0 ELSE dur[d][n]]]
+          /\ ops' = [p \in OpIds |-> IF \E v \in S : vops[v].p = p THEN [ops[p] EXCEPT !.st = "undone"] ELSE ops[p]]
+          /\ vops' = [v \in VIds |-> IF v \in S THEN [vops[v] EXCEPT !.taken = TRUE] ELSE vops[v]]
+    /\ pc' = [ph |-> "takein"]
+    /\ UNCHANGED <<objs, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver, ghost, nextV, vpc,
+                   vsess, vpart, vfile>>
+
+(* view.TakenIn: whether the catalog alone presents at a path what the view presents with its operations. Nothing with
+   nothing; a disk the view presents with the catalog's original there, or with the copy there in sync, at the size and
+   time a look this pass finds there, on a disk it looked at (view.agrees, inSyncOn). The model compares a look with a
+   row by its object and gen, and two copies by the version their rows hold, as a replica keeps its source's size and
+   modification time. *)
+Agrees(f) ==
+    LET vd == ViewDisk(f)
+        cd == CatDisk(f)
+        live == IF vd = 0 THEN 0 ELSE vol[vd][M(f)]
+        inSync == crow[f][vd].st = "ok" /\ crow[f][vd].gone = "no" /\ crow[f][vd].obj = live /\ crow[f][vd].gen = objs[live].gen
+    IN IF vd = 0 THEN cd = 0
+       ELSE /\ InSess(vd) /\ Ok(vd)
+            /\ IF live = 0 \/ cd = 0 THEN live = 0 /\ cd = 0
+               ELSE IF cd = vd THEN inSync
+               ELSE crow[f][cd].gver = objs[live].ver /\ inSync
+
+(* §21.2 Taken in, at the end of the pass: each operation of the view that is done, in the order of their ids, once the
+   catalog alone presents at its path what the view presents with all of them; one not taken in holds back the later
+   ones at its path. Then the pass ends. *)
+TakeIn ==
+    /\ pc.ph = "takein"
+    /\ LET held(f) == LET H == {v \in OpenAt(f) : vops[v].st # "done"} IN IF H = {} THEN MaxVOps + 1 ELSE Min(H)
+           T0 == {v \in VIds : vops[v].k \in {"create", "write", "unlink"} /\ vops[v].st = "done" /\ ~vops[v].taken
+                               /\ v < held(vops[v].f) /\ Agrees(vops[v].f)}
+       IN vops' = [v \in VIds |-> IF v \in T0 THEN [vops[v] EXCEPT !.taken = TRUE] ELSE vops[v]]
+    /\ pc' = Idle /\ sess' = NoSess /\ look' = NoLooks
+    /\ UNCHANGED <<phys, cat, cnt, nver, ghost, nextV, vpc, vsess, vpart, vfile>>
+
+-----------------------------------------------------------------------------
+(* §21.2 Atoll's own view, which writes: atoll mount, a process of its own beside the daemon, one operation at a time
+   (the writer's lock), each made on one disk and journaled in view_ops before it runs, with its operations of ops in
+   the same transaction (invariant 12): a new file at its logical path on a data disk, its part written in parallel to
+   its replica's target, a write on the copy the view presents, and a deletion that sends that copy to the trash at once,
+   deleted (§17.1). Stopped short, it loses what it held in memory, and resolves at its next start what it left planned,
+   before it mounts; a command's or the daemon's reprise leaves its operations alone. *)
+
+(* A user's write through the view reaches its disk durably, with what came before on that disk, as UserAct says. *)
+VUserAct(d, vol1, objs1, gone, f, newv, named) ==
+    LET objs2 == SyncObjs(objs1, OnDisk(objs1, d))
+        dur2 == [dur EXCEPT ![d] = vol1[d]]
+    IN /\ vol' = vol1 /\ objs' = objs2 /\ dur' = dur2
+       /\ nver' = newv
+       /\ cnt' = [cnt EXCEPT !.user = @ + 1]
+       /\ ghost' = [ghost EXCEPT !.written = @ \cup {newv}, !.latest = [@ EXCEPT ![f] = newv],
+              !.udest = IF gone # 0 /\ ~Holds(objs2, dur2, gone) THEN @ \cup {gone} ELSE @,
+              !.vlast = IF named THEN [@ EXCEPT ![f] = newv] ELSE @]
+
+(* The latest version a user wrote of a file, which no user deleted, held by an object. *)
+VLatestIn(f, o) == o # 0 /\ objs[o].ver = ghost.latest[f] /\ ghost.latest[f] \notin ghost.udel
+
+(* §21.2, at its start: the view's own mount check opens the root of each disk it finds mounted, then it resolves what
+   it left planned (VRepriseOp). *)
+VStart ==
+    /\ ViewActs # {} /\ vpc = VDown
+    /\ vsess' = ViewCheck
+    /\ vpc' = [ph |-> "reprise", v |-> 1]
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vpart, vfile>>
+
+(* Its mount check again, every 30 s: a disk lost and mounted again is another mount, whose old handles answer EIO.
+   The code resolves nothing then, what the view left planned waiting for its next start (readonly.Serve); with
+   "view-recheck" in Fixes (README.md, flaw 5), a check that finds such an operation's disk there resolves it, as the
+   reprise of a start would, but for a part the view still writes or closes. *)
+VHeld(v) == \E e \in Disks : vpart[e].st # "none" /\ vpart[e].v = v
+VResolvable == {v \in VIds : vops[v].st = "planned" /\ ~VHeld(v) /\ Up(vops[v].d)}
+VCheck ==
+    /\ vpc = VIdle /\ (vsess # ViewCheck \/ ("view-recheck" \in Fixes /\ VResolvable # {}))
+    /\ vsess' = ViewCheck
+    /\ vpc' = IF "view-recheck" \in Fixes /\ VResolvable # {} THEN [ph |-> "reprise", v |-> 1] ELSE vpc
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vpart, vfile>>
+
+(* atoll mount stopped short, as by kill -9: its parts and open files go with it, its journal stays. *)
+VStop ==
+    /\ cnt.stop < MaxStop /\ vpc # VDown
+    /\ vpc' = VDown /\ vsess' = NoSess /\ vpart' = NoVParts /\ vfile' = NoVFile
+    /\ cnt' = [cnt EXCEPT !.stop = @ + 1]
+    /\ UNCHANGED <<phys, cat, pc, sess, look, nver, ghost, vops, nextV>>
+
+(* §17.2's table for a deletion of the view, its look in place of a row: what "view-reprise" and "view-resolve" in
+   Fixes take (README.md, flaws 3 and 4). The trash's name alone holding the copy's object is the copy only with the
+   size and modification time the look found (gen); both names leading to it are one file, edited since or not. *)
+VTrashLook(d, v) ==
+    LET o == vops[v]
+        sr == Seen(d, M(o.f), o.key)
+        edited == objs[o.key].gen # o.gen
+        tg0 == Seen(d, X(o.p), o.key)
+        tg == IF tg0 = "same" /\ sr # "same" /\ edited THEN "other" ELSE tg0
+    IN [tg |-> tg, sr |-> sr, edited |-> edited]
+VTrashOut(d, v) ==
+    LET s == VTrashLook(d, v) IN IF s.tg = "same" /\ ~(s.sr = "same" /\ s.edited) THEN "done" ELSE "undone"
+VTrashResolveNames(d, v) ==
+    LET f == vops[v].f
+        p == vops[v].p
+        s == VTrashLook(d, v)
+        v0 == vol[d]
+        v1 == CASE s.tg = "same" /\ s.sr = "same" /\ s.edited -> [v0 EXCEPT ![X(p)] = 0]
+                [] s.tg = "same" /\ s.sr = "same" -> [v0 EXCEPT ![M(f)] = 0]
+                [] s.tg = "other" /\ s.sr = "absent" -> [v0 EXCEPT ![M(f)] = v0[X(p)], ![X(p)] = 0]
+                [] OTHER -> v0
+    IN /\ vol' = [vol EXCEPT ![d] = v1]
+       /\ dur' = [dur EXCEPT ![d][M(f)] = v1[M(f)], ![d][X(p)] = v1[X(p)]]
+       /\ objs' = SyncObjs(objs, {v1[M(f)], v1[X(p)]} \ {0})
+
+(* §21.2, The view's journal: what the view left planned, in the order of the ids, on each disk it holds a handle on;
+   one on another disk stays planned, for its next start (writer.Reprise). A file made is done when something is at its
+   name, and undone otherwise. A part being written is no copy of a file closed: its part goes, and it is undone. A
+   deletion, as the code reads it (writer.resolve), is done when the trash's name holds the file of its inode, and
+   undone otherwise: by the inode alone, with nothing synced or put back; §21.2 says by the table of §17.2, which
+   "view-reprise" in Fixes takes, in two steps, the names then the commit (README.md, flaw 3). A part the view still
+   holds in memory, which only a check while it runs can meet (VCheck), is its writer's. *)
+VRepriseOp ==
+    /\ vpc.ph = "reprise" /\ vpc.v <= MaxVOps
+    /\ LET v == vpc.v
+           o == vops[v]
+           d == o.d
+           f == o.f
+           next == [ph |-> "reprise", v |-> v + 1]
+       IN IF o.st # "planned" \/ ~VOk(d) \/ VHeld(v)
+          THEN /\ vpc' = next /\ UNCHANGED <<objs, vol, dur, ops, vops, ghost>>
+          ELSE CASE o.k = "create" ->
+                      /\ vops' = [vops EXCEPT ![v].st = IF vol[d][M(f)] # 0 THEN "done" ELSE "undone"]
+                      /\ vpc' = next /\ UNCHANGED <<objs, vol, dur, ops, ghost>>
+                 [] o.k = "part" ->
+                      /\ vol' = [vol EXCEPT ![d][T(o.p)] = 0]
+                      /\ dur' = [dur EXCEPT ![d][T(o.p)] = 0]
+                      /\ ops' = [ops EXCEPT ![o.p].st = "undone"]
+                      /\ vops' = [vops EXCEPT ![v].st = "undone"]
+                      /\ vpc' = next /\ UNCHANGED <<objs, ghost>>
+                 [] o.k = "unlink" /\ "view-reprise" \in Fixes ->
+                      /\ VTrashResolveNames(d, v)
+                      /\ vpc' = [ph |-> "vrepcommit", v |-> v, out |-> VTrashOut(d, v)]
+                      /\ UNCHANGED <<ops, vops, ghost>>
+                 [] o.k = "unlink" ->
+                      LET trashed == vol[d][X(o.p)] = o.key IN
+                      /\ ops' = [ops EXCEPT ![o.p].st = IF trashed THEN "done" ELSE "undone"]
+                      /\ vops' = [vops EXCEPT ![v].st = IF trashed THEN "done" ELSE "undone"]
+                      /\ ghost' = Flag(Flag(ghost, "inv7", trashed /\ (~Durable(d, X(o.p), o.key) \/ o.key \in {vol[d][M(f)], dur[d][M(f)]})),
+                                       "inv10-replacement", trashed /\ VLatestIn(f, o.key))
+                      /\ vpc' = next /\ UNCHANGED <<objs, vol, dur>>
+                 [] OTHER -> /\ vpc' = next /\ UNCHANGED <<objs, vol, dur, ops, vops, ghost>>
+    /\ UNCHANGED <<dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, nextV, vsess, vpart, vfile>>
+
+VRepriseCommit ==
+    /\ vpc.ph = "vrepcommit"
+    /\ LET v == vpc.v
+           o == vops[v]
+       IN /\ ops' = [ops EXCEPT ![o.p].st = vpc.out]
+          /\ vops' = [vops EXCEPT ![v].st = vpc.out]
+          /\ ghost' = Flag(ghost, "inv7", vpc.out = "done" /\
+                                          (~Durable(o.d, X(o.p), o.key) \/ o.key \in {vol[o.d][M(o.f)], dur[o.d][M(o.f)]}))
+    /\ vpc' = [ph |-> "reprise", v |-> vpc.v + 1]
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, nextV, vsess, vpart, vfile>>
+
+VRepriseEnd ==
+    /\ vpc.ph = "reprise" /\ vpc.v > MaxVOps
+    /\ vpc' = VIdle
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vsess, vpart, vfile>>
+
+(* §21.2 What is new: a file made at its logical path on a data disk the view can write to, where it presents
+   nothing; journaled, then made, as a user's file, then done (writer.Create). The model takes make and done as one
+   step, the reprise finding the file made done either way. A name taken there is EEXIST, undone; a disk that cannot
+   be relied on leaves it planned. With Parallel, and no file of the catalog at its path, its part comes next. *)
+PartTargets(f, a) ==
+    LET c == {e \in Disks : e # a /\ Phys[e] # Phys[a] /\ cdisk[e] = "online" /\ VOk(e) /\ vpart[e].st = "none"}
+    IN IF Level < 2 \/ c = {} THEN {} ELSE {Min(c)}
+
+VCreate(f) ==
+    /\ "create" \in ViewActs /\ vpc = VIdle /\ ~vfile.open /\ cnt.user < MaxUser /\ nextV <= MaxVOps
+    /\ ViewDisk(f) = 0
+    /\ \E d \in Disks :
+         /\ cdisk[d] = "online" /\ VOk(d)
+         /\ vops' = [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "create", !.d = d, !.f = f, !.st = "planned"]]
+    /\ nextV' = nextV + 1
+    /\ vpc' = [ph |-> "create", v |-> nextV]
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vsess, vpart, vfile>>
+
+VCreateMake ==
+    /\ vpc.ph = "create"
+    /\ LET v == vpc.v
+           d == vops[v].d
+           f == vops[v].f
+           n == Len(objs) + 1
+           e == nver + 1
+       IN IF ~VOk(d)
+          THEN /\ vpc' = VIdle /\ UNCHANGED <<objs, vol, dur, nver, cnt, ghost, vops, vfile>>
+          ELSE IF vol[d][M(f)] # 0
+          THEN /\ vops' = [vops EXCEPT ![v].st = "undone"]
+               /\ vpc' = VIdle /\ UNCHANGED <<objs, vol, dur, nver, cnt, ghost, vfile>>
+          ELSE /\ VUserAct(d, [vol EXCEPT ![d][M(f)] = n],
+                           Append(objs, [d |-> d, ver |-> e, dver |-> e, gen |-> 0, cg |-> 0, atoll |-> FALSE]), 0, f, e, TRUE)
+               /\ vops' = [vops EXCEPT ![v].st = "done"]
+               /\ vfile' = [open |-> TRUE, f |-> f, d |-> d, o |-> n]
+               /\ vpc' = IF Parallel /\ ~cfile[f].on THEN [ph |-> "parts", f |-> f, todo |-> PartTargets(f, d)] ELSE VIdle
+    /\ UNCHANGED <<dstat, mgen, cat, pc, sess, look, nextV, vsess, vpart>>
+
+(* §21.2 Each part journaled before it is made: an operation create of ops on the target, planned, its part
+   <op id>.part, and the view's row kind part that names it, in one transaction (catalog.BeginViewPart); then made as a
+   copy's part is, empty as the new file is, synced, and its inode recorded (ops.MakePart, catalog.SetCreateKey), which
+   the model takes as one step. A disk that cannot be relied on leaves it planned, for the view's reprise; with no ids
+   left, the replica is the ordinary job's. *)
+VPartBegin ==
+    /\ vpc.ph = "parts" /\ vpc.todo # {}
+    /\ LET e == Min(vpc.todo)
+           f == vpc.f
+       IN /\ vpart[e].st = "none"
+          /\ IF nextOp > MaxOps \/ nextV > MaxVOps \/ ~VOk(e)
+             THEN /\ vpc' = [vpc EXCEPT !.todo = @ \ {e}] /\ UNCHANGED <<ops, nextOp, vops, nextV, vpart>>
+             ELSE /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "create", d |-> e, f |-> f, key |-> 0, st |-> "planned", part |-> nextOp,
+                                                      reason |-> "none"]]
+                  /\ nextOp' = nextOp + 1
+                  /\ vops' = [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "part", !.d = e, !.f = f, !.p = nextOp, !.st = "planned"]]
+                  /\ nextV' = nextV + 1
+                  /\ vpart' = [vpart EXCEPT ![e] = [NoVPart EXCEPT !.st = "begun", !.p = nextOp, !.v = nextV]]
+                  /\ UNCHANGED vpc
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, rjob, tjob, tick, pc, sess, look, cnt, nver, ghost, vsess, vfile>>
+
+VPartMake ==
+    /\ vpc.ph = "parts" /\ vpc.todo # {}
+    /\ LET e == Min(vpc.todo)
+           pt == vpart[e]
+           n == Len(objs) + 1
+       IN /\ pt.st = "begun"
+          /\ IF VOk(e)
+             THEN /\ objs' = Append(objs, [d |-> e, ver |-> objs[vfile.o].ver, dver |-> objs[vfile.o].ver, gen |-> 0, cg |-> 0,
+                                           atoll |-> TRUE])
+                  /\ vol' = [vol EXCEPT ![e][T(pt.p)] = n]
+                  /\ dur' = [dur EXCEPT ![e][T(pt.p)] = n]
+                  /\ ops' = [ops EXCEPT ![pt.p].key = n]
+                  /\ vpart' = [vpart EXCEPT ![e] = [pt EXCEPT !.st = "live", !.o = n]]
+             ELSE /\ vpart' = [vpart EXCEPT ![e] = NoVPart]
+                  /\ UNCHANGED <<objs, vol, dur, ops>>
+          /\ vpc' = [vpc EXCEPT !.todo = @ \ {e}]
+    /\ UNCHANGED <<dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, ghost, vops, nextV, vsess, vfile>>
+
+VPartsDone ==
+    /\ vpc.ph = "parts" /\ vpc.todo = {}
+    /\ vpc' = VIdle
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vsess, vpart, vfile>>
+
+(* The program writes into the file it holds open through the view: into its object, wherever its names are, an edit
+   in place, durably as a user acts; each live part takes the write too, or fails, as one that falls behind, whose write
+   fails, or that would fill its disk past min_free (parallel.mirror). A write that fails on the original drops every
+   part. *)
+VData ==
+    /\ vfile.open /\ vpc = VIdle /\ cnt.user < MaxUser
+    /\ LET d == vfile.d
+           f == vfile.f
+           o == vfile.o
+           v == nver + 1
+           live == {e \in Disks : vpart[e].st = "live"}
+       IN IF ~VOk(d)
+          THEN /\ vpart' = [e \in Disks |-> IF vpart[e].st \in {"live", "failed"} THEN [vpart[e] EXCEPT !.st = "drop"] ELSE vpart[e]]
+               /\ UNCHANGED <<objs, vol, dur, nver, cnt, ghost>>
+          ELSE \E F \in SUBSET live :
+                 /\ \A e \in live : ~VOk(e) => e \in F
+                 /\ LET objs1 == [x \in DOMAIN objs |->
+                            IF x = o THEN [objs[x] EXCEPT !.ver = v, !.dver = v, !.gen = @ + 1]
+                            ELSE IF \E e \in live \ F : vpart[e].o = x THEN [objs[x] EXCEPT !.ver = v]
+                            ELSE objs[x]]
+                    IN VUserAct(d, vol, objs1, objs[o].ver, f, v, vol[d][M(f)] = o)
+                 /\ vpart' = [e \in Disks |-> IF e \in F THEN [vpart[e] EXCEPT !.st = "failed"] ELSE vpart[e]]
+    /\ UNCHANGED <<dstat, mgen, cat, pc, sess, look, vops, nextV, vpc, vsess, vfile>>
+
+(* The program closes the file (parallel.release): each live part is to be sealed, against the original's size then,
+   any other dropped; with the original's disk lost, its size cannot be told, and every part is dropped. *)
+VClose ==
+    /\ vfile.open /\ vpc = VIdle
+    /\ vpart' = [e \in Disks |->
+           CASE vpart[e].st = "live" /\ VOk(vfile.d) -> [vpart[e] EXCEPT !.st = "closing", !.size = Size(objs[vfile.o].ver)]
+             [] vpart[e].st \in {"live", "failed"} -> [vpart[e] EXCEPT !.st = "drop"]
+             [] OTHER -> vpart[e]]
+    /\ vfile' = NoVFile
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vpc, vsess>>
+
+(* What closing a file's parts does apart from the program (parallel.finish, seal, dropPart): a part that holds the
+   original's size is synced, then its row is done, handed over to the passes, its operation create left planned so
+   that tmp/ keeps it; one dropped is removed and its operations undone, or, on a disk that cannot be relied on, left
+   planned for the view's reprise. *)
+VPartSeal(e) ==
+    /\ vpc # VDown /\ vpart[e].st = "closing"
+    /\ LET pt == vpart[e] IN
+       IF VOk(e) /\ Size(objs[pt.o].ver) = pt.size
+       THEN /\ objs' = SyncObjs(objs, {pt.o})
+            /\ vpart' = [vpart EXCEPT ![e].st = "sealed"]
+       ELSE /\ vpart' = [vpart EXCEPT ![e].st = "drop"]
+            /\ UNCHANGED objs
+    /\ UNCHANGED <<vol, dur, dstat, mgen, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vpc, vsess, vfile>>
+
+VPartWritten(e) ==
+    /\ vpc # VDown /\ vpart[e].st = "sealed"
+    /\ vops' = [vops EXCEPT ![vpart[e].v].st = "done"]
+    /\ vpart' = [vpart EXCEPT ![e] = NoVPart]
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, nextV, vpc, vsess, vfile>>
+
+VPartDrop(e) ==
+    /\ vpc # VDown /\ vpart[e].st = "drop"
+    /\ LET pt == vpart[e] IN
+       IF VOk(e)
+       THEN /\ vol' = [vol EXCEPT ![e][T(pt.p)] = 0]
+            /\ dur' = [dur EXCEPT ![e][T(pt.p)] = 0]
+            /\ ops' = [ops EXCEPT ![pt.p].st = "undone"]
+            /\ vops' = [vops EXCEPT ![pt.v].st = "undone"]
+       ELSE UNCHANGED <<vol, dur, ops, vops>>
+    /\ vpart' = [vpart EXCEPT ![e] = NoVPart]
+    /\ UNCHANGED <<objs, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, ghost, nextV, vpc,
+                   vsess, vfile>>
+
+(* §21.2 A file that exists, opened to be written through the view, on the copy it presents alone, and its write
+   journaled once, done at once, unless an operation of the view open at that path already presents it from there
+   (writer.Open, journalWrite). *)
+VWriteOpen(f) ==
+    /\ "write" \in ViewActs /\ vpc = VIdle /\ ~vfile.open /\ cnt.user < MaxUser
+    /\ LET d == ViewDisk(f)
+           latest == IF OpenAt(f) = {} THEN 0 ELSE Max(OpenAt(f))
+           again == latest # 0 /\ vops[latest].k \in {"create", "write"} /\ vops[latest].d = d
+       IN /\ d # 0 /\ VOk(d) /\ vol[d][M(f)] # 0
+          /\ again \/ nextV <= MaxVOps
+          /\ vops' = IF again THEN vops ELSE [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "write", !.d = d, !.f = f, !.st = "done"]]
+          /\ nextV' = IF again THEN nextV ELSE nextV + 1
+          /\ vfile' = [open |-> TRUE, f |-> f, d |-> d, o |-> vol[d][M(f)]]
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vpc, vsess, vpart>>
+
+(* §21.2 A deletion: the parts of the file being written at that path dropped (abandonAt), the copy the view presents
+   looked at, then its operation trash of ops, deleted, and the view's row unlink that names it, in one transaction
+   (catalog.BeginViewTrash), then the steps of §17.1 (ops.ToTrash): the look right before the move, which the model
+   takes apart from the move so that a user may act between them, the move without replacing anything, or link, its
+   syncs, a look at the source and unlink, then the look after the move, the syncs and the commit. *)
+VDelete(f) ==
+    /\ "delete" \in ViewActs /\ vpc = VIdle /\ cnt.user < MaxUser /\ nextOp <= MaxOps /\ nextV <= MaxVOps
+    /\ LET d == ViewDisk(f)
+           key == IF d = 0 THEN 0 ELSE vol[d][M(f)]
+       IN /\ d # 0 /\ VOk(d) /\ key # 0
+          /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "trash", d |-> d, f |-> f, key |-> key, st |-> "planned", part |-> 0,
+                                              reason |-> "deleted"]]
+          /\ vops' = [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "unlink", !.d = d, !.f = f, !.p = nextOp, !.key = key,
+                                                !.gen = objs[key].gen, !.cg = objs[key].cg, !.st = "planned"]]
+          /\ vpart' = IF vfile.open /\ vfile.f = f
+                      THEN [e \in Disks |-> IF vpart[e].st \in {"live", "failed"} THEN [vpart[e] EXCEPT !.st = "drop"] ELSE vpart[e]]
+                      ELSE vpart
+          /\ cnt' = [cnt EXCEPT !.user = @ + 1]
+          /\ ghost' = [ghost EXCEPT !.udel = @ \cup {objs[key].ver}, !.vlast = [@ EXCEPT ![f] = 0]]
+    /\ nextOp' = nextOp + 1
+    /\ nextV' = nextV + 1
+    /\ vpc' = [ph |-> "del", v |-> nextV, s |-> "journaled"]
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, rjob, tjob, tick, pc, sess, look, nver, vsess, vfile>>
+
+VDelLook ==
+    /\ vpc.ph = "del" /\ vpc.s = "journaled"
+    /\ LET o == vops[vpc.v] IN
+       /\ VOk(o.d)
+       /\ IF vol[o.d][M(o.f)] = o.key /\ objs[o.key].gen = o.gen /\ objs[o.key].cg = o.cg
+          THEN /\ vpc' = [vpc EXCEPT !.s = "looked"] /\ UNCHANGED <<ops, vops>>
+          ELSE \* changed: nothing moves, undone (§17.1, step 4)
+               /\ ops' = [ops EXCEPT ![o.p].st = "undone"]
+               /\ vops' = [vops EXCEPT ![vpc.v].st = "undone"]
+               /\ vpc' = VIdle
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, ghost, nextV, vsess, vpart, vfile>>
+
+VDelMove ==
+    /\ vpc.ph = "del" /\ vpc.s = "looked"
+    /\ LET o == vops[vpc.v]
+           d == o.d
+           src == vol[d][M(o.f)]
+       IN /\ VOk(d)
+          /\ IF src = 0
+             THEN /\ ops' = [ops EXCEPT ![o.p].st = "undone"]
+                  /\ vops' = [vops EXCEPT ![vpc.v].st = "undone"]
+                  /\ vpc' = VIdle
+                  /\ UNCHANGED vol
+             ELSE IF d \in LinkDisks
+             THEN /\ vol' = [vol EXCEPT ![d][X(o.p)] = src]
+                  /\ vpc' = [vpc EXCEPT !.s = "linked"]
+                  /\ UNCHANGED <<ops, vops>>
+             ELSE /\ vol' = [vol EXCEPT ![d][M(o.f)] = 0, ![d][X(o.p)] = src]
+                  /\ vpc' = [vpc EXCEPT !.s = "after"]
+                  /\ UNCHANGED <<ops, vops>>
+    /\ UNCHANGED <<objs, dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, ghost, nextV,
+                   vsess, vpart, vfile>>
+
+VDelLinkSync ==
+    /\ vpc.ph = "del" /\ vpc.s = "linked"
+    /\ LET o == vops[vpc.v] IN
+       /\ VOk(o.d)
+       /\ dur' = [dur EXCEPT ![o.d][X(o.p)] = vol[o.d][X(o.p)]]
+       /\ objs' = SyncObjs(objs, {vol[o.d][X(o.p)]} \ {0})
+    /\ vpc' = [vpc EXCEPT !.s = "lsynced"]
+    /\ UNCHANGED <<vol, dstat, mgen, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vsess, vpart, vfile>>
+
+(* The look at the source's name before the unlink: inode, size and modification time, as the link moved the change
+   time. Gone by itself, the link is the file's name now; another file or an edit, the link goes, undone. *)
+VDelUnlink ==
+    /\ vpc.ph = "del" /\ vpc.s = "lsynced"
+    /\ LET o == vops[vpc.v]
+           d == o.d
+           src == vol[d][M(o.f)]
+       IN /\ VOk(d)
+          /\ IF src = 0
+             THEN /\ vpc' = [vpc EXCEPT !.s = "after"] /\ UNCHANGED <<vol, ops, vops>>
+             ELSE IF src # o.key \/ objs[o.key].gen # o.gen
+             THEN /\ vol' = [vol EXCEPT ![d][X(o.p)] = 0]
+                  /\ ops' = [ops EXCEPT ![o.p].st = "undone"]
+                  /\ vops' = [vops EXCEPT ![vpc.v].st = "undone"]
+                  /\ vpc' = VIdle
+             ELSE /\ vol' = [vol EXCEPT ![d][M(o.f)] = 0]
+                  /\ vpc' = [vpc EXCEPT !.s = "after"]
+                  /\ UNCHANGED <<ops, vops>>
+    /\ UNCHANGED <<objs, dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, ghost, nextV,
+                   vsess, vpart, vfile>>
+
+(* §17.1, step 4: afterwards the trash's name must hold the copy, by its inode, size and modification time. Otherwise
+   the code (writer.toTrash, which calls no ResolveNow) gives up: the operation undone, both names as they are; §17.1
+   says it is resolved at once by the table of §17.2, which "view-resolve" in Fixes takes (README.md, flaw 4). *)
+VDelAfter ==
+    /\ vpc.ph = "del" /\ vpc.s = "after"
+    /\ LET v == vpc.v
+           o == vops[v]
+           d == o.d
+       IN /\ VOk(d)
+          /\ IF vol[d][X(o.p)] = o.key /\ objs[o.key].gen = o.gen
+             THEN /\ vpc' = [vpc EXCEPT !.s = "moved"] /\ UNCHANGED <<objs, vol, dur, ops, vops, ghost>>
+             ELSE IF "view-resolve" \in Fixes
+             THEN /\ VTrashResolveNames(d, v)
+                  /\ vpc' = [ph |-> "del", v |-> v, s |-> "resolved", out |-> VTrashOut(d, v)]
+                  /\ UNCHANGED <<ops, vops, ghost>>
+             ELSE /\ ops' = [ops EXCEPT ![o.p].st = "undone"]
+                  /\ vops' = [vops EXCEPT ![v].st = "undone"]
+                  /\ ghost' = Flag(ghost, "inv10-replacement", VLatestIn(o.f, vol[d][X(o.p)]))
+                  /\ vpc' = VIdle
+                  /\ UNCHANGED <<objs, vol, dur>>
+    /\ UNCHANGED <<dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, nextV, vsess, vpart, vfile>>
+
+VDelResolved ==
+    /\ vpc.ph = "del" /\ vpc.s = "resolved"
+    /\ LET o == vops[vpc.v] IN
+       /\ ops' = [ops EXCEPT ![o.p].st = vpc.out]
+       /\ vops' = [vops EXCEPT ![vpc.v].st = vpc.out]
+       /\ ghost' = Flag(Flag(ghost, "inv7", vpc.out = "done" /\ ~Durable(o.d, X(o.p), o.key)),
+                        "inv10-replacement", VLatestIn(o.f, vol[o.d][X(o.p)]))
+    /\ vpc' = VIdle
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, nextV, vsess, vpart, vfile>>
+
+(* §17.1 step 5: fsync of the file at its new name and of the trash's folder, then of the source's folder. *)
+VDelSync ==
+    /\ vpc.ph = "del" /\ vpc.s \in {"moved", "tsynced"}
+    /\ LET o == vops[vpc.v]
+           n == IF vpc.s = "moved" THEN X(o.p) ELSE M(o.f)
+       IN /\ VOk(o.d)
+          /\ dur' = [dur EXCEPT ![o.d][n] = vol[o.d][n]]
+          /\ objs' = SyncObjs(objs, {vol[o.d][n]} \ {0})
+    /\ vpc' = [vpc EXCEPT !.s = IF vpc.s = "moved" THEN "tsynced" ELSE "ssynced"]
+    /\ UNCHANGED <<vol, dstat, mgen, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vsess, vpart, vfile>>
+
+(* The view's operation done, and its operation trash with it (catalog.FinishViewOp); the copy's row is the pass's to
+   remove, as gone by the user. *)
+VDelFinish ==
+    /\ vpc.ph = "del" /\ vpc.s = "ssynced"
+    /\ LET o == vops[vpc.v] IN
+       /\ ops' = [ops EXCEPT ![o.p].st = "done"]
+       /\ vops' = [vops EXCEPT ![vpc.v].st = "done"]
+       /\ ghost' = Flag(ghost, "inv7", ~Durable(o.d, X(o.p), o.key) \/ dur[o.d][M(o.f)] = o.key)
+    /\ vpc' = VIdle
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, nextOp, rjob, tjob, tick, pc, sess, look, cnt, nver, nextV, vsess, vpart, vfile>>
+
+(* A disk that cannot be relied on at any step of a deletion: its operations stay planned, for the view's reprise. *)
+VDelLost ==
+    /\ vpc.ph = "del" /\ vpc.s \in {"journaled", "looked", "linked", "lsynced", "after", "moved", "tsynced"}
+    /\ ~VOk(vops[vpc.v].d)
+    /\ vpc' = VIdle
+    /\ UNCHANGED <<phys, cat, pc, sess, look, cnt, nver, ghost, vops, nextV, vsess, vpart, vfile>>
+
+ViewUser ==
+    \/ \E f \in Files : VCreate(f) \/ VWriteOpen(f) \/ VDelete(f)
+    \/ VData
+
+ViewSys ==
+    \/ VStart \/ VCheck \/ VRepriseOp \/ VRepriseCommit \/ VRepriseEnd
+    \/ VCreateMake \/ VPartBegin \/ VPartMake \/ VPartsDone \/ VClose
+    \/ \E e \in Disks : VPartSeal(e) \/ VPartWritten(e) \/ VPartDrop(e)
+    \/ VDelLook \/ VDelMove \/ VDelLinkSync \/ VDelUnlink \/ VDelAfter \/ VDelResolved \/ VDelSync \/ VDelFinish \/ VDelLost
+
+-----------------------------------------------------------------------------
 
 Atoll ==
     \/ PassStart
@@ -1125,12 +1731,16 @@ Atoll ==
     \/ CopyPick \/ CopyPart \/ CopyKey \/ CopySourceLost \/ CopyData \/ CopyRecheck \/ CopyVerify
     \/ CopyRename \/ CopyUnlink \/ CopyRecord \/ CopySync \/ CopyCommit \/ CopyLost
 
-Next == Atoll \/ World
+(* The daemon's passes, with what they make of the view's operations. *)
+AtollAll == (Atoll /\ UNCHANGED vw) \/ AdoptParts \/ SettleParts \/ TakeIn
+
+Next == AtollAll \/ (World /\ UNCHANGED vw) \/ PowerCut \/ VStop \/ ViewSys \/ ViewUser
 
 Spec == Init /\ [][Next]_vars
 
-(* For liveness: Atoll keeps running its passes, and a disk lost is mounted again in time. *)
-FairSpec == Spec /\ WF_vars(Atoll) /\ \A d \in Disks : WF_vars(Return(d))
+(* For liveness: Atoll keeps running its passes, the view its own steps and the program closes what it opened, and a
+   disk lost is mounted again in time. *)
+FairSpec == Spec /\ WF_vars(AtollAll) /\ WF_vars(ViewSys) /\ \A d \in Disks : WF_vars(Return(d) /\ UNCHANGED vw)
 
 -----------------------------------------------------------------------------
 (* Invariants, named after CLAUDE.md's non-negotiable invariants. *)
@@ -1200,12 +1810,23 @@ ReplicaInSync ==
 DoubtUnverified ==
     \A f \in Files, d \in Disks : crow[f][d].doubt => ~crow[f][d].verified
 
+(* 14. Atoll's own view presents the in-sync copy with the oldest creation time, never a stale one (§21.2): a file a
+   user last wrote through the view, and did not delete since, reads through it as what was written, while every disk
+   is there and online in the catalog and the file is in no conflict. A change made directly on a disk is the passes' to
+   bring to the view, and leaves no claim (UserAct). *)
+ViewPresentsLatest ==
+    \A f \in Files : LET d == ViewDisk(f) IN
+        (ghost.vlast[f] > 0 /\ ~cfile[f].conflict /\ AllOnline)
+        => (d # 0 /\ vol[d][M(f)] # 0 /\ objs[vol[d][M(f)]].ver = ghost.vlast[f])
+
 TypeOK ==
     /\ dstat \in [Disks -> {"up", "gone"}]
     /\ cdisk \in [Disks -> {"online", "missing"}]
     /\ \A f \in Files, d \in Disks : crow[f][d].st \in {"none", "ok", "stale", "pending"}
     /\ \A p \in OpIds : ops[p].st \in {"none", "planned", "done", "undone"}
     /\ nextOp \in 1..(MaxOps + 1)
+    /\ \A v \in VIds : vops[v].st \in {"none", "planned", "done", "undone"}
+    /\ nextV \in 1..(MaxVOps + 1)
 
 -----------------------------------------------------------------------------
 (* Liveness, under FairSpec, with Waits = FALSE and no disk lost for good: each file reaches its level, and no
@@ -1216,5 +1837,10 @@ Settled ==
     /\ \A p \in OpIds : ops[p].st # "planned"
 
 EventuallySettled == <>[]Settled
+
+(* With the view: every operation of the view that happened is taken in, by a pass, at last (§21.2). *)
+ViewTaken == \A v \in VIds : (vops[v].k # "none" /\ vops[v].st # "undone") => vops[v].taken
+
+EventuallyViewTaken == <>[]ViewTaken
 
 =============================================================================
