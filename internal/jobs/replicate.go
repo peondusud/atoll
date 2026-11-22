@@ -153,6 +153,31 @@ type replicator struct {
 	on *sharedSession
 }
 
+// roomPast says whether a disk keeps min_free once a copy writes grow bytes more there, as its filesystem says its
+// free space now. A disk whose space cannot be read is let through: ENOSPC still keeps its capacity.
+func (r *replicator) roomPast(disk string, grow int64) bool {
+	for i := range r.config.Disks {
+		d := &r.config.Disks[i]
+		if d.ID != disk {
+			continue
+		}
+		capacity, free, err := r.machine.Space(d.Mount)
+		if err != nil {
+			return true
+		}
+		minFree, err := r.config.MinFree()
+		if err != nil {
+			return true
+		}
+		reserved, err := minFree.Reserved(capacity)
+		if err != nil {
+			return true
+		}
+		return free-grow >= reserved
+	}
+	return true
+}
+
 func (r *replicator) positions(ctx context.Context) error {
 	rows, err := catalog.Disks(ctx, r.db)
 	if err != nil {
@@ -751,6 +776,10 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 	}
 	var hashes []byte
 	first := start
+	// What the part holds past which a write takes room on its disk: each such write checks min_free first, so that no
+	// copy takes its disk past it, whatever else wrote there since the plan, as the view's parts do (specs.md §14;
+	// conformance/models/README.md, flaw 12).
+	end := part.Stat.Size
 	record := func() error {
 		if err := catalog.RecordChunks(ctx, c.r.db, c.job.ID, first, hashes); err != nil {
 			return fmt.Errorf("%w: %w", errCatalog, err)
@@ -788,12 +817,16 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 			same = m == n && bytes.Equal(held[:m], buf[:n])
 		}
 		if !same {
+			if grow := off + int64(n) - end; grow > 0 && !c.r.roomPast(c.op.Disk, grow) {
+				return c.drop(ctx, OutcomeNoRoom, true)
+			}
 			if _, err := part.WriteAt(buf[:n], off); err != nil {
 				if isNoRoom(err) {
 					return c.drop(ctx, OutcomeNoRoom, true)
 				}
 				return classifyDisk(err)
 			}
+			end = max(end, off+int64(n))
 		}
 		sum := integrity.ChunkSum(buf[:n])
 		hashes = append(hashes, sum[:]...)

@@ -499,15 +499,18 @@ func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[in
 // recoverMakeLink resolves a link left planned: made, it is done; not there, or another file there, nothing of it
 // happened. Either way nothing else depends on it: the next pass looks at the links again.
 func (d *Disk) recoverMakeLink(ctx context.Context, db *sql.DB, op *Op) error {
-	seen, st, err := d.seen(d.linkPlace(op.Link), op)
+	seen, _, err := d.seen(d.linkPlace(op.Link), op)
 	if err != nil {
 		return err
 	}
 	if seen != SeenSame {
 		return d.endLink(ctx, db, op, nil, false)
 	}
-	// What the file had just before is gone with the crash: its names take what it has now, as after any reprise.
-	return d.endLink(ctx, db, op, linksFrom(&st), true)
+	// What the file had just before is gone with the crash: its names keep what they recorded, so that the next look
+	// finds the change time moved and reads the copy, a change of metadata alone when nothing else was written. Taking
+	// what is there now would take a write that kept the size and the dates for the link's (specs.md §17.2;
+	// conformance/models/README.md, flaw 11, the maintainer's remedy). The guard's links are no names a row counts.
+	return d.endLink(ctx, db, op, nil, true)
 }
 
 // endLink ends an operation on a link, done with what the names of its file record, or undone.
@@ -534,9 +537,6 @@ func (d *Disk) recoverDropLink(ctx context.Context, db *sql.DB, op *Op) error {
 	if seen != SeenAbsent {
 		return d.endLink(ctx, db, op, nil, false)
 	}
-	links, err := d.LinksLeft(ctx, db, op.FileKey, sql.NullInt64{})
-	if err != nil {
-		return err
-	}
-	return d.endLink(ctx, db, op, links, true)
+	// Its names keep what they recorded, as for a link made (recoverMakeLink, flaw 11).
+	return d.endLink(ctx, db, op, nil, true)
 }

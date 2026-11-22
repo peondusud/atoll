@@ -15,9 +15,9 @@
    none, the others canceled; then the copies a file below its level gets, on the disk with the most room past min_free
    and the pending copies kept), then the run (§14, internal/jobs/parallel.go): a queued job starts as soon as the disk
    it reads and the disk it writes each run fewer copies than their limit, fewer than Total run in all, and no copy of
-   its file runs (the per-path lock); then each copy under way takes its steps, journaled, its part made, copied (ENOSPC
-   is no-room: the part dropped, undone, queued again), synced, verified, renamed without replacing anything, synced,
-   committed. A disk one copy cannot rely on is lost at once for every copy that has not started, and each copy under
+   its file runs (the per-path lock); then each copy under way takes its steps, journaled, its part made, copied (ENOSPC,
+   or a write that would take its disk past min_free, is no-room: the part dropped, undone, queued again), synced,
+   verified, renamed without replacing anything, synced, committed. A disk one copy cannot rely on is lost at once for every copy that has not started, and each copy under
    way on it stops at its next step: planned for the reprise on its target, undone with its part kept on its source.
 
    What it leaves out: what a walk finds and the decisions (no copy changes but by Atoll; a source is always what its row
@@ -44,7 +44,7 @@ CONSTANTS
     MaxCut,     \* how many power cuts
     MaxDrop,    \* how many times a disk is lost
     MaxOps,     \* how many operations Atoll may journal
-    Fixes       \* the remedies proposed for the flaws it found and still open, by name (README.md)
+    Fixes       \* the remedies proposed for the flaws it found and still open, by name (README.md); {} is specs.md as it is
 
 Disks == 1..NDisks
 Files == 1..NFiles
@@ -56,7 +56,7 @@ Names == 1..(NFiles + MaxOps)
 ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3 /\ Total \in Nat \ {0}
        /\ Size \in [Files -> Nat \ {0}] /\ Cap \in [Disks -> Nat] /\ MinFree \in [Disks -> Nat]
        /\ Limit \in [Disks -> Nat \ {0}] /\ Start \in [Files -> SUBSET Disks]
-       /\ Fixes \subseteq {"copy-room", "view-room"}
+       /\ Fixes = {}    \* no flaw open: flaw 12's remedies are specs.md's and the code's, and the model's
 
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 RECURSIVE SumFiles(_)
@@ -153,9 +153,9 @@ UserFill(d) ==
     /\ UNCHANGED <<vol, dstat, mgen, vfill, cat, pc, sess, run>>
 
 (* §21.2, Copies written in parallel: the view writes a part of a new file to a disk, as the program writes it, beside
-   the daemon's copies, with the room it measured past min_free as its filesystem says it (writer.openPart,
-   parallel.mirror), the room the catalog's pending copies hold there not counted; with the remedy view-room of
-   README.md's flaw 12, counted. *)
+   the daemon's copies, with the room it measured past min_free as its filesystem says it, less what the catalog's
+   pending copies still have to write there (writer.openPart, writer.pendingLeft, parallel.mirror; README.md's flaw
+   12, the remedy view-room). *)
 (* What the pending copies of a disk still have to write there: each its size, less what its part holds. *)
 PartBytes(f, d) == LET n == vol[d][T(rjob[f][d].part)] IN IF rjob[f][d].part # 0 /\ n # 0 THEN objs[n].size ELSE 0
 RECURSIVE SumLeft(_, _)
@@ -163,7 +163,7 @@ SumLeft(S, d) == IF S = {} THEN 0 ELSE LET f == CHOOSE x \in S : TRUE IN (Size[f
 PendingRoom(d) == SumLeft({f \in Files : crow[f][d].st = "pending" /\ rjob[f][d].on}, d)
 ViewWrite(d) ==
     /\ cnt.view < MaxView /\ Up(d)
-    /\ FreeNow(d) >= FillBy + MinFree[d] + (IF "view-room" \in Fixes THEN PendingRoom(d) ELSE 0)
+    /\ FreeNow(d) >= FillBy + MinFree[d] + PendingRoom(d)
     /\ vfill' = [vfill EXCEPT ![d] = @ + FillBy]
     /\ cnt' = [cnt EXCEPT !.view = @ + 1]
     /\ UNCHANGED <<objs, vol, dur, dstat, mgen, ufill, cat, pc, sess, run, ghost>>
@@ -389,11 +389,12 @@ CopyStep(f, d) ==
                          /\ ops' = [ops EXCEPT ![p].key = n]
                  /\ UNCHANGED <<crow, rjob, ghost>>
             [] r.s = "made" ->
-                 \* the copy, read from the source: ENOSPC, or with the remedy copy-room of README.md's flaw 12 a write
-                 \* that would take the disk past min_free, is no-room: the part goes, undone, the job queued again
+                 \* the copy, read from the source: ENOSPC, or a write that would take the disk past min_free
+                 \* (replicator.roomPast; README.md's flaw 12, the remedy copy-room), is no-room: the part goes,
+                 \* undone, the job queued again
                  /\ Ok(src)
                  /\ LET grow == Size[f] - objs[r.o].size
-                    IN IF FreeNow(d) >= grow /\ (("copy-room" \notin Fixes) \/ FreeNow(d) >= grow + MinFree[d])
+                    IN IF FreeNow(d) >= grow + MinFree[d]
                        THEN /\ objs' = [objs EXCEPT ![r.o].size = Size[f], ![r.o].ver = objs[s.obj].ver]
                             /\ run' = [run EXCEPT ![f][d].s = "copied"]
                             /\ UNCHANGED <<vol, dur, ops, rjob>>

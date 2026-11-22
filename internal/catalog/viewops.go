@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -36,6 +37,9 @@ const (
 	OpPlanned = "planned"
 	OpDone    = "done"
 	OpUndone  = "undone"
+	// ViewHeld is a write, or a new file, that the view holds open, view_ops alone: done once it lets go of its last
+	// handle on the file, and never taken in before (specs.md §21.2; conformance/models/README.md, flaw 10).
+	ViewHeld = "open"
 )
 
 // ViewOp is one operation of the view, as view_ops holds it.
@@ -109,13 +113,26 @@ func insertViewOp(ctx context.Context, tx *sql.Tx, v *ViewOp) error {
 }
 
 // BeginViewOp journals an operation of the view before it runs, planned; a write, which moves no name, is done at
-// once (specs.md §9, §21.2).
+// once (specs.md §9, §21.2), or held, while the view holds the file open to write. A held write waits while a move of
+// Atoll's own of the copy it writes is planned: ErrMovePlanned, checked in the transaction that journals it, as the
+// transfer of the SSD cache checks the view's operations in its own (flaw 10).
 func BeginViewOp(ctx context.Context, db *sql.DB, v *ViewOp) error {
+	held := v.State == ViewHeld && v.Kind == ViewWrite
 	v.State = OpPlanned
 	if v.Kind == ViewWrite {
 		v.State = OpDone
+		if held {
+			v.State = ViewHeld
+		}
 	}
-	err := inTransaction(ctx, db, func(tx *sql.Tx) error { return insertViewOp(ctx, tx, v) })
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		if held {
+			if planned, err := movePlannedAt(ctx, tx, v.Disk, v.Path); err != nil || planned {
+				return cmpErr(err, ErrMovePlanned)
+			}
+		}
+		return insertViewOp(ctx, tx, v)
+	})
 	if err != nil {
 		return fmt.Errorf("%q: %w", v.Path, err)
 	}
@@ -171,6 +188,107 @@ func FinishViewOp(ctx context.Context, db *sql.DB, v *ViewOp, state string, warn
 		return fmt.Errorf("%q: %w", v.Path, err)
 	}
 	v.State = state
+	return nil
+}
+
+// ErrMovePlanned says that a move of Atoll's own of the copy at a path is planned: what would write to it waits.
+var ErrMovePlanned = errors.New("a move of Atoll's own of that copy is planned")
+
+// ErrViewHolds says that an operation of the view no pass has taken in touches a path: Atoll's own move waits.
+var ErrViewHolds = errors.New("an operation of the view touches that path")
+
+// cmpErr gives err, or want when err is nil.
+func cmpErr(err, want error) error {
+	if err != nil {
+		return err
+	}
+	return want
+}
+
+// movePlannedAt says whether a move to the trash of the copy at a path on a disk is planned, of Atoll's own: an
+// operation of ops no row of view_ops names.
+func movePlannedAt(ctx context.Context, tx *sql.Tx, disk, path string) (bool, error) {
+	var n int
+	err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ops o WHERE o.state = 'planned' AND o.kind = 'trash' AND o.disk_id = ?
+		AND o.path = ? AND NOT EXISTS (SELECT 1 FROM view_ops v WHERE v.op_id = o.id)`, disk, []byte(path)).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("journal: %w", err)
+	}
+	return n > 0, nil
+}
+
+// MovePlannedAt is movePlannedAt, on its own.
+func MovePlannedAt(ctx context.Context, db *sql.DB, disk, path string) (bool, error) {
+	var planned bool
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		var err error
+		planned, err = movePlannedAt(ctx, tx, disk, path)
+		return err
+	})
+	return planned, err
+}
+
+// viewTouches says whether an operation of the view no pass has taken in touches a path: at it, above it or below it.
+func viewTouches(ctx context.Context, tx *sql.Tx, path string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT lpath, COALESCE(lpath2, x'') FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone'")
+	if err != nil {
+		return false, fmt.Errorf("view journal: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	below := func(p, at string) bool { return p == at || strings.HasPrefix(p, at+"/") }
+	for rows.Next() {
+		var lpath, lpath2 []byte
+		if err := rows.Scan(&lpath, &lpath2); err != nil {
+			return false, fmt.Errorf("view journal: %w", err)
+		}
+		for _, at := range []string{string(lpath), string(lpath2)} {
+			if at != "" && (below(path, at) || below(at, path)) {
+				return true, nil
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("view journal: %w", err)
+	}
+	return false, nil
+}
+
+// HoldViewOp says that the view holds open again a write or a new file it journaled, done and not taken in yet. It
+// waits, as a new held write does, while a move of Atoll's own of that copy is planned: ErrMovePlanned. No such move
+// is journaled while the row is not taken in (TrashStart.ViewFree), and this keeps it so whatever journaled one.
+func HoldViewOp(ctx context.Context, db *sql.DB, id int64) error {
+	return inTransaction(ctx, db, func(tx *sql.Tx) error {
+		var disk string
+		var path []byte
+		switch err := tx.QueryRowContext(ctx, "SELECT disk_id, lpath FROM view_ops WHERE id = ?", id).Scan(&disk, &path); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return fmt.Errorf("view journal: %w", err)
+		}
+		if planned, err := movePlannedAt(ctx, tx, disk, string(path)); err != nil || planned {
+			return cmpErr(err, ErrMovePlanned)
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE view_ops SET state = 'open' WHERE id = ? AND state = 'done' AND taken_ns IS NULL", id); err != nil {
+			return fmt.Errorf("view journal: %w", err)
+		}
+		return nil
+	})
+}
+
+// ReleaseViewOp says that the view let go of its last handle on a file it held open: done.
+func ReleaseViewOp(ctx context.Context, db *sql.DB, id int64) error {
+	if _, err := db.ExecContext(ctx, "UPDATE view_ops SET state = 'done' WHERE id = ? AND state = 'open'", id); err != nil {
+		return fmt.Errorf("view journal: %w", err)
+	}
+	return nil
+}
+
+// ReleaseViewOps says that the view holds nothing open, as at its start: every row held open is done.
+func ReleaseViewOps(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, "UPDATE view_ops SET state = 'done' WHERE state = 'open'"); err != nil {
+		return fmt.Errorf("view journal: %w", err)
+	}
 	return nil
 }
 

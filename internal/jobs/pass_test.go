@@ -30,7 +30,9 @@ type bench struct {
 	dirs   map[string]string
 	// spaces gives, by mount, the capacity and the free space a disk reports, when it is not the one every disk has.
 	spaces map[string][2]int64
-	fail   map[string]func(call, name string) error
+	// spaceErr makes the free space of a disk, by mount, fail to be read.
+	spaceErr map[string]error
+	fail     map[string]func(call, name string) error
 	// walkFail makes a call fail in a walk, which goes through its own handle.
 	walkFail map[string]func(call, name string) error
 	// pastCache counts, by mount, the reads of a disk's head past the cache: what confirms a disk, and wakes it.
@@ -102,6 +104,9 @@ func (b *bench) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
 }
 func (b *bench) Now() int64 { return b.now }
 func (b *bench) Space(mount string) (capacity, free int64, err error) {
+	if err := b.spaceErr[mount]; err != nil {
+		return 0, 0, err
+	}
 	if s, ok := b.spaces[mount]; ok {
 		return s[0], s[1], nil
 	}

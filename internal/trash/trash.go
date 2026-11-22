@@ -754,7 +754,7 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 // it left its place, purged or not. One the purge leaves stays in the trash, which its retention or trash.max_size
 // empties.
 func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow) (string, error) {
-	outcome, op, err := s.send(ctx, f, c, reasonSurplus)
+	outcome, op, err := s.sendFor(ctx, f, c, reasonSurplus, true)
 	if err != nil || outcome != OutcomeTrashed || op == nil {
 		return outcome, err
 	}
@@ -764,6 +764,19 @@ func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.C
 	}
 	if !found {
 		return outcome, nil
+	}
+	// Right before the purge, the copies on the data disks the transfer leans on are looked at: the catalog's word that
+	// they hold the file may be the whole pass old. One that is no longer what its row says, or that cannot be looked
+	// at, undoes the transfer's purge: nothing is purged, the copy stays in the cache's trash, and the next pass decides
+	// from what the data disks hold (specs.md §19; conformance/models/README.md, flaw 8, the maintainer's remedy).
+	held, err := s.dataCopiesHold(ctx, f.ID, c.Disk)
+	if err != nil {
+		return "", err
+	}
+	if !held {
+		slog.Warn("a copy the SSD cache sent stays in its trash: the copies on the data disks are no longer what the catalog says",
+			"disk", e.Disk, "path", e.Path)
+		return OutcomeChanged, nil
 	}
 	purged, err := s.purgeEntry(ctx, &e)
 	if err != nil {
@@ -775,8 +788,46 @@ func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.C
 	return outcome, nil
 }
 
+// dataCopiesHold says whether every copy of a file on a data disk the catalog calls ok is what its row says, as a look
+// finds it now, and whether there is one: what a transfer leans on before its purge. A disk that fails the look is lost
+// (invariant 4), and says the copy does not hold.
+func (s *Session) dataCopiesHold(ctx context.Context, fileID int64, cacheDisk string) (bool, error) {
+	f, err := catalog.FileByID(ctx, s.db, fileID)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if f == nil {
+		return false, nil
+	}
+	held := 0
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		sl := s.slots[c.Disk]
+		if c.Disk == cacheDisk || c.State != string(solver.CopyOK) || sl == nil || sl.config == nil || sl.config.Role == solver.RoleCache {
+			continue
+		}
+		same, err := s.unchanged(ctx, f.Path, c)
+		if err != nil || !same {
+			return false, err
+		}
+		held++
+	}
+	return held > 0, nil
+}
+
+// OutcomeViewHolds says that an operation of the view no pass has taken in touches the path of a copy the transfer
+// would move, as its journal's transaction read it: the transfer waits, as for one the pass read before it (specs.md
+// §19, §21.2; conformance/models/README.md, flaw 10). No line says it.
+const OutcomeViewHolds = "view-holds"
+
 // send is Send, which also gives the operation that moved the copy, when one did.
 func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, *ops.Op, error) {
+	return s.sendFor(ctx, f, c, reason, false)
+}
+
+// sendFor is send, which with viewFree waits while an operation of the view touches the copy's path, read in the
+// transaction that journals the move: OutcomeViewHolds, nothing journaled.
+func (s *Session) sendFor(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string, viewFree bool) (string, *ops.Op, error) {
 	place := c.Place(f)
 	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
 	if !s.writable(c.Disk) {
@@ -796,8 +847,11 @@ func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
 		Disk: c.Disk, Path: place, FileKey: c.FileKey.String, Size: c.Size, Hash: hash, Reason: reason,
-		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention),
+		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention), ViewFree: viewFree,
 	})
+	if errors.Is(err, catalog.ErrViewHolds) {
+		return OutcomeViewHolds, nil, nil
+	}
 	if err != nil {
 		return "", nil, fmt.Errorf("catalog: %w", err)
 	}

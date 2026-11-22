@@ -30,6 +30,12 @@ func (w *Writer) Recheck(ctx context.Context) error {
 }
 
 func (w *Writer) reprise(ctx context.Context, running bool) error {
+	if !running {
+		// At its start the view holds nothing open: what a stopped view held is let go of (specs.md §21.2, flaw 10).
+		if err := catalog.ReleaseViewOps(ctx, w.db); err != nil {
+			return fmt.Errorf("%w", err)
+		}
+	}
 	open, err := catalog.OpenViewOps(ctx, w.db)
 	if err != nil {
 		return fmt.Errorf("%w", err)
