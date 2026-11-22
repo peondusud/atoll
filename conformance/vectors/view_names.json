@@ -48,6 +48,12 @@
     {"note": "made on one disk, then moved to another: its name once on each", "max_names": 10000,
      "ops": [{"kind": "create", "disk": "t1", "path": "a"}, {"kind": "move", "disk": "t2", "disk2": "t1", "path": "a"}],
      "disks": [{"disk": "t1", "names": [{"path": "a"}]}, {"disk": "t2", "names": [{"path": "a"}]}]},
+    {"note": "a second disk counts for a move alone: a file written with one names its own disk", "max_names": 10000,
+     "ops": [{"kind": "write", "disk": "t2", "disk2": "t1", "path": "a"}],
+     "disks": [{"disk": "t2", "names": [{"path": "a"}]}]},
+    {"note": "a move on one disk names it once", "max_names": 10000,
+     "ops": [{"kind": "move", "disk": "t1", "disk2": "t1", "path": "a"}],
+     "disks": [{"disk": "t1", "names": [{"path": "a"}]}]},
     {"note": "no operation: nothing", "max_names": 10000, "ops": [], "disks": []}
   ]
 }

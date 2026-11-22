@@ -1,6 +1,7 @@
 package trash
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -166,5 +167,27 @@ func TestARestoreOnExt4IgnoresCase(t *testing.T) {
 	}
 	if outcomes, _ := b.restoredTo("B", "t1", true); len(outcomes) != 1 || outcomes[0] != OutcomeRestored || b.read("t1", "B") != "upper" {
 		t.Errorf("to t1: %v, t1 holds B %q", outcomes, b.read("t1", "B"))
+	}
+}
+
+// A copy's row shows what its disk holds now: its creation time when the disk gives one, and none, whatever the row said,
+// when it gives none (specs.md §7, §16).
+func TestACopyShownHasTheCreationTimeItsDiskGives(t *testing.T) {
+	valid := func(n int64) sql.NullInt64 { return sql.NullInt64{Int64: n, Valid: true} }
+	birth := int64(9)
+	for _, seen := range []*catalog.SeenCopy{
+		{Size: 4, MtimeNS: 1, CtimeNS: 2, BtimeNS: &birth, FileKey: "7", Nlink: 1},
+		{Size: 4, MtimeNS: 1, CtimeNS: 2, FileKey: "7", Nlink: 1},
+	} {
+		c := catalog.CopyRow{BtimeNS: valid(5)}
+		show(&c, seen)
+		want := sql.NullInt64{}
+		if seen.BtimeNS != nil {
+			want = valid(9)
+		}
+		if c.BtimeNS != want || c.Size != valid(4) || c.MtimeNS != valid(1) || c.CtimeNS != valid(2) || c.Nlink != valid(1) ||
+			c.FileKey != (sql.NullString{String: "7", Valid: true}) {
+			t.Errorf("%+v shown as %+v", seen, c)
+		}
 	}
 }

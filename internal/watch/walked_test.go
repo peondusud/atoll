@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/solver"
 )
@@ -328,5 +331,319 @@ func TestAnEmptyFolderThatWentIsNoneToWaitFor(t *testing.T) {
 	}
 	if r := b.scan(Options{}).Disks[0]; slices.Contains(r.UnfoundFolders, "e") {
 		t.Errorf("waits for %q", r.UnfoundFolders)
+	}
+}
+
+// A scan that reads every copy reads none of a disk that is missing, and those of the disks after it all the same:
+// nothing the missing one holds is said verified (invariant 4).
+func TestAFullScanReadsNothingOfADiskMissing(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "a", "x")
+	b.write("t2", "a", "x")
+	b.scan(Options{Full: true})
+	verified := func(disk string) int64 {
+		t.Helper()
+		var at sql.NullInt64
+		if err := b.db.QueryRowContext(t.Context(), "SELECT verified_ns FROM copies WHERE disk_id = ?", disk).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at.Int64
+	}
+	before := verified("t1")
+	b.now += int64(time.Hour)
+	b.unread = map[string]bool{b.dirs["t1"]: true}
+	b.scan(Options{Full: true})
+	if verified("t1") != before || verified("t2") != b.now {
+		t.Errorf("t1 verified at %d, before at %d; t2 at %d", verified("t1"), before, verified("t2"))
+	}
+}
+
+// Two files that swapped names each moved to the other's: neither is gone nor replaced, as the file an overwriting
+// move leaves nowhere is (specs.md §15.12).
+func TestTwoFilesThatSwappedNamesEachMoved(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "x")
+	b.write("t1", "b", "yy")
+	b.scan(Options{})
+	pastTick()
+	media := filepath.Join(b.dirs["t1"], "media")
+	for _, mv := range [][2]string{{"a", "c"}, {"b", "a"}, {"c", "b"}} {
+		if err := os.Rename(filepath.Join(media, mv[0]), filepath.Join(media, mv[1])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := b.look()
+	if len(r.Absent) != 0 || len(r.Changed) != 0 || !slices.Equal(r.Moved, []MovedCopy{{Path: "a", To: "b"}, {Path: "b", To: "a"}}) {
+		t.Errorf("%+v", r)
+	}
+}
+
+// A copy gone from its name that Atoll's own folders hold, the same file, is Atoll's own and never deleted; they are
+// asked for the inodes of the copies gone alone, not of those that moved (specs.md §15.12, invariant 11).
+func TestACopyGoneIntoAtollsOwnFoldersIsItsOwn(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "x")
+	b.write("t1", "b", "yy")
+	b.scan(Options{})
+	var key string
+	var size, mtime int64
+	if err := b.db.QueryRowContext(t.Context(), "SELECT c.file_key, c.size, c.mtime_ns FROM copies c JOIN files f ON f.id = c.file_id WHERE f.lpath = ?",
+		[]byte("a")).Scan(&key, &size, &mtime); err != nil {
+		t.Fatal(err)
+	}
+	id := func(path string) int64 { return int64(b.count("SELECT id FROM files WHERE lpath = ?", []byte(path))) }
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Remove(filepath.Join(media, "a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(media, "b"), filepath.Join(media, "c")); err != nil {
+		t.Fatal(err)
+	}
+	verdicts, err := disks.CheckAll(t.Context(), b, b.config.Disks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verdictOf := func(r *Report, path string) solver.CopyVerdict {
+		for _, seen := range r.Seen {
+			if seen.FileID == id(path) {
+				return seen.Verdict
+			}
+		}
+		return ""
+	}
+	var asked []map[string]bool
+	look := &Look{Own: func(_ *config.Disk, inodes map[string]bool) (map[string][]solver.FileLook, error) {
+		asked = append(asked, inodes)
+		return map[string][]solver.FileLook{key: {{Inode: key, Size: size + 1, MtimeNS: mtime}, {Inode: key, Size: size, MtimeNS: mtime}}}, nil
+	}}
+	r, err := LookAtDisk(t.Context(), b.db, b.config, b, &b.config.Disks[0], verdicts[0], b.now, look)
+	if err != nil || verdictOf(r, "a") != solver.VerdictOwn || verdictOf(r, "b") != solver.VerdictMoved || len(asked) != 1 || len(asked[0]) != 1 || !asked[0][key] {
+		t.Errorf("%+v, %v; asked %v", r, err, asked)
+	}
+	r, err = LookAtDisk(t.Context(), b.db, b.config, b, &b.config.Disks[0], verdicts[0], b.now, &Look{})
+	if err != nil || verdictOf(r, "a") != solver.VerdictGone {
+		t.Errorf("a look that does not ask: %+v, %v", r, err)
+	}
+	failing := &Look{Own: func(*config.Disk, map[string]bool) (map[string][]solver.FileLook, error) { return nil, syscall.EIO }}
+	if _, err := LookAtDisk(t.Context(), b.db, b.config, b, &b.config.Disks[0], verdicts[0], b.now, failing); !errors.Is(err, syscall.EIO) {
+		t.Errorf("own folders that fail: %v", err)
+	}
+}
+
+// A link the guard makes once the walk read its file leaves that file the one name the walk found, never fewer
+// (specs.md §17).
+func TestALinkTheGuardMakesMeanwhileLeavesAFileItsName(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "x")
+	b.write("t1", "b", "y")
+	media, links := filepath.Join(b.dirs["t1"], "media"), filepath.Join(b.dirs["t1"], "Atoll", "links")
+	if err := os.MkdirAll(links, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, file := range map[string]string{"7": "a", "8": "b"} {
+		if err := os.Link(filepath.Join(media, file), filepath.Join(links, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, made := "", false
+	b.wrap = func(_ string, d fsx.Dir) fsx.Dir {
+		return fsx.Fault(d, func(call, name string) error {
+			if call != "stat" || (name != "a" && name != "b") {
+				return nil
+			}
+			switch {
+			case first == "":
+				first = name
+			case name != first && !made:
+				made = true
+				if err := os.Link(filepath.Join(media, first), filepath.Join(links, "9")); err != nil {
+					t.Error(err)
+				}
+			}
+			return nil
+		})
+	}
+	b.scan(Options{})
+	if got := b.count("SELECT count(*) FROM copies WHERE nlink = 1"); !made || got != 2 {
+		t.Errorf("%d copies of one name, a link made %v", got, made)
+	}
+}
+
+// deviceGone is the bench with the device of one disk gone away: its mount check finds it missing.
+type deviceGone struct {
+	*bench
+	mount string
+}
+
+func (g *deviceGone) Device(fs names.Filesystem, entry *disks.MountEntry) disks.DeviceSeen {
+	if entry.MountPoint == g.mount {
+		return disks.DeviceSeen{Device: disks.DeviceGoneAway}
+	}
+	return g.bench.Device(fs, entry)
+}
+
+// rootRefused is the bench with the root of one disk that cannot be opened, though the disk passes its check.
+type rootRefused struct {
+	*bench
+	mount string
+}
+
+func (r *rootRefused) OpenRoot(mount, root string) (fsx.Dir, error) {
+	if mount == r.mount {
+		return nil, syscall.EIO
+	}
+	return r.bench.OpenRoot(mount, root)
+}
+
+// HashNew reads nothing of a disk that is missing, nor of one whose root it cannot open, and the copies of the disks
+// after it all the same; at its time, it leaves every file for later (specs.md §15.13, invariant 4).
+func TestHashNewReadsOnlyWhatItCan(t *testing.T) {
+	var b *bench
+	verified := func(disk string) bool {
+		t.Helper()
+		return b.count("SELECT count(*) FROM copies WHERE disk_id = ? AND verified_ns IS NOT NULL", disk) == 1
+	}
+	hashed := func() int { return b.count("SELECT count(*) FROM files WHERE blake3 IS NOT NULL") }
+	fresh := func() {
+		b = newBench(t, "t1", "t2")
+		b.write("t1", "a", "x")
+		b.write("t2", "a", "x")
+		b.scan(Options{})
+	}
+	fresh()
+	if out, err := HashNew(t.Context(), b.db, b.config, b, b.now); err != nil || !out.Left || hashed() != 0 {
+		t.Errorf("at its time: %+v, %v, %d hashed", out, err, hashed())
+	}
+	if out, err := HashNew(t.Context(), b.db, b.config, &deviceGone{bench: b, mount: b.dirs["t1"]}, b.now+int64(time.Hour)); err != nil || out.Left || hashed() != 1 || verified("t1") || !verified("t2") {
+		t.Errorf("t1 missing: %+v, %v, %d hashed, t1 verified %v, t2 %v", out, err, hashed(), verified("t1"), verified("t2"))
+	}
+	fresh()
+	m := &rootRefused{bench: b, mount: b.dirs["t1"]}
+	if out, err := HashNew(t.Context(), b.db, b.config, m, b.now+int64(time.Hour)); err != nil || out.Left || hashed() != 1 || verified("t1") || !verified("t2") {
+		t.Errorf("the root of t1 refused: %+v, %v, %d hashed, t1 verified %v, t2 %v", out, err, hashed(), verified("t1"), verified("t2"))
+	}
+}
+
+// A second to the nanosecond is a second gone by: what waits is committed with the file read at that moment
+// (specs.md §15.10).
+func TestAShareEndsAtASecondToTheNanosecond(t *testing.T) {
+	b := newBench(t, "t1")
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		b.write("t1", name, "x"+name)
+	}
+	// 500 ms a file: a, b and c are read within a second to the nanosecond, and committed with c; d waits.
+	if got := b.killedAt("e", 500_000_000); got != "a,b,c" {
+		t.Errorf("killed at e, the catalog holds the hashes of %q, want a, b and c", got)
+	}
+}
+
+// A folder renamed keeps its row and those below it, and its new name and what is below it get none, folders as
+// files, until the files below are decided (specs.md §15.12).
+func TestTheFoldersBelowAFolderRenamedGetNoRowYet(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "d/sub/x", "x")
+	b.scan(Options{})
+	if b.count("SELECT count(*) FROM entries WHERE lpath = CAST('d' AS BLOB) AND btime_ns IS NOT NULL") != 1 {
+		t.Skip("no creation time of folders here")
+	}
+	media := filepath.Join(b.dirs["t1"], "media")
+	if err := os.Rename(filepath.Join(media, "d"), filepath.Join(media, "e")); err != nil {
+		t.Fatal(err)
+	}
+	r := b.look()
+	if !slices.Contains(r.FolderMoves, FolderMove{From: "d", To: "e"}) {
+		t.Fatalf("folder moves %+v", r.FolderMoves)
+	}
+	for path, want := range map[string]int{"d": 1, "d/sub": 1, "e": 0, "e/sub": 0} {
+		if got := b.count("SELECT count(*) FROM entries WHERE lpath = ?", []byte(path)); got != want {
+			t.Errorf("%d rows of %s", got, path)
+		}
+	}
+}
+
+// atoll catalog verify compares every disk after one that failed, which it never reads again (specs.md §9, §18).
+func TestACompareGoesOnPastAFailedDisk(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "a", "x")
+	b.write("t2", "a", "x")
+	b.scan(Options{})
+	b.config.Disks[0].State = config.DiskFailed
+	out, err := Compare(t.Context(), b.db, b.config, b)
+	if err != nil || len(out.Disks) != 1 || out.Disks[0].ID != "t2" || !out.Disks[0].Walked {
+		t.Errorf("%+v, %v", out, err)
+	}
+}
+
+// A disk in standby takes a new file's replica, but not when the view may not write to it (specs.md §12.4, §21.2).
+func TestAStandbyDiskTheViewCannotWriteIsNoTarget(t *testing.T) {
+	b := newBench(t, "t1", "t2", "t3")
+	b.write("t1", "show/e1.mkv", "one")
+	b.scan(Options{})
+	if _, err := b.db.ExecContext(t.Context(), "UPDATE disks SET state = 'standby' WHERE id IN ('t2', 't3')"); err != nil {
+		t.Fatal(err)
+	}
+	free := func(string) (int64, bool) { return 0, false }
+	for _, tc := range []struct {
+		name     string
+		writable func(string) bool
+		want     []string
+	}{
+		{"writable", func(string) bool { return true }, []string{"t2"}},
+		{"not writable", func(d string) bool { return d != "t2" }, []string{"t3"}},
+	} {
+		got, err := ParallelTargets(t.Context(), b.db, b.config, b.now, "show/e2.mkv", "t1", free, tc.writable)
+		if err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%s: %q, %v", tc.name, got, err)
+		}
+	}
+}
+
+// heldBelow counts the files this process holds open at or below a folder.
+func heldBelow(t *testing.T, folder string) int {
+	t.Helper()
+	fds, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, fd := range fds {
+		if target, err := os.Readlink(filepath.Join("/proc/self/fd", fd.Name())); err == nil && (target == folder || strings.HasPrefix(target, folder+"/")) {
+			n++
+		}
+	}
+	return n
+}
+
+// A look limited to names closes every folder it opened on the way to them, and keeps its root open for the next
+// name, whichever comes first (specs.md §15.13).
+func TestALookAtNamesLeavesNoFolderOpen(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "d/e/x", "x")
+	b.write("t1", "y", "y")
+	b.scan(Options{})
+	verdicts, err := disks.CheckAll(t.Context(), b, b.config.Disks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, names := range [][]Named{{{Path: "d/e/x"}, {Path: "y"}}, {{Path: "y"}, {Path: "d/e/x"}}, {{Path: "z"}, {Path: "d/e/x"}}} {
+		r, err := LookAtDisk(t.Context(), b.db, b.config, b, &b.config.Disks[0], verdicts[0], b.now, &Look{Names: names})
+		if err != nil || len(r.Absent) != 0 || len(r.Unreadable) != 0 {
+			t.Errorf("%v: %+v, %v", names, r, err)
+		}
+		if n := heldBelow(t, b.dirs["t1"]); n != 0 {
+			t.Errorf("%v: %d files left open", names, n)
+		}
+	}
+}
+
+// A file of a chunk exactly shares the transaction of the files read with it: only one of more than a chunk has one of
+// its own (specs.md §15.10).
+func TestAFileOfAChunkSharesItsTransaction(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "xa")
+	b.write("t1", "b", strings.Repeat("x", integrity.ChunkSize))
+	b.write("t1", "c", "xc")
+	if got := b.killedAt("c", 0); got != "" {
+		t.Errorf("killed at c, the catalog holds the hashes of %q, want none", got)
 	}
 }
