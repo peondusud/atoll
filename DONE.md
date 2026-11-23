@@ -2,6 +2,68 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The view's check every 30 s resolves only a disk back on a mount of its own and confirmed, 2026-11-23 (specs.md §10, §21.2)
+
+The remedy the maintainer chose on 2026-11-23, both (a) and (b), for the finding of 2026-11-22 (the entry "The
+loop-device tests replayed in qemu, and counted in the coverage", below): the view's check resolved, from the page
+cache, a deletion it had left planned on a disk whose device failed while it stayed mounted, `done`, the copy at its
+name once the disk was back. Commits `4b1abca` (the fix, its unit tests, specs.md, the model's comment, the
+fingerprint) and `21a200d` (the loop-device tests), then the one that records this, on
+`worktree-agent-ab9118bd2ef0d06d1`, on `beta`'s `0ec1132`.
+
+- **(a) Confirmed past the page cache**: before the check resolves any row of a disk, `disks.Confirm` reads the head of
+  its device past the page cache, as a session of the daemon confirms a disk (§10); a disk that does not confirm
+  resolves nothing now, with a line of the log (`readonly.checker.ready`).
+- **(b) Back on a mount of its own**: the checker keeps the mount each disk is on (`readonly.checker.follow`): the id of
+  the mount table, the device and the unique id of the mount where the kernel gives one, as the readings kept once per
+  mount tell a mount (§10); a check that finds nothing mounted at a disk's path forgets it, so that whatever is mounted
+  there next is another mount; the mounts the first check finds are those the view started on, none of their own. The
+  writer's `Recheck` takes a `writer.Ready`, which says of each disk up to when its rows may be resolved: those
+  journaled before the check that first found the mount it is on now, once that is a mount of its own and the disk
+  confirms; asked once a recheck, only of a disk with a row planned, so that no disk is read for nothing. A move's row
+  waits for both its disks. What cannot be resolved stays planned, as before; a start's reprise is unchanged.
+- **Tests seen failing first**: `writer.TestARecheckResolvesOnlyADiskBackOnAMountOfItsOwn` (not back, or failing a
+  confirm; back but journaled on that mount; another disk back: each resolved before), seen failing against `Recheck`
+  taking a `Ready` it ignored; `readonly.TestTheViewsCheckResolvesOnlyADiskBackAndConfirmed`, through the fault layer
+  and a machine whose device fails past the cache, whose mount moves on and whose device goes: a disk failing while
+  still mounted, never found lost; found missing, back on a mount of its own but failing a read past the cache; found
+  missing, its device gone, back on the same mount: each resolved before, nothing now; found missing then back on a
+  mount of its own and confirmed, and on another mount between two checks, resolved.
+  `TestTheViewsRecheckOnADiskStillFailing` unskipped: the deletion stays planned while the device fails; the view then
+  stopped, the disk brought back and the view started again, its reprise resolves it and the pass takes it in, the
+  library and the catalog agreeing.
+- **specs.md §21.2** says what "there again" is now; its fingerprint given anew. **The model** (`Replication.tla`)
+  is unchanged but its comment of `VCheck`: a row there stays planned only where `VOk` failed (`VDelLost`), its disk
+  gone or on another mount, and is `Up` again only on another mount (`Return`), which is (b); a mount check answered
+  from a page cache, and (a), are not modelled. TLC through `heavy.sh`: every instance of the three modules gives what it
+  expects, 41 pass and the five flaws of `Copies.tla` their violation.
+- **In qemu**, through `heavy.sh`, `VERBOSE=1`, the plain build (run J): the remedies' six tests **pass** on Linux
+  6.12.118 and 7.3.5, on every driver each applies to: `TestTheViewsRecheckAfterADiskLostOnEachDriver` on all seven
+  drivers of 7.3, `TestTheViewsRecheckOnADiskStillFailing` on ext4, XFS, ntfs3, the type `ntfs` and ntfs-3g; skipped
+  only the type `ntfs` on 6.12 and the put-back's killed case on the two FUSE drivers, as before. Before it, run G on
+  6.12 with the fix: `TestTheViewsRecheckOnADiskStillFailing` passed on ext4, XFS, ntfs3 and ntfs-3g, which it had
+  failed on.
+- **ntfs-3g mounted again under the view** (the coordinator's question): a diagnostic run in qemu twice (G, H; not kept)
+  mounted ntfs-3g again, unmounted at once and its process killed, daemonized or kept in the foreground, with the view
+  running and holding handles there and without it: each time the new process served the mount. What failed was in the
+  recheck's test alone, where the view had a deletion planned on that disk: the new ntfs-3g mounted, then read
+  `/dev/fuse` with EPERM ("fuse: reading device: Operation not permitted", the kernel's answer to a read of a FUSE device
+  bound to no connection) and unmounted itself (run I). The handles the view holds are not the cause; what is, is not
+  found. As the daemon's remount after a USB reset runs while `atoll mount` holds handles, it is to look at again with a
+  view whose operation is planned (TODO.md); the remount is unchanged. That test keeps the disk mounted on ntfs-3g and
+  lowntfs-3g: never lost, the check leaves the deletion planned for ten checks, and the view's next start resolves it.
+- **Checks**: `go test` of the view's packages; `go test -race` of `view`, `writer`, `readonly`, `fusefs` and `ops`
+  through `heavy.sh`; `make conformance` through `heavy.sh` (662 scenarios, passing); `go vet` in the three builds and
+  the three lints, 0 issues; `conformance/models` (the fingerprints).
+- **Not verified**: the remedies' tests under systemd; why ntfs-3g reads `/dev/fuse` with EPERM there.
+- **Decided without the maintainer, to confirm**: a disk found on another mount by a check that never found it missing,
+  as when it was mounted again between two checks, counts as lost and back, as the per-mount readings take a mount
+  that changed, rather than waiting for the view's next start (the case of flaw 5); the rows of a disk resolved are
+  those journaled before the check that first found its mount, so that a row journaled on that very mount waits for
+  the next; the mounts the view started on are none of their own; a move's row waits for both its disks; `Ready` asked
+  once a recheck and only of a disk with a row planned; a disk that does not confirm leaves its rows planned with a line
+  of the log, its mount kept, so that only another mount brings them back.
+
 ## The TLA+ models of the SSD cache's transfer, the link guard and copies at once, and the five flaws they found, 2026-11-22 (specs.md §14, §17, §19, §27, §29.4)
 
 The three next TLA+ models of TODO.md, by risk, each finished before the next, on the branch `worktree-agent-a754daf6495f5c743` from `beta`'s `cea8b6d`. They found five flaws, 8 to 12, each shown on the code by a test of the build tag `flaws` seen failing; none is fixed, as the remedies are the maintainer's (`conformance/models/README.md` gives each step by step).
@@ -94,7 +156,7 @@ TODO.md's items of the loop-device tests in qemu: the replays the copy pipeline'
   - **Flaw 5, the view's check every 30 s** (`TestTheViewsRecheckAfterADiskLostOnEachDriver`): a deletion through a real mount of the view meets EIO at its move (the fault layer), a disk lost, and stays planned; the disk is then unmounted at once and mounted again, before the view's next check (every 3 s here); the check finds it there again and resolves the deletion with no restart, `undone`, the copy at its name; the file is then deleted through the view, and a pass takes that in. **Pass** on ext4, XFS, btrfs, ntfs3, and the type `ntfs` on 7.3. On ntfs-3g and lowntfs-3g the disk stays mounted, the fault's EIO alone standing for it lost, and passes: unmounted at once with its process killed while the view held handles there, then mounted again, ntfs-3g left a mount no process served (`ENOTCONN`, no `ntfs-3g` running; measured in D4 and D5), where the same remount works with no view running; not explained (TODO.md). With dm-error instead (D1, D2), the remount of a kernel driver gave back the very superblock the view's handles kept alive, aborted, which no USB reset does: dm-error stays in the finding's test below.
   - **Flaw 6, the `mkdir` keyed by its inode** (`TestAFolderAUserMadeAtAMkdirsNameOnEachDriver`): a pass killed at `mkdir-journaled` or at `mkdir-unkeyed` (Atoll's empty folder then removed by the user), a user's folder made 0700 at that name: the reprise leaves it as it was, its inode and mode, the `mkdir` `undone`, no row saying it is Atoll's, and the copy goes into it. **Pass** on every driver of both kernels (on ntfs-3g and lowntfs-3g the mode is the mount's, 0777, and stays).
   - **Flaw 7, the rename's put-back** (`TestAFileSavedAtTheOldNameGoesBackOnEachDriver`): a user's rename taken by a pass to v, a file saved at the copy's old name at the rename's call, the fault layer's hook standing for that instant, as no real mount holds the window open: on ext4, XFS, btrfs, ntfs3 and the type `ntfs`, which rename with `RENAME_NOREPLACE`, the file arrives at the new name and goes back, also with the pass killed at `put-back` and its reprise; on ntfs-3g and lowntfs-3g, which link, the look at the source finds it and the link goes, so nothing is put back (the killed case skipped there). Either way the file saved is at its old name, at no name Atoll gave it, no rename left planned. **Pass** on every driver of both kernels.
-  - **A finding: the view's check resolves on a disk that still fails** (`TestTheViewsRecheckOnADiskStillFailing`, committed skipped): a deletion through the view stopped by dm-error under the disk, which stays mounted, failing, for ten of the view's checks before it is unmounted and mounted again. On ext4, ntfs3 and ntfs-3g, of Linux 6.12 and 7.3, the check resolved the deletion within 40 to 350 ms, `done`, from what the page cache still answered (a few checks first left it planned on an `fsync` that failed, then one passed: a filesystem reports a write error once); once the disk was back the copy was at its library name and its trash empty, the journal saying `done` and the catalog's trash its entry, so that the view presents as deleted a file both disks hold, and no pass takes the operation in (seen in D1: "not taken in"). XFS, which shuts down, and the type `ntfs` on 7.3 leave it planned and pass. Atoll is wrong there: §21.2 resolves "once that disk is there again", and the view's check confirms a disk by its mount alone, never past the page cache as a session of the daemon does once per disk (`disks.Confirm`, §10). Not fixed, as the remedy is a choice (TODO.md).
+  - **A finding: the view's check resolves on a disk that still fails** (`TestTheViewsRecheckOnADiskStillFailing`, committed skipped; fixed on 2026-11-23 as the maintainer chose, the entry above): a deletion through the view stopped by dm-error under the disk, which stays mounted, failing, for ten of the view's checks before it is unmounted and mounted again. On ext4, ntfs3 and ntfs-3g, of Linux 6.12 and 7.3, the check resolved the deletion within 40 to 350 ms, `done`, from what the page cache still answered (a few checks first left it planned on an `fsync` that failed, then one passed: a filesystem reports a write error once); once the disk was back the copy was at its library name and its trash empty, the journal saying `done` and the catalog's trash its entry, so that the view presents as deleted a file both disks hold, and no pass takes the operation in (seen in D1: "not taken in"). XFS, which shuts down, and the type `ntfs` on 7.3 leave it planned and pass. Atoll is wrong there: §21.2 resolves "once that disk is there again", and the view's check confirms a disk by its mount alone, never past the page cache as a session of the daemon does once per disk (`disks.Confirm`, §10). Not fixed, as the remedy is a choice (TODO.md).
 - **The whole of `test/loopdev` with the plain build** (the coordinator's item; on `b4e84ab`, `VERBOSE=1`, then the systemd guest's tests):
   - run E, Linux 6.12.118+deb13 (Debian's kernel moved from 6.12.117 since run C): **pass**, 704 tests and subtests, 2619 s of tests; by driver ntfs-3g 102 subtests, ntfs3 88, ext4 82, XFS 74, lowntfs-3g 63, btrfs 43; skipped only as written (the type `ntfs`, ntfs3's `ads`, the children, `TestScale`, `TestDaemonSoak`, `TestTheViewsRecheckOnADiskStillFailing`, the put-back's killed case on the two FUSE drivers, the units in the first run); the five tests of the units pass under systemd.
   - run E, Linux 7.3.5: its first run reached the tests' own timeout, 50 minutes (`TIMEOUT=3000s`), as `TestADeviceThatFailsDuringARestore` began, 94 tests passed before it and none failed: the machine loaded by the other agents, qemu emulating the processor (run C's first run there took about 49 minutes of its 50, and these tests add about six). Run again (run F, `KERNELS=mainline`, `TIMEOUT=6000s`): **pass**, 704 tests and subtests, 3082 s of tests, through `heavy.sh`; two earlier tries of it were stopped by the maintainer's restart of Docker. By driver ntfs-3g 102 subtests, the type `ntfs` 97, ntfs3 89, ext4 82, XFS 74, lowntfs-3g 63, btrfs 43; skipped only as written (`TestTheLinkGuardThroughMergerfs/ntfs`, the children, `TestScale`, `TestDaemonSoak`, `TestTheViewsRecheckOnADiskStillFailing`, the put-back's killed case on the two FUSE drivers, the units in the first run); the five tests of the units pass under systemd. The tests' own 50 minutes of the guest are tight on a machine this loaded with no KVM; the CI's runner, about 20 minutes for both kernels, is far from them.
