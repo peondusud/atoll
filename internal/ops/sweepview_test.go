@@ -190,9 +190,10 @@ func TestUserOperationsLoseNothingWhereverTheyFail(t *testing.T) {
 				gone, _, err = d.LeftAt(op)
 				return err
 			},
-			done: func() bool {
-				return gone && absent(mount, "media/Series/e01") && statAt(t, mount, "media/Series").Mtime == before
-			},
+			done: func() bool { return gone && absent(mount, "media/Series/e01") },
+			// The folder's time given back, as it was before, but where that very call fails: a time that cannot be
+			// given back is logged and costs no data (specs.md §6.1, §17.1).
+			best: func() bool { return statAt(t, mount, "media/Series").Mtime == before },
 			kept: func() bool { return holding(mount, "media/Series/e02", "other") },
 		}
 	}})
