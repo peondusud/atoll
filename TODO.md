@@ -54,11 +54,6 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - Wildcard names on the type `ntfs` (§15.8, §22): made on 2026-11-23 as the maintainer chose (DONE.md): a copy at a name holding `" * < > ?` on a disk of that type is left as it is, `name-incompatible`, never moved, sent to the trash or written to, the disk online; since the maintainer's change of the same day it may be the source of a copy to ext4, XFS or btrfs, so an edit made there refreshes the other copies; Atoll's own trash move of such a name, measured there, is a rename that sets the volume read-only. Its file keeps showing `name-incompatible`, as the maintainer confirmed on 2026-11-23 with the other choices made alone (DONE.md); the rule holds with `windows_names` too, as that rename sets the volume read-only there as well (confirmed by the maintainer on 2026-11-23); measured on mainline 7.3.5 alone, not on Debian sid's 7.3.3; a volume a program set read-only by making such a name without `windows_names` stays `readonly`, `read-only-mount`, until it is mounted again (§10), which Atoll does not do.
 - The type `ntfs`: `test/loopdev` ran whole on it in qemu on mainline 7.3.5 on 2026-11-22 (DONE.md), 91 subtests, each passing; still to consider, booting Debian sid's 7.3.3, the kernel with no ntfs3 (point 7 of the report). Measured in `docs/research/ntfs-driver.md`, whose last section lists the decisions it needs. Until then a disk mounted with it is `readonly`.
 
-## GitHub Actions and releases (DONE.md, 2026-11-19)
-
-- The first release, `v0.1.0` (its `.deb` `0.1.0-1`), once the core is proven and after the soak of 24 hours: he pushes the tag, checks the drafted release and its attestations, publishes it.
-- Before it: a first run of the release's three jobs (DONE.md, 2026-11-22), which no run has tried on GitHub: a tag of a prerelease, `v0.1.0-rc.1`, on a commit the CI passed on, then its draft deleted. On 2026-11-22 the API listed no run of `ci.yml` on `main` at all, `b6c1104` (#23's merge) included: a tag there is refused until the CI runs on it, by a dispatch on the tag.
-
 ## After the two flaws TLC found, fixed on 2026-11-19 (DONE.md)
 
 - A file renamed while a job runs reappears at its old name on that disk once the reprise finishes the copy: the reprise could take `first_seen_ns` from the operation's `started_ns`.

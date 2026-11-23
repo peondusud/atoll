@@ -2,6 +2,12 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## `v0.1.0`, released, 2026-11-23 (specs.md §26, §27)
+
+- **The try, `v0.1.0-rc.1`**, tagged by the maintainer on `4128f72`, #26's merge, once its CI passed there (run 45239867995): the release's three jobs passed (run 45253723596), and the draft held its seven files, each matching `SHA256SUMS` by the digest GitHub gives, each archive and package attested. It found the prerelease's `.deb` served under another name than `SHA256SUMS` gave (the entry "A prerelease's `.deb` under the name GitHub serves", below), fixed and pushed straight to `main` at the maintainer's word, `e7b90a9`, its CI passed (run 45259055530). The try's draft and tag deleted.
+- **`v0.1.0`**, tagged by the maintainer on `e7b90a9` (run 45273637604: `ci` 7 s, `build` 2 min, `draft` 25 s). Checked before he published it: the seven files, `atoll_0.1.0_linux_{amd64,arm64}.tar.gz` with their SBOMs, `atoll_0.1.0-1_{amd64,arm64}.deb` and `SHA256SUMS`, each matching `SHA256SUMS`; the two archives and the two packages attested; the amd64 files downloaded, `sha256sum --ignore-missing -c SHA256SUMS` giving `OK` for both, the binary saying `atoll v0.1.0`, and `dpkg-deb` reading `atoll` `0.1.0-1`, depending on `passwd` and recommending mergerfs, smartmontools and polkitd. The notes say how to check a download, then list every commit, as no tag came before.
+- **Published** by the maintainer on 2026-11-23 at 22:18 UTC, the repository's latest release. ROADMAP.md and README.md say so; the tries on the maintainer's own disks are still to come.
+
 ## The maintainer's answers of 2026-11-23, evening: the choices made alone, all confirmed
 
 Put as twelve questions in three dialogs, each with its options and what each costs; the maintainer took the option put first every time.
