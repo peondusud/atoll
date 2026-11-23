@@ -131,7 +131,8 @@ lint:
 	$(GOLANGCI_LINT) run --build-tags conformance ./cmd/... ./internal/disks/...
 
 # A release as .github/workflows/release.yml builds one (.goreleaser.yaml), into dist/, from this checkout and
-# what it holds uncommitted: no tag, no upload, only Docker. From a clone: a git worktree's .git names a
+# what it holds uncommitted: no tag, no upload, only Docker; then the names GitHub would serve its files by, as the
+# release's build checks them (test/ci/release-names.sh). From a clone: a git worktree's .git names a
 # folder the container does not have. What the container writes goes back to whoever runs make. The image's
 # GOTOOLCHAIN is local: auto lets its go fetch go.mod's version when the image holds an older one, so the build
 # takes the Go a release takes. goreleaser/goreleaser:v2.20.3, the GoReleaser of release.yml, by its digest.
@@ -139,7 +140,8 @@ GORELEASER_IMAGE := goreleaser/goreleaser@sha256:3019e0e61c99808e42ce60c9cf77f78
 release-snapshot:
 	docker run --rm -v "$(CURDIR):/src" -w /src -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory \
 		-e GIT_CONFIG_VALUE_0=/src -e GOTOOLCHAIN=auto --entrypoint sh $(GORELEASER_IMAGE) -c \
-		'goreleaser release --snapshot --clean; s=$$?; chown $(shell id -u):$(shell id -g) bin 2>/dev/null; \
+		'goreleaser release --snapshot --clean && sh test/ci/release-names.sh dist; s=$$?; \
+		chown $(shell id -u):$(shell id -g) bin 2>/dev/null; \
 		chown -R $(shell id -u):$(shell id -g) bin/deb dist 2>/dev/null; exit $$s'
 
 clean:
