@@ -1769,7 +1769,9 @@ VStart ==
 (* Its mount check again, every 30 s: a disk lost and mounted again is another mount, whose old handles answer EIO.
    A check that finds there the disk of an operation the view left planned resolves it, as the reprise of a start
    would, but for a part the view still writes or closes (writer.Recheck, the maintainer, 2026-11-22; README.md, flaw 5,
-   fixed). *)
+   fixed). Its disk is lost and there again on a mount of its own, as the maintainer asked on 2026-11-23: an operation
+   stays planned only where VOk failed, its disk gone or on another mount (VDelLost), and is Up again only on another
+   mount (Return); a mount check answered from a page cache, and the confirmation past it, are not modelled. *)
 VHeld(v) == \E e \in Disks : vpart[e].st # "none" /\ vpart[e].v = v
 VResolvable == {v \in VIds : vops[v].st = "planned" /\ ~VHeld(v) /\ Up(vops[v].d)}
 VCheck ==
