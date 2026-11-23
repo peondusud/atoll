@@ -11,4 +11,14 @@ CapTwo == <<2, 2, 2>>             \* the SSD with room for one copy past min_fre
 MinFreeOne == <<1, 1, 1>>
 LimitSSD == <<1, 1, 2>>
 StartApart == <<{1}, {2}>>
+
+\* One file at three copies on three SSDs, each two copies at once, with room for its refresh beside its entry in the
+\* trash: a user's write into one copy makes the two others stale, sent to the trash, then refreshed from it, two
+\* copies of one file to two disks, from one; and one file on one SSD wanting two replicas, two copies of it at once
+\* to two disks, from the same source.
+SizeUnit == <<1>>
+CapRoom == <<3, 3, 3>>
+LimitFlash == <<2, 2, 2>>
+StartAll == <<{1, 2, 3}>>
+StartFirst == <<{1}>>
 =============================================================================
