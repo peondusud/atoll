@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -116,12 +117,17 @@ const mountCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown
 
 // childEnv names the configuration TestReadonlyMountChild serves the view of, at the point childPointEnv names; with
 // childWritesEnv the view writes, as atoll mount at view.mount does, and childKillAtEnv names a crash point where the
-// process kills itself, as kill -9 would.
+// process kills itself, as kill -9 would. childEveryEnv is the time between two checks of its disks, a duration, 30 s
+// without it; with childFailMoveEnv, MOUNT/NAME, the first move of a file named NAME on the disk mounted at MOUNT meets
+// EIO, a disk that cannot be relied on, the fault layer standing for it as in
+// TestTheViewsRecheckAfterADiskLostOnEachDriver.
 const (
-	childEnv       = "ATOLL_READONLY_CHILD"
-	childPointEnv  = "ATOLL_READONLY_POINT"
-	childWritesEnv = "ATOLL_VIEW_WRITES"
-	childKillAtEnv = "ATOLL_VIEW_KILL_AT"
+	childEnv         = "ATOLL_READONLY_CHILD"
+	childPointEnv    = "ATOLL_READONLY_POINT"
+	childWritesEnv   = "ATOLL_VIEW_WRITES"
+	childKillAtEnv   = "ATOLL_VIEW_KILL_AT"
+	childEveryEnv    = "ATOLL_VIEW_EVERY"
+	childFailMoveEnv = "ATOLL_VIEW_FAIL_MOVE"
 )
 
 // TestReadonlyMountAsTheUnit: the view served as deploy/atoll-mount.service serves it, as another account than root,
@@ -207,12 +213,32 @@ func TestReadonlyMountChild(t *testing.T) {
 	if point := os.Getenv(childKillAtEnv); point != "" {
 		machine = &killedAt{Machine: machine, point: point}
 	}
+	if file := os.Getenv(childFailMoveEnv); file != "" {
+		machine = failingMove(machine, filepath.Dir(file), filepath.Base(file))
+	}
+	var every time.Duration
+	if text := os.Getenv(childEveryEnv); text != "" {
+		every, err = time.ParseDuration(text)
+		mustDo(t, err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
 	mustDo(t, readonly.Run(ctx, readonly.Options{
 		Config: c, DB: db, Machine: machine, Point: os.Getenv(childPointEnv), Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
-		Writes: os.Getenv(childWritesEnv) != "",
+		Writes: os.Getenv(childWritesEnv) != "", Every: every,
 	}))
+}
+
+// failingMove is a machine whose first move of a name on a disk, by its mount, meets EIO: rename, or link where the
+// driver has no RENAME_NOREPLACE.
+func failingMove(m disks.Machine, mount, name string) disks.Machine {
+	var lost atomic.Bool
+	return &faultTop{Machine: m, fail: map[string]func(call, name string) error{mount: func(call, n string) error {
+		if (call == "rename" || call == "link") && n == name && lost.CompareAndSwap(false, true) {
+			return syscall.EIO
+		}
+		return nil
+	}}}
 }
 
 // killedAt is a machine whose process kills itself with SIGKILL at a crash point, as kill -9 does: nothing of it runs

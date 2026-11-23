@@ -304,3 +304,44 @@ The author's suggestion, for what it is worth: C, with `errors=remount-ro` requi
 - Volumes that Windows wrote: names in the Win32 namespace with real short names, a real hibernation or Fast Startup, a `$LogFile` that Windows left unclean (the source empties it at a read-write mount), compressed or encrypted files, sparse files.
 - mergerfs over `ntfs`, and the renames through it of §15.2.
 - Debian's own 7.3.3 kernel, `acl`, performance, large files, long runs.
+
+## ntfs-3g mounted again while its old mount is held (2026-11-23)
+
+Not about the type `ntfs`: a question of TODO.md, asked by the maintainer on 2026-11-23. In qemu, an ntfs-3g disk unmounted at once (`umount -l`), its process killed and mounted again, while Atoll's own view ran there with a deletion it had left planned, mounted, then said "fuse: reading device: Operation not permitted" and left a mount answering `ENOTCONN`, where the same remount worked in other runs.
+
+### Method
+
+- `test/qemu`, Linux 6.12.118 (Debian 13) and 7.3.5 (Ubuntu's mainline), ntfs-3g and lowntfs-3g 2022.10.3 with their integrated FUSE 28, a volume made by `mkntfs` on a loop device. A throwaway test of `test/loopdev`, not committed: the volume mounted and a file written; a descriptor of this process held open on its `media/` folder, or none; `umount -l`; the driver's process killed (`SIGKILL`) or left alone; that descriptor closed, or not; then the driver started again on the same device, in the foreground (`-o no_detach`) to hear what it says, or daemonized as a mount helper starts it. What is mounted at the path is read from `/proc/self/mountinfo`, and this process's own descriptors on the old mount from `/proc/self/fdinfo` (`mnt_id`).
+- Then Atoll's own view, served in the test's process with its check every 3 s, writing, idle or with a deletion it left planned (`EIO` at its move, as `TestTheViewsRecheckAfterADiskLostOnEachDriver` gives it): `umount -l` and the process killed, then ntfs-3g started again at once, or 7 s later, after two of the view's checks.
+- ntfs-3g's sources, at the `edge` branch of tuxera/ntfs-3g, explain two of the results. The kernel's sources were not read for this (they could not be fetched): what is said of the kernel is what the measurements show.
+
+### Results
+
+The same on both kernels, and on ntfs-3g and lowntfs-3g alike:
+
+| Before the driver is started again | What it does | What is then at the path |
+|---|---|---|
+| nothing held on the old mount, its process killed, or exited at the unmount | serves | a mount of its own, the old mount's id given again; the file reads |
+| a descriptor held on the old mount, its process killed | mounts, says "fuse: reading device: Operation not permitted" and "Unmounting", and exits with 0; daemonized, it says nothing | a mount of another id, answering `ENOTCONN` |
+| held, its process left alive, as the daemon's remount leaves it | the same | a mount of another id, the file read through it, served by the old process: once that is killed, `ENOTCONN` |
+| held, its process killed, the descriptor closed before the start | serves | a mount of its own |
+| Atoll's view, idle or with a deletion planned, its process killed, started again at once | as held and killed | `ENOTCONN`, still 7 s later; the deletion stays planned |
+| the same, started again 7 s later | serves | a mount of its own; the view's next check resolves the deletion, `undone` |
+| the same, a file held open through the view, started again 7 s later | as held and killed | `ENOTCONN`; once the file is closed, the mount unmounted and the driver started again, a mount of its own |
+
+- The view held two descriptors on the old mount, its root for reading (`<mount>/media`) and its writer's handle on the top (`<mount>`), until its check let go of both, the disk found lost: none 7 s later, and two on the new mount once it was there. A file open through the view holds a third, the copy it reads from (`<mount>/media/Films/a.mkv`), which its check leaves: it went only once the program closed the file, within 2 s.
+
+### Why
+
+- ntfs-3g run by root on a block device mounts the type `fuseblk`, a filesystem of a block device, as ext4 is one: the kernel keeps one superblock per device, and a mount of a device whose superblock is alive is given that superblock. A mount that `umount -l` detached stays alive, out of every mount table, while a descriptor holds a file on it, and its superblock with it. The free case gave the new mount the old one's id again: nothing of it was left.
+- So the new process's `mount(2)` succeeds, but what it mounts is the old superblock, and its own FUSE connection is never made: its descriptor of `/dev/fuse` is bound to none, and its first read of it fails with `EPERM`, which `fuse_kern_chan_receive` reports as "fuse: reading device" (for any error but `EINTR`, `EAGAIN` and `ENODEV`). It then says "Unmounting", but libfuse-lite's `fuse_kern_unmount` polls the device first, and returns at `POLLERR`, which it takes for "already unmounted": the mount it made stays.
+- That mount is the old superblock's: served by the old process while it lives, and `ENOTCONN` once it died, as its connection ended with it.
+- ntfs-3g opens a block device without `O_EXCL` ("Fuseblk takes care about block devices", `ntfs_device_unix_io_open`), so nothing refuses it before its mount.
+- The deletion the view had planned has nothing to do with it: the view idle fails the same. What decides is whether a check of the view let go of its handles before the driver is started again. The test had killed ntfs-3g and mounted it again at once, a second after the view's check.
+
+### What it means for Atoll
+
+- The daemon's remount after a USB reset (§10) runs `umount -l`, then mounts from the fstab entry, and kills nothing. A USB reset brings the disk back as another device, with numbers of its own, and its mount is given a superblock of its own (not measured: a loop or device-mapper device keeps its numbers).
+- Where the device keeps its numbers, the disk `missing` for `device-unreadable` or `io-error`, or renamed as `TestDaemonRemountsAfterAReset` renames it, a remount while anything holds the old mount is given the old superblock: its process alive, the old process serves the new mount, which the view's check takes for a mount of its own (another id) and the disk is back; its process dead, as a crash of ntfs-3g leaves it, the mount is dead, the disk stays `missing`, and the daemon's next check, while it does, unmounts it and mounts again: once nothing holds the old mount, a superblock of its own, a new process serving it.
+- So with `atoll mount` running, a disk whose FUSE process died is back once the view's check has let go of its handles, at the daemon's next check after it: within a check of each, about a minute by default. `TestTheDaemonsRemountUnderTheViewOnEachFUSEDriver` measures it, the daemon's check every 300 ms and the view's every 3 s: the disk renamed, the old process serves the new mount at the first try; the process killed, six to eight tries in under 3 s, then a new process serves.
+- What keeps it lost longer: anything that holds a file open on the old mount, for as long as it does. A program that holds a file open through the view on that disk does, as the view keeps the copy it reads from open (above), as mergerfs does its own, and so does a shell whose folder is on the disk, or a program reading the disk itself. Each try of the daemon's remount then mounts the dead superblock again, and the disk stays `missing` until the file is closed. What Atoll would need for the view's part, the maintainer's to decide (TODO.md): the view letting go of the copies it holds open on a disk its check finds lost, as it lets go of its root and its handle there, their reads failing with `EIO` from then on, as the disk's own do; where its process lives, as after a device that kept its numbers, a read that would have gone on once the disk was back would fail too.
