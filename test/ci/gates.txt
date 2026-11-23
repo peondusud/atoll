@@ -27,6 +27,8 @@ mutation ./internal/watch 93 80
 # the unit tests run (unit), and that the unit tests or the scenarios run (merged), in all, rounded to a tenth as the
 # table prints it. Measured on 2026-11-21, on 1be6613 with the tests the mutation gates brought: 84.4 and 88.9, of
 # 30,181 statements, where 2026-11-20's 84.7 and 89.3 counted 29,584; what came between is mostly the view's writer,
-# which the loop-device tests run.
-cover unit 84.4
-cover merged 88.9
+# which the loop-device tests run. Raised on 2026-11-23, as the maintainer chose, a tenth under the measure of the
+# merged beta (1aa2d21: 89.1 and 90.4), as two runs of the same code moved by a tenth: the unit tests of cmd/atoll and
+# of the view's packages, and of the mutation gates, came between.
+cover unit 88.8
+cover merged 90.2
