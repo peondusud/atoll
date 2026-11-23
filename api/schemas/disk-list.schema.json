@@ -54,7 +54,7 @@
           "if": { "properties": { "state": { "const": "missing" } } },
           "then": {
             "properties": {
-              "reason": { "enum": ["not-mounted", "io-error", "partial-mount", "wrong-filesystem", "device-gone", "device-unreadable", "wrong-identifier", "no-root"] },
+              "reason": { "enum": ["not-mounted", "io-error", "partial-mount", "wrong-filesystem", "device-gone", "device-unreadable", "wrong-identifier", "no-root", "no-marker"] },
               "message": { "type": "string" }
             }
           }

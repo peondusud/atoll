@@ -1,0 +1,41 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a711.3, \u00a725",
+  "description": "rules check writes a label of the configuration, which may hold any text, as an error escapes it (G16): a rule labelled Trailer, U+202E RIGHT-TO-LEFT OVERRIDE, then vkm, which an earlier rule hides whole, is written with \\u{202E} in the warning of its human text, never as it is, which would make the line read in another order; --json gives the label as it is.",
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[rule]]\nlabel = \"films\"\npath = \"Films/**\"\n[[rule]]\nlabel = \"Trailer\\u202Evkm\"\npath = \"Films/**\"\next = [\"mkv\"]\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "stdout_json": {
+        "valid": true,
+        "problems": [],
+        "warnings": [],
+        "hidden": [
+          {
+            "rule": "Trailer\u202evkm",
+            "by": "films"
+          }
+        ],
+        "unreached": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check"
+      ],
+      "stdout_has": [
+        "Trailer\\u{202E}vkm"
+      ],
+      "stdout_lacks": [
+        "\u202e"
+      ]
+    }
+  ]
+}

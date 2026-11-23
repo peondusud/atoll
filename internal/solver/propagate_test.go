@@ -90,6 +90,7 @@ type propVector struct {
 			GuardHeld bool         `json:"guard_held"`
 			Size      int64        `json:"size"`
 			Through   bool         `json:"through_view"`
+			Left      bool         `json:"left"`
 		} `json:"copies"`
 	} `json:"files"`
 	Decisions *[]struct {
@@ -129,7 +130,7 @@ func propInputOf(t *testing.T, i int, v *propVector) *PropInput {
 			file.Copies = append(file.Copies, PropCopy{
 				Disk: *c.Disk, Position: *c.Position, Verdict: *c.Verdict, Target: c.Target, Due: *c.Due, GoneNS: c.GoneNS,
 				CreatedBy: *c.CreatedBy, FirstSeenNS: *c.FirstSeen, Verified: *c.Verified, OldPath: c.OldPath, GuardHeld: c.GuardHeld, Size: c.Size,
-				ThroughView: c.Through,
+				ThroughView: c.Through, Left: c.Left,
 			})
 		}
 		in.Files = append(in.Files, file)

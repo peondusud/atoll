@@ -18,22 +18,55 @@ import (
 // NewMachine gives what the delivered binary sees, which is the machine. Taking a folder for a
 // disk takes another build (specs.md §29.4), so nothing here can skip a check.
 func NewMachine() (Machine, error) {
-	return machine{hiberfil: &hiberfilCache{}, logFile: &logFileCache{}}, nil
+	return machine{hiberfil: &hiberfilCache{}, logFile: &logFileCache{}, marker: &markerCache{}}, nil
 }
 
-// machine keeps what it read of hiberfil.sys and of $LogFile on each mount, for as long as it runs.
+// markerCache keeps what a machine that runs for long read of each disk's marker, once per mount.
+type markerCache = onceAMount[MarkerSeen]
+
+// machine keeps what it read of hiberfil.sys, of $LogFile and of each disk's marker on each mount, for as long as it
+// runs.
 type machine struct {
 	hiberfil *hiberfilCache
 	logFile  *logFileCache
+	marker   *markerCache
 }
 
-// Mount answers questions 1 and 2. A path at which no mount of its own is found forgets what was read of hiberfil.sys
-// and $LogFile there: what is mounted there next is another mount, whatever id the kernel gives it.
+// Mount answers questions 1 and 2. A path at which no mount of its own is found forgets what was read of hiberfil.sys,
+// $LogFile and the marker there: what is mounted there next is another mount, whatever id the kernel gives it.
 func (m machine) Mount(mount string) MountSeen {
 	seen := lookAtMount(mount)
 	if seen.Path != PathOK || seen.Entry == nil || seen.Entry.MountPoint != mount {
 		m.hiberfil.forget(mount)
 		m.logFile.forget(mount)
+		m.marker.forget(mount)
+	}
+	return seen
+}
+
+// Marker reads a disk's marker once per mount, as hiberfil.sys is read (specs.md §10), through a handle on the top whose
+// mount is the one the check found at the path; an absence is read again when again says so, as atoll disk mark may
+// have written the marker since.
+func (m machine) Marker(mount, workdir string, entry *MountEntry, again bool) MarkerSeen {
+	read := func() MarkerSeen {
+		top, err := fsx.OpenDir(mount)
+		if err != nil {
+			return markerError(err)
+		}
+		defer func() { _ = top.Close() }()
+		info, err := top.Info()
+		switch {
+		case err != nil:
+			return markerError(err)
+		case info.MountID != entry.ID:
+			return MarkerSeen{}.changedMount()
+		}
+		return ReadMarker(top, workdir)
+	}
+	seen := m.marker.answer(mount, entry, fsx.UniqueMountID, read)
+	if again && seen.File == MarkerAbsent {
+		m.marker.forget(mount)
+		seen = m.marker.answer(mount, entry, fsx.UniqueMountID, read)
 	}
 	return seen
 }

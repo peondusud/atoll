@@ -55,6 +55,8 @@ type slot struct {
 	tried  bool
 	// precision is how finely the disk holds a time, as its row says (specs.md §9): 0 when no check read it.
 	precision int64
+	// markerSeen says that the disk's own marker was seen, as its row says, or this session saw it (specs.md §10).
+	markerSeen bool
 }
 
 // Session is one run of a command that writes: it confirms each disk once, before it first reads or
@@ -121,7 +123,7 @@ func openSession(ctx context.Context, db *sql.DB, c *config.Config, m disks.Mach
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	for i := range rows {
-		s.slots[rows[i].ID] = &slot{state: solver.DiskState(rows[i].State), precision: rows[i].TimePrecisionNS}
+		s.slots[rows[i].ID] = &slot{state: solver.DiskState(rows[i].State), precision: rows[i].TimePrecisionNS, markerSeen: rows[i].MarkerSeen}
 	}
 	for i := range c.Disks {
 		if sl := s.slots[c.Disks[i].ID]; sl != nil {
@@ -143,9 +145,19 @@ func openSession(ctx context.Context, db *sql.DB, c *config.Config, m disks.Mach
 	return s, nil
 }
 
-// VerdictOf says what the mount check found of a disk of the configuration, by its order there.
+// VerdictOf says what the mount check found of a disk of the configuration, by its order there, and what a
+// confirmation in this session made of its marker since: readonly, other-marker or no-marker (specs.md §10).
 func (s *Session) VerdictOf(i int) disks.Verdict {
 	return s.verdicts[i]
+}
+
+// setVerdict records what a confirmation made of a disk's marker, for VerdictOf.
+func (s *Session) setVerdict(id string, v disks.Verdict) {
+	for i := range s.config.Disks {
+		if s.config.Disks[i].ID == id && i < len(s.verdicts) {
+			s.verdicts[i] = v
+		}
+	}
 }
 
 // Readable says whether a disk can still be looked at in this session.
@@ -173,6 +185,18 @@ func (s *Session) MountOwner(id string) bool {
 	for i := range s.config.Disks {
 		if s.config.Disks[i].ID == id && i < len(s.verdicts) {
 			return s.verdicts[i].MountOwner
+		}
+	}
+	return false
+}
+
+// LeavesWildcards says whether a disk of the configuration leaves its copies at a wildcard name as they are, as its
+// mount check found it: one of the type ntfs, which cannot move or remove such a name without setting its volume
+// read-only (specs.md §15.8). Such a copy is never moved, written to or sent to the trash; it may be read.
+func (s *Session) LeavesWildcards(id string) bool {
+	for i := range s.config.Disks {
+		if s.config.Disks[i].ID == id && i < len(s.verdicts) {
+			return s.verdicts[i].LeavesWildcards
 		}
 	}
 	return false
@@ -251,7 +275,7 @@ func (s *Session) Lost() bool {
 
 // Settle works out the original, policy and state of each file, whatever happened.
 func (s *Session) Settle(ctx context.Context) error {
-	if err := watch.Settle(ctx, s.db, s.config, s.now); err != nil {
+	if err := watch.Settle(ctx, s.db, s.config, s.now, s.LeavesWildcards); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	return nil
@@ -363,15 +387,36 @@ func (s *Session) open(ctx context.Context, id string) (*ops.Disk, error) {
 			handle.Close()
 			return nil, s.lose(ctx, id, fmt.Errorf("%s: %s", verdict.Reason, verdict.Message))
 		}
-		// A disk whose marker names another pool, disk or filesystem is written to no more (specs.md §10).
-		if text, found, err := handle.ReadMarker(); err != nil {
+		// A disk whose marker names another pool, disk or filesystem, or whose own marker seen before is gone, is
+		// written to no more; its own marker is recorded seen, once the handle is held to the disk (specs.md §10).
+		own := false
+		text, found, err := handle.ReadMarker()
+		switch marker := disks.MarkerSeenOf(text, found, err); marker.File {
+		case disks.MarkerIOError, disks.MarkerUnreadable:
+			// What the handle then says of the disk decides.
 			slog.Warn("the marker of a disk could not be read", "disk", id, "error", err)
-		} else if verdict = disks.MarkerVerdict(verdict, text, found, s.config.PoolID, sl.config); verdict.Reason == disks.OtherMarker {
-			slog.Warn("a disk is written to no more", "disk", id, "reason", verdict.Reason, "message", verdict.Message)
+		case disks.MarkerAbsent, disks.MarkerFile, disks.MarkerNotAFile:
+			before := verdict
+			if verdict, own = disks.JudgeMarker(verdict, marker, sl.markerSeen, s.config.PoolID, sl.config); verdict.State != before.State {
+				slog.Warn("a disk is written to no more", "disk", id, "state", verdict.State, "reason", verdict.Reason, "message", verdict.Message)
+				s.setVerdict(id, verdict)
+			}
+		}
+		// A disk whose own marker went is not that disk: nothing it holds counts, as for another identifier (§10).
+		if verdict.State == disks.Missing {
+			handle.Close()
+			return nil, s.lose(ctx, id, fmt.Errorf("%s: %s", verdict.Reason, verdict.Message))
 		}
 		if err := handle.Verify(); err != nil {
 			handle.Close()
 			return nil, s.lose(ctx, id, err)
+		}
+		if own && !sl.markerSeen {
+			if err := catalog.SetMarkerSeen(ctx, s.db, id, sl.config.UUID, s.now); err != nil {
+				handle.Close()
+				return nil, fmt.Errorf("catalog: %w", err)
+			}
+			sl.markerSeen = true
 		}
 		if state := heldState(sl.config, solver.DiskState(verdict.State)); state != sl.state {
 			sl.state = state
@@ -481,7 +526,7 @@ func (s *Session) Finish(ctx context.Context) error {
 	if !s.changed {
 		return nil
 	}
-	if err := watch.Settle(ctx, s.db, s.config, s.now); err != nil {
+	if err := watch.Settle(ctx, s.db, s.config, s.now, s.LeavesWildcards); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	return nil
@@ -721,7 +766,7 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 // it left its place, purged or not. One the purge leaves stays in the trash, which its retention or trash.max_size
 // empties.
 func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow) (string, error) {
-	outcome, op, err := s.send(ctx, f, c, reasonSurplus)
+	outcome, op, err := s.sendFor(ctx, f, c, reasonSurplus, true)
 	if err != nil || outcome != OutcomeTrashed || op == nil {
 		return outcome, err
 	}
@@ -731,6 +776,19 @@ func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.C
 	}
 	if !found {
 		return outcome, nil
+	}
+	// Right before the purge, the copies on the data disks the transfer leans on are looked at: the catalog's word that
+	// they hold the file may be the whole pass old. One that is no longer what its row says, or that cannot be looked
+	// at, undoes the transfer's purge: nothing is purged, the copy stays in the cache's trash, and the next pass decides
+	// from what the data disks hold (specs.md §19; conformance/models/README.md, flaw 8, the maintainer's remedy).
+	held, err := s.dataCopiesHold(ctx, f.ID, c.Disk)
+	if err != nil {
+		return "", err
+	}
+	if !held {
+		slog.Warn("a copy the SSD cache sent stays in its trash: the copies on the data disks are no longer what the catalog says",
+			"disk", e.Disk, "path", e.Path)
+		return OutcomeChanged, nil
 	}
 	purged, err := s.purgeEntry(ctx, &e)
 	if err != nil {
@@ -742,8 +800,46 @@ func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.C
 	return outcome, nil
 }
 
+// dataCopiesHold says whether every copy of a file on a data disk the catalog calls ok is what its row says, as a look
+// finds it now, and whether there is one: what a transfer leans on before its purge. A disk that fails the look is lost
+// (invariant 4), and says the copy does not hold.
+func (s *Session) dataCopiesHold(ctx context.Context, fileID int64, cacheDisk string) (bool, error) {
+	f, err := catalog.FileByID(ctx, s.db, fileID)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if f == nil {
+		return false, nil
+	}
+	held := 0
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		sl := s.slots[c.Disk]
+		if c.Disk == cacheDisk || c.State != string(solver.CopyOK) || sl == nil || sl.config == nil || sl.config.Role == solver.RoleCache {
+			continue
+		}
+		same, err := s.unchanged(ctx, f.Path, c)
+		if err != nil || !same {
+			return false, err
+		}
+		held++
+	}
+	return held > 0, nil
+}
+
+// OutcomeViewHolds says that an operation of the view no pass has taken in touches the path of a copy the transfer
+// would move, as its journal's transaction read it: the transfer waits, as for one the pass read before it (specs.md
+// §19, §21.2; conformance/models/README.md, flaw 10). No line says it.
+const OutcomeViewHolds = "view-holds"
+
 // send is Send, which also gives the operation that moved the copy, when one did.
 func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, *ops.Op, error) {
+	return s.sendFor(ctx, f, c, reason, false)
+}
+
+// sendFor is send, which with viewFree waits while an operation of the view touches the copy's path, read in the
+// transaction that journals the move: OutcomeViewHolds, nothing journaled.
+func (s *Session) sendFor(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string, viewFree bool) (string, *ops.Op, error) {
 	place := c.Place(f)
 	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
 	if !s.writable(c.Disk) {
@@ -756,6 +852,11 @@ func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 	if handle == nil {
 		return outcomeUnavailable, nil, nil
 	}
+	// A name its disk leaves as it is, at a wildcard character on the type ntfs, never moves: refused before anything
+	// is journaled or asked of the disk (specs.md §15.8).
+	if handle.Leaves(place) {
+		return OutcomeNameRefused, nil, nil
+	}
 	// A stale copy holds a version that came before the file's hash, and a corrupt one holds none.
 	hash := f.Hash
 	if reason == catalog.ReasonOverwritten || reason == catalog.ReasonQuarantined || reason == catalog.ReasonRepaired {
@@ -763,8 +864,11 @@ func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
 		Disk: c.Disk, Path: place, FileKey: c.FileKey.String, Size: c.Size, Hash: hash, Reason: reason,
-		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention),
+		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention), ViewFree: viewFree,
 	})
+	if errors.Is(err, catalog.ErrViewHolds) {
+		return OutcomeViewHolds, nil, nil
+	}
 	if err != nil {
 		return "", nil, fmt.Errorf("catalog: %w", err)
 	}
@@ -1023,7 +1127,7 @@ func (s *Session) makeFolder(ctx context.Context, handle *ops.Disk, e *catalog.T
 	if err != nil {
 		return catalogError{fmt.Errorf("catalog: %w", err)}
 	}
-	st, err := handle.MakeRootFolder(folder, like)
+	st, err := handle.MakeRootFolder(folder, like, func(key string) error { return catalog.SetCreateKey(ctx, s.db, op, key) })
 	switch {
 	case err == nil:
 		if err := handle.FinishMkdir(ctx, s.db, op, &st); err != nil {
@@ -1364,6 +1468,13 @@ func (s *Session) purgeEntry(ctx context.Context, e *catalog.TrashEntry) (string
 	}
 	if handle == nil || !s.writable(e.Disk) {
 		return outcomeUnavailable, nil
+	}
+	// An entry whose path holds a wildcard character, which another driver moved there, stays in the trash of a disk of
+	// the type ntfs: removing it would set the volume read-only. Nothing is journaled or asked of the disk (specs.md
+	// §15.8).
+	if handle.Leaves(e.TrashPath) {
+		slog.Warn("an entry stays in the trash: the type ntfs cannot remove its name without setting its volume read-only", "disk", e.Disk, "path", e.TrashPath)
+		return OutcomeIOError, nil
 	}
 	if !layout.IsChunks(e.TrashPath) {
 		known, err := s.dropLinksOf(ctx, handle, e)

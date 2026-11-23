@@ -134,7 +134,7 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk %s: %w", change, err))
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -318,7 +318,7 @@ func diskShow(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk show: %w", err))
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -343,7 +343,17 @@ func showDisk(ctx context.Context, c *config.Config, m disks.Machine, d *config.
 	if d.Domain != "" {
 		out.Domain = &d.Domain
 	}
-	verdict := disks.Check(m, d)
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	// The check asks the marker as a pass does: a disk whose own marker went is missing, no-marker (specs.md §10).
+	seen, err := catalog.MarkersSeen(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	verdict := disks.CheckKnown(m, d, c.PoolID, disks.Seen(seen).Of(d))
 	out.State = string(verdict.State)
 	switch {
 	case d.State == config.DiskFailed:
@@ -355,11 +365,6 @@ func showDisk(ctx context.Context, c *config.Config, m disks.Machine, d *config.
 		reason := string(verdict.Reason)
 		out.Reason = &reason
 	}
-	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
-	if err != nil {
-		return nil, fmt.Errorf("%w", err)
-	}
-	defer func() { err = errors.Join(err, db.Close()) }()
 	rows, err := catalog.Disks(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
@@ -457,7 +462,7 @@ func diskReplace(configPath string, args []string, stdout, stderr io.Writer) int
 	if err != nil {
 		return failure(stderr, fmt.Errorf("disk replace: %w", err))
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}

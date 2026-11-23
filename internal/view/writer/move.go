@@ -44,6 +44,9 @@ func (w *Writer) move(f *File, write int) error {
 	if err != nil {
 		return err
 	}
+	// Its row is this move's until it returns, its copy outside the writer's lock: no check resolves it meanwhile; one it
+	// leaves planned is the file's until it is closed.
+	defer w.letGo(f, m)
 	w.machine.Checkpoint("move-journaled")
 	if err := m.copy(ctx, f.WritableFile, &st); err != nil {
 		w.dropMove(ctx, f, m, err)
@@ -72,7 +75,7 @@ func (w *Writer) move(f *File, write int) error {
 	})
 	if err != nil {
 		// Its copy is at its name on the other disk, the same bytes as here: the reprise finishes it (specs.md §21.2).
-		f.movable = false
+		f.movable, m.planned = false, true
 		_ = m.part.Close()
 		w.log.Warn("a file moved for room stays planned: the journal cannot be written", "disk", m.v.Disk, "path", f.Path, "error", err)
 		return fmt.Errorf("%w", err)
@@ -86,17 +89,34 @@ func (w *Writer) move(f *File, write int) error {
 		w.log.Warn("the handle a moved file left did not close cleanly", "disk", m.v.Disk2, "path", f.Path, "error", err)
 	}
 	w.machine.Checkpoint("move-swapped")
-	w.log.Info("a file whose write ran out of space moved to another disk", "from", m.v.Disk2, "to", m.v.Disk, "path", f.Path, "size", st.Size)
-	w.leave(ctx, m.v, trashed, row)
+	w.log.Info("a file whose write ran out of space moved to another disk",
+		append([]any{"from", m.v.Disk2, "to", m.v.Disk, "path", f.Path, "size", st.Size}, askedBy(m.v)...)...)
+	m.planned = w.leave(ctx, m.v, trashed, row, &m.placed)
 	return nil
 }
 
-// moving is a move under way: its row, its create, its part, open, and the writer's log.
+// moving is a move under way: its row, its create, its part, open, the writer's log, the copy at its name on the disk
+// it goes to as the move placed it there, and whether it stays planned, for the view's reprise or check.
 type moving struct {
-	v    *catalog.ViewOp
-	op   *catalog.Op
-	part *ops.Part
-	log  *slog.Logger
+	v       *catalog.ViewOp
+	op      *catalog.Op
+	part    *ops.Part
+	log     *slog.Logger
+	placed  fsx.Stat
+	planned bool
+}
+
+// letGo ends the writer's hold on a move's row once the move returns, under f.mu held alone: a move done or undone is
+// let go of; one left planned stays held until the file is closed, as a part being written is, so that the view's
+// check every 30 s resolves none whose file the program still holds open, where its writes go (specs.md §21.2;
+// conformance/models/README.md, flaw 15, the maintainer's remedy, 2026-11-23). A stop of the view lets go of it, and
+// its next start resolves it.
+func (w *Writer) letGo(f *File, m *moving) {
+	if m.planned {
+		f.moving = append(f.moving, m.v.ID)
+		return
+	}
+	w.release(m.v.ID)
 }
 
 // startMove checks that a file may move, picks the disk it goes to, journals the move and makes its part, under the
@@ -114,10 +134,11 @@ func (w *Writer) startMove(ctx context.Context, f *File, st *fsx.Stat, need int6
 	if err := w.mayCreate(ctx, asking(f.who), target, f.Path); err != nil {
 		return nil, err
 	}
-	m := &moving{v: &catalog.ViewOp{Disk: target, Disk2: f.Disk, Path: f.Path, FileKey: fmt.Sprintf("%d", st.Ino), AtNS: w.now()}, log: w.log}
+	m := &moving{v: &catalog.ViewOp{Disk: target, Disk2: f.Disk, Path: f.Path, FileKey: fmt.Sprintf("%d", st.Ino), AtNS: w.now(), Asker: f.who.asker()}, log: w.log}
 	if m.op, err = catalog.BeginViewMove(ctx, w.db, m.v); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
+	w.hold(m.v.ID)
 	err = w.handles.Use(target, func(d *ops.Disk) error {
 		var err error
 		if m.part, err = d.MakePart(m.op); err != nil {
@@ -127,6 +148,7 @@ func (w *Writer) startMove(ctx context.Context, f *File, st *fsx.Stat, need int6
 	})
 	if err != nil {
 		w.dropMove(ctx, f, m, err)
+		w.letGo(f, m)
 		return nil, err
 	}
 	return m, nil
@@ -173,6 +195,31 @@ func (w *Writer) mayMove(ctx context.Context, f *File, st *fsx.Stat) error {
 // sameAs says whether a file is as a look found it: its size, modification time, change time and inode.
 func sameAs(a, b *fsx.Stat) bool {
 	return a.Ino == b.Ino && a.Size == b.Size && a.Mtime == b.Mtime && a.Ctime == b.Ctime
+}
+
+// targetHolds looks at a moved file's path on the disk it went to, right before the copy the move left on the full disk
+// is purged from its trash or removed at its path, and says whether it still holds the copy the move placed there as
+// placed says: a file, its inode, size, modification time and change time, as the move's look compares the copy it
+// left (sameAs). The program's writes are held back until the move ends, so that nothing of the view's own moves them
+// meanwhile. One that a user or a program deleted, replaced or wrote into directly since, or a disk that cannot be
+// looked at, keeps the copy left, in the trash unpurged or at its path (specs.md §21.2; conformance/models/README.md,
+// flaw 17, the maintainer's remedy, 2026-11-23), as the SSD cache's transfer looks at the data disks' copies before
+// its purge (flaw 8).
+func (w *Writer) targetHolds(v *catalog.ViewOp, placed *fsx.Stat) bool {
+	holds := false
+	err := w.handles.Use(v.Disk, func(d *ops.Disk) error {
+		st, found, err := d.StatRoot(v.Path)
+		if err != nil {
+			return err //nolint:wrapcheck // ops says what failed
+		}
+		holds = found && st.Kind == fsx.KindFile && placed.Ino != 0 && sameAs(&st, placed)
+		return nil
+	})
+	if err != nil {
+		w.log.Warn("the disk a file moved to cannot be looked at before the copy it left goes", "disk", v.Disk, "path", v.Path, "error", err)
+		return false
+	}
+	return holds
 }
 
 // copy copies what a file holds into the move's part, each chunk hashed as it is read, then gives the part the file's
@@ -282,20 +329,26 @@ func partErr(what string, err error) error {
 }
 
 // placeMove renames the part to the file's path on the disk it goes to, after the folders that disk lacks, each made as
-// the view presents it (specs.md §21.2, step 5). A rename that may not have happened is looked at: what did not happen
-// drops the move; what cannot be told, on a disk that cannot be relied on, leaves it planned for the view's reprise.
+// the view presents it (specs.md §21.2, step 5), and records the copy there as it placed it. A rename that may not have
+// happened is looked at: what did not happen drops the move; what cannot be told, on a disk that cannot be relied on,
+// leaves it planned for the view's reprise.
 func (w *Writer) placeMove(ctx context.Context, f *File, m *moving) error {
 	err := w.handles.Use(m.v.Disk, func(d *ops.Disk) error {
-		_, err := d.PlaceUserPart(m.op, f.Path, w.like(ctx))
-		if err == nil || errors.Is(err, ops.ErrDiskLost) {
+		placed, err := d.PlaceUserPart(m.op, f.Path, w.like(ctx))
+		if err == nil {
+			m.placed = placed
+			return nil
+		}
+		if errors.Is(err, ops.ErrDiskLost) {
 			return err //nolint:wrapcheck // ops says what failed
 		}
-		placed, look := holdsAt(d, f.Path, m.op.FileKey, false)
+		st, found, look := d.StatRoot(f.Path)
 		switch {
 		case look != nil:
 			return fmt.Errorf("%w: %w", ops.ErrDiskLost, look)
-		case placed:
+		case found && st.Kind == fsx.KindFile && fmt.Sprintf("%d", st.Ino) == m.op.FileKey:
 			// The name holds the part all the same: the move goes on.
+			m.placed = st
 			return nil
 		}
 		return err //nolint:wrapcheck // ops says what failed
@@ -304,7 +357,7 @@ func (w *Writer) placeMove(ctx context.Context, f *File, m *moving) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, ops.ErrDiskLost), errors.Is(err, ErrNoHandle):
-		f.movable = false
+		f.movable, m.planned = false, true
 		_ = m.part.Close()
 		w.log.Warn("a file moved for room stays planned: the disk it goes to cannot be relied on", "disk", m.v.Disk, "path", f.Path, "error", err)
 		return err
@@ -321,29 +374,30 @@ func (w *Writer) dropMove(ctx context.Context, f *File, m *moving, why error) {
 	}
 	err := w.handles.Use(m.v.Disk, func(d *ops.Disk) error { return d.DropPart(m.op.Path2) }) //nolint:wrapcheck // ops says what failed
 	if err != nil {
-		f.movable = false
+		f.movable, m.planned = false, true
 		w.log.Warn("a file moved for room stays planned: its part cannot be removed", "disk", m.v.Disk, "path", f.Path, "error", err, "reason", why)
 		return
 	}
 	if err := catalog.EndViewMove(ctx, w.db, m.v, catalog.OpUndone, catalog.OpUndone, false, w.now()); err != nil {
-		f.movable = false
+		f.movable, m.planned = false, true
 		w.log.Warn("a file moved for room stays planned: the journal cannot be written", "disk", m.v.Disk, "path", f.Path, "error", err)
 	}
 }
 
 // leave sends the copy a move left on the full disk to its trash, then purges it from there at once, each journaled,
 // and says the move done (specs.md §21.2, steps 8 and 9). A trash with no room for it, its folders or its rename
-// answered ENOSPC or EDQUOT, nothing moved, has it removed at its path instead (the maintainer, 2026-11-21). What stops
-// on a disk that cannot be relied on stays planned, for the view's reprise; a copy its trash refuses stays at its path,
+// answered ENOSPC or EDQUOT, nothing moved, has it removed at its path instead (the maintainer, 2026-11-21). Either
+// only while the target still holds the copy placed there as placed says (targetHolds). What stops on a disk that
+// cannot be relied on stays planned, for the view's reprise: it says so. A copy its trash refuses stays at its path,
 // beside the moved one.
-func (w *Writer) leave(ctx context.Context, v *catalog.ViewOp, trashed *catalog.Op, row *catalog.KnownCopy) {
+func (w *Writer) leave(ctx context.Context, v *catalog.ViewOp, trashed *catalog.Op, row *catalog.KnownCopy, placed *fsx.Stat) bool {
 	err := w.handles.Use(v.Disk2, func(d *ops.Disk) error {
 		if _, err := d.ToTrash(trashed, row); err != nil {
 			if errors.Is(err, ops.ErrDiskLost) {
 				return err //nolint:wrapcheck // ops says what failed
 			}
 			if noRoom(err) {
-				done, rerr := w.removeHere(ctx, d, v, trashed, row, err)
+				done, rerr := w.removeHere(ctx, d, v, trashed, row, placed, err)
 				if done || rerr != nil {
 					return rerr
 				}
@@ -360,19 +414,21 @@ func (w *Writer) leave(ctx context.Context, v *catalog.ViewOp, trashed *catalog.
 			}
 		}
 		w.machine.Checkpoint("move-trashed")
-		return w.purgeLeft(ctx, d, v, trashed)
+		return w.purgeLeft(ctx, d, v, trashed, placed)
 	})
 	if err != nil {
 		w.log.Warn("a file moved for room stays planned, its copy left on the full disk to the reprise", "disk", v.Disk2, "path", v.Path, "error", err)
+		return true
 	}
+	return false
 }
 
 // removeHere removes at its path the copy a move left on a full disk whose trash had no room for it, why the error that
 // said so (specs.md §21.2): only once a look finds that nothing moved, the copy at its path and none in the trash; then
 // the trash undone and the unlink journaled with its purge event, in one transaction, and the copy removed after the
-// checks the trash makes, against what the move copied. It says whether it ended the move: false leaves it to the table
-// of §17.2, as something moved after all.
-func (w *Writer) removeHere(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, trashed *catalog.Op, row *catalog.KnownCopy, why error) (bool, error) {
+// checks the trash makes, against what the move copied, once the target is found to hold the moved copy as placed says
+// (targetHolds). It says whether it ended the move: false leaves it to the table of §17.2, as something moved after all.
+func (w *Writer) removeHere(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, trashed *catalog.Op, row *catalog.KnownCopy, placed *fsx.Stat, why error) (bool, error) {
 	left, err := holdsAt(d, v.Path, trashed.FileKey, false)
 	if err != nil {
 		return false, err
@@ -388,6 +444,12 @@ func (w *Writer) removeHere(ctx context.Context, d *ops.Disk, v *catalog.ViewOp,
 		return true, fmt.Errorf("%w", err)
 	}
 	w.machine.Checkpoint("move-unlink-journaled")
+	if !w.targetHolds(v, placed) {
+		w.log.Warn("the copy a moved file left stays at its path: the disk it moved to no longer holds the moved copy as it was placed",
+			"disk", v.Disk2, "path", v.Path, "target", v.Disk)
+		return true, catalog.EndViewMove(ctx, w.db, v, catalog.OpUndone, catalog.OpDone, true, w.now()) //nolint:wrapcheck // the catalog says what failed
+	}
+	w.machine.Checkpoint("move-target-looked")
 	switch err := d.RemoveLeft(here, row); {
 	case err == nil:
 		w.log.Info("the copy a moved file left is removed at its path: its trash had no room for it", "disk", v.Disk2, "path", v.Path, "reason", why)
@@ -401,14 +463,21 @@ func (w *Writer) removeHere(ctx context.Context, d *ops.Disk, v *catalog.ViewOp,
 	}
 }
 
-// purgeLeft purges the copy a move sent to the full disk's trash, journaled, and says the move done: a purge that
-// cannot be made leaves the copy in the trash, which its retention or trash.max_size empties.
-func (w *Writer) purgeLeft(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, trashed *catalog.Op) error {
+// purgeLeft purges the copy a move sent to the full disk's trash, journaled, once the target is found to hold the moved
+// copy as placed says (targetHolds), and says the move done: a purge that cannot be made, or that the look undoes,
+// leaves the copy in the trash, which its retention or trash.max_size empties.
+func (w *Writer) purgeLeft(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, trashed *catalog.Op, placed *fsx.Stat) error {
 	purge, err := catalog.ViewMovePurge(ctx, w.db, v, trashed, w.now())
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	w.machine.Checkpoint("move-purge-journaled")
+	if !w.targetHolds(v, placed) {
+		w.log.Warn("the copy a moved file left stays in the trash: the disk it moved to no longer holds the moved copy as it was placed",
+			"disk", v.Disk2, "path", v.Path, "target", v.Disk)
+		return catalog.EndViewMove(ctx, w.db, v, catalog.OpUndone, catalog.OpDone, true, w.now()) //nolint:wrapcheck // the catalog says what failed
+	}
+	w.machine.Checkpoint("move-target-looked")
 	if _, err := d.PurgeEntry(purge); err != nil {
 		if errors.Is(err, ops.ErrDiskLost) {
 			return err //nolint:wrapcheck // ops says what failed

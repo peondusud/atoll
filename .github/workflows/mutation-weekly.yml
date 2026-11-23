@@ -1,10 +1,11 @@
-# Mutation testing of the packages that act on the disks (specs.md §27), ops, trash and watch, each week and on demand,
-# never on a push: gremlins changes each package's code one mutant at a time and runs the package's tests against each
-# (test/ci/mutation.sh, make mutation PKG=./internal/ops), each package in a job of its own, as each takes an hour or
-# more. The score and the mutants that lived go to the job's summary, gremlins' log and JSON to an artifact. A package
-# under its gate (test/ci/gates.txt), the mutants test/ci/mutation-equivalents.txt names left out, fails its job; one
-# with no gate is only measured. jobs is not here: gremlins runs every test of a package against each mutant, half an
-# hour for jobs, so a run of its mutants would take days.
+# Mutation testing of the packages that act on the disks (specs.md §27), ops, trash, watch and jobs, each week and on
+# demand, never on a push: gremlins changes each package's code one mutant at a time and runs the package's tests
+# against each (test/ci/mutation.sh, make mutation PKG=./internal/ops), each package in a job of its own, as each takes
+# an hour or more. The score and the mutants that lived go to the job's summary, gremlins' log and JSON to an artifact.
+# A package under its gate (test/ci/gates.txt), the mutants test/ci/mutation-equivalents.txt names left out, fails its
+# job; one with no gate is only measured. jobs, whose every test against each mutant would take days, runs by test, a
+# mutant given only the tests that reach its line (test/ci/mutation.sh, by_test), without its four sweeps of a whole
+# pass, in parts that each fit a job, then one score of them all (jobs-score).
 name: Mutation, weekly
 
 on:
@@ -70,5 +71,99 @@ jobs:
             bin/mutation/*.log
             bin/mutation/*.json
             bin/mutation/lived.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # jobs in parts: the files of each part, MUTATION_FILES, and of a file too large for one job its lines, MUTATION_LINES;
+  # the last part takes every file the others leave, a new one included. The parts come from an estimate of 2026-11-22
+  # (DONE.md): for each mutant, a build of 15 s and every test that reaches its line, as if each lived, which
+  # -failfast cuts short for one killed, at the times of jobs' tests measured alone with one CPU on a loaded machine,
+  # 1,031 s in all without the sweeps; 88.5 hours of tests in all, none of the parts over 7.7, under 2 hours at 4
+  # workers, under 4 at 2, besides about 20 minutes of the map of the tests and of gremlins' first run. A file whose
+  # lines move only moves the balance: the ranges cover every line.
+  jobs-parts:
+    name: mutation (jobs, ${{ matrix.part }})
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { part: "01", files: pass, lines: "1-644" }
+          - { part: "02", files: pass, lines: "645-965" }
+          - { part: "03", files: pass, lines: "966-1667" }
+          - { part: "04", files: pass, lines: "1668-" }
+          - { part: "05", files: replicate, lines: "1-726" }
+          - { part: "06", files: replicate, lines: "727-" }
+          - { part: "07", files: work, lines: "1-692" }
+          - { part: "08", files: work, lines: "693-" }
+          - { part: "09", files: parallel, lines: "1-283" }
+          - { part: "10", files: parallel, lines: "284-" }
+          - { part: "11", files: modify, lines: "" }
+          - { part: "12", files: passcopies, lines: "" }
+          - { part: "13", files: "scrub|repair|viewops", lines: "" }
+          - { part: "14", files: "!pass|replicate|work|parallel|modify|passcopies|scrub|repair|viewops", lines: "" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'beta' || github.ref }}
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            /go/pkg/mod
+            ~/.cache/go-build
+          key: go-mutation-jobs-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-mutation-jobs-${{ runner.arch }}-
+            go-mutation-${{ runner.arch }}-
+      - run: bash test/ci/mutation.sh ./internal/jobs
+        env:
+          MUTATION_FILES: ${{ matrix.files }}
+          MUTATION_LINES: ${{ matrix.lines }}
+          # Each reaches most of jobs' mutants, and they take 30 minutes of its tests together: a mutant given them
+          # would wait for them, where most take seconds.
+          MUTATION_SKIP: '^(TestAPassEndsTheSameWhereverItFails|TestAPassEndsTheSameWhereverItsCatalogFails|TestScrubsAndRepairsEndTheSameWhereverTheyFail|TestScrubsAndRepairsEndTheSameWhereverTheirCatalogFails)$'
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-jobs-${{ matrix.part }}
+          path: |
+            bin/mutation/*.log
+            bin/mutation/*.json
+            bin/mutation/*.runs
+            bin/mutation/*.tests.times
+            bin/mutation/lived.txt
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # One score of jobs' parts, each mutant as the part that tried it found it (test/ci/mutation-merge.sh), to its summary
+  # and an artifact: the measure its gate is to be set at, which it has none of yet, and is only measured.
+  jobs-score:
+    name: mutation (jobs, all parts)
+    needs: jobs-parts
+    if: always()
+    runs-on: ubuntu-latest
+    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'beta' || github.ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutation-jobs-*
+          path: parts
+      # A part that failed or ran out of time has no whole log: the merge fails, and says which.
+      - run: |
+          mkdir -p bin/mutation
+          bash test/ci/mutation-merge.sh ./internal/jobs bin/mutation/internal-jobs.log parts/*/internal-jobs.log
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-jobs
+          path: bin/mutation/internal-jobs.log
           if-no-files-found: ignore
           retention-days: 30

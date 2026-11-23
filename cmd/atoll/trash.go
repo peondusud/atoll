@@ -11,12 +11,10 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
-	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/trash"
 	"github.com/peondusud/atoll/internal/value"
@@ -68,7 +66,7 @@ func exitOf(f *writeFlags, s *trash.Summary) int {
 // included: nothing is left unsaid on an exit code that says the rest.
 func session(c *config.Config, stdout, stderr io.Writer, apply bool, run func(*trash.Session, *bufio.Writer) error) (err error) {
 	ctx := context.Background()
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
@@ -111,15 +109,13 @@ func encodePath(p string) (path, pathB64 string) {
 	return "", base64.StdEncoding.EncodeToString([]byte(p))
 }
 
-// shownPath gives a path as a line of human output shows it: as it is when it is UTF-8 with no control character,
-// in base64 otherwise, as an alert shows it (specs.md §23). A name may hold a line feed or an escape sequence, which
-// written as it is writes lines of its own on a terminal, or clears it. Every path the human output writes goes
-// through here, or through shownB64 or pathText, which do.
+// shownPath gives a path as a line of human output shows it: as it is when it is UTF-8 with no control character and
+// no format character, in base64 otherwise, as an alert shows it (names.Shown, specs.md §23, §25). A name may hold a
+// line feed or an escape sequence, which written as it is writes lines of its own on a terminal, or clears it; or
+// U+202E RIGHT-TO-LEFT OVERRIDE, an isolate or a zero-width character, which make it read as another name. Every
+// path the human output writes goes through here, or through shownB64 or pathText, which do.
 func shownPath(p string) string {
-	if isUTF8(p) && !strings.ContainsFunc(p, unicode.IsControl) {
-		return p
-	}
-	return "(base64) " + base64.StdEncoding.EncodeToString([]byte(p))
+	return names.Shown(p)
 }
 
 // pruneCopy is one copy of api/schemas/prune.schema.json.
@@ -482,10 +478,11 @@ func trashPurge(configPath string, args []string, stdout, stderr io.Writer) int 
 }
 
 // shownText gives a text that is not Atoll's own, as an answer of a server, as a line of human output shows it: each
-// control character, and each byte that is no UTF-8, replaced, so that it writes nothing of its own on a terminal.
+// control character and each format character, and each byte that is no UTF-8, replaced, so that it writes nothing
+// of its own on a terminal and reorders or hides nothing there (names.Unshowable, specs.md §25).
 func shownText(s string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if names.Unshowable(r) {
 			return utf8.RuneError
 		}
 		return r

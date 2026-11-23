@@ -31,7 +31,7 @@ func (p *pass) transfers(ctx context.Context) error {
 	}
 	p.copiesWaiting += waiting
 	p.copiesDue = earliest(p.copiesDue, next)
-	list, err := watch.CacheTransfers(ctx, p.db, p.config, p.now)
+	list, err := watch.CacheTransfers(ctx, p.db, p.config, p.now, p.session.LeavesWildcards)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
@@ -69,6 +69,12 @@ func (p *pass) transfers(ctx context.Context) error {
 		outcome, err := p.transfer(ctx, t, diskList)
 		if err != nil {
 			return err
+		}
+		if outcome == trash.OutcomeViewHolds {
+			// An operation of the view came since the pass read them: it waits as above (flaw 10).
+			p.copiesWaiting++
+			p.copiesDue = earliest(p.copiesDue, sql.NullInt64{Int64: p.now + p.debounce.Nanoseconds(), Valid: true})
+			continue
 		}
 		p.ranFile(t.FileID)
 		p.record(Operation{Disk: t.Src, Kind: KindTransfer, Path: t.Path, Outcome: outcome})
@@ -126,6 +132,10 @@ func (p *pass) transfer(ctx context.Context, t *watch.Transfer, diskList []catal
 		return "", fmt.Errorf("%w", err)
 	}
 	if outcome != trash.OutcomeTrashed {
+		if outcome == trash.OutcomeChanged {
+			// A transfer undone put its copy back on the cache, maybe as the file's original again.
+			p.settled = false
+		}
 		return outcome, nil
 	}
 	// The file is worked out again at the end of the pass: its original is now on a data disk.

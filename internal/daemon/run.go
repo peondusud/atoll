@@ -215,6 +215,8 @@ type loop struct {
 	watcher  *watch.Watcher
 	grouping *watch.Grouping
 	disks    map[string]*diskState
+	// seen is which disks' own marker the catalog recorded seen, as its check read it last (specs.md §10).
+	seen disks.Seen
 
 	first, reloaded, gone, back bool
 	// afterPass says that the last step the loop took was a pass, a check aside: another step due then runs before a
@@ -598,7 +600,7 @@ func (l *loop) check(ctx context.Context) {
 	// From its end: a check that took longer than the time between two, as one that waited for a remount, would
 	// otherwise be due again at once, and it comes before every pass.
 	defer func() { l.checkDue = l.opt.Machine.Now() + l.set.checkEvery.Nanoseconds() }()
-	verdicts, err := disks.CheckAll(ctx, l.opt.Machine, l.opt.Config.Disks)
+	verdicts, err := disks.CheckAllKnown(ctx, l.opt.Machine, l.opt.Config.Disks, l.opt.Config.PoolID, l.markersSeen(ctx))
 	if err != nil {
 		l.log.Warn("the mount check stopped", "error", err)
 		return
@@ -643,6 +645,24 @@ func (l *loop) check(ctx context.Context) {
 	}
 	l.recordSpin(ctx)
 	l.recordDisks(true)
+}
+
+// markersSeen reads which disks' own marker the catalog records seen, which the check asks of each disk (specs.md §10):
+// what it read last when the catalog cannot be read now, so that a disk whose marker went stays missing.
+func (l *loop) markersSeen(ctx context.Context) disks.Seen {
+	db, err := catalog.OpenPool(ctx, l.set.catalog, l.opt.Config.PoolID)
+	if err == nil {
+		var seen map[string]string
+		seen, err = catalog.MarkersSeen(ctx, db)
+		_ = db.Close()
+		if err == nil {
+			l.seen = disks.Seen(seen)
+		}
+	}
+	if err != nil {
+		l.log.Warn("which disks' own marker was seen is not read now: the check takes what it read last", "error", err)
+	}
+	return l.seen
 }
 
 // rearm watches again a disk whose watch ended while the disk stayed there: its reader stopped on an error, or the

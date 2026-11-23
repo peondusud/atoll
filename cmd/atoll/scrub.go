@@ -61,7 +61,7 @@ func runScrub(configPath string, args []string, stdout, stderr io.Writer) int {
 			return failure(stderr, fmt.Errorf("scrub: %w", err))
 		}
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}

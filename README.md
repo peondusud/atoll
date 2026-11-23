@@ -71,6 +71,8 @@ make conformance        # the black-box scenarios against a conformance build
 make test-qemu          # test/loopdev as root in qemu, on Linux 6.12 and 7.3, with only Docker on the host
 make model-check        # the TLA+ model of the replication protocol, checked by TLC, with only Docker
 make cover              # the coverage of the unit tests and of the scenarios, by package (bin/cover/), and its floor
+make test-qemu-cover    # test-qemu with both builds made with -cover, the counters of each guest into bin/qemu-cover/
+make cover-qemu         # make cover with what test-qemu-cover gathered counted too, in columns of their own
 make fuzz FUZZTIME=5m   # each fuzz target in turn
 make mutation           # mutation tests of the pure core (gremlins), and each package's gate
 make test-mediaservers  # the notifications on real Plex, Jellyfin and Emby in containers, with no account
@@ -78,7 +80,7 @@ test/ci/run.sh [REV]    # every check of a commit, with only git and Docker
 make release-snapshot   # a release as a tag makes one, into dist/, with only Docker: nothing is uploaded
 ```
 
-GitHub Actions runs the same checks on each push to `beta` and `main` and each pull request (`.github/workflows/ci.yml`), with the unit tests on arm64 too. Once the workflows are on `main`, it also runs the fuzz targets and the mutation tests each night, and the media-server test each week.
+GitHub Actions runs the same checks on each push to `main` and on each pull request once it is ready for review, never a draft (`.github/workflows/ci.yml`), with the unit tests on arm64 too. Once the workflows are on `main`, it also runs the fuzz targets and the mutation tests each night, and the media-server test each week.
 
 ## Releasing
 

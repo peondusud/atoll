@@ -51,6 +51,9 @@ type TrashStart struct {
 	ExpiresNS int64
 	// Link says that what goes is the link guard's link of that file, rather than the copy at Path (specs.md §17).
 	Link int64
+	// ViewFree says that it waits while an operation of the view no pass has taken in touches Path: ErrViewHolds, read
+	// in the transaction that journals it, as the SSD cache's transfer reads it (specs.md §19, flaw 10).
+	ViewFree bool
 }
 
 // eventData is the data of an event (specs.md §9).
@@ -112,6 +115,11 @@ func BeginTrash(ctx context.Context, db *sql.DB, s *TrashStart) (*Op, error) {
 
 // beginTrashTx journals sending a copy to the trash within a transaction: the operation, the trash row and the event.
 func beginTrashTx(ctx context.Context, tx *sql.Tx, s *TrashStart) (*Op, error) {
+	if s.ViewFree {
+		if touched, err := viewTouches(ctx, tx, s.Path); err != nil || touched {
+			return nil, cmpErr(err, ErrViewHolds)
+		}
+	}
 	op := &Op{Disk: s.Disk, Kind: OpTrash, Path: s.Path, FileKey: s.FileKey, Link: s.Link}
 	result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, file_key, started_ns, state, link) VALUES (?, 'trash', ?, ?, ?, 'planned', ?)",
 		s.Disk, []byte(s.Path), s.FileKey, s.NowNS, linkOf(s.Link))

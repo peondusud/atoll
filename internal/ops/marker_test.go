@@ -3,6 +3,7 @@ package ops
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
@@ -499,5 +501,99 @@ func TestForeignWork(t *testing.T) {
 	d.FS = names.NTFS
 	if place, uid, foreign, err := ForeignWork(d, trusted); err != nil || foreign {
 		t.Errorf("on NTFS: %q, %d, %v, %v", place, uid, foreign, err)
+	}
+	// A folder of the three that is not there is skipped, and those after it are looked at.
+	d.FS = names.Ext4
+	if err := os.Chown(work, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"tmp", "links"} {
+		if err := os.Remove(filepath.Join(work, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if place, uid, foreign, err := ForeignWork(d, trusted); err != nil || !foreign || uid != 1000 || place != "Atoll/trash" {
+		t.Errorf("tmp and links not there, trash given away: %q, %d, %v, %v", place, uid, foreign, err)
+	}
+}
+
+// The accounts Atoll trusts are each named once: root, the one it runs as, and the catalog's owner when that is
+// another (specs.md §10).
+func TestTrustedOwnersNameEachOnce(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "catalog.db")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := []uint32{0}
+	if uid := os.Geteuid(); uid > 0 {
+		want = append(want, uint32(uid))
+	}
+	if got := TrustedOwners(file); !slices.Equal(got, want) {
+		t.Errorf("a catalog of this account's: %v", got)
+	}
+	if got := TrustedOwners(filepath.Join(t.TempDir(), "none.db")); !slices.Equal(got, want) {
+		t.Errorf("no catalog: %v", got)
+	}
+}
+
+// A disk with no work folder yet says nothing of whose it is, whichever accounts are trusted.
+func TestNoWorkFolderIsNoForeignOne(t *testing.T) {
+	d := &config.Disk{ID: "t1", Mount: t.TempDir(), Workdir: "Atoll", FS: names.Ext4}
+	if uid, foreign, err := ForeignWorkdir(d, []uint32{4242}); err != nil || foreign {
+		t.Errorf("%d, %v, %v", uid, foreign, err)
+	}
+}
+
+// What a crash left of a marker or a catalog backup being written, its <name>.new, is replaced by the next one.
+func TestAWriteReplacesWhatACrashLeft(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, "Atoll/disk.toml.new", "half")
+	put(t, mount, "Atoll/catalog/catalog.db.new", "half")
+	d := openAt(t, mount, nil)
+	if err := d.WriteMarker("pool_id = \"p\"\n"); err != nil || !holding(mount, "Atoll/disk.toml", "pool_id = \"p\"\n") {
+		t.Errorf("the marker: %v", err)
+	}
+	if err := d.PutCatalog(strings.NewReader("catalog")); err != nil || !holding(mount, "Atoll/catalog/catalog.db", "catalog") {
+		t.Errorf("the catalog: %v", err)
+	}
+	if !absent(mount, "Atoll/disk.toml.new") || !absent(mount, "Atoll/catalog/catalog.db.new") {
+		t.Error("what the crash left stays")
+	}
+}
+
+// The highest operation a part names counts the largest id a catalog gives, and nothing past it.
+func TestTheHighestPartIsOneACatalogGives(t *testing.T) {
+	mount := newMount(t)
+	put(t, mount, fmt.Sprintf("Atoll/tmp/%d.part", catalog.MaxID), "c")
+	put(t, mount, fmt.Sprintf("Atoll/tmp/%d.part", int64(catalog.MaxID)+1), "c")
+	if got, err := openAt(t, mount, nil).HighestOpID(); err != nil || got != catalog.MaxID {
+		t.Errorf("%d, %v", got, err)
+	}
+}
+
+// openFiles counts the files this process holds open.
+func openFiles(t *testing.T) int {
+	t.Helper()
+	held, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skipf("no /proc/self/fd: %v", err)
+	}
+	return len(held)
+}
+
+// A look at whose the folders Atoll works in are lets go of every folder it opened on the way down to them, however
+// deep the work folder is.
+func TestALookAtTheWorkFoldersHoldsNothingOpen(t *testing.T) {
+	mount := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(mount, "Atoll", "work", "tmp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := &config.Disk{ID: "t1", Mount: mount, Workdir: "Atoll/work", FS: names.Ext4}
+	before := openFiles(t)
+	if _, _, foreign, err := ForeignWork(d, TrustedOwners(filepath.Join(mount, "catalog.db"))); err != nil || foreign {
+		t.Fatalf("%v, %v", foreign, err)
+	}
+	if after := openFiles(t); after != before {
+		t.Errorf("%d files open before, %d after", before, after)
 	}
 }

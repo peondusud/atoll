@@ -105,7 +105,7 @@ func Replicate(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 		}
 		return queue(ctx, db, r.now, jobs)
 	}}
-	if err := watch.SettleFor(ctx, db, c, r.now, rep); err != nil {
+	if err := watch.SettleFor(ctx, db, c, r.now, rep, session.LeavesWildcards); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	switch {
@@ -151,6 +151,52 @@ type replicator struct {
 	force bool
 	// on is the session as the copies under way share it, while runAll runs them.
 	on *sharedSession
+}
+
+// spaceOf gives a disk's free space as its filesystem says it now, and what min_free keeps of it; false when either
+// cannot be read, which lets a write through: ENOSPC still keeps the disk's capacity.
+func (r *replicator) spaceOf(disk string) (free, reserved int64, ok bool) {
+	for i := range r.config.Disks {
+		d := &r.config.Disks[i]
+		if d.ID != disk {
+			continue
+		}
+		capacity, free, err := r.machine.Space(d.Mount)
+		if err != nil {
+			return 0, 0, false
+		}
+		minFree, err := r.config.MinFree()
+		if err != nil {
+			return 0, 0, false
+		}
+		reserved, err := minFree.Reserved(capacity)
+		if err != nil {
+			return 0, 0, false
+		}
+		return free, reserved, true
+	}
+	return 0, 0, false
+}
+
+// room keeps what a copy knows of its target's free space as it writes: the disk's word at its first look, less what
+// the copy wrote since, as a filesystem may count a write only once it is flushed (btrfs does), and the disk's word
+// now, for what else wrote there; the lesser holds (specs.md §14.2; conformance/models/README.md, flaw 12).
+type room struct {
+	looked  bool
+	first   int64
+	written int64
+}
+
+// keeps says whether the target keeps min_free once the copy writes grow bytes more there.
+func (m *room) keeps(r *replicator, disk string, grow int64) bool {
+	free, reserved, ok := r.spaceOf(disk)
+	if !ok {
+		return true
+	}
+	if !m.looked {
+		m.looked, m.first = true, free
+	}
+	return min(free, m.first-m.written)-grow >= reserved
 }
 
 func (r *replicator) positions(ctx context.Context) error {
@@ -751,6 +797,11 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 	}
 	var hashes []byte
 	first := start
+	// What the part holds past which a write takes room on its disk: each such write checks min_free first, so that no
+	// copy takes its disk past it, whatever else wrote there since the plan, as the view's parts do (specs.md §14;
+	// conformance/models/README.md, flaw 12).
+	end := part.Stat.Size
+	var space room
 	record := func() error {
 		if err := catalog.RecordChunks(ctx, c.r.db, c.job.ID, first, hashes); err != nil {
 			return fmt.Errorf("%w: %w", errCatalog, err)
@@ -788,12 +839,18 @@ func (c *copier) fill(ctx context.Context, part *ops.Part, source fsx.File, star
 			same = m == n && bytes.Equal(held[:m], buf[:n])
 		}
 		if !same {
+			grow := max(off+int64(n)-end, 0)
+			if grow > 0 && !space.keeps(c.r, c.op.Disk, grow) {
+				return c.drop(ctx, OutcomeNoRoom, true)
+			}
 			if _, err := part.WriteAt(buf[:n], off); err != nil {
 				if isNoRoom(err) {
 					return c.drop(ctx, OutcomeNoRoom, true)
 				}
 				return classifyDisk(err)
 			}
+			end = max(end, off+int64(n))
+			space.written += grow
 		}
 		sum := integrity.ChunkSum(buf[:n])
 		hashes = append(hashes, sum[:]...)
@@ -960,7 +1017,7 @@ func (c *copier) place(ctx context.Context) (*ops.Moved, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", errCatalog, err)
 		}
-		st, err := c.dst.MakeRootFolder(folder, like)
+		st, err := c.dst.MakeRootFolder(folder, like, func(key string) error { return catalog.SetCreateKey(ctx, c.r.db, op, key) })
 		switch {
 		case err == nil:
 			if err := c.dst.FinishMkdir(ctx, c.r.db, op, &st); err != nil {

@@ -64,13 +64,15 @@ type diskAddOutput struct {
 
 // diskAdding is a disk add that passed its checks.
 type diskAdding struct {
-	out     diskAddOutput
-	disk    *config.Disk
-	text    []byte
-	config  *config.Config
-	marker  string // the marker to write, "" for none
-	machine disks.Machine
-	stderr  io.Writer
+	out    diskAddOutput
+	disk   *config.Disk
+	text   []byte
+	config *config.Config
+	marker string // the marker to write, "" for none
+	// ownMarker says that the disk holds its own marker already, which the catalog then records seen (specs.md §10).
+	ownMarker bool
+	machine   disks.Machine
+	stderr    io.Writer
 }
 
 func (a *diskAdding) warn(kind, message string) {
@@ -89,7 +91,7 @@ func diskAdd(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -393,6 +395,7 @@ func (a *diskAdding) checkMarker(c *config.Config) error {
 			return fmt.Errorf(T("its marker names the filesystem %s, and this one is %s: a marker copied from another disk"), mark.FSUUID, a.disk.UUID)
 		}
 		// It says the same, and is left as it is, however it is written (specs.md §10).
+		a.ownMarker = true
 		return nil
 	}
 	if on, _ := c.Effective()["layout.marker"].(bool); on && a.out.Disk.State == string(disks.Online) {
@@ -435,10 +438,28 @@ func (a *diskAdding) finish(ctx context.Context, configPath string) int {
 	if a.marker != "" {
 		if err := a.writeMarker(); err != nil {
 			a.warn(warnMarkerNotWritten, fmt.Sprintf(T("its marker was not written: %v"), err))
+			return exitPartial
+		}
+		a.ownMarker = true
+	}
+	if a.ownMarker {
+		// From now on, a confirmation that finds no marker on it makes it readonly, no-marker (specs.md §10).
+		if err := recordMarkerSeen(ctx, a.config, a.disk, a.machine.Now()); err != nil {
+			a.warn(warnCatalogNotUpdated, fmt.Sprintf(T("the catalog was not updated, %v: the next pass that confirms the disk records its marker"), err))
 			code = exitPartial
 		}
 	}
 	return code
+}
+
+// recordMarkerSeen records in the catalog that a disk's own marker was seen (specs.md §9, §10).
+func recordMarkerSeen(ctx context.Context, c *config.Config, d *config.Disk, nowNS int64) (err error) {
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	return catalog.SetMarkerSeen(ctx, db, d.ID, d.UUID, nowNS) //nolint:wrapcheck // the catalog names the disk
 }
 
 // recordAndTell records every disk's state in the catalog and tells the daemon, once the configuration holds a

@@ -14,6 +14,8 @@ func TestIsMountCommand(t *testing.T) {
 		"atoll\x00--config\x00mount\x00daemon\x00":          false,
 		"atoll\x00": false,
 		"":          false,
+		// --config and its value, and no command after them.
+		"atoll\x00--config=/etc/a.toml\x00": false,
 	} {
 		if got := IsMountCommand([]byte(cmdline)); got != want {
 			t.Errorf("%q: %v, want %v", cmdline, got, want)

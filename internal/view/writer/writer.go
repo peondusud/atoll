@@ -30,7 +30,10 @@ import (
 
 // What the view answers a user, each the error a filesystem gives.
 var (
-	ErrExists    = errors.New("a name is there")
+	ErrExists = errors.New("a name is there")
+	// ErrBusy says that a move of Atoll's own of the copy an open to write would write stayed planned past the wait
+	// (specs.md §21.2, flaw 10): EBUSY, for the program to try again.
+	ErrBusy      = errors.New("a move of Atoll's own of that copy is under way")
 	ErrNotFound  = errors.New("no such name")
 	ErrNotFolder = errors.New("not a folder")
 	ErrIsFolder  = errors.New("a folder")
@@ -67,6 +70,68 @@ type Writer struct {
 	// §21.2). writing holds, by path, each file Create made that is still open through the handle it gave, under mu.
 	moveOnENOSPC bool
 	writing      map[string]*File
+	// held holds the rows of view_ops that work under way still answers for, though the writer's lock does not cover
+	// it: a part being written or closed, a move during its copy. A check while the view runs resolves none of them
+	// (Recheck).
+	heldMu sync.Mutex
+	held   map[int64]bool
+	// opened counts, by row of view_ops, the handles open to write on the file it made or writes, under heldMu: the row
+	// stays held open until the last of them closes, and no pass takes it in meanwhile (specs.md §21.2, flaw 10).
+	opened map[int64]int
+}
+
+// openHandle counts a handle open to write on the file of a row held open, opened with ctx.
+func (w *Writer) openHandle(ctx context.Context, f *File, id int64) {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	w.opened[id]++
+	f.held, f.holder, f.heldCtx = id, w, context.WithoutCancel(ctx)
+}
+
+// closeHandle counts a handle closed, and makes the row done once none is open on its file any more.
+func (w *Writer) closeHandle(ctx context.Context, id int64) {
+	w.heldMu.Lock()
+	w.opened[id]--
+	last := w.opened[id] <= 0
+	if last {
+		delete(w.opened, id)
+	}
+	w.heldMu.Unlock()
+	if !last {
+		return
+	}
+	if err := catalog.ReleaseViewOp(ctx, w.db, id); err != nil {
+		// It stays held open until the view's next start, which lets go of every row so (Reprise).
+		w.log.Warn("an operation of the view stays held open", "id", id, "error", err)
+	}
+}
+
+// forgetHandle counts a handle closed whose row is not let go of but undone.
+func (w *Writer) forgetHandle(id int64) {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	if w.opened[id]--; w.opened[id] <= 0 {
+		delete(w.opened, id)
+	}
+}
+
+// hold says that work under way answers for a row of the view's journal, until release.
+func (w *Writer) hold(id int64) {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	w.held[id] = true
+}
+
+func (w *Writer) release(id int64) {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	delete(w.held, id)
+}
+
+func (w *Writer) isHeld(id int64) bool {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	return w.held[id]
 }
 
 // New makes the writer of a view.
@@ -82,7 +147,8 @@ func New(db *sql.DB, c *config.Config, m disks.Machine, tree *view.Tree, handles
 	}
 	moveOnENOSPC, _ := c.Effective()["view.move_on_enospc"].(bool)
 	return &Writer{db: db, config: c, machine: m, tree: tree, handles: handles, retention: retention, minFree: minFree, log: log,
-		par: &parts{files: map[string]*parallel{}, rooms: map[string]*roomOf{}}, moveOnENOSPC: moveOnENOSPC, writing: map[string]*File{}}, nil
+		par: &parts{files: map[string]*parallel{}, rooms: map[string]*roomOf{}}, moveOnENOSPC: moveOnENOSPC, writing: map[string]*File{},
+		held: map[int64]bool{}, opened: map[int64]int{}}, nil
 }
 
 // Tree gives what the writer looks at what the view presents through.
@@ -136,20 +202,34 @@ func (w *Writer) like(ctx context.Context) ops.Like {
 
 func (w *Writer) now() int64 { return w.machine.Now() }
 
-// journal writes an operation of the view before it runs (invariant 12).
-func (w *Writer) journal(ctx context.Context, v *catalog.ViewOp) error {
+// journal writes an operation of the view before it runs (invariant 12), with who asked it (specs.md §9).
+func (w *Writer) journal(ctx context.Context, v *catalog.ViewOp, who Caller) error {
 	v.AtNS = w.now()
+	v.Asker = who.asker()
 	if err := catalog.BeginViewOp(ctx, w.db, v); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	return nil
 }
 
+// askedBy gives what a log line of an operation of the view says of who asked it: its uid and pid, as the journal
+// records them, or nothing (specs.md §21.2).
+func askedBy(v *catalog.ViewOp) []any {
+	if v.Asker == nil {
+		return nil
+	}
+	if v.Asker.PID == 0 {
+		return []any{"uid", v.Asker.UID}
+	}
+	return []any{"uid", v.Asker.UID, "pid", v.Asker.PID}
+}
+
 // finish says what became of an operation: done, or undone when err says nothing happened. A disk that cannot be
 // relied on leaves it planned, for the view's reprise (specs.md §17.1).
 func (w *Writer) finish(ctx context.Context, v *catalog.ViewOp, err error) error {
 	if errors.Is(err, ops.ErrDiskLost) {
-		w.log.Warn("an operation of the view stays planned: its disk cannot be relied on", "disk", v.Disk, "path", v.Path, "error", err)
+		w.log.Warn("an operation of the view stays planned: its disk cannot be relied on",
+			append([]any{"disk", v.Disk, "path", v.Path, "error", err}, askedBy(v)...)...)
 		return err
 	}
 	state := catalog.OpDone
@@ -160,6 +240,17 @@ func (w *Writer) finish(ctx context.Context, v *catalog.ViewOp, err error) error
 		return errors.Join(err, fmt.Errorf("%w", ferr))
 	}
 	return err
+}
+
+// finishHeld is finish for an operation whose file the view then holds open: held, rather than done.
+func (w *Writer) finishHeld(ctx context.Context, v *catalog.ViewOp, err error) error {
+	if err != nil {
+		return w.finish(ctx, v, err)
+	}
+	if ferr := catalog.FinishViewOp(ctx, w.db, v, catalog.ViewHeld, false, w.now()); ferr != nil {
+		return fmt.Errorf("%w", ferr)
+	}
+	return nil
 }
 
 // Create makes a new file, on the SSD cache when its policy says so, or on the disk placement.new_files picks
@@ -185,7 +276,7 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Calle
 		return nil, nil, err
 	}
 	v := &catalog.ViewOp{Kind: catalog.ViewCreate, Disk: disk, Path: path}
-	if err := w.journal(ctx, v); err != nil {
+	if err := w.journal(ctx, v, who); err != nil {
 		return nil, nil, err
 	}
 	var f fsx.WritableFile
@@ -195,12 +286,14 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Calle
 		f, st, err = d.CreateUserFile(path, mode, who.UID, who.GID, w.like(ctx))
 		return err //nolint:wrapcheck // ops says what failed
 	})
-	if err := w.finish(ctx, v, err); err != nil {
+	// Made, the row is held open, as the file is through the handle it gives, until the last one closes (flaw 10).
+	if err := w.finishHeld(ctx, v, err); err != nil {
 		return nil, nil, err
 	}
 	file := &File{WritableFile: f, Disk: disk, Path: path}
+	w.openHandle(ctx, file, v.ID)
 	if !cached {
-		file.par = w.startParallel(ctx, disk, path)
+		file.par = w.startParallel(ctx, disk, path, who)
 	}
 	if w.moveOnENOSPC {
 		// A new file, open through this handle alone: a write that runs out of space may move it (specs.md §21.2).
@@ -225,7 +318,7 @@ func (w *Writer) Mkdir(ctx context.Context, path string, mode uint32, who Caller
 		return nil, err
 	}
 	v := &catalog.ViewOp{Kind: catalog.ViewMkdir, Disk: disk, Path: path, Folder: true}
-	if err := w.journal(ctx, v); err != nil {
+	if err := w.journal(ctx, v, who); err != nil {
 		return nil, err
 	}
 	var st fsx.Stat
@@ -255,7 +348,7 @@ func (w *Writer) Symlink(ctx context.Context, path, target string, who Caller) (
 		return nil, err
 	}
 	v := &catalog.ViewOp{Kind: catalog.ViewSymlink, Disk: disk, Path: path}
-	if err := w.journal(ctx, v); err != nil {
+	if err := w.journal(ctx, v, who); err != nil {
 		return nil, err
 	}
 	var st fsx.Stat
@@ -466,11 +559,63 @@ func (w *Writer) refusedOn(ctx context.Context, d *config.Disk, path, except str
 	return false, nil
 }
 
+// moveWait is how long an open to write waits, a try at a time, while a move of Atoll's own of the copy it would write
+// is planned: a move and its syncs take milliseconds, and one a stop left planned waits for the daemon's reprise.
+var moveWait, moveTry = 10 * time.Second, 20 * time.Millisecond
+
 // Open opens a file the view presents for writing: its original, the copy it presents, alone (specs.md §21.2), once
-// the caller may write it there. The write is journaled once, until a pass takes it in.
+// the caller may write it there. The write is journaled once, until a pass takes it in, and held open until the last
+// handle on it closes. While a move of Atoll's own of that copy is planned, as the SSD cache's transfer journals one
+// (§19), it waits, then opens the copy the view presents once that move is over, another disk's when it went through:
+// a write to a copy on its way to the trash would be lost with it (conformance/models/README.md, flaw 10).
 func (w *Writer) Open(ctx context.Context, path string, n *view.Node, who Caller) (*File, error) {
 	if n.Kind == view.NodeDir {
 		return nil, ErrIsFolder
+	}
+	lookedAgain := false
+	for waited := time.Duration(0); ; waited += moveTry {
+		f, err := w.open(ctx, path, n, who)
+		if (errors.Is(err, ops.ErrGone) || fsx.IsAbsent(err)) && !lookedAgain {
+			// The copy the kernel looked up left its name since, as a move of Atoll's own leaves it once done: what the
+			// view presents now is opened, once, as a read falls back to the next copy (flaws 9 and 10).
+			lookedAgain = true
+			again, lerr := w.tree.Lookup(ctx, path)
+			if lerr == nil && again != nil && again.Kind == n.Kind && again.Disk != n.Disk {
+				n = again
+				continue
+			}
+		}
+		if !errors.Is(err, catalog.ErrMovePlanned) {
+			return f, err
+		}
+		if waited >= moveWait {
+			return nil, fmt.Errorf("%w: %w", ErrBusy, err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w", ctx.Err())
+		case <-time.After(moveTry):
+		}
+		again, err := w.tree.Lookup(ctx, path)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("%w", err)
+		case again == nil:
+			return nil, ErrNotFound
+		}
+		n = again
+	}
+}
+
+// open is one try of Open, under the writer's lock.
+func (w *Writer) open(ctx context.Context, path string, n *view.Node, who Caller) (*File, error) {
+	if n.Kind == view.NodeDir {
+		return nil, ErrIsFolder
+	}
+	// A write of the content of a wildcard name on the type ntfs sets its whole volume read-only once written back
+	// (measured): refused, as its move is (specs.md §15.8).
+	if w.leftOn(w.disk(n.Disk), path) {
+		return nil, ErrRefused
 	}
 	// One change of names at a time: a move of the file this opens again (specs.md §21.2) is over, or never starts.
 	w.mu.Lock()
@@ -495,26 +640,45 @@ func (w *Writer) Open(ctx context.Context, path string, n *view.Node, who Caller
 	}
 	// Opened again to be written, a file is no new file written once: its copies in parallel go.
 	w.abandonAt(path, "opened again to be written")
-	if err := w.journalWrite(ctx, path, n); err != nil {
+	id, fresh, err := w.journalWrite(ctx, path, n, who, true)
+	if err != nil {
 		return nil, err
 	}
 	var f fsx.WritableFile
-	err := w.handles.Use(n.Disk, func(d *ops.Disk) error {
+	err = w.handles.Use(n.Disk, func(d *ops.Disk) error {
 		var err error
 		f, _, err = d.OpenUserFile(path)
 		return err //nolint:wrapcheck // ops says what failed
 	})
+	file := &File{WritableFile: f, Disk: n.Disk, Path: path}
+	// Counted before what failed is said, so that a row held open for nothing is let go of at once.
+	if id != 0 {
+		w.openHandle(ctx, file, id)
+	}
 	if err != nil {
+		switch {
+		case fresh:
+			// Nothing was opened: the write it journaled is undone, never done, so that the view presents nothing from a
+			// copy it could not open, one a move of Atoll's own took from its name among them (Open).
+			w.forgetHandle(id)
+			if uerr := catalog.FinishViewOp(ctx, w.db, &catalog.ViewOp{ID: id, Path: path}, catalog.OpUndone, false, w.now()); uerr != nil {
+				return nil, errors.Join(err, fmt.Errorf("%w", uerr))
+			}
+		case id != 0:
+			w.closeHandle(ctx, id)
+		}
 		return nil, err
 	}
-	return &File{WritableFile: f, Disk: n.Disk, Path: path}, nil
+	return file, nil
 }
 
 // journalWrite journals a write on a path's presented copy, unless one is open already that presents it from there.
-func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node) error {
+// With held, for an open to write, the row is held open, and its id given, fresh when the row is new: one done already
+// is held open again, and a new one waits while a move of Atoll's own of that copy is planned (catalog.ErrMovePlanned).
+func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node, who Caller, held bool) (int64, bool, error) {
 	open, err := catalog.OpenViewOps(ctx, w.db)
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return 0, false, fmt.Errorf("%w", err)
 	}
 	for i := len(open) - 1; i >= 0; i-- {
 		v := &open[i]
@@ -527,11 +691,29 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node) er
 			continue
 		}
 		if (v.Kind == catalog.ViewWrite || v.Kind == catalog.ViewCreate) && v.Path == path && v.Disk == n.Disk {
-			return nil
+			if !held {
+				return 0, false, nil
+			}
+			if v.State == catalog.OpDone {
+				if err := catalog.HoldViewOp(ctx, w.db, v.ID); err != nil {
+					return 0, false, fmt.Errorf("%w", err)
+				}
+			}
+			return v.ID, false, nil
 		}
 		break
 	}
-	return w.journal(ctx, &catalog.ViewOp{Kind: catalog.ViewWrite, Disk: n.Disk, Path: path, Folder: n.Kind == view.NodeDir})
+	v := &catalog.ViewOp{Kind: catalog.ViewWrite, Disk: n.Disk, Path: path, Folder: n.Kind == view.NodeDir}
+	if held && !v.Folder {
+		v.State = catalog.ViewHeld
+	}
+	if err := w.journal(ctx, v, who); err != nil {
+		return 0, false, err
+	}
+	if v.State != catalog.ViewHeld {
+		return 0, false, nil
+	}
+	return v.ID, true, nil
 }
 
 // Setattr changes what a user may change of a path: the owner, the mode, the size and the times. A file or a symbolic
@@ -540,6 +722,10 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node) er
 func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.UserAttrs, how Asked) (*view.Node, error) {
 	if n.Kind == view.NodeDir && a.Size != nil {
 		return nil, ErrIsFolder
+	}
+	if a.Size != nil && n.Kind != view.NodeDir && w.leftOn(w.disk(n.Disk), path) {
+		// A change of its content's size is a write of it: refused, as an open to write is (specs.md §15.8).
+		return nil, ErrRefused
 	}
 	if a.Size != nil {
 		w.abandonAt(path, "truncated")
@@ -569,7 +755,7 @@ func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.
 			changes[id] = change
 		}
 	}
-	if err := w.journalWrite(ctx, path, &view.Node{Kind: n.Kind, Disk: targets[0]}); err != nil {
+	if _, _, err := w.journalWrite(ctx, path, &view.Node{Kind: n.Kind, Disk: targets[0]}, how.Caller, false); err != nil {
 		return nil, err
 	}
 	var first *fsx.Stat
@@ -651,7 +837,7 @@ func (w *Writer) Link(ctx context.Context, from, to string, who Caller) (*view.N
 			return err
 		}
 		v := &catalog.ViewOp{Kind: catalog.ViewLink, Disk: n.Disk, Path: from, Path2: to, FileKey: fmt.Sprintf("%d", st.Ino)}
-		if err := w.journal(ctx, v); err != nil {
+		if err := w.journal(ctx, v, who); err != nil {
 			return err
 		}
 		made, err = h.LinkUser(from, to, v.FileKey, w.like(ctx))
@@ -731,7 +917,7 @@ func (w *Writer) changeXattr(ctx context.Context, path string, n *view.Node, who
 			return err
 		}
 	}
-	if err := w.journal(ctx, v); err != nil {
+	if err := w.journal(ctx, v, who); err != nil {
 		return err
 	}
 	var first error
@@ -759,6 +945,19 @@ func (w *Writer) linkMovesTimes(d *config.Disk) bool {
 	return seen.Entry == nil || seen.Entry.FSType == "ntfs"
 }
 
+// leftOn says whether a disk leaves as it is what it holds at one of these paths: it is mounted with the type ntfs, as
+// its mount table says now, and a component of the path holds a wildcard character, which that driver cannot take out
+// of its folder, by a rename, an unlink or an rmdir, nor write the content of, without setting its whole volume
+// read-only (specs.md §15.8). The view refuses such a move, removal or write, EINVAL, before it journals anything; a
+// disk whose mount cannot be read now is not one, as ops refuses a move or a removal again there.
+func (w *Writer) leftOn(d *config.Disk, paths ...string) bool {
+	if d == nil {
+		return false
+	}
+	seen := w.machine.Mount(d.Mount)
+	return seen.Entry != nil && disks.LeavesWildcards(seen.Entry.FSType) && slices.ContainsFunc(paths, names.HoldsWildcard)
+}
+
 // Unlink deletes what a path presents, but a folder: a file goes to the trash from the disk it is presented from,
 // `deleted`, and the pass sends its other copies (specs.md §15.5, §21.2); a symbolic link is removed.
 func (w *Writer) Unlink(ctx context.Context, path string, who Caller) error {
@@ -777,15 +976,18 @@ func (w *Writer) Unlink(ctx context.Context, path string, who Caller) error {
 	if err := w.mayDelete(ctx, asking(who), n.Disk, path, n); err != nil {
 		return err
 	}
+	if w.leftOn(w.disk(n.Disk), path) {
+		return ErrRefused
+	}
 	if n.Kind == view.NodeSymlink {
 		v := &catalog.ViewOp{Kind: catalog.ViewUnlink, Disk: n.Disk, Path: path}
-		if err := w.journal(ctx, v); err != nil {
+		if err := w.journal(ctx, v, who); err != nil {
 			return err
 		}
 		err := w.handles.Use(n.Disk, func(d *ops.Disk) error { return d.RemoveUser(path, false) }) //nolint:wrapcheck // ops says what failed
 		return w.finish(ctx, v, err)
 	}
-	v := &catalog.ViewOp{Kind: catalog.ViewUnlink, Disk: n.Disk, Path: path}
+	v := &catalog.ViewOp{Kind: catalog.ViewUnlink, Disk: n.Disk, Path: path, Asker: who.asker()}
 	return w.toTrash(ctx, v, path, "deleted")
 }
 
@@ -815,13 +1017,40 @@ func (w *Writer) toTrash(ctx context.Context, v *catalog.ViewOp, path, reason st
 			return fmt.Errorf("%w", err)
 		}
 		if _, err := d.ToTrash(op, row); err != nil {
-			return w.finish(ctx, v, err)
+			if moved, err := w.afterFailedTrash(ctx, d, v, op, row, err); !moved {
+				return err
+			}
 		}
 		if err := d.TouchParent(path, fsx.TimeOf(now)); err != nil {
 			w.log.Warn("a folder keeps its time", "path", path, "error", err)
 		}
 		return w.finish(ctx, v, nil)
 	})
+}
+
+// afterFailedTrash resolves a move of the view to the trash that failed, as the daemon's session does
+// (trash.Session.afterFailedMove): a disk that cannot be relied on leaves it planned, for the view's reprise, and one
+// on another mount moved nothing; anything else is resolved at once by the table of §17.2, against the look right
+// before the move (specs.md §17.1, §21.2). It says whether the copy reached the trash after all, the operation then to
+// finish; otherwise what the program gets, the operation undone or left planned.
+func (w *Writer) afterFailedTrash(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, op *ops.Op, row *catalog.KnownCopy, moveErr error) (bool, error) {
+	if errors.Is(moveErr, ops.ErrDiskLost) || errors.Is(moveErr, ops.ErrOtherMount) {
+		return false, w.finish(ctx, v, moveErr)
+	}
+	done, warn, err := d.ResolveViewTrash(ctx, w.db, op, row)
+	switch {
+	case errors.Is(err, ops.ErrDiskLost):
+		return false, w.finish(ctx, v, err)
+	case err != nil:
+		w.log.Warn("an operation of the view stays planned", append([]any{"disk", v.Disk, "path", v.Path, "error", err}, askedBy(v)...)...)
+		return false, errors.Join(moveErr, fmt.Errorf("%w", err))
+	case done:
+		return true, nil
+	}
+	if ferr := catalog.FinishViewOp(ctx, w.db, v, catalog.OpUndone, warn, w.now()); ferr != nil {
+		return false, errors.Join(moveErr, fmt.Errorf("%w", ferr))
+	}
+	return false, moveErr
 }
 
 // knownOf is what a look found of a copy, as the row an operation compares it with right before it moves it.
@@ -888,9 +1117,12 @@ func (w *Writer) Rmdir(ctx context.Context, path string, who Caller) error {
 		if err := w.mayDelete(ctx, asker, id, path, n); err != nil && !errors.Is(err, ErrNoHandle) {
 			return err
 		}
+		if w.leftOn(w.disk(id), path) {
+			return ErrRefused
+		}
 	}
 	v := &catalog.ViewOp{Kind: catalog.ViewRmdir, Disk: holders[0], Path: path, Folder: true}
-	if err := w.journal(ctx, v); err != nil {
+	if err := w.journal(ctx, v, who); err != nil {
 		return err
 	}
 	for _, id := range holders {
@@ -962,9 +1194,9 @@ func (w *Writer) Rename(ctx context.Context, from, to string, noReplace bool, wh
 		return err
 	}
 	if n.Kind == view.NodeDir {
-		return w.renameFolder(ctx, holders, from, to)
+		return w.renameFolder(ctx, holders, from, to, who)
 	}
-	return w.renameFile(ctx, n.Disk, from, to, replace)
+	return w.renameFile(ctx, n.Disk, from, to, replace, who)
 }
 
 // refusedBy refuses a rename that a disk holding a copy at or below the old name would refuse: the new name, and below
@@ -974,6 +1206,9 @@ func (w *Writer) refusedBy(ctx context.Context, holders []string, from, to strin
 		d := w.disk(id)
 		if d == nil {
 			continue
+		}
+		if w.leftOn(d, from, to) {
+			return ErrRefused
 		}
 		refused, err := w.refusedOn(ctx, d, to, from)
 		if err != nil {
@@ -993,7 +1228,7 @@ func (w *Writer) refusedBy(ctx context.Context, holders []string, from, to strin
 	return nil
 }
 
-func (w *Writer) renameFile(ctx context.Context, disk, from, to string, replace bool) error {
+func (w *Writer) renameFile(ctx context.Context, disk, from, to string, replace bool, who Caller) error {
 	return w.handles.Use(disk, func(d *ops.Disk) error {
 		st, found, err := d.StatRoot(from)
 		switch {
@@ -1005,18 +1240,18 @@ func (w *Writer) renameFile(ctx context.Context, disk, from, to string, replace 
 		key := fmt.Sprintf("%d", st.Ino)
 		if !replace {
 			v := &catalog.ViewOp{Kind: catalog.ViewRename, Disk: disk, Path: from, Path2: to, FileKey: key}
-			if err := w.journal(ctx, v); err != nil {
+			if err := w.journal(ctx, v, who); err != nil {
 				return err
 			}
 			return w.finish(ctx, v, d.RenameUser(from, to, false, key, w.like(ctx)))
 		}
-		return w.replace(ctx, d, from, to, key)
+		return w.replace(ctx, d, from, to, key, who)
 	})
 }
 
 // replace sends the copy presented at to to the trash, `overwritten`, then renames from onto its name, as one
 // operation of the view: a rename that fails once the copy is in the trash leaves it planned, for the view's reprise.
-func (w *Writer) replace(ctx context.Context, d *ops.Disk, from, to, key string) error {
+func (w *Writer) replace(ctx context.Context, d *ops.Disk, from, to, key string, who Caller) error {
 	st, found, err := d.StatRoot(to)
 	switch {
 	case err != nil:
@@ -1031,7 +1266,7 @@ func (w *Writer) replace(ctx context.Context, d *ops.Disk, from, to, key string)
 		return err
 	}
 	now := w.now()
-	v := &catalog.ViewOp{Kind: catalog.ViewReplace, Disk: d.ID, Path: from, Path2: to, FileKey: key, AtNS: now}
+	v := &catalog.ViewOp{Kind: catalog.ViewReplace, Disk: d.ID, Path: from, Path2: to, FileKey: key, AtNS: now, Asker: who.asker()}
 	op, err := catalog.BeginViewTrash(ctx, w.db, v, &catalog.TrashStart{
 		Disk: d.ID, Path: to, FileKey: row.FileKey.String, Size: row.Size, Reason: "overwritten", NowNS: now, ExpiresNS: expires(now, w.retention),
 	})
@@ -1039,7 +1274,9 @@ func (w *Writer) replace(ctx context.Context, d *ops.Disk, from, to, key string)
 		return fmt.Errorf("%w", err)
 	}
 	if _, err := d.ToTrash(op, row); err != nil {
-		return w.finish(ctx, v, err)
+		if moved, err := w.afterFailedTrash(ctx, d, v, op, row, err); !moved {
+			return err
+		}
 	}
 	err = d.RenameUser(from, to, false, key, w.like(ctx))
 	if err != nil {
@@ -1049,9 +1286,9 @@ func (w *Writer) replace(ctx context.Context, d *ops.Disk, from, to, key string)
 	return w.finish(ctx, v, nil)
 }
 
-func (w *Writer) renameFolder(ctx context.Context, holders []string, from, to string) error {
+func (w *Writer) renameFolder(ctx context.Context, holders []string, from, to string, who Caller) error {
 	v := &catalog.ViewOp{Kind: catalog.ViewRename, Disk: holders[0], Path: from, Path2: to, Folder: true}
-	if err := w.journal(ctx, v); err != nil {
+	if err := w.journal(ctx, v, who); err != nil {
 		return err
 	}
 	moved := 0

@@ -630,7 +630,8 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, fs_uuid, fs_type, mount_path, root, workdir, role, position, COALESCE(domain, ''), tags,
 			capacity_bytes IS NOT NULL, COALESCE(capacity_bytes, 0), COALESCE(free_bytes, 0), state, COALESCE(last_seen_ns, 0),
-			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, ''), names_disagree, links_unnamed, COALESCE(device, '')
+			last_seen_ns IS NOT NULL, COALESCE(time_precision_ns, 0), COALESCE(smart_json, ''), names_disagree, links_unnamed, COALESCE(device, ''),
+			marker_seen_ns IS NOT NULL, COALESCE(marker_seen_ns, 0)
 		FROM disks ORDER BY position`)
 	if err != nil {
 		return nil, fmt.Errorf("disks: %w", err)
@@ -640,7 +641,8 @@ func Disks(ctx context.Context, db *sql.DB) ([]Disk, error) {
 	for rows.Next() {
 		var d Disk
 		var tags string
-		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON, &d.NamesDisagree, &d.LinksUnnamed, &d.Device); err != nil {
+		if err := rows.Scan(&d.ID, &d.UUID, &d.FS, &d.Mount, &d.Root, &d.Workdir, &d.Role, &d.Position, &d.Domain, &tags, &d.HasCapacity, &d.Capacity, &d.Free, &d.State, &d.LastSeenNS, &d.Seen, &d.TimePrecisionNS, &d.SmartJSON, &d.NamesDisagree, &d.LinksUnnamed, &d.Device,
+			&d.MarkerSeen, &d.MarkerSeenNS); err != nil {
 			return nil, fmt.Errorf("disks: %w", err)
 		}
 		if err := json.Unmarshal([]byte(tags), &d.Tags); err != nil {
@@ -869,6 +871,40 @@ func SetDevice(ctx context.Context, db *sql.DB, disk string, physical []string) 
 		return fmt.Errorf("disk %s: %w", disk, err)
 	}
 	return nil
+}
+
+// SetMarkerSeen records that a disk's own marker was seen, naming this pool, the disk and its filesystem, by a
+// confirmation, by disk add once it wrote it, or by catalog rebuild (specs.md §9, §10): the first time is kept, and a
+// row of another filesystem is left as it is. From then on, a confirmation that finds no marker makes the disk
+// readonly, no-marker.
+func SetMarkerSeen(ctx context.Context, db *sql.DB, disk, uuid string, nowNS int64) error {
+	_, err := db.ExecContext(ctx, "UPDATE disks SET marker_seen_ns = ? WHERE id = ? AND fs_uuid = ? AND marker_seen_ns IS NULL", nowNS, disk, uuid)
+	if err != nil {
+		return fmt.Errorf("disk %s: %w", disk, err)
+	}
+	return nil
+}
+
+// MarkersSeen gives, by disk id, the identifier on which each disk's own marker was seen, for the disks whose own
+// marker was: what a mount check asks of the catalog (specs.md §9, §10).
+func MarkersSeen(ctx context.Context, db *sql.DB) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, "SELECT id, fs_uuid FROM disks WHERE marker_seen_ns IS NOT NULL ORDER BY id")
+	if err != nil {
+		return nil, fmt.Errorf("disks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	seen := map[string]string{}
+	for rows.Next() {
+		var id, uuid string
+		if err := rows.Scan(&id, &uuid); err != nil {
+			return nil, fmt.Errorf("disks: %w", err)
+		}
+		seen[id] = uuid
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("disks: %w", err)
+	}
+	return seen, nil
 }
 
 // JoinDevice gives physical disks as disks.device holds them: joined by a comma, empty for none.

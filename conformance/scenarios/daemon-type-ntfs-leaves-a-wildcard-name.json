@@ -1,0 +1,305 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.8, \u00a715.12, \u00a717.1, \u00a722",
+  "description": "On a disk of the type ntfs, which cannot take a name holding a wildcard character out of its folder without setting its whole volume read-only, a copy at such a name is left as it is: recorded, counted for nothing and its file name-incompatible; a deletion on another disk sends the third copy to the trash and leaves that one where it is, with its row, its job of the deletion refused before anything is journaled or asked of its disk; and the file stays with it alone, waiting as one whose deletion is decided, so that nothing is made again from it, however long.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "film"
+        },
+        {
+          "path": "media/plain.mkv",
+          "text": "plain"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "01D9F3A2B4C5E6F7",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "film"
+        },
+        {
+          "path": "media/plain.mkv",
+          "text": "plain"
+        }
+      ],
+      "driver": "ntfs"
+    },
+    {
+      "id": "t3",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "film"
+        },
+        {
+          "path": "media/plain.mkv",
+          "text": "plain"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"01D9F3A2B4C5E6F7\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ntfs\"\n[[disk]]\nid = \"t3\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n[deletes.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "Who?/q?.mkv",
+          "name-incompatible"
+        ],
+        [
+          "plain.mkv",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "Who?/q?.mkv",
+          "t1",
+          "ok"
+        ],
+        [
+          "Who?/q?.mkv",
+          "t2",
+          "ok"
+        ],
+        [
+          "Who?/q?.mkv",
+          "t3",
+          "ok"
+        ],
+        [
+          "plain.mkv",
+          "t1",
+          "ok"
+        ],
+        [
+          "plain.mkv",
+          "t2",
+          "ok"
+        ],
+        [
+          "plain.mkv",
+          "t3",
+          "surplus"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "10m"
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/Who?/q?.mkv"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "30s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "film"
+        },
+        {
+          "path": "media/plain.mkv",
+          "text": "plain"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t3",
+      "tree": [
+        {
+          "path": "media/Who?",
+          "kind": "dir"
+        },
+        {
+          "path": "media/plain.mkv",
+          "text": "plain"
+        },
+        {
+          "path": "Atoll/trash/*/*/Who?/q?.mkv",
+          "text": "film"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [
+        [
+          "Who?/q?.mkv",
+          "t2",
+          "ok"
+        ],
+        [
+          "plain.mkv",
+          "t1",
+          "ok"
+        ],
+        [
+          "plain.mkv",
+          "t2",
+          "ok"
+        ],
+        [
+          "plain.mkv",
+          "t3",
+          "surplus"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files ORDER BY lpath",
+      "rows": [
+        [
+          "Who?/q?.mkv",
+          "name-incompatible"
+        ],
+        [
+          "plain.mkv",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops WHERE disk_id = 't2'",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, reason, dst_disk, state FROM jobs",
+      "rows": [
+        [
+          "trash",
+          "deleted",
+          "t2",
+          "queued"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "2h"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/Who?",
+          "kind": "dir"
+        },
+        {
+          "path": "media/plain.mkv",
+          "text": "plain"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "film"
+        },
+        {
+          "path": "media/plain.mkv",
+          "text": "plain"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops WHERE disk_id = 't2'",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT kind, reason, dst_disk, state FROM jobs",
+      "rows": [
+        [
+          "trash",
+          "deleted",
+          "t2",
+          "queued"
+        ]
+      ]
+    }
+  ]
+}

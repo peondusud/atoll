@@ -223,6 +223,9 @@ func newBenchEdited(t *testing.T, t2fs, placement string, free1, free2 int64, ed
 	if b.w, err = New(db, c, m, b.tree, handles, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
+	// What closing a file's parts still does in the background ends before the test's folders are removed: a
+	// cleanup registered after them runs before them.
+	t.Cleanup(b.w.Wait)
 	b.db = db
 	b.machine = m
 	return b

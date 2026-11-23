@@ -27,6 +27,8 @@ func TestAResidencyBeginsAtTheCurrentVersion(t *testing.T) {
 		{"a mirror made after it", []catalog.CacheCopy{{Disk: "c1", State: "ok", CtimeNS: at(500)}, {Disk: "c2", State: "ok", CtimeNS: at(900)}}, 500},
 		{"a stale copy, older", []catalog.CacheCopy{{Disk: "c1", State: "stale", CtimeNS: at(200)}, {Disk: "c2", State: "ok", CtimeNS: at(900)}}, 900},
 		{"none in step", []catalog.CacheCopy{{Disk: "c1", State: "stale", CtimeNS: at(200)}, {Disk: "c2", State: "corrupt", CtimeNS: at(100)}}, 100},
+		{"none in step, the earliest first", []catalog.CacheCopy{{Disk: "c1", State: "stale", CtimeNS: at(100)}, {Disk: "c2", State: "corrupt", CtimeNS: at(200)}}, 100},
+		{"two in step, the earliest last", []catalog.CacheCopy{{Disk: "c1", State: "ok", CtimeNS: at(900)}, {Disk: "c2", State: "surplus", CtimeNS: at(500)}}, 500},
 		{"no change time recorded", []catalog.CacheCopy{{Disk: "c1", State: "ok", FirstSeenNS: 300}}, 300},
 	} {
 		for i := range tc.copies {

@@ -382,7 +382,7 @@ func applyRow(ctx context.Context, tx *sql.Tx, nowNS int64, c *FileChange, r *Ro
 // dropJobsAbove ends the folder jobs of a disk above a place: a copy there is back where the user wants it, and a
 // job would carry it away again. What is left below follows one by one (specs.md §15.12).
 func dropJobsAbove(ctx context.Context, tx *sql.Tx, disk, place string) error {
-	jobs, err := queryAll(ctx, tx, scanFolderJob, "SELECT id, payload FROM jobs WHERE kind = 'rename' AND dst_disk = ?", disk)
+	jobs, err := queryAll(ctx, tx, scanFolderJob, folderJobsOfSQL, disk)
 	if err != nil {
 		return fmt.Errorf("jobs: %w", err)
 	}
@@ -816,6 +816,31 @@ type FolderJob struct {
 	From, To string
 }
 
+// EntryKeyAt gives the inode a disk's entry at a path records, as its last walk found it: "" when there is no entry, or
+// one that records none.
+func EntryKeyAt(ctx context.Context, db *sql.DB, disk, path string) (string, error) {
+	var key sql.NullString
+	err := db.QueryRowContext(ctx, "SELECT file_key FROM entries WHERE lpath = ? AND disk_id = ?", []byte(path), disk).Scan(&key)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("entry %q: %w", path, err)
+	}
+	return key.String, nil
+}
+
+// The reads of the folder jobs: those of a disk, whatever their state, those of every disk, the job a rename on
+// two disks would queue twice, and those of a disk still to run, by id.
+const (
+	folderJobsOfSQL   = "SELECT id, payload FROM jobs WHERE kind = 'rename' AND dst_disk = ?"
+	allFolderJobsSQL  = "SELECT id, payload FROM jobs WHERE kind = 'rename'"
+	queueFolderJobSQL = `
+		INSERT INTO jobs(kind, src_disk, dst_disk, payload, state) SELECT 'rename', ?1, ?2, ?3, ?4
+		WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind = 'rename' AND dst_disk = ?2 AND payload = ?3 AND state = ?4)`
+	folderJobsSQL = "SELECT id, src_disk, dst_disk, payload FROM jobs WHERE kind = 'rename' AND dst_disk = ? AND state = ? ORDER BY id"
+)
+
 type folderPayload struct {
 	From string `json:"from_b64"`
 	To   string `json:"to_b64"`
@@ -854,10 +879,7 @@ func queueFolderJob(ctx context.Context, tx *sql.Tx, src, dst, from, to string) 
 		return err
 	}
 	// One folder renamed on two disks: one operation for each other disk.
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO jobs(kind, src_disk, dst_disk, payload, state) SELECT 'rename', ?1, ?2, ?3, ?4
-		WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE kind = 'rename' AND dst_disk = ?2 AND payload = ?3 AND state = ?4)`,
-		src, dst, payload, JobQueued)
+	_, err = tx.ExecContext(ctx, queueFolderJobSQL, src, dst, payload, JobQueued)
 	if err != nil {
 		return fmt.Errorf("job: %w", err)
 	}
@@ -867,7 +889,7 @@ func queueFolderJob(ctx context.Context, tx *sql.Tx, src, dst, from, to string) 
 // moveFolderJobs gives a further rename to the jobs whose target was that folder or below it, and drops
 // one whose two paths become equal.
 func moveFolderJobs(ctx context.Context, tx *sql.Tx, from, to string) error {
-	jobs, err := queryAll(ctx, tx, scanFolderJob, "SELECT id, payload FROM jobs WHERE kind = 'rename'")
+	jobs, err := queryAll(ctx, tx, scanFolderJob, allFolderJobsSQL)
 	if err != nil {
 		return fmt.Errorf("jobs: %w", err)
 	}
@@ -904,7 +926,7 @@ func FurtherRename(target, from, to string) (string, bool) {
 
 // FolderJobs gives the folders to rename on a disk, by their old path.
 func FolderJobs(ctx context.Context, db *sql.DB, disk string) ([]FolderJob, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, src_disk, dst_disk, payload FROM jobs WHERE kind = 'rename' AND dst_disk = ? AND state = ? ORDER BY id", disk, JobQueued)
+	rows, err := db.QueryContext(ctx, folderJobsSQL, disk, JobQueued)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: %w", err)
 	}
@@ -1075,7 +1097,7 @@ func FinishFolderRename(ctx context.Context, db *sql.DB, op *Op, jobID int64) er
 }
 
 func dropJobOfFolder(ctx context.Context, tx *sql.Tx, disk, from string) error {
-	jobs, err := queryAll(ctx, tx, scanFolderJob, "SELECT id, payload FROM jobs WHERE kind = 'rename' AND dst_disk = ?", disk)
+	jobs, err := queryAll(ctx, tx, scanFolderJob, folderJobsOfSQL, disk)
 	if err != nil {
 		return fmt.Errorf("jobs: %w", err)
 	}
@@ -1137,9 +1159,11 @@ type TrashJob struct {
 	State  string
 }
 
+const trashJobsSQL = "SELECT id, file_id, src_disk, dst_disk, reason, state FROM jobs WHERE kind = 'trash' AND dst_disk = ? ORDER BY id"
+
 // TrashJobs gives the trash jobs of a disk, by id.
 func TrashJobs(ctx context.Context, db *sql.DB, disk string) ([]TrashJob, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, file_id, src_disk, dst_disk, reason, state FROM jobs WHERE kind = 'trash' AND dst_disk = ? ORDER BY id", disk)
+	rows, err := db.QueryContext(ctx, trashJobsSQL, disk)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: %w", err)
 	}
@@ -1319,12 +1343,14 @@ func QueuedTrash(ctx context.Context, db *sql.DB, fileID int64, disk, reason str
 	return queued, nil
 }
 
+const dropStaleCanceledSQL = `
+	DELETE FROM jobs WHERE kind = 'trash' AND state = ? AND NOT EXISTS(
+		SELECT 1 FROM copies c WHERE c.file_id = jobs.file_id AND c.disk_id = jobs.dst_disk AND c.old_lpath IS NOT NULL)`
+
 // DropStaleCanceled forgets what a rejection said of a copy no longer behind: whichever way it caught up,
-// a later refused rename of it is another question.
+// a later refused rename of it is another question. Each pass asks.
 func DropStaleCanceled(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, `
-		DELETE FROM jobs WHERE kind = 'trash' AND state = ? AND NOT EXISTS(
-			SELECT 1 FROM copies c WHERE c.file_id = jobs.file_id AND c.disk_id = jobs.dst_disk AND c.old_lpath IS NOT NULL)`, JobCanceled)
+	_, err := db.ExecContext(ctx, dropStaleCanceledSQL, JobCanceled)
 	if err != nil {
 		return fmt.Errorf("jobs: %w", err)
 	}

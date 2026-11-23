@@ -79,8 +79,12 @@ func drawInput(t *rapid.T) Input {
 			Mount:  "/mnt/d", Root: "media", PastGrace: rapid.Bool().Draw(t, "past grace"),
 			Physical: rapid.SampledFrom([]string{"", "", "", "sda", "sdb"}).Draw(t, "physical"),
 		})
+		// An NTFS disk may be of the type ntfs, which leaves its copies at a wildcard name as they are (specs.md §15.8).
+		if d := &in.Disks[len(in.Disks)-1]; d.FS == names.NTFS {
+			d.LeavesWildcards = rapid.Bool().Draw(t, "type ntfs")
+		}
 	}
-	paths := []string{"p", "P", "p/q", "p/r", "P/s", "t", "T", "t/u/v", "a:b", "w", "x", "y", "z/1", "z/2", "z/3"}
+	paths := []string{"p", "P", "p/q", "p/r", "P/s", "t", "T", "t/u/v", "a:b", "w", "x", "y", "z/1", "z/2", "z/3", "q?", "w*/x"}
 	for _, path := range rapid.SliceOfNDistinct(rapid.SampledFrom(paths), 1, len(paths), rapid.ID[string]).Draw(t, "paths") {
 		f := File{
 			Path: path, Size: rapid.Int64Range(0, 119).Draw(t, "size"), Hold: oneIn(t, 6, "hold"), Leaving: oneIn(t, 8, "leaving"),

@@ -10,8 +10,9 @@
 # gremlins counts it, the named ones in: the tests do reach them. A timed-out mutant counts in neither, as for gremlins.
 # Each figure is compared as gremlins prints it, rounded to two decimals.
 #
-# A named mutant must be in the log, at its place and with its mutator, and its line of code must still read as the
-# list says: a line moved or changed fails the gate, until the list is brought up to date and the mutant argued again.
+# A named mutant must be in the log, at its place and with its mutator, when the log has its file (a run of a part of a
+# package, MUTATION_FILES, has none of the others), and its line of code must still read as the list says: a line moved
+# or changed fails the gate, until the list is brought up to date and the mutant argued again.
 # One gremlins counted killed is said, as a kill may come from outside, a machine too loaded, and left out all the same.
 #
 # It prints a line of figures, "<killed> <lived> <not covered> <timed out> <named> <efficacy> <coverage> <gate>", with
@@ -112,6 +113,9 @@ awk -v dir="$dir" -v gate="$gate" -v lines="$lines" -v equivalents="$equivalents
 		place = rest
 		sub(/^[A-Z_]+ at /, "", place)
 		key = dir "/" place " " mutator
+		file = place
+		sub(/:.*$/, "", file)
+		mutated[dir "/" file] = 1
 		count[status]++
 		if (key in named) {
 			seen[key] = 1
@@ -129,11 +133,15 @@ awk -v dir="$dir" -v gate="$gate" -v lines="$lines" -v equivalents="$equivalents
 		summed = 1
 	}
 	END {
-		for (key in named)
-			if (!(key in seen)) {
+		for (key in named) {
+			file = key
+			sub(/:.*$/, "", file)
+			# A run of a part of the package (MUTATION_FILES) has none of the files it left out.
+			if (!(key in seen) && (file in mutated)) {
 				printf "%s: %s is not in the log: brought up to date?\n", equivalents, key > "/dev/stderr"
 				bad = 1
 			}
+		}
 		k = count["KILLED"] + 0; l = count["LIVED"] + 0; nc = count["NOT COVERED"] + 0; to = count["TIMED OUT"] + 0
 		if (!summed || said[1] != k || said[2] != l || said[3] != nc) {
 			printf "the log lists %d killed, %d lived, %d not covered, which its last lines do not say\n", k, l, nc > "/dev/stderr"

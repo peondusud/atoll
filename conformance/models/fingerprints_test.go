@@ -18,7 +18,8 @@ import (
 
 // fingerprints is fingerprints.json.
 type fingerprints struct {
-	Model         string    `json:"model"`
+	// Models are the modules of the model, each a file of this folder: a section pinned is cited by one at least.
+	Models        []string  `json:"models"`
 	Normalisation string    `json:"normalisation"`
 	Sections      []section `json:"sections"`
 }
@@ -90,27 +91,40 @@ func TestSpecsSectionsKeepTheirFingerprint(t *testing.T) {
 	if err := json.Unmarshal([]byte(read(t, "fingerprints.json")), &fp); err != nil {
 		t.Fatalf("fingerprints.json: %v", err)
 	}
-	model := read(t, fp.Model)
-	if len(fp.Sections) == 0 || fp.Normalisation == "" {
-		t.Fatal("fingerprints.json: no section, or no normalisation")
+	if len(fp.Models) == 0 || len(fp.Sections) == 0 || fp.Normalisation == "" {
+		t.Fatal("fingerprints.json: no model, no section, or no normalisation")
+	}
+	models := map[string]string{}
+	for _, m := range fp.Models {
+		models[m] = read(t, m)
 	}
 	var numbers []string
 	for _, s := range fp.Sections {
 		numbers = append(numbers, s.Section)
+		// Cited as itself: §14 in "§14," or "§14 ", never in "§14.2". The modules that cite a section are those to
+		// reread against it.
+		cites := regexp.MustCompile(`§` + regexp.QuoteMeta(s.Section) + `($|[^0-9.]|\.[^0-9])`)
+		var citing []string
+		for _, m := range fp.Models {
+			if cites.MatchString(models[m]) {
+				citing = append(citing, m)
+			}
+		}
+		if len(citing) == 0 {
+			t.Errorf("fingerprints.json pins specs.md §%s, which no model cites (%s)", s.Section, strings.Join(fp.Models, ", "))
+			citing = fp.Models
+		}
+		reread := strings.Join(citing, " and ")
 		text, title, err := sectionText(spec, s.Section)
 		if err != nil {
 			t.Errorf("specs.md §%s: %v: the section the model formalizes was renumbered or removed; reread %s against "+
-				"specs.md, and say in fingerprints.json which section it formalizes now", s.Section, err, fp.Model)
+				"specs.md, and say in fingerprints.json which section it formalizes now", s.Section, err, reread)
 			continue
 		}
 		if got := sum(text); got != s.SHA256 || title != s.Title {
 			t.Errorf("specs.md §%s (%s) is no longer the text %s was checked against: reread the model against it, "+
 				"update the model or confirm it unchanged (make model-check), and give that section in fingerprints.json "+
-				"the title %q and the sha256 %q, in the same commit (CLAUDE.md)", s.Section, title, fp.Model, title, got)
-		}
-		// Cited as itself: §14 in "§14," or "§14 ", never in "§14.2".
-		if !regexp.MustCompile(`§` + regexp.QuoteMeta(s.Section) + `($|[^0-9.]|\.[^0-9])`).MatchString(model) {
-			t.Errorf("fingerprints.json pins specs.md §%s, which %s never cites", s.Section, fp.Model)
+				"the title %q and the sha256 %q, in the same commit (CLAUDE.md)", s.Section, title, reread, title, got)
 		}
 	}
 	if !slices.IsSortedFunc(numbers, compareSections) || len(slices.Compact(slices.Clone(numbers))) != len(numbers) {

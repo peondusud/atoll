@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/peondusud/atoll/internal/trash"
 )
@@ -44,11 +45,26 @@ func TestADiskLostStopsTheCopiesBesideIt(t *testing.T) {
 			p := newParallel(t, ssdAtOnce, map[string]string{"t1": "ssd", "t2": "ssd"}, "t1", "t2")
 			paths := p.fill("t1", 2)
 			p.slow = 0
-			// The first file's copy fails on the disk lost; the second's write waits until the first is over and said.
+			// The first file's copy fails on the disk lost once the second's has begun, by reading its source: on a
+			// loaded machine the second may start late, and found the disk already lost it would be refused, never begun.
+			// The second's write waits until the first is over and said.
 			first := make(chan struct{})
 			var once sync.Once
+			second := make(chan struct{})
+			var begun sync.Once
+			waitSecond := func() {
+				select {
+				case <-second:
+				case <-time.After(30 * time.Second):
+					t.Error("the second copy never read its source")
+				}
+			}
 			p.fault("t1", func(call, name string) error {
+				if call == "read" && name == "f01" {
+					begun.Do(func() { close(second) })
+				}
 				if tc.lost == "t1" && call == "read" && name == "f00" {
+					waitSecond()
 					return syscall.EIO
 				}
 				return nil
@@ -59,6 +75,7 @@ func TestADiskLostStopsTheCopiesBesideIt(t *testing.T) {
 				}
 				if name == p.partOf(paths[0]) {
 					if tc.lost == "t2" {
+						waitSecond()
 						return syscall.EIO
 					}
 					return nil

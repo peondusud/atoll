@@ -154,6 +154,42 @@ func HandOver(ctx context.Context, db *sql.DB, fileID int64, from, to string) er
 	return nil
 }
 
+// Pending is a pending copy of a disk, as the room it holds there counts it: its file's size, and the part in
+// <workdir>/tmp/ its job owns, empty for none yet.
+type Pending struct {
+	Size int64
+	Part string
+}
+
+// PendingOn gives the pending copies of a disk: what a plan made them hold the room of there (specs.md §13.4), which
+// what else writes to that disk leaves them (§21.2; conformance/models/README.md, flaw 12).
+func PendingOn(ctx context.Context, db *sql.DB, disk string) ([]Pending, error) {
+	rows, err := db.QueryContext(ctx, `SELECT f.size, j.payload FROM copies c JOIN files f ON f.id = c.file_id
+		LEFT JOIN jobs j ON j.file_id = c.file_id AND j.dst_disk = c.disk_id AND j.kind = 'replicate' AND j.state IN ('queued', 'running')
+		WHERE c.disk_id = ? AND c.state = 'pending' ORDER BY c.file_id`, disk)
+	if err != nil {
+		return nil, fmt.Errorf("pending copies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Pending
+	for rows.Next() {
+		var size int64
+		var payload sql.NullString
+		if err := rows.Scan(&size, &payload); err != nil {
+			return nil, fmt.Errorf("pending copies: %w", err)
+		}
+		var j ReplicateJob
+		if err := j.readPayload(payload); err != nil {
+			return nil, err
+		}
+		out = append(out, Pending{Size: size, Part: j.Part})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pending copies: %w", err)
+	}
+	return out, nil
+}
+
 // QueueReplicate queues copies, each a job and its pending copy on the target, in one transaction. The
 // pending copy holds the room and the name for later plans, and keeps the file from being queued twice
 // (specs.md §14.1).
@@ -214,16 +250,30 @@ func scanReplicateJobs(rows *sql.Rows) ([]ReplicateJob, error) {
 	return out, nil
 }
 
+// The replicate jobs still to run: every one, and those of the files at or below a path, which are looked for by their
+// path and then by file. Both in one query, an OR with the empty path, made SQLite read every job for a path too.
+const (
+	replicateJobsSQL = `
+		SELECT ` + replicateColumns + `
+		FROM jobs j JOIN files f ON f.id = j.file_id JOIN disks d ON d.id = j.dst_disk
+		WHERE j.kind = 'replicate' AND j.state IN ('queued', 'running')
+		ORDER BY f.lpath, d.position`
+	replicateJobsBelowSQL = `
+		SELECT ` + replicateColumns + `
+		FROM files f CROSS JOIN jobs j ON j.file_id = f.id JOIN disks d ON d.id = j.dst_disk
+		WHERE (f.lpath = ?1 OR (f.lpath >= ?2 AND f.lpath < ?3)) AND j.kind = 'replicate' AND j.state IN ('queued', 'running')
+		ORDER BY f.lpath, d.position`
+)
+
 // ReplicateJobs gives the replicate jobs still to run of the files at or below a path, every one for an
 // empty path, by path in byte order, then by the target's position (specs.md §14.3).
 func ReplicateJobs(ctx context.Context, db *sql.DB, path string) ([]ReplicateJob, error) {
-	lo, hi := folderRange(path)
-	rows, err := db.QueryContext(ctx, `
-		SELECT `+replicateColumns+`
-		FROM jobs j JOIN files f ON f.id = j.file_id JOIN disks d ON d.id = j.dst_disk
-		WHERE j.kind = 'replicate' AND j.state IN ('queued', 'running')
-			AND (?4 OR f.lpath = ?1 OR (f.lpath >= ?2 AND f.lpath < ?3))
-		ORDER BY f.lpath, d.position`, []byte(path), lo, hi, path == "")
+	query, args := replicateJobsSQL, []any(nil)
+	if path != "" {
+		lo, hi := folderRange(path)
+		query, args = replicateJobsBelowSQL, []any{[]byte(path), lo, hi}
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: %w", err)
 	}
@@ -241,24 +291,38 @@ const duePage = 1000
 type DueReader struct {
 	db           *sql.DB
 	nowNS        int64
+	page         int
 	started      bool
 	priority, id int64
 }
 
 // NewDueReader reads the jobs due at a time.
 func NewDueReader(db *sql.DB, nowNS int64) *DueReader {
-	return &DueReader{db: db, nowNS: nowNS}
+	return &DueReader{db: db, nowNS: nowNS, page: duePage}
 }
+
+// What DueReader reads: its first page from the start of jobs_to_do, and each next one from past the last job it gave,
+// the rest of that job's priority, then the lower ones, each a seek in jobs_to_do. Its key in an OR, as one condition,
+// had SQLite walk jobs_to_do from its start for each page: the 200 pages of 200,000 copies took 2.6 s, and take half a second
+// (specs.md §26).
+const (
+	dueFrom = `
+		FROM jobs j JOIN files f ON f.id = j.file_id
+		WHERE j.kind = 'replicate' AND j.state IN ('queued', 'running') AND (j.not_before_ns IS NULL OR j.not_before_ns <= ?1)`
+	dueFirstSQL = `SELECT ` + replicateColumns + dueFrom + `
+		ORDER BY j.priority DESC, j.id LIMIT ?2`
+	dueNextSQL = `SELECT ` + replicateColumns + dueFrom + ` AND j.priority = ?2 AND j.id > ?3
+		UNION ALL SELECT ` + replicateColumns + dueFrom + ` AND j.priority < ?2
+		ORDER BY j.priority DESC, j.id LIMIT ?4`
+)
 
 // Next gives the next due jobs, and none at the end.
 func (r *DueReader) Next(ctx context.Context) ([]ReplicateJob, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+replicateColumns+`
-		FROM jobs j JOIN files f ON f.id = j.file_id
-		WHERE j.kind = 'replicate' AND j.state IN ('queued', 'running')
-			AND (j.not_before_ns IS NULL OR j.not_before_ns <= ?1)
-			AND (NOT ?2 OR j.priority < ?3 OR (j.priority = ?3 AND j.id > ?4))
-		ORDER BY j.priority DESC, j.id LIMIT ?5`, r.nowNS, r.started, r.priority, r.id, duePage)
+	query, args := dueFirstSQL, []any{r.nowNS, r.page}
+	if r.started {
+		query, args = dueNextSQL, []any{r.nowNS, r.priority, r.id, r.page}
+	}
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: %w", err)
 	}
@@ -285,12 +349,22 @@ func CopiesLater(ctx context.Context, db *sql.DB, nowNS int64) (count int64, nex
 	return count, next, nil
 }
 
+// The copies to make on a disk that own a part, or that one: their payload names it, so they have one, and jobs_parts
+// holds them alone (specs.md §14.2). Without the payload named, SQLite would read every job.
+const (
+	jobOfPartSQL = `
+		SELECT ` + replicateColumns + `
+		FROM jobs j JOIN files f ON f.id = j.file_id
+		WHERE j.kind = 'replicate' AND j.dst_disk = ? AND j.payload IS NOT NULL AND json_extract(j.payload, '$.part') = ?`
+	partsInUseSQL = `
+		SELECT json_extract(payload, '$.part') FROM jobs
+		WHERE kind = 'replicate' AND dst_disk = ?1 AND payload IS NOT NULL AND json_extract(payload, '$.part') IS NOT NULL
+		UNION SELECT CAST(path2 AS TEXT) FROM ops WHERE kind = 'create' AND disk_id = ?1 AND state = 'planned' AND path2 IS NOT NULL`
+)
+
 // JobOfPart gives the replicate job that owns a part on a disk, and nil when none does.
 func JobOfPart(ctx context.Context, db *sql.DB, disk, part string) (*ReplicateJob, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT `+replicateColumns+`
-		FROM jobs j JOIN files f ON f.id = j.file_id
-		WHERE j.kind = 'replicate' AND j.dst_disk = ? AND json_extract(j.payload, '$.part') = ?`, disk, part)
+	rows, err := db.QueryContext(ctx, jobOfPartSQL, disk, part)
 	if err != nil {
 		return nil, fmt.Errorf("jobs: %w", err)
 	}
@@ -305,9 +379,7 @@ func JobOfPart(ctx context.Context, db *sql.DB, disk, part string) (*ReplicateJo
 // PartsInUse gives the parts of a disk that its tmp/ keeps: those a job owns, and those an operation left
 // planned names, which only its reprise can tell of (specs.md §14.2).
 func PartsInUse(ctx context.Context, db *sql.DB, disk string) (map[string]bool, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT json_extract(payload, '$.part') FROM jobs WHERE kind = 'replicate' AND dst_disk = ?1 AND json_extract(payload, '$.part') IS NOT NULL
-		UNION SELECT CAST(path2 AS TEXT) FROM ops WHERE kind = 'create' AND disk_id = ?1 AND state = 'planned' AND path2 IS NOT NULL`, disk)
+	rows, err := db.QueryContext(ctx, partsInUseSQL, disk)
 	if err != nil {
 		return nil, fmt.Errorf("parts: %w", err)
 	}

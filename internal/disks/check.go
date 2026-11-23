@@ -8,7 +8,6 @@ import (
 
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
-	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/names"
 )
 
@@ -36,6 +35,9 @@ const (
 	DeviceUnread    Reason = "device-unreadable"
 	WrongIdentifier Reason = "wrong-identifier"
 	NoRoot          Reason = "no-root"
+	// NoMarker is a disk whose own marker was seen, and that a check finds without one (specs.md §10): a filesystem with
+	// its identifier and none of its marker, as a clone made before disk add, is not that disk.
+	NoMarker Reason = "no-marker"
 )
 
 // The reasons of a disk that is read-only. UnsupportedDriver is a driver whose name rules were never measured: no type
@@ -69,6 +71,9 @@ type Verdict struct {
 	// Source is the device the mount table says the disk was mounted from, as /dev/sdb1, for what tells later whether
 	// that device left (specs.md §15.13). Never for a missing disk.
 	Source string
+	// LeavesWildcards says that the disk is mounted with the type ntfs, whose copies at a wildcard name Atoll leaves as
+	// they are (LeavesWildcards, specs.md §15.8). Never for a missing disk.
+	LeavesWildcards bool
 }
 
 // PathAnswer is what the mount path gave.
@@ -245,6 +250,7 @@ func Check(observer Observer, d *config.Disk) Verdict {
 	// of them at once.
 	verdict.MountOwner = e.FSType == "fuseblk"
 	verdict.Source = e.Source
+	verdict.LeavesWildcards = LeavesWildcards(e.FSType)
 	return verdict
 }
 
@@ -324,6 +330,16 @@ func LinkMovesTimes(fstype string) bool {
 	return fstype == "ntfs"
 }
 
+// LeavesWildcards says whether, on a mount of that type, Atoll leaves as it is a copy at a path one of whose components
+// holds a wildcard character, names.Wildcards: the type ntfs cannot take such a name out of its folder, by a rename or
+// an unlink, without setting its whole volume read-only, measured on names ntfs-3g wrote, and its rename does so with
+// windows_names too (docs/research/ntfs-driver.md). So such a copy there is never moved, sent to the trash or written
+// to, and its file is name-incompatible; reading it is harmless, so it may be the source of a copy to a disk that takes
+// its name (specs.md §15.8, §22). ntfs3 and ntfs-3g move and remove it.
+func LeavesWildcards(fstype string) bool {
+	return fstype == "ntfs"
+}
+
 // judgeWrites decides whether Atoll may write to a disk it has identified: the second table of
 // specs.md §10, in its order. ntfs3 and the type ntfs, the two NTFS drivers of the kernel, show their options among the
 // superblock options; the type ntfs has no ads. windows, what hiberfil.sys and $LogFile say of Windows on an NTFS disk,
@@ -359,31 +375,4 @@ func judgeWrites(e *MountEntry, id *Identity, otherCase bool, root string, windo
 	default:
 		return Verdict{State: Online}
 	}
-}
-
-// MarkerVerdict is what a confirmation makes of the disk's marker, <workdir>/disk.toml (specs.md §10): one that names
-// another pool, another disk of this pool or another filesystem, or a file there this version does not read, as disk
-// add refuses each, makes a disk online readonly, other-marker. What the check said otherwise stays: a missing disk is
-// missing, and a readonly one keeps its reason. No marker, or one that says the same, changes nothing.
-func MarkerVerdict(v Verdict, text []byte, found bool, poolID string, d *config.Disk) Verdict {
-	if !found || v.State != Online {
-		return v
-	}
-	m, err := layout.ParseMarker(text)
-	var why string
-	switch {
-	case err != nil:
-		why = fmt.Sprintf("its %s is not a marker this version reads: %v", layout.MarkerName, err)
-	case m.PoolID != poolID:
-		why = fmt.Sprintf("its marker says it is a disk of the pool %q", m.PoolID)
-	case m.DiskID != d.ID:
-		why = fmt.Sprintf("its marker says it is the disk %q of this pool", m.DiskID)
-	case m.FSUUID != d.UUID:
-		why = fmt.Sprintf("its marker names the filesystem %s, copied from another disk", m.FSUUID)
-	default:
-		return v
-	}
-	verdict := readOnly(OtherMarker, why)
-	verdict.TimePrecisionNS, verdict.MountOwner = v.TimePrecisionNS, v.MountOwner
-	return verdict
 }

@@ -25,7 +25,10 @@ const controlEnv = "ATOLL_CONFORMANCE"
 
 // control is the file conformance/scenarios/README.md describes.
 type control struct {
-	Now     string        `json:"now"`
+	Now string `json:"now"`
+	// Running makes the clock start at Now when the binary starts, and run as the machine's: for a daemon that runs for
+	// good, which test/integration starts. No scenario sets it, so that their clock stands still.
+	Running bool          `json:"running"`
 	Disks   []controlDisk `json:"disks"`
 	CrashAt string        `json:"crash_at"`
 }
@@ -73,13 +76,19 @@ func NewMachine() (Machine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("control file: %w", err)
 	}
-	return folders{c.Disks, now.UnixNano(), c.CrashAt}, nil
+	f := folders{disks: c.Disks, now: now.UnixNano(), crashAt: c.CrashAt}
+	if c.Running {
+		f.started = time.Now()
+	}
+	return f, nil
 }
 
 type folders struct {
 	disks   []controlDisk
 	now     int64
 	crashAt string
+	// started is when a clock that runs started, by the machine's monotonic clock; zero for one that stands still.
+	started time.Time
 }
 
 func (f folders) find(path string) *controlDisk {
@@ -194,6 +203,12 @@ func (folders) Root(mount, root string) RootSeen {
 	return lookAtRoot(mount, root)
 }
 
+// Marker reads a disk's marker in the real folder, at each check: a folder is no mount, so there is no mount to read
+// it once for (specs.md §10).
+func (folders) Marker(mount, workdir string, _ *MountEntry, _ bool) MarkerSeen {
+	return ReadMarkerAt(mount, workdir)
+}
+
 // Hiberfil reads hiberfil.sys at the top of the real folder, at each check: a folder is no mount, so there is no mount
 // to read it once for.
 func (folders) Hiberfil(mount string, _ *MountEntry) HiberfilSeen {
@@ -221,8 +236,12 @@ func (folders) LogFile(mount string, _ *MountEntry) LogFileSeen {
 	return seen
 }
 
+// Now is the control file's now, and, for a clock that runs, the time passed since the binary started on top.
 func (f folders) Now() int64 {
-	return f.now
+	if f.started.IsZero() {
+		return f.now
+	}
+	return f.now + time.Since(f.started).Nanoseconds()
 }
 
 // Space says what the control file does: a folder has no capacity of its own.

@@ -254,16 +254,27 @@ func TestListFits(t *testing.T) {
 	}
 }
 
+// An alert writes a path as the human output does (specs.md §23, §25): in base64 when it is not UTF-8, or holds a
+// control character, or a format character, U+202E RIGHT-TO-LEFT OVERRIDE and the zero-width characters among them,
+// which would make it read as another name in a mail or on a phone (G16).
 func TestShown(t *testing.T) {
 	for p, want := range map[string]string{
-		"films/été.mkv": "films/été.mkv",
-		"a\nb":          "(base64) YQpi",
-		"\xff":          "(base64) /w==",
-		"a\x7fb":        "(base64) YX9i",
+		"films/été.mkv":                    "films/été.mkv",
+		"a\nb":                             "(base64) YQpi",
+		"\xff":                             "(base64) /w==",
+		"a\x7fb":                           "(base64) YX9i",
+		"Films/Trailer\xe2\x80\xaevkm.exe": "(base64) RmlsbXMvVHJhaWxlcuKArnZrbS5leGU=",
+		"a\xe2\x81\xa6b":                   "(base64) YeKBpmI=",
+		"a\xe2\x80\x8bb":                   "(base64) YeKAi2I=",
+		"a\xe2\x80\xa8b":                   "a\xe2\x80\xa8b",
 	} {
 		if got := Shown(p); got != want {
 			t.Errorf("%q: %q", p, got)
 		}
+	}
+	body := list("first line", []string{"Films/Trailer\xe2\x80\xaevkm.exe"}, 1)
+	if want := "first line\n(base64) RmlsbXMvVHJhaWxlcuKArnZrbS5leGU="; body != want {
+		t.Errorf("%q, want %q", body, want)
 	}
 }
 

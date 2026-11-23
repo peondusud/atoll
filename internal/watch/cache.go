@@ -190,7 +190,7 @@ type Transfer struct {
 // disk position: each such file planned alone, from the catalog as it stands, as the copies a pass has just made are in
 // no plan made before them. A plan of one file decides its transfers as a plan of the pool does: they lean on its copies
 // alone, never on room or names.
-func CacheTransfers(ctx context.Context, db *sql.DB, c *config.Config, now int64) ([]Transfer, error) {
+func CacheTransfers(ctx context.Context, db *sql.DB, c *config.Config, now int64, leaves Leaves) ([]Transfer, error) {
 	diskList, err := catalog.Disks(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
@@ -215,7 +215,7 @@ func CacheTransfers(ctx context.Context, db *sql.DB, c *config.Config, now int64
 	if err != nil {
 		return nil, err
 	}
-	in := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), CacheMirror: settings.Mirror, CacheEarly: settings.Early}
+	in := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace, leaves), CacheMirror: settings.Mirror, CacheEarly: settings.Early}
 	ids := map[string]int64{}
 	for id, r := range residency {
 		if r != solver.CacheTransfer {

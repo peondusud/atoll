@@ -1,21 +1,27 @@
 {
-  "model": "Replication.tla",
+  "models": [
+    "Replication.tla",
+    "Rename.tla",
+    "Copies.tla",
+    "Folders.tla",
+    "ViewMove.tla"
+  ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
     {
       "section": "6.1",
       "title": "### 6.1 Writes under `media/`",
-      "sha256": "6e54ff8b83e9cd1dbec2a2a700545e35fc597b925788320ca42131590e3c8fe4"
+      "sha256": "837b9fdb288a2f524a0d92771cc84940106234f85111a186652620daf9e13de1"
     },
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "a72aff0f9db3cf70f8bcd949cc17574d73889c505e9d022f0cc93cd907524db7"
+      "sha256": "bcfd5c7ad6d3c24f0af0d6f32dadf1d26c9187b4d5522eb0e313fd84a798ffd8"
     },
     {
       "section": "10",
       "title": "## 10. Disk identity and mounts",
-      "sha256": "8aa77cc2760fc1fa0254b65cd2366b55dbf7cff90efdf03377eca2b567ffd8b3"
+      "sha256": "aa2fe3e7ea75a09cc65f4f3305cd6cf85930cbfe87cfc51a37ca1155b89a1ce9"
     },
     {
       "section": "13.4",
@@ -25,17 +31,22 @@
     {
       "section": "14",
       "title": "## 14. Replication",
-      "sha256": "f87f0ddce50a70c8b05fe0f676e39b14c41b2f1aa038f9af254b0860a25cfad7"
+      "sha256": "558da4d237a3abeacd9a11b187a4750fec49d9c03921b269b052ec09fee5f123"
     },
     {
       "section": "14.1",
       "title": "### 14.1 Jobs and pending copies",
-      "sha256": "240ddc5b490ab6f5f418d49433661334b159b3ae03c096ed68841df0b874001a"
+      "sha256": "2b4d60cc14b7bd1abb20cdc8854a040826d9e9594344dc88508367cb9e6d5ee1"
     },
     {
       "section": "14.2",
       "title": "### 14.2 The operation `create`",
-      "sha256": "ef898d93f0e77a5af5b8cd2bacfde4ba560489c6046dc92fc68a44812f40f98b"
+      "sha256": "6f38599d05d55ec214eba15d53ffeb8401936fbaf03aaca41aa9b1af8b632ded"
+    },
+    {
+      "section": "15.3",
+      "title": "### 15.3 Renames directly on one disk",
+      "sha256": "7bca4ca33eb75c0e74935d468cefb1b2dbe9f5d7963be40d47035baa5fb27cac"
     },
     {
       "section": "15.4",
@@ -55,22 +66,47 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "cdde2a2674789feeda7d85bf3e0109d4b6cdd3d4a6748c5f3e80fd35e5a948bc"
+      "sha256": "102ffd6fc085cd3899a1dc9413cdd1185e4eeaf8e6bca4d607427ea683987280"
+    },
+    {
+      "section": "17",
+      "title": "## 17. Trash",
+      "sha256": "f5da85cc02e9f1f1c3893b046c36852b9a6daf60097ee683a44571d15bae68a0"
     },
     {
       "section": "17.1",
       "title": "### 17.1 Sending a copy to the trash",
-      "sha256": "8b987ef854f5f0f2d556211e8cc6c6b766b54cb21143ff4819b4d8d0839e0293"
+      "sha256": "0e9f8a3a9998197ca357b2fdff9cc23c9b1281f1f4465ac125ab7213210d8c50"
     },
     {
       "section": "17.2",
       "title": "### 17.2 Reprise after a crash",
-      "sha256": "6e1cc7d2a3cb35f9c06b302825301baee37e94f6ee69d3de27e9b1ec6864eaa6"
+      "sha256": "7ca7a44fbd7117abd3c200bd3895df48b6dafd98910714e1dc5b505024726ecb"
+    },
+    {
+      "section": "17.4",
+      "title": "### 17.4 `atoll trash`",
+      "sha256": "d474437ab93f1f8d3971f6c44a141cef09180f847aec11f5ff732eaa11f7a466"
+    },
+    {
+      "section": "17.5",
+      "title": "### 17.5 Atoll's own empty folders",
+      "sha256": "4eaed6719c827181f722af98344fbeff62c8c27a38b2634d972207097a6a2a1a"
+    },
+    {
+      "section": "19",
+      "title": "## 19. SSD cache (phase 2b)",
+      "sha256": "e807602f8220535ffed37d906e464f3fe470615eb2c1980a2b922918eb90e3aa"
     },
     {
       "section": "20",
       "title": "## 20. Power loss",
       "sha256": "6692b88fbd1ee76edabf8080f5dd21732fa73dda4888bf3263052be3744e9326"
+    },
+    {
+      "section": "21.2",
+      "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
+      "sha256": "e5af384aaa1e4fbdd1bb6b11645ccad242016b4da040c176537eb70d00e0832b"
     }
   ]
 }

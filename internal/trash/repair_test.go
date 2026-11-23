@@ -1,6 +1,7 @@
 package trash
 
 import (
+	"bytes"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/layout"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // rot is a copy that rotted: its byte is another, and its row what its disk holds, as rot leaves a copy's times. The
@@ -359,5 +361,55 @@ func TestARepairWhoseTimeCannotBeSetBack(t *testing.T) {
 	after, err := os.Stat(path)
 	if err != nil || r.b.read("t3", "a") != "x" || r.repairState() != "done" || !after.ModTime().Equal(before.ModTime()) {
 		t.Errorf("the copy holds %q from %v, was %v; the operation is %s", r.b.read("t3", "a"), after.ModTime(), before.ModTime(), r.repairState())
+	}
+}
+
+// A copy of two chunks, rotted in both, the second the last and shorter: each bad chunk is saved to the trash from its
+// own offset, read from the healthy copy at it, checked against its own hash, written and read back there, and the
+// entry counts the bytes of both (specs.md §16.1).
+func TestARepairOfEveryChunkAtItsOffset(t *testing.T) {
+	b := newBench(t)
+	good := append(bytes.Repeat([]byte("a"), integrity.ChunkSize), "xyz"...)
+	bad := append(bytes.Repeat([]byte("b"), integrity.ChunkSize), "xyq"...)
+	for _, id := range []string{"t1", "t2", "t3"} {
+		b.write(id, "big", string(good))
+	}
+	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(b.dirs["t3"], "media", "big")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, bad, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	f, err := catalog.FileAt(t.Context(), b.db, "big")
+	if err != nil || f == nil {
+		t.Fatalf("%v", err)
+	}
+	c := copyOn(f, "t3")
+	c.CtimeNS = sql.NullInt64{Int64: ctimeOf(t, path), Valid: true}
+	h := copyOn(f, "t1")
+	healthy := &Healthy{Disk: "t1", Known: catalog.KnownCopy{Path: "big", Size: h.Size, MtimeNS: h.MtimeNS, CtimeNS: h.CtimeNS, FileKey: h.FileKey}}
+	first, last := integrity.ChunkSum(good[:integrity.ChunkSize]), integrity.ChunkSum(good[integrity.ChunkSize:])
+	outcome, err := b.session(true).RepairChunks(t.Context(), f, c, []int64{0, 1}, nil, healthy, append(first[:], last[:]...))
+	if err != nil || outcome != OutcomeRepaired {
+		t.Fatalf("%s, %v", outcome, err)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, good) {
+		t.Errorf("the copy is not the healthy one: %v", err)
+	}
+	if got := b.count("SELECT size FROM trash"); got != integrity.ChunkSize+3 {
+		t.Errorf("the entry holds %d bytes", got)
+	}
+	place := b.text("SELECT CAST(trash_path AS TEXT) FROM trash")
+	saved, err := os.ReadFile(filepath.Join(b.dirs["t3"], "Atoll", "trash", filepath.FromSlash(place), "00000001"))
+	if err != nil || string(saved) != "xyq" {
+		t.Errorf("the second chunk saved holds %q, %v", saved, err)
 	}
 }

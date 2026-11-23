@@ -38,6 +38,9 @@ var (
 	// ErrNamesDisagree says that a name leads to a file whose record no longer holds it, so that unlink
 	// cannot remove it: only a repair of the volume can say which name is the file's (specs.md §17.2).
 	ErrNamesDisagree = errors.New("a name and its file's record disagree: the volume needs a repair")
+	// ErrExchangedBack says that an exchange of two names took a file that is no copy of it, and that the two names
+	// were exchanged back and synced, each holding again what it held before: neither rename happened (specs.md §15.12).
+	ErrExchangedBack = errors.New("the exchange took a file that is no copy of it, and was exchanged back")
 )
 
 // Disk is a disk open for writing, through a handle on its top, which a mount check found to be the
@@ -88,6 +91,26 @@ func Open(m disks.Machine, d *config.Disk, precisionNS int64) (*Disk, error) {
 // included, as the type ntfs does, measured (specs.md §22): ntfs3 and the others move the change time alone.
 func (d *Disk) LinkMovesTimes() bool {
 	return disks.LinkMovesTimes(d.driver)
+}
+
+// Leaves says whether a path of the disk, below its root or in its trash, is one Atoll leaves as it is: the disk was
+// mounted with the type ntfs when it was opened, and a component of the path holds a wildcard character, which that
+// driver cannot take out of its folder, by a rename or an unlink, without setting its whole volume read-only (measured,
+// specs.md §15.8, §22). Such a copy is never moved, sent to the trash or written to; it may be read, the source of a
+// copy to a disk that takes its name.
+func (d *Disk) Leaves(path string) bool {
+	return disks.LeavesWildcards(d.driver) && names.HoldsWildcard(path)
+}
+
+// refuseLeft refuses an operation that would move or remove a name the disk leaves as it is, before anything is asked
+// of the disk: the name refused, and nothing moved.
+func (d *Disk) refuseLeft(paths ...string) error {
+	for _, path := range paths {
+		if d.Leaves(path) {
+			return fmt.Errorf("%w: %q holds a wildcard character, which the type ntfs cannot move or remove without setting its volume read-only", ErrNameRefused, path)
+		}
+	}
+	return nil
 }
 
 // renameTells says whether EINVAL from renameat2 with RENAME_NOREPLACE is a name the driver refuses, so that neither
@@ -209,10 +232,20 @@ func (d *Disk) open(path []string) (*folder, error) {
 	return f, nil
 }
 
+// standIn is what a folder Atoll makes in the trash takes of the folder it stands for, as a look at that one gave it
+// (specs.md §17.1, step 3): its mode and owner, and, when dated, its modification time, once what goes in it is in
+// place. A folder made up for one that went, or one that stands for no folder, has no time to take.
+type standIn struct {
+	fsx.Stat
+	dated bool
+}
+
 // makeFolders reaches a folder of the trash, creating what is missing on the way, each with the
 // mode and owner like gives for its level (specs.md §17.1). Each is durable before anything goes
-// through it. It is never given a path below the root, whose folders are operations of their own.
-func (d *Disk) makeFolders(path []string, like map[int]fsx.Stat) (*folder, error) {
+// through it, and the folder it is made in takes the time like gives for that level then, as it
+// holds what it was made for. It is never given a path below the root, whose folders are
+// operations of their own.
+func (d *Disk) makeFolders(path []string, like map[int]standIn) (*folder, error) {
 	f := &folder{Dir: d.top}
 	for i, name := range path {
 		parent := f.Dir
@@ -238,11 +271,11 @@ func (d *Disk) makeFolders(path []string, like map[int]fsx.Stat) (*folder, error
 	return f, nil
 }
 
-func (d *Disk) makeFolder(parent fsx.Dir, name string, like map[int]fsx.Stat, level int) error {
+func (d *Disk) makeFolder(parent fsx.Dir, name string, like map[int]standIn, level int) error {
 	st, known := like[level]
 	var mode *fsx.Stat
 	if known {
-		mode = &st
+		mode = &st.Stat
 	}
 	err := parent.Mkdir(name, modeLike(mode))
 	switch {
@@ -254,13 +287,20 @@ func (d *Disk) makeFolder(parent fsx.Dir, name string, like map[int]fsx.Stat, le
 		return classify(err)
 	}
 	if known {
-		if err := adopt(parent, name, &st); err != nil {
+		if err := adopt(parent, name, &st.Stat); err != nil {
 			return err
 		}
 	}
 	// The new folder first: its own record holds its name, as a moved file's does (measured on ntfs3).
 	if err := syncEntry(parent, name); err != nil {
 		return err
+	}
+	// The folder it was made in holds what it was made for now, which moved its time: it takes that of the folder
+	// it stands for, which the sync below makes durable (specs.md §17.1, step 3).
+	if above, ok := like[level-1]; ok && above.dated {
+		if err := restoreTime(parent, above.Mtime); err != nil {
+			return err
+		}
 	}
 	if err := parent.Sync(); err != nil {
 		return lost(err)
@@ -512,8 +552,11 @@ func (d *Disk) LookAt(logical string) (taken bool, missing []string, err error) 
 // MakeRootFolder makes one folder below the root, for a restore, a copy or a rename, and keeps the time of the folder
 // it lands in (specs.md §6.1, item 8). like is the folder it stands for, when there is one, whose mode and owner it
 // takes; with none, it takes the mode FolderMode, whatever the umask, and keeps the owner mkdir gives it (§17.4). It
-// says what it made. The root itself is never made: its absence is an error (invariant 3).
-func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) {
+// says what it made. The root itself is never made: its absence is an error (invariant 3). keyed journals the folder's
+// inode, right after the mkdir and before anything is given to it, so that a reprise can tell it from a folder someone
+// else made at that name (specs.md §17.2, §17.4).
+func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat, keyed func(key string) error) (fsx.Stat, error) {
+	d.machine.Checkpoint("mkdir-journaled")
 	if err := d.Verify(); err != nil {
 		return fsx.Stat{}, err
 	}
@@ -539,6 +582,14 @@ func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat) (fsx.Stat, error) 
 		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrNameRefused, err)
 	case err != nil:
 		return fsx.Stat{}, classify(err)
+	}
+	d.machine.Checkpoint("mkdir-unkeyed")
+	made, err := parent.Stat(name)
+	if err != nil {
+		return fsx.Stat{}, classify(err)
+	}
+	if err := keyed(keyOf(&made)); err != nil {
+		return fsx.Stat{}, err
 	}
 	d.machine.Checkpoint("mkdir-made")
 	if like != nil {
@@ -662,6 +713,9 @@ func (m *Moved) Links() *catalog.Links {
 // ToTrash moves a copy to where its operation says, and says once that is durable (specs.md §17.1).
 // row is what the catalog says of the copy.
 func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
+	if err := d.refuseLeft(op.Path, op.Path2); err != nil {
+		return nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, err
 	}
@@ -714,6 +768,11 @@ func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
 	if err := syncEntry(target.Dir, newName); err != nil {
 		return nil, err
 	}
+	// The folder the copy went in stands for the one it left: it takes the time that one gets back below, now that
+	// the copy is in it (specs.md §17.1, step 5).
+	if err := restoreTime(target.Dir, before.Mtime); err != nil {
+		return nil, err
+	}
 	if err := target.Sync(); err != nil {
 		return nil, lost(err)
 	}
@@ -729,10 +788,10 @@ func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
 }
 
 // likeSource gives, for each level of the target that stands for a folder of the logical path, that
-// folder's mode and owner, so that a private folder stays private in the trash (specs.md §17.1). The
-// operation's own folder stands for the root.
-func (d *Disk) likeSource(source *folder, src, dst []string) (map[int]fsx.Stat, error) {
-	like := map[int]fsx.Stat{}
+// folder's mode and owner, so that a private folder stays private in the trash, and its time (specs.md
+// §17.1). The operation's own folder stands for the root.
+func (d *Disk) likeSource(source *folder, src, dst []string) (map[int]standIn, error) {
+	like := map[int]standIn{}
 	root := len(components(d.config.Root))
 	folders := len(src) - 1 - root
 	for i := -1; i < folders; i++ {
@@ -742,7 +801,7 @@ func (d *Disk) likeSource(source *folder, src, dst []string) (map[int]fsx.Stat, 
 		}
 		// The last levels of dst are the operation's folder, the parents of the logical path, then its
 		// name.
-		like[len(dst)-1-folders+i] = st
+		like[len(dst)-1-folders+i] = standIn{Stat: st, dated: true}
 	}
 	return like, nil
 }
@@ -763,6 +822,9 @@ func (d *Disk) movedFrom(dir fsx.Dir, name string, seen *fsx.Stat) (*Moved, erro
 // FromTrash moves an entry of the trash back to its path. Every parent folder is there by now, each
 // made as an operation of its own, and the root is never made here (invariant 3).
 func (d *Disk) FromTrash(op *Op) (*Moved, error) {
+	if err := d.refuseLeft(op.Path2, op.Path); err != nil {
+		return nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, err
 	}
@@ -835,9 +897,43 @@ func sameFileAs(row *catalog.KnownCopy) func(*fsx.Stat) bool {
 	return func(st *fsx.Stat) bool { return isSameAsRow(row, st) }
 }
 
+// putBack moves what a rename brought to its target, when that is not the copy, back to the name it took, the old one,
+// once that is free again, without replacing anything, and syncs both names: rename(2) moves what the old name holds
+// when it runs, which a file a program saved there since the look right before may be (specs.md §15.12, step 4,
+// §17.2). What stops it leaves the file where it is, for the table of §17.2 to say, with a line of the log.
+func (d *Disk) putBack(source fsx.Dir, name string, target fsx.Dir, newName string) {
+	arrived, err := target.Stat(newName)
+	if err != nil || arrived.Kind != fsx.KindFile {
+		return
+	}
+	if _, err := source.Stat(name); !fsx.IsAbsent(err) {
+		return
+	}
+	same := func(st *fsx.Stat) bool { return st.Ino == arrived.Ino }
+	if err := d.moveNoReplace(target, newName, source, name, same); err != nil {
+		slog.Warn("a file a rename brought that is not the copy stays at the new name", "disk", d.ID, "name", newName, "error", err)
+		return
+	}
+	d.machine.Checkpoint("put-back")
+	if err := syncEntry(source, name); err != nil {
+		slog.Warn("a file put back after a rename is not synced", "disk", d.ID, "name", name, "error", err)
+		return
+	}
+	if err := source.Sync(); err != nil {
+		slog.Warn("a file put back after a rename is not synced", "disk", d.ID, "name", name, "error", err)
+		return
+	}
+	if err := target.Sync(); err != nil {
+		slog.Warn("a file put back after a rename is not synced", "disk", d.ID, "name", newName, "error", err)
+	}
+}
+
 // RenameFile moves a copy to where its operation says, both logical paths on this disk, and says once
 // that is durable (specs.md §15.12). The target's parents are there by now, each an operation of its own.
 func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, error) {
+	if err := d.refuseLeft(op.Path, op.Path2); err != nil {
+		return nil, nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, nil, err
 	}
@@ -878,6 +974,9 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 	// Known at its new name as the look of the link path and the reprise know it, by the identity of §15.1, never by its
 	// inode alone (specs.md §17.2).
 	if _, err := holds(target.Dir, newName, sameFileAs(row)); err != nil {
+		if errors.Is(err, ErrGone) {
+			d.putBack(source.Dir, name, target.Dir, newName)
+		}
 		return nil, nil, err
 	}
 	d.machine.Checkpoint("moved")
@@ -907,6 +1006,9 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 // then each file is synced at its new name and its folder synced, and both folders get their times back, as for a
 // rename. A driver that refuses the swap moved nothing: ErrPathTaken, as the names stay taken.
 func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, movedB *Moved, seenA, seenB *fsx.Stat, err error) {
+	if err := d.refuseLeft(a.Path, b.Path); err != nil {
+		return nil, nil, nil, nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -953,11 +1055,13 @@ func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, m
 	default:
 		return nil, nil, nil, nil, classify(err)
 	}
-	// Each known at its new name as a rename knows it, by the identity of §15.1, never by its inode alone.
-	if _, err := holds(dirB.Dir, nameB, sameFileAs(rowA)); err != nil {
-		return nil, nil, nil, nil, err
-	}
-	if _, err := holds(dirA.Dir, nameA, sameFileAs(rowB)); err != nil {
+	// Each known at its new name as a rename knows it, by the identity of §15.1, never by its inode alone. One name that
+	// did not hold its copy when the exchange ran, as a file a program saved there since the look right before, has the
+	// two exchanged back at once.
+	if err := exchanged(dirA.Dir, nameA, dirB.Dir, nameB, rowA, rowB); err != nil {
+		if errors.Is(err, ErrGone) && d.exchangeBack(dirA.Dir, nameA, dirB.Dir, nameB, timeA.Mtime, timeB.Mtime) {
+			return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrExchangedBack, err)
+		}
 		return nil, nil, nil, nil, err
 	}
 	d.machine.Checkpoint("moved")
@@ -987,6 +1091,46 @@ func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, m
 	return movedA, movedB, &lookA, &lookB, nil
 }
 
+// exchanged says whether each of two names an exchange swapped holds the other's copy, by the identity of §15.1:
+// ErrGone when one does not.
+func exchanged(dirA fsx.Dir, nameA string, dirB fsx.Dir, nameB string, rowA, rowB *catalog.KnownCopy) error {
+	if _, err := holds(dirB, nameB, sameFileAs(rowA)); err != nil {
+		return err
+	}
+	_, err := holds(dirA, nameA, sameFileAs(rowB))
+	return err
+}
+
+// exchangeBack exchanges two names back, once the look after their exchange found that one of them did not hold its
+// copy when it ran: renameat2 with RENAME_EXCHANGE swaps whatever the names hold then, which a file a program saved at
+// one of them since the look right before may be, and that file went to the other name. Both names then hold again
+// what they held before the exchange, each synced, and both folders get their times back and are synced (specs.md
+// §15.12, §17.2; conformance/models/README.md, flaw 13, the maintainer's remedy, 2026-11-23), as a rename puts back
+// what it took from its old name (putBack). It says whether it did: what stops it leaves the names as they are, for
+// the table of §17.2 to say, with a line of the log.
+func (d *Disk) exchangeBack(dirA fsx.Dir, nameA string, dirB fsx.Dir, nameB string, timeA, timeB fsx.Time) bool {
+	if err := dirA.Exchange(nameA, dirB, nameB); err != nil {
+		slog.Warn("an exchange that took a file that is no copy of it is not exchanged back", "disk", d.ID, "name", nameA, "other", nameB, "error", err)
+		return false
+	}
+	d.machine.Checkpoint("put-back")
+	err := syncEntry(dirA, nameA)
+	if err == nil {
+		err = syncEntry(dirB, nameB)
+	}
+	if err == nil {
+		err = d.restoreBoth(dirA, dirB, timeA, timeB)
+	}
+	if err == nil {
+		err = dirA.Sync()
+	}
+	if err != nil {
+		slog.Warn("two names exchanged back after an exchange are not synced", "disk", d.ID, "name", nameA, "other", nameB, "error", err)
+		return false
+	}
+	return true
+}
+
 // restoreBoth gives both folders of a move their times back. They may be one folder, and then the time
 // it had before is the one to give.
 func (d *Disk) restoreBoth(source, target fsx.Dir, sourceTime, targetTime fsx.Time) error {
@@ -1006,6 +1150,9 @@ func (d *Disk) restoreBoth(source, target fsx.Dir, sourceTime, targetTime fsx.Ti
 // Where the flag is refused, and a folder has no link, it is a look at the target and a plain rename,
 // whose only risk, measured, is replacing an empty folder that appeared since the look.
 func (d *Disk) RenameFolder(op *Op) error {
+	if err := d.refuseLeft(op.Path, op.Path2); err != nil {
+		return err
+	}
 	if err := d.Verify(); err != nil {
 		return err
 	}
@@ -1043,6 +1190,9 @@ func (d *Disk) RenameFolder(op *Op) error {
 		return err
 	}
 	if _, err := holdsFolder(target.Dir, newName, op.FileKey); err != nil {
+		if errors.Is(err, ErrGone) {
+			d.putBackFolder(source.Dir, name, target.Dir, newName, sourceTime.Mtime, targetTime.Mtime)
+		}
 		return err
 	}
 	d.machine.Checkpoint("moved")
@@ -1061,6 +1211,42 @@ func (d *Disk) RenameFolder(op *Op) error {
 	}
 	d.machine.Checkpoint("source-synced")
 	return nil
+}
+
+// putBackFolder moves what a folder's rename brought to its target, when that is not the folder journaled, back to the
+// name it took, the old one, once that is free again, without replacing anything, then syncs it there, gives both
+// folders their times back and syncs them: rename(2) moves what the old name holds when it runs, which a folder a
+// program made there since the look right before may be, as a tool that rotates a folder makes one (specs.md §15.12,
+// Folders, §17.2; conformance/models/README.md, flaw 14, the maintainer's remedy, 2026-11-23), as putBack does for a
+// file's rename. What stops it leaves what came where it is, for the table of §17.2 to say, with a line of the log.
+func (d *Disk) putBackFolder(source fsx.Dir, name string, target fsx.Dir, newName string, sourceTime, targetTime fsx.Time) {
+	arrived, err := target.Stat(newName)
+	if err != nil {
+		return
+	}
+	if _, err := source.Stat(name); !fsx.IsAbsent(err) {
+		return
+	}
+	if arrived.Kind == fsx.KindDir {
+		err = d.moveFolderNoReplace(target, newName, source, name)
+	} else {
+		err = d.moveNoReplace(target, newName, source, name, func(st *fsx.Stat) bool { return st.Ino == arrived.Ino })
+	}
+	if err != nil {
+		slog.Warn("what a folder's rename brought that is not the folder stays at the new name", "disk", d.ID, "name", newName, "error", err)
+		return
+	}
+	d.machine.Checkpoint("put-back")
+	err = syncEntry(source, name)
+	if err == nil {
+		err = d.restoreBoth(source, target, sourceTime, targetTime)
+	}
+	if err == nil {
+		err = source.Sync()
+	}
+	if err != nil {
+		slog.Warn("what a folder's rename put back is not synced", "disk", d.ID, "name", name, "error", err)
+	}
 }
 
 func holdsFolder(dir fsx.Dir, name, fileKey string) (fsx.Stat, error) {
@@ -1285,8 +1471,9 @@ func (d *Disk) FolderInfo(logical string) (*fsx.Stat, error) {
 	return &st, nil
 }
 
-// restoreTime gives a folder its time back. Only a disk that is gone makes it matter: a folder's
-// date protects nothing, and the next scan records what is there.
+// restoreTime gives a folder its time back, or a folder of the trash the time of the one it stands
+// for. Only a disk that is gone makes it matter: a folder's date protects nothing, and the next scan
+// records what is there.
 func restoreTime(f fsx.Dir, t fsx.Time) error {
 	err := f.SetMtime(t)
 	switch {
@@ -1310,6 +1497,9 @@ type Purged struct {
 // PurgeEntry deletes a file of the trash, and is fine with one that is already gone. ErrGone means that
 // the name holds another file, which stays.
 func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
+	if err := d.refuseLeft(op.Path2); err != nil {
+		return Purged{}, err
+	}
 	if err := d.Verify(); err != nil {
 		return Purged{}, err
 	}
@@ -1350,6 +1540,10 @@ func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
 // CleanTrash removes the folders of a location of the trash that are left empty, down to and
 // including the date. It may stop at any point: an empty folder in the trash harms nothing.
 func (d *Disk) CleanTrash(trashPath string) {
+	// Its folders are left too: a folder holding a wildcard character is no more removable than a file (specs.md §15.8).
+	if d.Leaves(trashPath) {
+		return
+	}
 	place := d.trashPlace(trashPath)
 	keep := len(components(d.config.Workdir, layout.TrashFolder))
 	for end := len(place) - 1; end > keep; end-- {

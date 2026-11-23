@@ -147,6 +147,48 @@ func (d *Disk) seen(path []string, op *Op) (Seen, fsx.Stat, error) {
 // recoverTrash resolves a move to the trash left planned, by the table of specs.md §17.2. known is what the move compared
 // the copy with, for a copy that no row of the catalog records; nil takes the copy's row.
 func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, known *catalog.KnownCopy, nowNS int64, retention time.Duration, out *Recovered) error {
+	finish, warn, moved, err := d.trashNames(ctx, db, op, known)
+	if err != nil {
+		return err
+	}
+	if !finish {
+		return d.Undo(ctx, db, op, warn, nowNS)
+	}
+	restart := catalog.Restart{DeletedNS: nowNS, ExpiresNS: AddRetention(nowNS, retention)}
+	if err := catalog.FinishTrash(ctx, db, op, &restart, linksOf(&moved)); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	out.Finished = true
+	out.Trashed = append(out.Trashed, op.ID)
+	return nil
+}
+
+// ResolveViewTrash resolves a move to the trash of Atoll's own view, a deletion or a replacement, that a stop left
+// planned or whose move failed, by the table of §17.2, as a reprise resolves one (specs.md §21.2): the names as the
+// table says, each made durable, then whether it is done, and for one undone whether an op-undone event says so. The
+// view commits it (catalog.FinishViewOp), as its copy keeps its row for the pass that takes the operation in. row is
+// what the view compared the copy with right before the move, or nil for the copy's row in the catalog, the inode
+// alone going for a copy that no row records.
+func (d *Disk) ResolveViewTrash(ctx context.Context, db *sql.DB, op *Op, row *catalog.KnownCopy) (done, warn bool, err error) {
+	if op.Kind != catalog.OpTrash || op.Link != 0 {
+		return false, false, fmt.Errorf("reprise: operation %d is no move of a copy to the trash", op.ID)
+	}
+	if err := d.Verify(); err != nil {
+		return false, false, err
+	}
+	done, warn, _, err = d.trashNames(ctx, db, op, row)
+	if err != nil {
+		return false, false, err
+	}
+	if !done {
+		d.CleanTrash(op.Path2)
+	}
+	return done, warn, nil
+}
+
+// trashNames resolves the names of a move to the trash by the table of §17.2, and says whether the operation
+// finishes, what the target holds then, and whether one that does not warns; it writes nothing to the catalog.
+func (d *Disk) trashNames(ctx context.Context, db *sql.DB, op *Op, known *catalog.KnownCopy) (finish, warn bool, moved fsx.Stat, err error) {
 	src, dst := d.rootPlace(op.Path), d.trashPlace(op.Path2)
 	if op.Link != 0 {
 		// The link guard's link went there, not the copy at the path (specs.md §17).
@@ -154,7 +196,7 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, known *cata
 	}
 	// First, as these can be long, and nothing long may come between the looks and what they decide.
 	if err := d.syncWay(dst); err != nil {
-		return err
+		return false, false, moved, err
 	}
 	// What the copy's row says of it, read before the looks, so that nothing long comes between them and what they
 	// decide. A link has no row to be edited from: whatever its data holds now is what goes.
@@ -164,58 +206,51 @@ func (d *Disk) recoverTrash(ctx context.Context, db *sql.DB, op *Op, known *cata
 	case known != nil:
 		row = *known
 	default:
-		var err error
 		if row, err = catalog.CopyOf(ctx, db, op.Disk, op.Path, op.FileKey); err != nil {
-			return fmt.Errorf("catalog: %w", err)
+			return false, false, moved, fmt.Errorf("catalog: %w", err)
 		}
 	}
 	source, _, err := d.seen(src, op)
 	if err != nil {
-		return err
+		return false, false, moved, err
 	}
 	target, targetStat, err := d.seen(dst, op)
 	if err != nil {
-		return err
+		return false, false, moved, err
 	}
 	changed, err := trashChanged(op, &row, target, source, &targetStat)
 	if err != nil {
-		return err
+		return false, false, moved, err
 	}
 	decision, err := ResolveTrash(target, source, changed)
 	if err != nil {
-		return err
+		return false, false, moved, err
 	}
 	switch {
 	case decision.RemoveTarget:
 		if err := d.dropName(dst, op.FileKey); err != nil {
-			return err
+			return false, false, moved, err
 		}
 	case decision.MoveBack:
 		if err := d.moveBack(dst, src); err != nil {
-			return err
+			return false, false, moved, err
 		}
 	}
 	if !decision.Finish {
-		return d.undoMove(ctx, db, op, src, dst, decision.Warn, nowNS)
+		return false, decision.Warn, moved, d.syncUndone(src, dst)
 	}
 	if err := d.finishNames(src, dst, decision.RemoveSource, op.FileKey); err != nil {
-		return err
+		return false, false, moved, err
 	}
 	// Looked at again, as the source's name going moved its change time and link count.
-	target, moved, err := d.seen(dst, op)
+	target, moved, err = d.seen(dst, op)
 	if err != nil {
-		return err
+		return false, false, moved, err
 	}
 	if target != SeenSame {
-		return d.undoMove(ctx, db, op, src, dst, true, nowNS)
+		return false, true, moved, d.syncUndone(src, dst)
 	}
-	restart := catalog.Restart{DeletedNS: nowNS, ExpiresNS: AddRetention(nowNS, retention)}
-	if err := catalog.FinishTrash(ctx, db, op, &restart, linksOf(&moved)); err != nil {
-		return fmt.Errorf("catalog: %w", err)
-	}
-	out.Finished = true
-	out.Trashed = append(out.Trashed, op.ID)
-	return nil
+	return true, false, moved, nil
 }
 
 // trashChanged says whether the file at the target of a move to the trash, by the copy's inode, is no longer what the
@@ -295,16 +330,21 @@ func (d *Disk) recoverRestore(ctx context.Context, db *sql.DB, op *Op, nowNS int
 // one that went, and so the file at the source, whose own record holds its names (specs.md §17.2). The
 // way to the target was synced first.
 func (d *Disk) undoMove(ctx context.Context, db *sql.DB, op *Op, src, dst []string, warn bool, nowNS int64) error {
+	if err := d.syncUndone(src, dst); err != nil {
+		return err
+	}
+	return d.Undo(ctx, db, op, warn, nowNS)
+}
+
+// syncUndone makes what an undone move left durable: the file at the source, then the folders of both names.
+func (d *Disk) syncUndone(src, dst []string) error {
 	if err := d.syncEntryAt(src); err != nil {
 		return err
 	}
 	if err := d.syncFolder(src[:len(src)-1]); err != nil {
 		return err
 	}
-	if err := d.syncFolder(dst[:len(dst)-1]); err != nil {
-		return err
-	}
-	return d.Undo(ctx, db, op, warn, nowNS)
+	return d.syncFolder(dst[:len(dst)-1])
 }
 
 // Undo says that an operation did not happen, and clears the folders of the trash left empty: what it
@@ -689,10 +729,12 @@ func (d *Disk) recoverMkdir(ctx context.Context, db *sql.DB, op *Op, nowNS int64
 	if err != nil {
 		return err
 	}
+	// The folder it made, by the inode journaled right after the mkdir: any other at that name, or one met before its
+	// inode was journaled, is someone else's, as far as anything says, and stays as it is (specs.md §17.2, §17.4).
 	target := SeenAbsent
 	if there {
 		target = SeenOther
-		if st.Kind == fsx.KindDir {
+		if st.Kind == fsx.KindDir && op.FileKey != "" && keyOf(&st) == op.FileKey {
 			target = SeenSame
 		}
 	}

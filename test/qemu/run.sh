@@ -10,12 +10,19 @@
 #
 # CACHE, a folder that outlives the container, as a CI keeps one from a run to the next, holds what the
 # run downloads: Debian's packages, and the mainline kernel's. What is there is not downloaded again.
+#
+# COVER_OUT, a folder that outlives the container, gets the coverage of each guest back, as make test-qemu-cover asks:
+# with a build made with -cover (make qemu-build QEMU_COVER=1, which writes /qemu/cover), every process of a guest
+# writes its counters to one folder, the tests through -test.gocoverdir, atoll through GOCOVERDIR, under systemd too;
+# the guest sends that folder through its second serial port once its tests are over, and it lands in
+# COVER_OUT/<kernel>, owned by COVER_OWNER when given (uid:gid). A guest that sends none is exit 2.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 built=${BUILT:-/qemu}
 kernels=${KERNELS:-debian mainline}
 mainline=${MAINLINE:-v7.3.5}
 cache=${CACHE:-}
+cover_out=${COVER_OUT:-}
 
 if [ ! -x "$built/loopdev.test" ] || [ ! -f "$built/repo/go.mod" ]; then
 	echo "no $built/loopdev.test or $built/repo/go.mod: run make qemu-build first" >&2
@@ -25,6 +32,10 @@ fi
 newer=$(find "$here/../loopdev" "$here/../../internal" "$here/../../cmd" -name '*.go' -newer "$built/loopdev.test" -print -quit 2>/dev/null)
 if [ -n "$newer" ]; then
 	echo "$built/loopdev.test is older than ${newer#"$here/../../"}: run make qemu-build first" >&2
+	exit 2
+fi
+if [ -n "$cover_out" ] && [ ! -f "$built/cover" ]; then
+	echo "COVER_OUT asks for the coverage of a build made without -cover: run make qemu-build QEMU_COVER=1 first" >&2
 	exit 2
 fi
 
@@ -102,6 +113,15 @@ done
 cp "$here/init" /init && chmod +x /init
 mkdir -p /opt/atoll && cp "$built/loopdev.test" /opt/atoll/ && cp -r "$built/repo" /opt/atoll/repo || exit 2
 mkdir -p /opt/atoll/repo/test/loopdev
+# A build made with -cover: each process of the guest writes its counters, which it sends back when COVER_OUT asks.
+rm -f /opt/atoll/cover /opt/atoll/cover-send
+if [ -f "$built/cover" ]; then
+	touch /opt/atoll/cover || exit 2
+	if [ -n "$cover_out" ]; then
+		touch /opt/atoll/cover-send || exit 2
+	fi
+	echo "coverage: built with -cover${cover_out:+, the counters of each guest into $cover_out}"
+fi
 # atoll where deploy/'s units start it, for the second run.
 if [ -x "$built/atoll" ]; then
 	cp "$built/atoll" /usr/local/bin/atoll || exit 2
@@ -162,11 +182,32 @@ cpus=$(nproc)
 [ "$cpus" -gt 8 ] && cpus=8
 
 worst=0
+# What a guest sent of its counters through its second serial port, between its two lines, a tar of its folder of
+# counters, into COVER_OUT/<kernel>; 1 when it sent none.
+take_cover() {
+	local key=$1 name=$2 into=$cover_out/$1
+	rm -rf "$into" && mkdir -p "$into" || return 1
+	if ! grep -aq '^ATOLL-COVER-END' /dl/cover.serial 2>/dev/null; then
+		echo "######## $name sent no coverage"
+		return 1
+	fi
+	sed -n '/^ATOLL-COVER-BEGIN/,/^ATOLL-COVER-END/p' /dl/cover.serial | tr -d '\r' | grep -v '^ATOLL-COVER-' |
+		base64 -d | tar -xzf - -C "$into" || return 1
+	if [ -n "${COVER_OWNER:-}" ]; then
+		chown -R "$COVER_OWNER" "$cover_out" || return 1
+	fi
+	echo "######## $name: $(find "$into" -type f | wc -l) coverage files into $into"
+}
 boot() {
-	local name=$1 kernel=$2 initrd=$3
+	local key=$1 name=$2 kernel=$3 initrd=$4
+	local serial=()
+	if [ -n "$cover_out" ]; then
+		rm -f /dl/cover.serial
+		serial=(-serial file:/dl/cover.serial)
+	fi
 	echo "######## $name"
 	timeout "${QEMU_TIMEOUT:-3600}" qemu-system-x86_64 "${accel[@]}" -smp "$cpus" -m "${QEMU_MEMORY:-6144}" \
-		-no-reboot -nic none -display none -monitor none -serial stdio \
+		-no-reboot -nic none -display none -monitor none -serial stdio "${serial[@]}" \
 		-kernel "$kernel" -initrd "$initrd" -append "console=ttyS0 rdinit=/init panic=-1 loglevel=3" | tee /tmp/console
 	local code
 	code=$(grep -ao 'ATOLL-QEMU-EXIT=[0-9]*' /tmp/console | tail -1 | cut -d= -f2)
@@ -176,13 +217,16 @@ boot() {
 	elif [ "$code" -ne 0 ]; then
 		code=1
 	fi
+	if [ -n "$cover_out" ] && ! take_cover "$key" "$name"; then
+		code=2
+	fi
 	[ "$code" -gt "$worst" ] && worst=$code
 	echo "######## $name: exit $code"
 }
 for k in $kernels; do
 	case $k in
-	debian) boot "Linux $debian_version" "/boot/vmlinuz-$debian_version" /dl/debian.gz ;;
-	mainline) boot "Linux $mainline_version" "/boot/$mainline_file" /dl/mainline.gz ;;
+	debian) boot debian "Linux $debian_version" "/boot/vmlinuz-$debian_version" /dl/debian.gz ;;
+	mainline) boot mainline "Linux $mainline_version" "/boot/$mainline_file" /dl/mainline.gz ;;
 	*)
 		echo "unknown kernel $k: debian or mainline" >&2
 		worst=2

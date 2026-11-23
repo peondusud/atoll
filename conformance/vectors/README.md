@@ -204,6 +204,13 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `name` | string | one component |
 | `short` | boolean | whether it has the form Windows gives the short name of a longer one, which a look on an NTFS disk must not take for a name of its own |
 
+### `wildcard_name.json` — a wildcard character in a path (§15.8, §22)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path`, `path_b64` | string | a logical path |
+| `holds` | boolean | whether a component of it, a folder's included, holds one of `" * < > ?`, the five wildcard characters of Windows, which the type `ntfs` cannot take out of a folder without setting its volume read-only: a copy at such a path on a disk of that type is left as it is |
+
 ### `branch_path.json` — the path limit of a mergerfs branch (§15.8)
 
 | Field | Type | Meaning |
@@ -234,6 +241,25 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `checked` | integer | the names in scope |
 | `findings` | array of objects | the findings, in the order of §15.9, as `api/schemas/names-check.schema.json` states them |
 | `error` | boolean | `true` when a path, `under` or a disk is rejected |
+
+### `shown_name.json` — a name in a line of human output and in an alert (§23, §25)
+
+Two kinds of case: a name and what is written for it; and a range of the format characters, the general category `Cf`. The ranges, in order, are every format character of Unicode 17.0.0, the version of Go 1.27's tables (`unicode.Version`), and no other character is one: a version of Go or of Rust whose tables differ fails the test until the file says what changed.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path`, `path_b64` | string | a name, a logical path |
+| `shown` | string | what is written for it: the name as it is when it is valid UTF-8 with no control character (`Cc`) and no format character (`Cf`), and otherwise `(base64) ` and its bytes in standard base64 |
+| `from`, `to` | integer | the first and the last code point of a range of format characters, both included |
+
+### `shown_text.json` — an error or a warning in a line written for a person (§24.4, §25)
+
+What standard error, the human text of `atoll rules check` and the message of a disk's line of a human output write for a text, an error's above all, which may hold a path or an argument as it is. A character that `shown_name.json` writes a name in base64 for, a control character (`Cc`) or a format character (`Cf`), is written `\u{XXXX}`, its code point in uppercase hexadecimal of four digits or more; a byte that is not UTF-8 `\x{XX}`; a backslash that `u{` or `x{` follows `\u{005C}`; anything else as it is. No other form of escape uses braces, so what Go's `%q`, the quotes of a configuration's key (§24.3) or `systemd-escape` escaped already stays as it is.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `text`, `text_b64` | string | the text |
+| `shown` | string | what is written for it |
 
 ### `file_state.json` — the state a file shows (§4)
 
@@ -419,7 +445,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `direct` | string | `deletes.direct` |
-| `files` | array of objects | `path`, `state` (one of §4), `conflict_held`, `true` for a corrupt file that holds a conflict (§4), `follow` when a folder renamed gives it a new path, `running`, `true` for a file with a job running, which waits for every decision and holds its path (§14.1), and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held`, `size`, 0 when absent, and `through_view`, `true` for a copy that went through Atoll's own view to the trash, which propagates whatever `direct` says (§21.2) |
+| `files` | array of objects | `path`, `state` (one of §4), `conflict_held`, `true` for a corrupt file that holds a conflict (§4), `follow` when a folder renamed gives it a new path, `running`, `true` for a file with a job running, which waits for every decision and holds its path (§14.1), and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held`, `size`, 0 when absent, `through_view`, `true` for a copy that went through Atoll's own view to the trash, which propagates whatever `direct` says (§21.2), and `left`, `true` for a copy left as it is at a wildcard name on a disk of the type `ntfs`, which a restore reads only when no other copy is there, and whose job of a deletion the trash refuses (§15.8) |
 | `taken` | array of strings | optional: the paths held by files outside this step |
 | `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone`, `trash` or `restore`), with `target` for `other-target`; `restore`, with `deletes.direct = "restore"`, makes a copy gone again in its place, from the copy `src` names |
 | `error` | boolean | `true` on an unknown word, a path that appears twice, a disk or a position that appears twice in one file, or a `moved` with no target |
@@ -784,7 +810,7 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 
 | Field | Type | Meaning |
 |---|---|---|
-| `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`), `physical` (none): the physical disk it lives on, which two disks share when a start found them on one (R-06); the plan counts them as one, so that no two copies of a file are on it |
+| `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`), `physical` (none): the physical disk it lives on, which two disks share when a start found them on one (R-06); the plan counts them as one, so that no two copies of a file are on it; `leaves_wildcards` (`false`): a disk of the type `ntfs`, whose copies at a path that holds a wildcard character (`wildcard_name.json`) are left as they are: counted for nothing, never marked, never a target, a source only when no other copy of their file is, and their files `name-incompatible` (§15.8) |
 | `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `leaving` (`false`), for a file whose deletion is decided and waits for a trash job (`specs.md` §13.4); `cache` (none), `resident` or `transfer` for a file on the SSD cache that stays or leaves it (`specs.md` §19), which must hold a copy on a cache disk; `policy` (below) |
 | `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source; `unverified` (`false`): `true` for a copy not read back since it last changed (`copies.verified_ns` NULL), on which no transfer leans; `running` (`false`): `true` for a `pending` copy whose job is running, its operation left planned (`specs.md` §14.1), which counts as an `ok` copy there would, holds no room and is never canceled, and an error on any other copy |
 | `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`), `colocate` (`none`) |
@@ -905,10 +931,13 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `hiberfil_read` | integer | how many bytes of its start a read gave: its first 4096, or all of it when it is smaller, when left out |
 | `logfile` | string | what the top of the mount holds at `$LogFile`, which a check asks of a disk of `fs` `ntfs` alone, once `hiberfil.sys` leaves it online (§10): `file` (when left out), `absent`, `not-a-file`, `io-error` for an error that makes the disk unknown, or `unreadable` for any other |
 | `journal` | string | what that `file` says, as `logfile.json` reads it: `empty` (when left out), `clean`, `unclean`, `version-2` or `invalid` |
-| `marker` | object or string | what `<workdir>/disk.toml` holds, which a confirmation reads (§10): an object of `pool_id`, `disk_id` and `fs_uuid`, the pool being `p`, or `not-a-marker` for a file there that this version does not read; none when left out |
+| `marker` | object or string | what a read of `<workdir>/disk.toml` gave, which every check that knows the catalog asks, question 11, and a confirmation (§10): an object of `pool_id`, `disk_id` and `fs_uuid`, the pool being `p`; `absent` for no file at that name; `not-a-marker` for a file there that this version does not read; `not-a-file` for a symbolic link, a folder or anything else that is no regular file there; `io-error` for an error that says the disk is unknown; `unreadable` for any other error. When left out, the case is the mount check without the catalog, which asks no marker |
+| `marker_seen` | boolean | the catalog records that the disk's own marker was seen (`disks.marker_seen_ns`, §9): a check that then finds none makes it `missing`, `no-marker`; `false` when left out |
+| `records_seen` | boolean | with a `marker`, that the confirmation records the disk's own marker seen: the disk is not `missing`, and the marker names the pool `p`, the disk and its filesystem; `false` when left out |
 | `state` | string | `online`, `readonly` or `missing` |
 | `reason` | string | the reason; left out when `online` |
 | `mount_owner` | boolean | the disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do (`fuseblk`), so that neither is a file's own (§15.4); `false` when absent, and always for a disk `missing` |
+| `leaves_wildcards` | boolean | the disk is mounted with the type `ntfs`, which cannot take a name holding a wildcard character out of its folder without setting its volume read-only, so that Atoll leaves its copies at such a path as they are (§15.8, §22); `false` when absent, and always for a disk `missing` |
 
 ### `capacity.json` — capacity of a pool (§13.1)
 
@@ -918,6 +947,17 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `k` | integer | the copies per file: `replicas` + 1 |
 | `capacity` | integer | `U(k)` in bytes, computed exactly, then rounded down; 0 with more copies than disks |
 | `error` | boolean | `true` when the input is rejected: `k` below 1, a negative size, or a total that does not fit in a signed 64-bit integer |
+
+### `capacity_reachable.json` — what `atoll capacity` says of a pool (§13.1, §13.3)
+
+A case gives a pool and its files as `plan.json` does, and the three levels of `atoll capacity --json` (`api/schemas/capacity.schema.json`). Each level plans the pool with every file wanted at k copies, whatever its `replicas`, and none waiting for `atoll replicate` (`manual` reads as `false`); the plan moves no copy. A file on the SSD cache that leaves it, as each does in time, says `cache` `transfer`, as the caller gives it. The formula counts the data disks `online` or in `standby`, two on one physical disk as one, in the failure domain of the first of them by position, whatever the order of the list.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `disks`, `files`, `entries`, `taken`, `min_free`, `new_files`, `fill_to`, `equalize`, `cache_mirror`, `cache_early` | | as in `plan.json`, with its defaults |
+| `spread_mode` | string | `[placement] spread_mode`: `prefer` when left out, or `strict`, for the formula of failure domains |
+| `levels` | array of objects | for k = 1, 2 and 3, in order, each with every field: `copies` (k); `theoretical`, the formula over each disk's capacity less `min_free`; `stored`, the bytes of the files that reach k copies in the plan, a file reaching them unless left `degraded`, `unavailable`, `name-incompatible` or `name-collision`; `short`, the count of the others; `reachable`, `stored` and the formula over each disk's free space less the copies the plan makes there and the pending copies it keeps there, less `min_free`, and never below 0 |
+| `error` | boolean | `true` when the plan refuses the input |
 
 ## Unicode versions
 

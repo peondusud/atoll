@@ -234,12 +234,12 @@ func TestAFileLeavesTheCacheOnceTheDataDisksHoldIt(t *testing.T) {
 	b.write("c", "show/e2.mkv", "other")
 	b.now = time.Now().UnixNano()
 	b.scan(Options{})
-	transfers, err := CacheTransfers(t.Context(), b.db, b.config, b.now)
+	transfers, err := CacheTransfers(t.Context(), b.db, b.config, b.now, nil)
 	if err != nil || len(transfers) != 0 {
 		t.Errorf("copies not known to be in step: %+v, %v", transfers, err)
 	}
 	b.scan(Options{Full: true})
-	transfers, err = CacheTransfers(t.Context(), b.db, b.config, b.now)
+	transfers, err = CacheTransfers(t.Context(), b.db, b.config, b.now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestAFileLeavesTheCacheOnceTheDataDisksHoldIt(t *testing.T) {
 	}
 
 	b.reconfigure("timezone = \"UTC\"\n", "engine = \"atoll\"\n", nil, "[cache]\nenabled = true\n")
-	if transfers, err := CacheTransfers(t.Context(), b.db, b.config, b.now); err != nil || len(transfers) != 0 {
+	if transfers, err := CacheTransfers(t.Context(), b.db, b.config, b.now, nil); err != nil || len(transfers) != 0 {
 		t.Errorf("with no cache disk: %+v, %v", transfers, err)
 	}
 }

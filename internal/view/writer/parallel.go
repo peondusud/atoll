@@ -125,7 +125,7 @@ func (w *Writer) maxParallelOn(d *config.Disk) int {
 // part held back by a disk waking would fall behind, and holding fewer parts of the view than its limit of copies at
 // once (specs.md §14).
 // What cannot begin is left to the ordinary job.
-func (w *Writer) startParallel(ctx context.Context, disk, path string) *parallel {
+func (w *Writer) startParallel(ctx context.Context, disk, path string, who Caller) *parallel {
 	if enabled, _ := w.config.Effective()["replication.enabled"].(bool); !enabled {
 		return nil
 	}
@@ -170,7 +170,7 @@ func (w *Writer) startParallel(ctx context.Context, disk, path string) *parallel
 	}
 	par := &parallel{w: w, path: path, ctx: context.WithoutCancel(ctx)}
 	for _, id := range targets {
-		if p := w.startPart(ctx, id, disk, path); p != nil {
+		if p := w.startPart(ctx, id, disk, path, who); p != nil {
 			par.parts = append(par.parts, p)
 		}
 	}
@@ -184,20 +184,22 @@ func (w *Writer) startParallel(ctx context.Context, disk, path string) *parallel
 }
 
 // startPart journals and makes one part on a target, and starts what writes it, or says nil.
-func (w *Writer) startPart(ctx context.Context, disk, source, path string) *part {
+func (w *Writer) startPart(ctx context.Context, disk, source, path string, who Caller) *part {
 	d := w.disk(disk)
 	if d == nil || !w.writableNow(ctx, disk) {
 		return nil
 	}
-	if !w.openPart(d) {
+	if !w.openPart(ctx, d) {
 		return nil
 	}
-	op, v, err := catalog.BeginViewPart(ctx, w.db, disk, path, source, w.now())
+	op, v, err := catalog.BeginViewPart(ctx, w.db, disk, path, source, w.now(), who.asker())
 	if err != nil {
 		w.closePart(disk)
 		w.log.Warn("no copy in parallel: the journal cannot be written", "disk", disk, "path", path, "error", err)
 		return nil
 	}
+	// Its row is this part's until it is handed over or dropped: no check while the view runs resolves it meanwhile.
+	w.hold(v.ID)
 	var file *ops.Part
 	err = w.handles.Use(disk, func(h *ops.Disk) error {
 		var err error
@@ -238,7 +240,7 @@ func (w *Writer) writableNow(ctx context.Context, disk string) bool {
 
 // openPart counts a part open on a disk, under its limit of copies at once, and measures its room past min_free when it is
 // the first open there.
-func (w *Writer) openPart(d *config.Disk) bool {
+func (w *Writer) openPart(ctx context.Context, d *config.Disk) bool {
 	w.par.mu.Lock()
 	defer w.par.mu.Unlock()
 	r := w.par.rooms[d.ID]
@@ -254,11 +256,40 @@ func (w *Writer) openPart(d *config.Disk) bool {
 		if err != nil || free <= reserved {
 			return false
 		}
-		r = &roomOf{room: free - reserved}
+		// The room a plan gave the pending copies of that disk is theirs: what they still have to write, each its size
+		// less what its part holds, comes off (specs.md §21.2; conformance/models/README.md, flaw 12).
+		held, err := w.pendingLeft(ctx, d.ID)
+		if err != nil || free-reserved <= held {
+			return false
+		}
+		r = &roomOf{room: free - reserved - held}
 		w.par.rooms[d.ID] = r
 	}
 	r.open++
 	return true
+}
+
+// pendingLeft gives what the pending copies of a disk still have to write there.
+func (w *Writer) pendingLeft(ctx context.Context, disk string) (int64, error) {
+	list, err := catalog.PendingOn(ctx, w.db, disk)
+	if err != nil {
+		return 0, fmt.Errorf("%w", err)
+	}
+	var left int64
+	for _, p := range list {
+		held := int64(0)
+		if p.Part != "" {
+			if err := w.handles.Use(disk, func(d *ops.Disk) error {
+				var err error
+				held, err = d.PartSize(p.Part)
+				return err //nolint:wrapcheck // ops says what failed
+			}); err != nil {
+				return 0, err
+			}
+		}
+		left += max(p.Size-held, 0)
+	}
+	return left, nil
 }
 
 // closePart counts a part no longer open on a disk; with none left there, the room is measured again for the next.
@@ -402,6 +433,7 @@ func (par *parallel) finish(parts []*part, size int64) {
 				w.log.Warn("a copy written in parallel stays planned: the journal cannot be written", "disk", p.disk, "path", par.path, "error", err)
 			}
 			w.closePart(p.disk)
+			w.release(p.view.ID)
 		}
 	}()
 }
@@ -425,6 +457,7 @@ func (p *part) seal(size int64) error {
 // dropPart removes a part and undoes its operations; on a disk that cannot be relied on they stay planned, for the
 // view's reprise at its next start (specs.md §17.2).
 func (w *Writer) dropPart(ctx context.Context, p *part, why error) {
+	defer w.release(p.view.ID)
 	if p.file != nil {
 		_ = p.file.Close()
 	}

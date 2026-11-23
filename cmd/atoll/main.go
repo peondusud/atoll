@@ -14,7 +14,9 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/peondusud/atoll/internal/config"
+	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/telemetry"
 )
 
@@ -39,6 +41,11 @@ func main() {
 	slog.SetDefault(slog.New(processLogs))
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
+
+// newMachine gives what a command asks of the machine about its disks and the time: the machine itself, or in a
+// conformance build its control file (disks.NewMachine). Only a unit test of a command changes it, for disks as
+// folders.
+var newMachine = disks.NewMachine
 
 // processLogs is the handler of every log of the process, on standard error: JSON lines by default, in the format the
 // configuration gives once it loads (specs.md §23.2). Only main sets it: a test that runs a command in its own process
@@ -228,7 +235,11 @@ func failure(stderr io.Writer, err error) int {
 	return exitError
 }
 
+// report writes a line for a person on standard error: a usage error, an error, or a warning. What the message holds
+// of a path, an argument, a label or an error from below the CLI may hold a control or a format character, or bytes
+// that are not UTF-8, which are escaped (names.Escaped), so that the line writes no line of its own and reorders or
+// hides nothing (specs.md §25).
 func report(stderr io.Writer, message string) {
 	// Nothing is left to tell, should standard error fail too: the exit code still says it.
-	_, _ = fmt.Fprintf(stderr, "atoll: %s\n", message)
+	_, _ = fmt.Fprintf(stderr, "atoll: %s\n", names.Escaped(message))
 }

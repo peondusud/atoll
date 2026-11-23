@@ -7,9 +7,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/vectors"
 )
 
@@ -41,8 +43,10 @@ func FuzzParse(f *testing.F) {
 			if err2 == nil || err2.Error() != err.Error() {
 				t.Fatalf("Parse(%q) gave %v, then %v", text, err, err2)
 			}
+			shownKeys(t, text, e.Problems)
 			return
 		}
+		shownKeys(t, text, c.Warnings)
 		if err2 != nil || !reflect.DeepEqual(c.Effective(), again.Effective()) || !reflect.DeepEqual(c.Warnings, again.Warnings) {
 			t.Fatalf("Parse(%q) loaded, then gave %v, or other values", text, err2)
 		}
@@ -50,6 +54,17 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("Parse(%q): warnings not sorted by key: %v", text, c.Warnings)
 		}
 	})
+}
+
+// shownKeys fails t when a key of a problem or a warning holds a control or a format character, or is not UTF-8: a
+// key a line names must not reorder or hide what follows it (specs.md §24.3).
+func shownKeys(t *testing.T, text []byte, list []Problem) {
+	t.Helper()
+	for _, p := range list {
+		if !utf8.ValidString(p.Key) || strings.ContainsFunc(p.Key, names.Unshowable) {
+			t.Fatalf("Parse(%q): the key %+q", text, p.Key)
+		}
+	}
 }
 
 // hasTwice says whether two problems name one key.

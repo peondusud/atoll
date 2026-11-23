@@ -30,6 +30,13 @@ type fakeDisk struct {
 	hiberfil disks.HiberfilSeen
 	// logFile is what it holds at $LogFile: an empty journal when left empty.
 	logFile disks.LogFileSeen
+	// fail makes calls through a handle on its top fail, as fsx.Fault does, when set.
+	fail func(call, name string) error
+}
+
+// Marker reads the disk's marker in its folder, as the conformance build does (specs.md §10).
+func (f *fakeDisk) Marker(mount, workdir string, _ *disks.MountEntry, _ bool) disks.MarkerSeen {
+	return disks.ReadMarkerAt(mount, workdir)
 }
 
 func (f *fakeDisk) Mount(mount string) disks.MountSeen {
@@ -67,7 +74,11 @@ func (f *fakeDisk) OpenRoot(mount, root string) (fsx.Dir, error) {
 	return fsx.OpenDir(filepath.Join(mount, root)) //nolint:wrapcheck // a test double
 }
 func (f *fakeDisk) OpenTop(mount string) (fsx.Dir, error) {
-	return fsx.OpenDir(mount) //nolint:wrapcheck // a test double
+	top, err := fsx.OpenDir(mount)
+	if err != nil || f.fail == nil {
+		return top, err //nolint:wrapcheck // a test double
+	}
+	return fsx.Fault(top, f.fail), nil
 }
 
 func (f *fakeDisk) ReadPastCache(fs names.Filesystem, entry *disks.MountEntry) disks.DeviceSeen {

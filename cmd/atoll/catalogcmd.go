@@ -16,6 +16,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/jobs"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/value"
 	"github.com/peondusud/atoll/internal/watch"
@@ -91,7 +92,7 @@ func runCatalog(configPath string, args []string, stdout, stderr io.Writer) int 
 		return failure(stderr, err)
 	}
 	defer release()
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -149,7 +150,7 @@ func catalogBackup(ctx context.Context, c *config.Config, m disks.Machine, stder
 // catalogVerify runs SQLite's integrity and foreign key checks on the catalog, then compares each disk with it, as
 // a scan would, writing nothing (specs.md §9, §25): exit 4 with a problem, a difference, or a disk not walked.
 func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, stderr io.Writer) int {
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -160,17 +161,7 @@ func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, s
 	if asJSON {
 		err = writeJSON(stdout, out)
 	} else {
-		var b bytes.Buffer
-		for _, p := range out.Problems {
-			fmt.Fprintf(&b, T("problem: %s\n"), p)
-		}
-		if len(out.Problems) == 0 {
-			fmt.Fprintf(&b, T("the catalog %s is in order\n"), path.Base(catalogPath(c)))
-		}
-		err = printScan(&b, scanOutput{Disks: out.Disks, Conflicts: []pathItem{}})
-		if err == nil {
-			err = writeText(stdout, b.String())
-		}
+		err = printVerify(stdout, out, path.Base(catalogPath(c)))
 	}
 	if err != nil {
 		return failure(stderr, err)
@@ -179,6 +170,22 @@ func catalogVerify(ctx context.Context, c *config.Config, asJSON bool, stdout, s
 		return exitPartial
 	}
 	return exitOK
+}
+
+// printVerify writes catalog verify's human text: each problem SQLite found, escaped as an error is (names.Escaped,
+// specs.md §25), as it may quote what a row holds; then what each disk holds, as a scan says it.
+func printVerify(w io.Writer, out *catalogVerifyOutput, file string) error {
+	var b bytes.Buffer
+	for _, p := range out.Problems {
+		fmt.Fprintf(&b, T("problem: %s\n"), names.Escaped(p))
+	}
+	if len(out.Problems) == 0 {
+		fmt.Fprintf(&b, T("the catalog %s is in order\n"), file)
+	}
+	if err := printScan(&b, scanOutput{Disks: out.Disks, Conflicts: []pathItem{}}); err != nil {
+		return err
+	}
+	return writeText(w, b.String())
 }
 
 // differs says whether a disk was not walked, or does not hold what the catalog says: a file it does not know, a
@@ -231,7 +238,7 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 		}
 		return writeRebuild(&out, flags["--json"], code, stdout, stderr)
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -370,7 +377,34 @@ func rebuildInto(ctx context.Context, c *config.Config, m disks.Machine, fresh s
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
+	if err := markersSeen(ctx, c, m, db, outcome, stderr); err != nil {
+		return nil, err
+	}
 	return outcome, nil
+}
+
+// markersSeen records in the new catalog each disk's own marker seen, as a confirmation would, once the scan found the
+// disk there: from then on, a confirmation that finds none makes it readonly, no-marker (specs.md §9, §10). A marker
+// that cannot be read records nothing, with a warning.
+func markersSeen(ctx context.Context, c *config.Config, m disks.Machine, db *sql.DB, outcome *watch.Outcome, stderr io.Writer) error {
+	for i := range outcome.Disks {
+		r := &outcome.Disks[i]
+		d, err := diskOfConfig(c, r.ID)
+		if err != nil || r.Verdict.State == disks.Missing {
+			continue
+		}
+		text, found, err := ops.ReadMarkerAt(d.Mount, d.Workdir)
+		if err != nil {
+			report(stderr, fmt.Sprintf(T("warning: disk %s: its marker could not be read (%v): a confirmation records it once it can"), d.ID, err))
+			continue
+		}
+		if _, own := disks.MarkerVerdict(r.Verdict, text, found, false, c.PoolID, d); own {
+			if err := catalog.SetMarkerSeen(ctx, db, d.ID, d.UUID, m.Now()); err != nil {
+				return fmt.Errorf("%w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // listTrashAgain lists again the entries of each disk's trash, which a catalog made from the disks knew none of, so that

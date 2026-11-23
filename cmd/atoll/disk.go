@@ -2,19 +2,24 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/names"
 )
 
 func runDisk(configPath string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return usage(stderr, T("disk: want add, list, show, remove, fail or replace"))
+		return usage(stderr, T("disk: want add, list, show, remove, fail, replace or mark"))
 	}
 	switch args[0] {
+	case "mark":
+		return diskMark(configPath, args[1:], stdout, stderr)
 	case "add":
 		return diskAdd(configPath, args[1:], stdout, stderr)
 	case "show":
@@ -50,6 +55,11 @@ type diskListOutput struct {
 }
 
 func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
+	return diskListOn(configPath, args, newMachine, stdout, stderr)
+}
+
+// diskListOn is diskList on the machine newMachine gives, once the arguments and the configuration are read.
+func diskListOn(configPath string, args []string, newMachine func() (disks.Machine, error), stdout, stderr io.Writer) int {
 	asJSON := false
 	for _, a := range args {
 		if a != "--json" {
@@ -63,11 +73,13 @@ func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	observer, err := disks.NewMachine()
+	observer, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
-	verdicts, err := disks.CheckAll(context.Background(), observer, c.Disks)
+	verdicts, err := knownChecks(context.Background(), c, observer, func(err error) {
+		report(stderr, fmt.Sprintf(T("warning: which disks' own marker was seen cannot be read (%v): no disk is said missing for its marker gone"), err))
+	})
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -81,6 +93,35 @@ func diskList(configPath string, args []string, stdout, stderr io.Writer) int {
 		return failure(stderr, err)
 	}
 	return exitOK
+}
+
+// knownChecks runs the mount check of every disk with the question of its marker, as a pass asks it, which takes the
+// catalog's record of which disks' own marker was seen (specs.md §10). A catalog that cannot be read is said through
+// warn, and the check then takes none as seen.
+func knownChecks(ctx context.Context, c *config.Config, m disks.Machine, warn func(error)) ([]disks.Verdict, error) {
+	seen, err := markersSeenOf(ctx, c)
+	if err != nil {
+		warn(err)
+	}
+	verdicts, err := disks.CheckAllKnown(ctx, m, c.Disks, c.PoolID, seen)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	return verdicts, nil
+}
+
+// markersSeenOf reads which disks' own marker the catalog records seen.
+func markersSeenOf(ctx context.Context, c *config.Config) (seen disks.Seen, err error) {
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	list, err := catalog.MarkersSeen(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	return disks.Seen(list), nil
 }
 
 func diskListFrom(list []config.Disk, verdicts []disks.Verdict) diskListOutput {
@@ -103,7 +144,8 @@ func printDiskList(w io.Writer, out diskListOutput) error {
 		d := &out.Disks[i]
 		fmt.Fprintf(&text, "%s: %s (%s, %s)", d.ID, d.State, d.Mount, d.FS)
 		if d.Reason != nil {
-			fmt.Fprintf(&text, ": %s: %s", *d.Reason, *d.Message)
+			// The message of a mount check may hold an error of the system, which names a path as it is (specs.md §25).
+			fmt.Fprintf(&text, ": %s: %s", *d.Reason, names.Escaped(*d.Message))
 		}
 		text.WriteString("\n")
 	}

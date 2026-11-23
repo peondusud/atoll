@@ -1,0 +1,44 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a724.3, \u00a725",
+  "description": "A key of the configuration that holds a format character is written with it escaped, as TOML writes it, in uppercase hexadecimal (G16): an unknown key Trailer, U+202E RIGHT-TO-LEFT OVERRIDE, then vkm, is \"Trailer\\u202Evkm\" in --json and in the human text, never with the character itself, and the human text leaves the key's own escape as it is.",
+  "config": "\"Trailer\\u202Evkm\" = 1\npool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check",
+        "--json"
+      ],
+      "exit": 1,
+      "stdout_json": {
+        "valid": false,
+        "problems": [
+          {
+            "key": "\"Trailer\\u202Evkm\"",
+            "message": "${ANY}"
+          }
+        ],
+        "warnings": [],
+        "hidden": [],
+        "unreached": null
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "rules",
+        "check"
+      ],
+      "exit": 1,
+      "stdout_has": [
+        "\"Trailer\\u202Evkm\""
+      ],
+      "stdout_lacks": [
+        "\u202e",
+        "\\u{"
+      ]
+    }
+  ]
+}

@@ -42,7 +42,7 @@ func ParallelTargets(ctx context.Context, db *sql.DB, c *config.Config, now int6
 	if err != nil {
 		return nil, err
 	}
-	disks := planDisks(diskList, now, grace)
+	disks := planDisks(diskList, now, grace, nil)
 	for i := range disks {
 		d := &disks[i]
 		if d.ID == original {

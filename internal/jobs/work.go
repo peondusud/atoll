@@ -284,6 +284,21 @@ func (p *pass) folderReady(ctx context.Context, d *config.Disk, handle *ops.Disk
 	if !there || from.Kind != fsx.KindDir {
 		return false, from, nil
 	}
+	// The folder this disk's last walk found at that name, by its inode: another one, as a folder a program made there
+	// since, which a job's rename put back at its old name leaves when a stop came before the job went, is not the job's
+	// to carry, and the copies follow one by one (specs.md §15.12; conformance/models/README.md, flaw 14).
+	known, err := catalog.EntryKeyAt(ctx, p.db, d.ID, job.From)
+	if err != nil {
+		return false, from, fmt.Errorf("catalog: %w", err)
+	}
+	if known != "" && known != strconv.FormatUint(from.Ino, 10) {
+		return false, from, nil
+	}
+	// A folder left as it is, at or to a wildcard name on the type ntfs, cannot go as one operation: its copies follow
+	// one by one, each left as it is (specs.md §15.8).
+	if p.leftAsItIs(d.ID, job.From, job.To) {
+		return false, from, nil
+	}
 	// Before any look at that name: a driver can answer one with an error, which says nothing of the disk.
 	refused, err := refusal(ctx, p.db, d, job.To, job.From)
 	if err != nil {
@@ -480,7 +495,7 @@ func (p *pass) makeParents(ctx context.Context, d *config.Disk, handle *ops.Disk
 		if err != nil {
 			return fmt.Errorf("catalog: %w", err)
 		}
-		st, err := handle.MakeRootFolder(folder, like)
+		st, err := handle.MakeRootFolder(folder, like, func(key string) error { return catalog.SetCreateKey(ctx, p.db, op, key) })
 		switch {
 		case err == nil:
 			if err := handle.FinishMkdir(ctx, p.db, op, &st); err != nil {
@@ -715,9 +730,11 @@ func (p *pass) exchange(ctx context.Context, d *config.Disk, handle *ops.Disk, r
 	movedA, movedB, seenA, seenB, err := handle.ExchangeFiles(a, b, knownA, knownB)
 	if err != nil {
 		for _, op := range []*catalog.Op{a, b} {
-			// A swap the driver refused moved nothing, as no look is needed to tell: both are undone, with no event.
-			if errors.Is(err, ops.ErrPathTaken) {
-				if err := handle.Undo(ctx, p.db, op, false, p.now); err != nil {
+			// A swap the driver refused moved nothing, as no look is needed to tell: both are undone, with no event. One
+			// that took a file that is no copy of it was exchanged back, each name holding what it held before: both are
+			// undone, with an op-undone event each (specs.md §15.12; conformance/models/README.md, flaw 13).
+			if errors.Is(err, ops.ErrPathTaken) || errors.Is(err, ops.ErrExchangedBack) {
+				if err := handle.Undo(ctx, p.db, op, errors.Is(err, ops.ErrExchangedBack), p.now); err != nil {
 					return false, fmt.Errorf("%w", err)
 				}
 				continue
@@ -787,6 +804,10 @@ func (p *pass) lookBefore(ctx context.Context, d *config.Disk, handle *ops.Disk,
 	waiting, err := p.moveUndecided(ctx, r)
 	if err != nil || waiting {
 		return "", false, err
+	}
+	// Left as it is where it sits: its driver cannot move it without setting its volume read-only (specs.md §15.8).
+	if p.leftAsItIs(d.ID, r.Place, r.Target) {
+		return trash.OutcomeNameRefused, false, nil
 	}
 	refused, err := refusal(ctx, p.db, d, r.Target, r.Place)
 	if err != nil {
@@ -917,8 +938,9 @@ func (p *pass) wantTrash(ctx context.Context, d *config.Disk, refused []catalog.
 			p.session.MarkChanged()
 			continue
 		}
-		// Its wish comes from before the decisions, and the target may have changed since.
-		if g == nil || g.tripped || !g.wishes[r.FileID] || onlyAFolderCan(d, r.Place, r.Target) {
+		// Its wish comes from before the decisions, and the target may have changed since. One left as it is never goes
+		// to the trash (specs.md §15.8).
+		if g == nil || g.tripped || !g.wishes[r.FileID] || onlyAFolderCan(d, r.Place, r.Target) || p.leftAsItIs(d.ID, r.Place) {
 			continue
 		}
 		if err := catalog.QueueRenamedJob(ctx, p.db, r.FileID, d.ID); err != nil {
@@ -1492,7 +1514,8 @@ func (p *pass) listOn(ctx context.Context, d *config.Disk, handle *ops.Disk, pla
 	decided := len(plan.trashes)
 	for _, left := range p.renameRounds(d, rest, whole) {
 		p.operated(Operation{Disk: d.ID, Kind: KindRename, Path: left.row.Place, To: left.row.Target, Outcome: left.outcome})
-		if g := p.guards[d.ID]; left.outcome == trash.OutcomeNameRefused && g != nil && !g.tripped && g.wishes[left.row.FileID] && !onlyAFolderCan(d, left.row.Place, left.row.Target) {
+		if g := p.guards[d.ID]; left.outcome == trash.OutcomeNameRefused && g != nil && !g.tripped && g.wishes[left.row.FileID] && !onlyAFolderCan(d, left.row.Place, left.row.Target) &&
+			!p.leftAsItIs(d.ID, left.row.Place) {
 			plan.trashes = append(plan.trashes, Operation{Disk: d.ID, Kind: KindTrash, Path: left.row.Place, Reason: reasonRenamed, Outcome: OutcomeToTrash})
 		}
 	}

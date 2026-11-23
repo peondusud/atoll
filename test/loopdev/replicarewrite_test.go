@@ -4,9 +4,11 @@ package loopdev
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -152,5 +154,55 @@ func TestAWriteKeepingTheDatesOnEachDriver(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestTheChangeTimeARenameLeavesOnEachDriver measures what TestAWriteKeepingTheDatesOnEachDriver waits a clock tick
+// for: how often the rename of a new copy, right after its part was verified, leaves it the change time the part was
+// verified with, as a look at its name reads it, so that a reprise with no record of the change time after the rename
+// finds nothing moved and records the copy verified (specs.md §14.2; flaw 1's limit). Atoll is killed right after the
+// rename and its look (moved), then the reprise finishes the copy, ten times on each driver. It says each driver's
+// count and fails on none: a measure.
+func TestTheChangeTimeARenameLeavesOnEachDriver(t *testing.T) {
+	needRoot(t)
+	const tries = 10
+	for _, tc := range trashDrivers {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, v, tc.driver, at, options...)
+			b := newPassBench(t, v, at)
+			real := b.machine
+			same := 0
+			for i := range tries {
+				name := fmt.Sprintf("a%d", i)
+				writeBytes(t, b.keep, name, []byte("content"), time.Unix(1500000000, 0))
+				b.scan(false)
+				stop := errors.New("stopped")
+				b.machine = &stoppingAt{Machine: real, at: map[string]func(){
+					"moved": func() { panic(stop) }, //nolint:forbidigo // what stands for kill -9
+				}}
+				func() {
+					defer func() {
+						if err, ok := recover().(error); !ok || !errors.Is(err, stop) {
+							t.Fatalf("it did not stop at moved: %v", err)
+						}
+					}()
+					_, _ = jobs.Replicate(t.Context(), b.db, b.config, b.machine, jobs.ReplicateOptions{Path: name, Now: true}, func(*jobs.ReplicateItem) error { return nil })
+				}()
+				part := b.text("SELECT json_extract(payload, '$.part_look.ctime_ns') FROM jobs WHERE kind = 'replicate' ORDER BY id DESC LIMIT 1")
+				if part == strconv.FormatInt(ctimeAt(t, filepath.Join(at, "media", name)), 10) {
+					same++
+				}
+				b.machine = &later{Machine: real, by: 11 * time.Minute}
+				b.pass()
+				b.machine = real
+				if got := b.text("SELECT count(*) FROM ops WHERE state = 'planned'"); got != "0" {
+					t.Fatalf("%s operations left planned", got)
+				}
+			}
+			t.Logf("%s: the rename left the change time the part was verified with %d times of %d", tc.name, same, tries)
+		})
 	}
 }

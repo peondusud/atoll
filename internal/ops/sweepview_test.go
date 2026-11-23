@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/fsx"
 )
 
@@ -150,6 +151,52 @@ func TestUserOperationsLoseNothingWhereverTheyFail(t *testing.T) {
 			}})
 		})
 	}
+	// A new file the view moves to this disk once a write ran out of space on another: its part placed at its path, the
+	// folders on the way made as the view presents them (specs.md §21.2).
+	sweep(t, sweepCase{name: "a part the view places", prepare: func(t *testing.T, mount string) swept {
+		put(t, mount, "Atoll/tmp/5.part", "episode")
+		op := &Op{ID: 5, Disk: "t1", Kind: catalog.OpCreate, Path: "Series/S01/e01", Path2: "5.part", FileKey: keyAt(t, mount, "Atoll/tmp/5.part")}
+		var placed fsx.Stat
+		return swept{
+			op: func(d *Disk) error {
+				var err error
+				placed, err = d.PlaceUserPart(op, "Series/S01/e01", like)
+				return err
+			},
+			done: func() bool {
+				return holding(mount, "media/Series/S01/e01", "episode") && absent(mount, "Atoll/tmp/5.part") &&
+					placed.Ino == statAt(t, mount, "media/Series/S01/e01").Ino && statAt(t, mount, "media/Series").Mode&0o777 == 0o750
+			},
+			kept: func() bool {
+				return holding(mount, "media/Series/S01/e01", "episode") || holding(mount, "Atoll/tmp/5.part", "episode")
+			},
+		}
+	}})
+	// The copy a move of the view left on a disk whose trash had no room for it, removed at its path once the same
+	// bytes are on another disk, and the look a reprise of that takes (specs.md §21.2).
+	sweep(t, sweepCase{name: "a copy left removed", prepare: func(t *testing.T, mount string) swept {
+		put(t, mount, "media/Series/e01", "episode")
+		put(t, mount, "media/Series/e02", "other")
+		row := rowAt(t, mount, "Series/e01")
+		op := &Op{ID: 6, Disk: "t1", Kind: catalog.OpUnlink, Path: "Series/e01", FileKey: row.FileKey.String}
+		before := statAt(t, mount, "media/Series").Mtime
+		gone := false
+		return swept{
+			op: func(d *Disk) error {
+				if err := d.RemoveLeft(op, row); err != nil {
+					return err
+				}
+				var err error
+				gone, _, err = d.LeftAt(op)
+				return err
+			},
+			done: func() bool { return gone && absent(mount, "media/Series/e01") },
+			// The folder's time given back, as it was before, but where that very call fails: a time that cannot be
+			// given back is logged and costs no data (specs.md §6.1, §17.1).
+			best: func() bool { return statAt(t, mount, "media/Series").Mtime == before },
+			kept: func() bool { return holding(mount, "media/Series/e02", "other") },
+		}
+	}})
 	sweep(t, sweepCase{name: "attributes changed", prepare: func(t *testing.T, mount string) swept {
 		put(t, mount, "media/Series/e01", "episode")
 		mkdir(t, mount, "media/Series/S01")

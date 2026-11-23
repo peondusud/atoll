@@ -13,7 +13,7 @@ build:
 
 # Unit and property tests, including conformance/vectors; no root.
 test:
-	$(GO) test ./...
+	$(GO) test -timeout 45m ./...
 
 # Mandatory before any commit touching jobs, ops, watch, integrity or catalog.
 test-race:
@@ -31,43 +31,62 @@ model-check:
 
 # The black-box scenarios of the flaws the model found in specs.md and still open (conformance/models/flaws/): they
 # fail until the maintainer decides a remedy, and then move to conformance/scenarios/. With none open, the folder is gone.
+# A flaw the runner cannot reach, as one of Atoll's own view, which it has no FUSE to drive, or one in a window no crash
+# point of the conformance build opens, is a test TestFlaw… behind the build tag flaws, run here too
+# (conformance/models/README.md).
 model-flaws:
 ifeq ($(wildcard conformance/models/flaws/*.json),)
-	@echo "model-flaws: no flaw open (conformance/models/README.md)"
+	@echo "model-flaws: no black-box scenario of a flaw open (conformance/models/README.md)"
 else
 	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
 	$(GO) run ./conformance/runner --bin $(BIN)-conformance --scenarios conformance/models/flaws
 endif
+	$(GO) test -tags flaws -count=1 -run '^TestFlaw' ./internal/view/writer/ ./internal/jobs/
 
 # The next two depend on the machine, not only on the code, so they never reuse
 # a cached result (-count=1).
 
-# Disks simulated with directories; no root.
+# Disks simulated with directories; no root: a conformance build, which takes folders for disks, run as the daemon that
+# runs for good, with its watcher, its signals and its socket, through its command line alone (test/integration).
 test-integration:
-	$(GO) test -count=1 -tags integration ./test/...
+	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
+	ATOLL_BIN="$(CURDIR)/$(BIN)-conformance" $(GO) test -count=1 -tags integration ./test/...
 
 # Needs root: ext4, NTFS, XFS, btrfs on loop devices; USB drops with dm-error / dm-flakey.
 test-loopdev:
 	$(GO) test -count=1 -tags loopdev ./test/...
 
 # What test-qemu boots: the loopdev tests, static, with what they read above their folder; and atoll itself, which
-# deploy/'s units start in the guest's run under systemd.
+# deploy/'s units start in the guest's run under systemd. With QEMU_COVER=1, as test-qemu-cover builds them, both are
+# built with -cover, of every package of the module, and bin/qemu/cover says so to test/qemu/run.sh.
+QEMU_COVER_FLAGS = $(if $(QEMU_COVER),-cover -coverpkg=./...)
 qemu-build:
 	rm -rf bin/qemu
 	mkdir -p bin/qemu/repo
-	CGO_ENABLED=0 $(GO) test -c -tags loopdev,memory.counters -o bin/qemu/loopdev.test ./test/loopdev
-	CGO_ENABLED=0 $(GO) build -trimpath -o bin/qemu/atoll ./cmd/atoll
+	CGO_ENABLED=0 $(GO) test -c -tags loopdev,memory.counters $(QEMU_COVER_FLAGS) -o bin/qemu/loopdev.test ./test/loopdev
+	CGO_ENABLED=0 $(GO) build -trimpath $(QEMU_COVER_FLAGS) -o bin/qemu/atoll ./cmd/atoll
 	cp go.mod bin/qemu/repo/
 	cp -r conformance deploy bin/qemu/repo/
+	$(if $(QEMU_COVER),touch bin/qemu/cover)
 
 # test-loopdev as root in qemu, on Debian's kernel and a mainline one, with neither root nor ntfs3 on
 # the host: only Docker (test/qemu/README.md). QEMU_CACHE, a folder of the host, keeps the packages and
 # the kernel it downloads from one run to the next, as the CI's qemu job does. debian:13 by its digest, as
 # test/ci/run.sh names it: a tag can be moved, a digest cannot.
 QEMU_IMAGE := debian@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+QEMU_RUN = docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e SYSTEMD_RUN -e COUNT -e VERBOSE \
+	$(if $(QEMU_CACHE),-v "$(abspath $(QEMU_CACHE)):/var/cache/atoll-qemu" -e CACHE=/var/cache/atoll-qemu)
 test-qemu: qemu-build
-	docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e SYSTEMD_RUN -e COUNT -e VERBOSE \
-		$(if $(QEMU_CACHE),-v "$(abspath $(QEMU_CACHE)):/var/cache/atoll-qemu" -e CACHE=/var/cache/atoll-qemu) \
+	$(QEMU_RUN) -v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" $(QEMU_IMAGE) bash /src/test/qemu/run.sh
+
+# test-qemu with the coverage counted, for cover-qemu: both built with -cover (qemu-build QEMU_COVER=1), and the
+# counters of every process of each guest, the tests', the children they start and each atoll the units start, into
+# bin/qemu-cover/<kernel>/, emptied first, which run.sh gives back to whoever runs make (test/qemu/README.md).
+.PHONY: test-qemu-cover
+test-qemu-cover:
+	$(MAKE) qemu-build QEMU_COVER=1
+	rm -rf bin/qemu-cover && mkdir -p bin/qemu-cover
+	$(QEMU_RUN) -e COVER_OUT=/cover -e COVER_OWNER=$(shell id -u):$(shell id -g) -v "$(CURDIR)/bin/qemu-cover:/cover" \
 		-v "$(CURDIR):/src:ro" -v "$(CURDIR)/bin/qemu:/qemu:ro" $(QEMU_IMAGE) bash /src/test/qemu/run.sh
 
 # The notifications on real Plex, Jellyfin and Emby, each in a container, on the last commit: only git
@@ -83,6 +102,14 @@ test-mediaservers:
 .PHONY: cover
 cover:
 	GO="$(GO)" bash test/ci/cover.sh
+
+# make cover with the loop-device tests in qemu counted too, from the counters test-qemu-cover gathered into
+# QEMU_COVERDIR, bin/qemu-cover by default: a column of what they ran, and one of what any of the three ran; the floors
+# are make cover's.
+QEMU_COVERDIR ?= bin/qemu-cover
+.PHONY: cover-qemu
+cover-qemu:
+	GO="$(GO)" QEMU_COVERDIR="$(QEMU_COVERDIR)" bash test/ci/cover.sh
 
 # Mutation testing with gremlins (test/ci/mutation.sh) of one package, PKG=./internal/glob, or of the whole pure core
 # without PKG, as .github/workflows/mutation.yml runs it each night. The log and gremlins' JSON go to bin/mutation/;

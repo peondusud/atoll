@@ -30,7 +30,9 @@ type bench struct {
 	dirs   map[string]string
 	// spaces gives, by mount, the capacity and the free space a disk reports, when it is not the one every disk has.
 	spaces map[string][2]int64
-	fail   map[string]func(call, name string) error
+	// spaceErr makes the free space of a disk, by mount, fail to be read.
+	spaceErr map[string]error
+	fail     map[string]func(call, name string) error
 	// walkFail makes a call fail in a walk, which goes through its own handle.
 	walkFail map[string]func(call, name string) error
 	// pastCache counts, by mount, the reads of a disk's head past the cache: what confirms a disk, and wakes it.
@@ -45,7 +47,9 @@ type bench struct {
 	// precision is how finely a disk holds a time, by id, as its head would say; 0 says nothing.
 	precision map[string]int64
 	// tops dresses the top of a disk, by mount, as a driver answers for it: shortNames, for one.
-	tops   map[string]func(fsx.Dir) fsx.Dir
+	tops map[string]func(fsx.Dir) fsx.Dir
+	// types gives, by mount, the type an NTFS disk is mounted with, when it is not ntfs3: the type ntfs, for one.
+	types  map[string]string
 	points []string
 	now    int64
 	// base is the configuration's text up to the tables a test adds after the disks.
@@ -64,6 +68,9 @@ func (b *bench) Mount(mount string) disks.MountSeen {
 	for i := range b.config.Disks {
 		if d := &b.config.Disks[i]; d.Mount == mount && d.FS == names.NTFS {
 			fsType, super = "ntfs3", append(slices.Clone(options), "iocharset=utf8")
+			if b.types[mount] == "ntfs" {
+				fsType, super = "ntfs", append(super, "errors=remount-ro")
+			}
 		}
 	}
 	return disks.MountSeen{Path: disks.PathOK, Entry: &disks.MountEntry{
@@ -102,6 +109,9 @@ func (b *bench) LogFile(string, *disks.MountEntry) disks.LogFileSeen {
 }
 func (b *bench) Now() int64 { return b.now }
 func (b *bench) Space(mount string) (capacity, free int64, err error) {
+	if err := b.spaceErr[mount]; err != nil {
+		return 0, 0, err
+	}
 	if s, ok := b.spaces[mount]; ok {
 		return s[0], s[1], nil
 	}
@@ -129,6 +139,12 @@ func (b *bench) OpenRoot(mount, root string) (fsx.Dir, error) {
 		return fsx.Fault(dir, fail), nil
 	}
 	return dir, nil
+}
+
+// Marker reads a disk's marker in its folder, as the conformance build does, at each check, past the faults a test
+// gives its operations (specs.md §10).
+func (b *bench) Marker(mount, workdir string, _ *disks.MountEntry, _ bool) disks.MarkerSeen {
+	return disks.ReadMarkerAt(mount, workdir)
 }
 
 func (b *bench) OpenTop(mount string) (fsx.Dir, error) {

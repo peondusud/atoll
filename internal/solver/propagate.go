@@ -124,6 +124,10 @@ type PropCopy struct {
 	// ThroughView says that the copy went through Atoll's own view, to the trash: the user deleted the file, which
 	// propagates whatever deletes.direct says (specs.md §21.2).
 	ThroughView bool
+	// Left says that the copy is left as it is, at a wildcard name on a disk of the type ntfs: a restore reads it only
+	// when no other copy is there, and the trash refuses its job of a deletion, which its file then waits for (specs.md
+	// §15.8).
+	Left bool
 }
 
 // PropFile is one file to decide about. Follow is the new path it takes because a folder above it was
@@ -468,7 +472,12 @@ func decideRest(f *PropFile, direct string) PropDecision {
 	// With restore, what a deletion would have sent to the trash stays, and what went is made again in its place, from
 	// the first copy found there by position (specs.md §15.5).
 	if direct == "restore" && isDeletion(f, gone, left) {
-		if at := slices.IndexFunc(left, func(c *PropCopy) bool { return c.Verdict == VerdictThere }); at >= 0 {
+		// A copy left as it is, at a wildcard name on the type ntfs, is read only when no other is there (specs.md §15.8).
+		at := slices.IndexFunc(left, func(c *PropCopy) bool { return c.Verdict == VerdictThere && !c.Left })
+		if at < 0 {
+			at = slices.IndexFunc(left, func(c *PropCopy) bool { return c.Verdict == VerdictThere })
+		}
+		if at >= 0 {
 			d.Src = left[at].Disk
 		}
 	}

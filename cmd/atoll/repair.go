@@ -53,7 +53,7 @@ func runRepair(configPath string, args []string, stdout, stderr io.Writer) int {
 			return failure(stderr, fmt.Errorf("repair: %w", err))
 		}
 	}
-	m, err := disks.NewMachine()
+	m, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}

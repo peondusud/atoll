@@ -533,7 +533,7 @@ func TestPastGrace(t *testing.T) {
 		{"long ago", 1, true},
 		{"never seen", 0, false},
 	} {
-		got := planDisks([]catalog.Disk{{ID: "t1", State: "missing", LastSeenNS: tc.lastSeen, FS: "ext4"}}, now, grace)
+		got := planDisks([]catalog.Disk{{ID: "t1", State: "missing", LastSeenNS: tc.lastSeen, FS: "ext4"}}, now, grace, nil)
 		if got[0].PastGrace != tc.want {
 			t.Errorf("%s: got %v", tc.name, got[0].PastGrace)
 		}

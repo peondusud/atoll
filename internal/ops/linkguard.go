@@ -383,6 +383,9 @@ func (d *Disk) RemoveLinksFolder() {
 // root and the folders of the logical path, as they do for a copy: each is made like the one it stands for, while
 // that one is still there, and otherwise private, and the file's owner's.
 func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
+	if err := d.refuseLeft(op.Path2); err != nil {
+		return nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, err
 	}
@@ -426,6 +429,13 @@ func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
 	if err := syncEntry(target.Dir, newName); err != nil {
 		return nil, err
 	}
+	// The folder the data went in takes the time of the one it stands for, while that one is still there, now that the
+	// data is in it (specs.md §17.1, step 5).
+	if last := like[len(dst)-2]; last.dated {
+		if err := restoreTime(target.Dir, last.Mtime); err != nil {
+			return nil, err
+		}
+	}
 	if err := target.Sync(); err != nil {
 		return nil, lost(err)
 	}
@@ -439,11 +449,12 @@ func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
 }
 
 // likeLogical gives, for each level of a target in the trash that stands for the root or a folder of a logical path,
-// the mode and owner of that folder below the root while it is still there. What the guard sends to the trash may
-// have lost its folders, and nothing says any more how open one that went was: it is private in the trash, and so
-// is every one below it, with the owner of the file. The last folder on the way that is still there may be open to
-// every account, as the root is, and a private folder must not come back open (specs.md §17.1).
-func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[int]fsx.Stat, error) {
+// the mode, owner and time of that folder below the root while it is still there. What the guard sends to the trash
+// may have lost its folders, and nothing says any more how open one that went was: it is private in the trash, and
+// so is every one below it, with the owner of the file, and with no time to take. The last folder on the way that is
+// still there may be open to every account, as the root is, and a private folder must not come back open (specs.md
+// §17.1).
+func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[int]standIn, error) {
 	parts := strings.Split(logical, "/")
 	folders := len(parts) - 1
 	// The last levels of dst are the operation's folder, the folders of the logical path, then its name.
@@ -457,7 +468,7 @@ func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[in
 	if err != nil {
 		return nil, classify(err)
 	}
-	like := map[int]fsx.Stat{first: last}
+	like := map[int]standIn{first: {Stat: last, dated: true}}
 	at := root.Dir
 	var opened []fsx.Dir
 	defer func() {
@@ -482,7 +493,8 @@ func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[in
 				return nil, classify(err)
 			}
 		}
-		like[first+1+i] = last
+		// One that went, and every one below it, has no time to take.
+		like[first+1+i] = standIn{Stat: last, dated: at != nil}
 	}
 	return like, nil
 }
@@ -490,15 +502,18 @@ func (d *Disk) likeLogical(logical string, dst []string, file *fsx.Stat) (map[in
 // recoverMakeLink resolves a link left planned: made, it is done; not there, or another file there, nothing of it
 // happened. Either way nothing else depends on it: the next pass looks at the links again.
 func (d *Disk) recoverMakeLink(ctx context.Context, db *sql.DB, op *Op) error {
-	seen, st, err := d.seen(d.linkPlace(op.Link), op)
+	seen, _, err := d.seen(d.linkPlace(op.Link), op)
 	if err != nil {
 		return err
 	}
 	if seen != SeenSame {
 		return d.endLink(ctx, db, op, nil, false)
 	}
-	// What the file had just before is gone with the crash: its names take what it has now, as after any reprise.
-	return d.endLink(ctx, db, op, linksFrom(&st), true)
+	// What the file had just before is gone with the crash: its names keep what they recorded, so that the next look
+	// finds the change time moved and reads the copy, a change of metadata alone when nothing else was written. Taking
+	// what is there now would take a write that kept the size and the dates for the link's (specs.md §17.2;
+	// conformance/models/README.md, flaw 11, the maintainer's remedy). The guard's links are no names a row counts.
+	return d.endLink(ctx, db, op, nil, true)
 }
 
 // endLink ends an operation on a link, done with what the names of its file record, or undone.
@@ -525,9 +540,6 @@ func (d *Disk) recoverDropLink(ctx context.Context, db *sql.DB, op *Op) error {
 	if seen != SeenAbsent {
 		return d.endLink(ctx, db, op, nil, false)
 	}
-	links, err := d.LinksLeft(ctx, db, op.FileKey, sql.NullInt64{})
-	if err != nil {
-		return err
-	}
-	return d.endLink(ctx, db, op, links, true)
+	// Its names keep what they recorded, as for a link made (recoverMakeLink, flaw 11).
+	return d.endLink(ctx, db, op, nil, true)
 }

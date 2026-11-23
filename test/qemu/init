@@ -19,6 +19,15 @@ echo "kernel: $(uname -r)"
 # What run.sh installs is here: a test that would skip for want of it fails instead.
 export ATOLL_QEMU=1
 mapfile -t args </opt/atoll/args
+# A build made with -cover (run.sh): every process writes its counters here, whatever account runs it, the tests and
+# the children they start through -test.gocoverdir, atoll through GOCOVERDIR. Not sticky: a child the tests run as
+# another account writes the meta-data file again, by a rename over the one another account wrote, which a sticky
+# folder refuses with EPERM, and the child then exits with 2 (measured).
+if [ -f /opt/atoll/cover ]; then
+	export GOCOVERDIR=/opt/atoll/coverage
+	mkdir -p "$GOCOVERDIR" && chmod 0777 "$GOCOVERDIR"
+	args+=(-test.gocoverdir="$GOCOVERDIR")
+fi
 cd /opt/atoll/repo/test/loopdev && /opt/atoll/loopdev.test "${args[@]}"
 code=$?
 if [ -s /opt/atoll/units-args ]; then
@@ -29,6 +38,14 @@ if [ -s /opt/atoll/units-args ]; then
 	cd / || exit 1
 	SYSTEMD_IN_INITRD=0 exec /usr/lib/systemd/systemd --unit=atoll-qemu-units.service --log-target=console \
 		--log-level=warning --show-status=no
+fi
+# The counters, to run.sh through the second serial port, when it asks for them.
+if [ -f /opt/atoll/cover-send ]; then
+	{
+		echo ATOLL-COVER-BEGIN
+		tar -C /opt/atoll/coverage -czf - . | base64
+		echo ATOLL-COVER-END
+	} >/dev/ttyS1
 fi
 echo "ATOLL-QEMU-EXIT=$code"
 sync

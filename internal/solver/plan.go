@@ -45,6 +45,10 @@ type Disk struct {
 	// Physical names the physical disk it lives on when another disk of the pool lives there too, and is empty
 	// otherwise: the plan counts such disks as one, so that no two copies of a file are on one physical disk (R-06).
 	Physical string
+	// LeavesWildcards says that the disk is mounted with the type ntfs, which cannot take a name holding a wildcard
+	// character out of its folder without setting its whole volume read-only: a copy there at such a path is left as
+	// it is (names.HoldsWildcard, specs.md §15.8, §22).
+	LeavesWildcards bool
 }
 
 // Copy is one copy of a file.
@@ -338,6 +342,7 @@ type planFile struct {
 	overflow bool        // a copy went to a disk the rule did not list
 	refused  nameRefusal // what the searches for a disk met
 	stale    nameRefusal // what a refresh met
+	held     bool        // it has a copy the plan leaves as it is (leftAsItIs)
 	marks    *fileMarks  // nil for most files
 	// rare is nil for most files too: a plan of the whole pool holds a planFile for each file, all at once, and the
 	// first pass of a pool of 400,000 copies holds them within its 200 MB (specs.md §26).
@@ -570,6 +575,7 @@ func checkFile(f *File) error {
 // then keeps the level's number of them.
 func (p *planner) addCopies(f *planFile) error {
 	var source *planDisk
+	sourceLeft := false
 	var counted []countedCopy
 	seen := make([]*planDisk, 0, len(f.Copies))
 	for i := range f.Copies {
@@ -605,7 +611,13 @@ func (p *planner) addCopies(f *planFile) error {
 			}
 			d.old[c.OldPath] = true
 		}
-		if f.Cache != CacheNone && d.Role == RoleCache {
+		left := leftAsItIs(f, c, d)
+		if left {
+			// It holds its disk and its name, counts for nothing and gets no mark: no job moves it, writes to it or
+			// sends it to the trash, and its file is reported. It may be read, the source of a copy to a disk that
+			// takes its name, after any other (specs.md §15.8).
+			f.held = true
+		} else if f.Cache != CacheNone && d.Role == RoleCache {
 			p.cacheCopy(f, c, d)
 		} else if slices.Contains(f.misplacedDisks(), d) {
 			// It counts for nothing, so that one is made where the setting wants it; it is no loss.
@@ -618,8 +630,8 @@ func (p *planner) addCopies(f *planFile) error {
 				f.mark().cancel = append(f.mark().cancel, d)
 			}
 		}
-		if isSource(c, d) && (source == nil || betterSource(d, source)) {
-			source = d
+		if isSource(c, d) && (source == nil || sourceLeft && !left || sourceLeft == left && betterSource(d, source)) {
+			source, sourceLeft = d, left
 		}
 	}
 	if f.Cache != CacheNone && !slices.ContainsFunc(f.holding, func(d *planDisk) bool { return d.Role == RoleCache }) {
@@ -654,6 +666,20 @@ func (p *planner) cacheCopy(f *planFile, c *Copy, d *planDisk) {
 	case counts(c, d) && d.State != DiskMissing && c.State != CopyPending:
 		f.more().cacheReached++
 	}
+}
+
+// leftAsItIs says whether a copy is one the plan leaves as it is: on a disk of the type ntfs, at a path, where it sits,
+// one of whose components holds a wildcard character, which that driver cannot take out of its folder without setting
+// its whole volume read-only (specs.md §15.8, §22). A pending copy is nothing on its disk yet.
+func leftAsItIs(f *planFile, c *Copy, d *planDisk) bool {
+	if !d.LeavesWildcards || c.State == CopyPending {
+		return false
+	}
+	place := f.Path
+	if c.OldPath != "" {
+		place = c.OldPath
+	}
+	return names.HoldsWildcard(place)
 }
 
 // cancelable says whether a plan may cancel a copy: a pending one whose job is not running (specs.md §14.1).
@@ -1021,7 +1047,7 @@ func (p *planner) refresh(f *planFile, jobs []Job) ([]Job, error) {
 	}
 	var stale []*planDisk
 	for i := range f.Copies {
-		if d := p.byID[f.Copies[i].Disk]; f.Copies[i].State == CopyStale && d.writable() {
+		if d := p.byID[f.Copies[i].Disk]; f.Copies[i].State == CopyStale && d.writable() && !leftAsItIs(f, &f.Copies[i], d) {
 			stale = append(stale, d)
 		}
 	}
@@ -1149,7 +1175,7 @@ func (p *planner) transfers(f *planFile, jobs []Job) []Job {
 		if slices.Contains(f.counted, d) && (c.State != CopyOK || c.Unverified || c.Away || c.OldPath != "" || !up && d.State != DiskReadOnly) {
 			return jobs
 		}
-		if d.Role == RoleCache && (c.State == CopyOK || c.State == CopySurplus) && !c.Away && c.OldPath == "" && up {
+		if d.Role == RoleCache && (c.State == CopyOK || c.State == CopySurplus) && !c.Away && c.OldPath == "" && up && !leftAsItIs(f, c, d) {
 			from = append(from, d)
 		}
 	}
@@ -1204,7 +1230,7 @@ func (p *planner) misplaced(f *planFile) []*planDisk {
 		c := &f.Copies[i]
 		d := p.byID[c.Disk]
 		// A copy on the SSD cache of a file there is where the cache wants it: it leaves by its transfer (specs.md §19).
-		if !counts(c, d) || c.State == CopyPending || f.Cache != CacheNone && d.Role == RoleCache {
+		if !counts(c, d) || c.State == CopyPending || f.Cache != CacheNone && d.Role == RoleCache || leftAsItIs(f, c, d) {
 			continue
 		}
 		if p.movable(c) && onlyListed(f.Placement) && !listed(d, f.Placement) {
@@ -1470,8 +1496,10 @@ func (p *planner) result(f *planFile) Result {
 			r.States = append(r.States, s)
 		}
 	}
-	add(f.source == nil, StateUnavailable)
-	add(below && f.refused.incompatible || f.stale.incompatible, StateNameIncompatible)
+	// A copy left as it is can be read, by mergerfs or the view, but not by the plan: its file is not unavailable, and
+	// is name-incompatible however many copies it has (specs.md §15.8).
+	add(f.source == nil && !f.held, StateUnavailable)
+	add(below && f.refused.incompatible || f.stale.incompatible || f.held, StateNameIncompatible)
 	add(below && f.refused.collision || f.stale.collision, StateNameCollision)
 	add(!waiting && !resident && (reached < f.level || notCovered), StateDegraded)
 	add(f.jobs > 0 || cacheJobs > 0 || f.pending > 0 || resident, StatePending)

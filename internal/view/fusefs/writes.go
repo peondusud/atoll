@@ -58,6 +58,8 @@ func errnoOf(what, p string, err error) syscall.Errno {
 		return syscall.EXDEV
 	case errors.Is(err, writer.ErrNoSpace):
 		return syscall.ENOSPC
+	case errors.Is(err, writer.ErrBusy):
+		return syscall.EBUSY
 	case errors.Is(err, writer.ErrNoHandle):
 		return syscall.EROFS
 	case errors.Is(err, writer.ErrXattrOnLink):
@@ -73,10 +75,11 @@ func errnoOf(what, p string, err error) syscall.Errno {
 }
 
 // caller is who asks, as the kernel names it: its account and group, which own what it makes, and the thread that asks,
-// whose other groups and capabilities a check on a disk reads (specs.md §21.2).
+// whose other groups and capabilities a check on a disk reads; the journal of the view records both, as who asked
+// (specs.md §9, §21.2).
 func caller(ctx context.Context) writer.Caller {
 	if c, ok := fuse.FromContext(ctx); ok {
-		return writer.Caller{Owner: writer.Owner{UID: c.Uid, GID: c.Gid}, PID: c.Pid}
+		return writer.Caller{Owner: writer.Owner{UID: c.Uid, GID: c.Gid}, PID: c.Pid, InRequest: true}
 	}
 	return writer.Caller{}
 }

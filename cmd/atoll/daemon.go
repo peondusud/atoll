@@ -23,6 +23,7 @@ import (
 	"github.com/peondusud/atoll/internal/disks"
 	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/metrics"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/solver"
 	"github.com/peondusud/atoll/internal/telemetry"
 	"github.com/peondusud/atoll/internal/value"
@@ -145,7 +146,7 @@ func runDaemon(configPath string, args []string, stdout, stderr io.Writer) int {
 // §15.13), which hangups has given since before the configuration was first read. Atoll never detaches itself:
 // --foreground changes nothing.
 func runForGood(configPath string, c *config.Config, apply bool, stderr io.Writer, hangups <-chan os.Signal) int {
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return failure(stderr, err)
 	}
@@ -218,7 +219,7 @@ const telemetryStop = 5 * time.Second
 
 func runPass(c *config.Config, apply bool, sink jobs.Sink, stderr io.Writer) (outcome *jobs.Outcome, err error) {
 	ctx := context.Background()
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
@@ -399,7 +400,8 @@ func (t *textDaemon) Disks(list []jobs.DiskLine) error {
 	var text strings.Builder
 	for i := range list {
 		if d := daemonDiskOf(&list[i]); d.Reason != nil {
-			fmt.Fprintf(&text, "%s: %s: %s: %s\n", d.ID, d.State, *d.Reason, *d.Message)
+			// The message of a mount check may hold an error of the system, which names a path as it is (specs.md §25).
+			fmt.Fprintf(&text, "%s: %s: %s: %s\n", d.ID, d.State, *d.Reason, names.Escaped(*d.Message))
 		}
 	}
 	return writeText(t.w, text.String())
@@ -450,7 +452,7 @@ func (t *textDaemon) end(o *jobs.Outcome) error {
 // shownB64 is shownPath for a path as an output holds it: in path, or in base64 when it is not UTF-8.
 func shownB64(path, b64 string) string {
 	if b64 != "" {
-		return "(base64) " + b64
+		return names.Base64Shown + b64
 	}
 	return shownPath(path)
 }
@@ -609,7 +611,7 @@ func readModifyGuard(ctx context.Context, db *sql.DB, disk string, s *guardSetti
 // nowOf reads the clock as a command that looks at no disk does: in a conformance build, that is the
 // control file's.
 func nowOf() (int64, error) {
-	machine, err := disks.NewMachine()
+	machine, err := newMachine()
 	if err != nil {
 		return 0, fmt.Errorf("%w", err)
 	}
