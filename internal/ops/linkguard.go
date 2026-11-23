@@ -383,6 +383,9 @@ func (d *Disk) RemoveLinksFolder() {
 // root and the folders of the logical path, as they do for a copy: each is made like the one it stands for, while
 // that one is still there, and otherwise private, and the file's owner's.
 func (d *Disk) LinkToTrash(op *Op) (*Moved, error) {
+	if err := d.refuseLeft(op.Path2); err != nil {
+		return nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, err
 	}

@@ -105,7 +105,7 @@ func Replicate(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machin
 		}
 		return queue(ctx, db, r.now, jobs)
 	}}
-	if err := watch.SettleFor(ctx, db, c, r.now, rep); err != nil {
+	if err := watch.SettleFor(ctx, db, c, r.now, rep, session.LeavesWildcards); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	switch {
@@ -248,6 +248,15 @@ func (r *replicator) runOn(ctx context.Context, job *catalog.ReplicateJob, dst, 
 			return "", fmt.Errorf("catalog: %w", err)
 		}
 		return trash.OutcomeChanged, nil
+	}
+	// Nothing is ever copied from a copy left as it is, at a wildcard name on the type ntfs, which no plan reads: a job
+	// queued from one, as the refresh of a modification made there, ends, and the next plan finds another source or
+	// none (specs.md §15.8).
+	if src.Leaves(row.Path) {
+		if err := catalog.EndJob(ctx, r.db, job); err != nil {
+			return "", fmt.Errorf("catalog: %w", err)
+		}
+		return trash.OutcomeNameRefused, nil
 	}
 	// What visibly stands in the way ends the job before anything is copied; what comes after the look is
 	// found at the rename.

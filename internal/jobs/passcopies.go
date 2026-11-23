@@ -37,7 +37,7 @@ func (p *pass) copies(ctx context.Context) error {
 		}
 		return queue(ctx, p.db, p.now, jobs)
 	}, Only: p.only}
-	if err := watch.SettleFor(ctx, p.db, p.config, p.now, rep); err != nil {
+	if err := watch.SettleFor(ctx, p.db, p.config, p.now, rep, p.session.LeavesWildcards); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	// What the view wrote in parallel goes to the jobs just queued, before any runs (specs.md §12.3).

@@ -90,6 +90,25 @@ func (d *Disk) LinkMovesTimes() bool {
 	return disks.LinkMovesTimes(d.driver)
 }
 
+// Leaves says whether a path of the disk, below its root or in its trash, is one Atoll leaves as it is: the disk was
+// mounted with the type ntfs when it was opened, and a component of the path holds a wildcard character, which that
+// driver cannot take out of its folder, by a rename or an unlink, without setting its whole volume read-only (measured,
+// specs.md §15.8, §22). Such a copy is never moved, sent to the trash, written to or copied from.
+func (d *Disk) Leaves(path string) bool {
+	return disks.LeavesWildcards(d.driver) && names.HoldsWildcard(path)
+}
+
+// refuseLeft refuses an operation that would move or remove a name the disk leaves as it is, before anything is asked
+// of the disk: the name refused, and nothing moved.
+func (d *Disk) refuseLeft(paths ...string) error {
+	for _, path := range paths {
+		if d.Leaves(path) {
+			return fmt.Errorf("%w: %q holds a wildcard character, which the type ntfs cannot move or remove without setting its volume read-only", ErrNameRefused, path)
+		}
+	}
+	return nil
+}
+
 // renameTells says whether EINVAL from renameat2 with RENAME_NOREPLACE is a name the driver refuses, so that neither
 // link nor a plain rename is tried (specs.md §17.1).
 func (d *Disk) renameTells(err error) bool {
@@ -690,6 +709,9 @@ func (m *Moved) Links() *catalog.Links {
 // ToTrash moves a copy to where its operation says, and says once that is durable (specs.md §17.1).
 // row is what the catalog says of the copy.
 func (d *Disk) ToTrash(op *Op, row *catalog.KnownCopy) (*Moved, error) {
+	if err := d.refuseLeft(op.Path, op.Path2); err != nil {
+		return nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, err
 	}
@@ -796,6 +818,9 @@ func (d *Disk) movedFrom(dir fsx.Dir, name string, seen *fsx.Stat) (*Moved, erro
 // FromTrash moves an entry of the trash back to its path. Every parent folder is there by now, each
 // made as an operation of its own, and the root is never made here (invariant 3).
 func (d *Disk) FromTrash(op *Op) (*Moved, error) {
+	if err := d.refuseLeft(op.Path2, op.Path); err != nil {
+		return nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, err
 	}
@@ -902,6 +927,9 @@ func (d *Disk) putBack(source fsx.Dir, name string, target fsx.Dir, newName stri
 // RenameFile moves a copy to where its operation says, both logical paths on this disk, and says once
 // that is durable (specs.md §15.12). The target's parents are there by now, each an operation of its own.
 func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, error) {
+	if err := d.refuseLeft(op.Path, op.Path2); err != nil {
+		return nil, nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, nil, err
 	}
@@ -974,6 +1002,9 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 // then each file is synced at its new name and its folder synced, and both folders get their times back, as for a
 // rename. A driver that refuses the swap moved nothing: ErrPathTaken, as the names stay taken.
 func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, movedB *Moved, seenA, seenB *fsx.Stat, err error) {
+	if err := d.refuseLeft(a.Path, b.Path); err != nil {
+		return nil, nil, nil, nil, err
+	}
 	if err := d.Verify(); err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -1073,6 +1104,9 @@ func (d *Disk) restoreBoth(source, target fsx.Dir, sourceTime, targetTime fsx.Ti
 // Where the flag is refused, and a folder has no link, it is a look at the target and a plain rename,
 // whose only risk, measured, is replacing an empty folder that appeared since the look.
 func (d *Disk) RenameFolder(op *Op) error {
+	if err := d.refuseLeft(op.Path, op.Path2); err != nil {
+		return err
+	}
 	if err := d.Verify(); err != nil {
 		return err
 	}
@@ -1378,6 +1412,9 @@ type Purged struct {
 // PurgeEntry deletes a file of the trash, and is fine with one that is already gone. ErrGone means that
 // the name holds another file, which stays.
 func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
+	if err := d.refuseLeft(op.Path2); err != nil {
+		return Purged{}, err
+	}
 	if err := d.Verify(); err != nil {
 		return Purged{}, err
 	}
@@ -1418,6 +1455,10 @@ func (d *Disk) PurgeEntry(op *Op) (Purged, error) {
 // CleanTrash removes the folders of a location of the trash that are left empty, down to and
 // including the date. It may stop at any point: an empty folder in the trash harms nothing.
 func (d *Disk) CleanTrash(trashPath string) {
+	// Its folders are left too: a folder holding a wildcard character is no more removable than a file (specs.md §15.8).
+	if d.Leaves(trashPath) {
+		return
+	}
 	place := d.trashPlace(trashPath)
 	keep := len(components(d.config.Workdir, layout.TrashFolder))
 	for end := len(place) - 1; end > keep; end-- {

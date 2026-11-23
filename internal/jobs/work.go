@@ -284,6 +284,11 @@ func (p *pass) folderReady(ctx context.Context, d *config.Disk, handle *ops.Disk
 	if !there || from.Kind != fsx.KindDir {
 		return false, from, nil
 	}
+	// A folder left as it is, at or to a wildcard name on the type ntfs, cannot go as one operation: its copies follow
+	// one by one, each left as it is (specs.md §15.8).
+	if p.leftAsItIs(d.ID, job.From, job.To) {
+		return false, from, nil
+	}
 	// Before any look at that name: a driver can answer one with an error, which says nothing of the disk.
 	refused, err := refusal(ctx, p.db, d, job.To, job.From)
 	if err != nil {
@@ -788,6 +793,10 @@ func (p *pass) lookBefore(ctx context.Context, d *config.Disk, handle *ops.Disk,
 	if err != nil || waiting {
 		return "", false, err
 	}
+	// Left as it is where it sits: its driver cannot move it without setting its volume read-only (specs.md §15.8).
+	if p.leftAsItIs(d.ID, r.Place, r.Target) {
+		return trash.OutcomeNameRefused, false, nil
+	}
 	refused, err := refusal(ctx, p.db, d, r.Target, r.Place)
 	if err != nil {
 		return "", false, err
@@ -917,8 +926,9 @@ func (p *pass) wantTrash(ctx context.Context, d *config.Disk, refused []catalog.
 			p.session.MarkChanged()
 			continue
 		}
-		// Its wish comes from before the decisions, and the target may have changed since.
-		if g == nil || g.tripped || !g.wishes[r.FileID] || onlyAFolderCan(d, r.Place, r.Target) {
+		// Its wish comes from before the decisions, and the target may have changed since. One left as it is never goes
+		// to the trash (specs.md §15.8).
+		if g == nil || g.tripped || !g.wishes[r.FileID] || onlyAFolderCan(d, r.Place, r.Target) || p.leftAsItIs(d.ID, r.Place) {
 			continue
 		}
 		if err := catalog.QueueRenamedJob(ctx, p.db, r.FileID, d.ID); err != nil {
@@ -1044,7 +1054,10 @@ func (p *pass) jobStands(ctx context.Context, d *config.Disk, job *catalog.Trash
 			return false
 		}
 		v := p.verdictOf(f, &o).Verdict
-		return !slices.Contains(covered, o.Disk) || (o.Disk != d.ID && (v == solver.VerdictMoved || p.isMovedOutOfReach(&o, v)))
+		// A copy left as it is, at a wildcard name on the type ntfs, gets no job of the deletion and stays where it is,
+		// as the decision said (specs.md §15.8).
+		uncovered := !slices.Contains(covered, o.Disk) && !p.leftAsItIs(o.Disk, o.Place(f))
+		return uncovered || (o.Disk != d.ID && (v == solver.VerdictMoved || p.isMovedOutOfReach(&o, v)))
 	})
 	return (p.direct == "propagate" || p.deletedThroughView(f.Path)) && !bad && !gained, nil
 }
@@ -1492,7 +1505,8 @@ func (p *pass) listOn(ctx context.Context, d *config.Disk, handle *ops.Disk, pla
 	decided := len(plan.trashes)
 	for _, left := range p.renameRounds(d, rest, whole) {
 		p.operated(Operation{Disk: d.ID, Kind: KindRename, Path: left.row.Place, To: left.row.Target, Outcome: left.outcome})
-		if g := p.guards[d.ID]; left.outcome == trash.OutcomeNameRefused && g != nil && !g.tripped && g.wishes[left.row.FileID] && !onlyAFolderCan(d, left.row.Place, left.row.Target) {
+		if g := p.guards[d.ID]; left.outcome == trash.OutcomeNameRefused && g != nil && !g.tripped && g.wishes[left.row.FileID] && !onlyAFolderCan(d, left.row.Place, left.row.Target) &&
+			!p.leftAsItIs(d.ID, left.row.Place) {
 			plan.trashes = append(plan.trashes, Operation{Disk: d.ID, Kind: KindTrash, Path: left.row.Place, Reason: reasonRenamed, Outcome: OutcomeToTrash})
 		}
 	}

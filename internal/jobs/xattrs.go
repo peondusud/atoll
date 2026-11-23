@@ -113,6 +113,11 @@ func (p *pass) giveXattrsTo(ctx context.Context, f *catalog.FileRow, c *catalog.
 		slog.Warn("a copy keeps its extended attributes: its disk cannot be written now", "disk", c.Disk, "path", f.Path)
 		return OutcomeUnavailable, nil
 	}
+	// A copy left as it is, at a wildcard name on the type ntfs, keeps what it holds: nothing writes to it (specs.md
+	// §15.8).
+	if p.leftAsItIs(c.Disk, f.Path) {
+		return OutcomeKept, nil
+	}
 	handle, err := p.session.Handle(ctx, c.Disk)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)

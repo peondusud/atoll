@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §15.8, §22",
+  "description": "Whether a logical path has a component holding one of the five wildcard characters of Windows, \" * < > ?, a folder's included: the type ntfs cannot remove such a name from its folder, or move it, without setting its whole volume read-only, so Atoll leaves a copy there at such a path as it is. Every other byte, the other characters NTFS forbids among them, and a character that only looks like one, is no wildcard.",
+  "cases": [
+    { "path": "Films/a.mkv", "holds": false },
+    { "path": "Films/a\"b.mkv", "holds": true, "note": "a double quote" },
+    { "path": "Films/a*b.mkv", "holds": true, "note": "an asterisk" },
+    { "path": "Films/a<b.mkv", "holds": true, "note": "less-than" },
+    { "path": "Films/a>b.mkv", "holds": true, "note": "greater-than" },
+    { "path": "Films/Who?.mkv", "holds": true, "note": "a question mark" },
+    { "path": "Films?/a.mkv", "holds": true, "note": "in a folder above the file" },
+    { "path": "?", "holds": true, "note": "a name of that character alone" },
+    { "path": "Films/a:b.mkv", "holds": false, "note": "NTFS forbids a colon, but the type ntfs removes and moves it" },
+    { "path": "Films/a\\b|c.mkv", "holds": false, "note": "nor a backslash or a vertical bar" },
+    { "path": "Films/a\u0001b.mkv", "holds": false, "note": "nor a control character" },
+    { "path": "Films/Who\uff1f.mkv", "holds": false, "note": "a fullwidth question mark, U+FF1F, is another character" },
+    { "path_b64": "RmlsbXMvYf8/Lm1rdg==", "holds": true, "note": "Films/a\\xff?.mkv: a name that is not valid UTF-8 is read by its bytes" },
+    { "path_b64": "RmlsbXMvYf8ubWt2", "holds": false, "note": "Films/a\\xff.mkv" }
+  ]
+}

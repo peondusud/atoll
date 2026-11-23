@@ -204,6 +204,13 @@ A case has exactly one of `key` and `no_key`. Paths that collide have the same k
 | `name` | string | one component |
 | `short` | boolean | whether it has the form Windows gives the short name of a longer one, which a look on an NTFS disk must not take for a name of its own |
 
+### `wildcard_name.json` — a wildcard character in a path (§15.8, §22)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `path`, `path_b64` | string | a logical path |
+| `holds` | boolean | whether a component of it, a folder's included, holds one of `" * < > ?`, the five wildcard characters of Windows, which the type `ntfs` cannot take out of a folder without setting its volume read-only: a copy at such a path on a disk of that type is left as it is |
+
 ### `branch_path.json` — the path limit of a mergerfs branch (§15.8)
 
 | Field | Type | Meaning |
@@ -438,7 +445,7 @@ A look is `inode`, `size`, `mtime`, `ctime`, and `btime` when the file has a cre
 | Field | Type | Meaning |
 |---|---|---|
 | `direct` | string | `deletes.direct` |
-| `files` | array of objects | `path`, `state` (one of §4), `conflict_held`, `true` for a corrupt file that holds a conflict (§4), `follow` when a folder renamed gives it a new path, `running`, `true` for a file with a job running, which waits for every decision and holds its path (§14.1), and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held`, `size`, 0 when absent, and `through_view`, `true` for a copy that went through Atoll's own view to the trash, which propagates whatever `direct` says (§21.2) |
+| `files` | array of objects | `path`, `state` (one of §4), `conflict_held`, `true` for a corrupt file that holds a conflict (§4), `follow` when a folder renamed gives it a new path, `running`, `true` for a file with a job running, which waits for every decision and holds its path (§14.1), and `copies`: `disk`, `position`, `verdict`, `target`, `due`, `gone_ns`, `created_by`, `first_seen`, `verified`, `old_path`, `guard_held`, `size`, 0 when absent, `through_view`, `true` for a copy that went through Atoll's own view to the trash, which propagates whatever `direct` says (§21.2), and `left`, `true` for a copy left as it is at a wildcard name on a disk of the type `ntfs`, which a deletion never sends to the trash and a restore never reads (§15.8) |
 | `taken` | array of strings | optional: the paths held by files outside this step |
 | `decisions` | array of objects | for each file, by path: `path`, `kind` (`none`, `wait`, `held`, `rename`, `path-taken`, `deletion`, `kept` or `gone`), and when they apply `target`, `src`, `drop_hash` and `clear_conflict`, then `copies`, each `disk` and `action` (`follow`, `pending`, `clear`, `own-file`, `other-target`, `stay`, `drop`, `keep-gone`, `trash` or `restore`), with `target` for `other-target`; `restore`, with `deletes.direct = "restore"`, makes a copy gone again in its place, from the copy `src` names |
 | `error` | boolean | `true` on an unknown word, a path that appears twice, a disk or a position that appears twice in one file, or a `moved` with no target |
@@ -803,7 +810,7 @@ A case gives a pool and its files, and the whole plan: `jobs`, then `results`, w
 
 | Field | Type | Meaning |
 |---|---|---|
-| `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`), `physical` (none): the physical disk it lives on, which two disks share when a start found them on one (R-06); the plan counts them as one, so that no two copies of a file are on it |
+| `disks` | array of objects | `id`, `position`, `capacity` and `free`, in bytes; `state` (`online` when left out), `role` (`data`), `fs` (`ext4`), `domain` (none), `tags` (none), `mount` (`/mnt/<id>`), `root` (`media`), `past_grace` (`false`), `physical` (none): the physical disk it lives on, which two disks share when a start found them on one (R-06); the plan counts them as one, so that no two copies of a file are on it; `leaves_wildcards` (`false`): a disk of the type `ntfs`, whose copies at a path that holds a wildcard character (`wildcard_name.json`) are left as they are: no source, counted for nothing, never marked, and their files `name-incompatible` (§15.8) |
 | `files` | array of objects | `path` or `path_b64`, `size`, `copies`; `manual` (`false`), for a file that waits for `atoll replicate`; `leaving` (`false`), for a file whose deletion is decided and waits for a trash job (`specs.md` §13.4); `cache` (none), `resident` or `transfer` for a file on the SSD cache that stays or leaves it (`specs.md` §19), which must hold a copy on a cache disk; `policy` (below) |
 | `copies` | array of objects | `disk`; `state` (`ok`), `created_by` (`user`), `first_seen_ns` (0), `old_path` (none), `away` (`false`): `true` for a copy whose clock runs (`specs.md` §15.12), which counts and is no source; `unverified` (`false`): `true` for a copy not read back since it last changed (`copies.verified_ns` NULL), on which no transfer leans; `running` (`false`): `true` for a `pending` copy whose job is running, its operation left planned (`specs.md` §14.1), which counts as an `ok` copy there would, holds no room and is never canceled, and an error on any other copy |
 | `policy` | object | `replicas` (1), `priority` (0), `tags` (none), `tags_mode` (`prefer`), `domains` (none), `spread` (`domain`), `spread_mode` (`prefer`), `overflow` (`allow`), `colocate` (`none`) |
@@ -930,6 +937,7 @@ A case gives the answers a machine would give to each question, and the verdict.
 | `state` | string | `online`, `readonly` or `missing` |
 | `reason` | string | the reason; left out when `online` |
 | `mount_owner` | boolean | the disk gives every file the owner and the mode of its mount, as ntfs-3g and lowntfs-3g do (`fuseblk`), so that neither is a file's own (§15.4); `false` when absent, and always for a disk `missing` |
+| `leaves_wildcards` | boolean | the disk is mounted with the type `ntfs`, which cannot take a name holding a wildcard character out of its folder without setting its volume read-only, so that Atoll leaves its copies at such a path as they are (§15.8, §22); `false` when absent, and always for a disk `missing` |
 
 ### `capacity.json` — capacity of a pool (§13.1)
 

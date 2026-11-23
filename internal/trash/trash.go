@@ -190,6 +190,18 @@ func (s *Session) MountOwner(id string) bool {
 	return false
 }
 
+// LeavesWildcards says whether a disk of the configuration leaves its copies at a wildcard name as they are, as its
+// mount check found it: one of the type ntfs, which cannot move or remove such a name without setting its volume
+// read-only (specs.md §15.8). Such a copy is never read for a copy, moved, written to or sent to the trash.
+func (s *Session) LeavesWildcards(id string) bool {
+	for i := range s.config.Disks {
+		if s.config.Disks[i].ID == id && i < len(s.verdicts) {
+			return s.verdicts[i].LeavesWildcards
+		}
+	}
+	return false
+}
+
 // Opened says that this session opened a handle on a disk, to read or write it: the disk is awake.
 func (s *Session) Opened(id string) bool {
 	sl := s.slots[id]
@@ -263,7 +275,7 @@ func (s *Session) Lost() bool {
 
 // Settle works out the original, policy and state of each file, whatever happened.
 func (s *Session) Settle(ctx context.Context) error {
-	if err := watch.Settle(ctx, s.db, s.config, s.now); err != nil {
+	if err := watch.Settle(ctx, s.db, s.config, s.now, s.LeavesWildcards); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	return nil
@@ -514,7 +526,7 @@ func (s *Session) Finish(ctx context.Context) error {
 	if !s.changed {
 		return nil
 	}
-	if err := watch.Settle(ctx, s.db, s.config, s.now); err != nil {
+	if err := watch.Settle(ctx, s.db, s.config, s.now, s.LeavesWildcards); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	return nil
@@ -788,6 +800,11 @@ func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 	}
 	if handle == nil {
 		return outcomeUnavailable, nil, nil
+	}
+	// A name its disk leaves as it is, at a wildcard character on the type ntfs, never moves: refused before anything
+	// is journaled or asked of the disk (specs.md §15.8).
+	if handle.Leaves(place) {
+		return OutcomeNameRefused, nil, nil
 	}
 	// A stale copy holds a version that came before the file's hash, and a corrupt one holds none.
 	hash := f.Hash
@@ -1397,6 +1414,13 @@ func (s *Session) purgeEntry(ctx context.Context, e *catalog.TrashEntry) (string
 	}
 	if handle == nil || !s.writable(e.Disk) {
 		return outcomeUnavailable, nil
+	}
+	// An entry whose path holds a wildcard character, which another driver moved there, stays in the trash of a disk of
+	// the type ntfs: removing it would set the volume read-only. Nothing is journaled or asked of the disk (specs.md
+	// §15.8).
+	if handle.Leaves(e.TrashPath) {
+		slog.Warn("an entry stays in the trash: the type ntfs cannot remove its name without setting its volume read-only", "disk", e.Disk, "path", e.TrashPath)
+		return OutcomeIOError, nil
 	}
 	if !layout.IsChunks(e.TrashPath) {
 		known, err := s.dropLinksOf(ctx, handle, e)

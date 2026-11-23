@@ -45,7 +45,9 @@ type bench struct {
 	// precision is how finely a disk holds a time, by id, as its head would say; 0 says nothing.
 	precision map[string]int64
 	// tops dresses the top of a disk, by mount, as a driver answers for it: shortNames, for one.
-	tops   map[string]func(fsx.Dir) fsx.Dir
+	tops map[string]func(fsx.Dir) fsx.Dir
+	// types gives, by mount, the type an NTFS disk is mounted with, when it is not ntfs3: the type ntfs, for one.
+	types  map[string]string
 	points []string
 	now    int64
 	// base is the configuration's text up to the tables a test adds after the disks.
@@ -64,6 +66,9 @@ func (b *bench) Mount(mount string) disks.MountSeen {
 	for i := range b.config.Disks {
 		if d := &b.config.Disks[i]; d.Mount == mount && d.FS == names.NTFS {
 			fsType, super = "ntfs3", append(slices.Clone(options), "iocharset=utf8")
+			if b.types[mount] == "ntfs" {
+				fsType, super = "ntfs", append(super, "errors=remount-ro")
+			}
 		}
 	}
 	return disks.MountSeen{Path: disks.PathOK, Entry: &disks.MountEntry{

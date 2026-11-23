@@ -1,0 +1,61 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §4, §13.4, §29.3",
+  "description": "Nothing sets the copy state unavailable. A copy on a disk missing, within health.missing_grace or past it, and on a disk the configuration no longer lists, keeps the state it had, ok or surplus: the disk's state says it cannot be read, and its file is unavailable when no other copy can be.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        { "path": "media/alone", "text": "a" },
+        { "path": "media/both", "text": "b" }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        { "path": "media/both", "text": "b" }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"single\"\npath = \"**\"\nreplicas = 0\n",
+  "steps": [
+    { "do": "atoll", "args": ["init"] },
+    { "do": "atoll", "args": ["scan"] },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state, f.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [["alone", "t1", "ok", "unprotected"], ["both", "t1", "ok", "unprotected"], ["both", "t2", "surplus", "unprotected"]]
+    },
+    { "do": "unmount", "disk": "t1" },
+    { "do": "atoll", "args": ["scan"], "exit": 4 },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state, f.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [["alone", "t1", "ok", "unavailable"], ["both", "t1", "surplus", "unprotected"], ["both", "t2", "ok", "unprotected"]]
+    },
+    { "do": "advance", "by": "25h" },
+    { "do": "atoll", "args": ["daemon", "--until-idle"], "exit": 4 },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state, f.state FROM copies c JOIN files f ON f.id = c.file_id ORDER BY f.lpath, c.disk_id",
+      "rows": [["alone", "t1", "ok", "unavailable"], ["both", "t1", "surplus", "unprotected"], ["both", "t2", "ok", "unprotected"]]
+    },
+    {
+      "do": "config",
+      "text": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[rule]]\nlabel = \"single\"\npath = \"**\"\nreplicas = 0\n"
+    },
+    { "do": "atoll", "args": ["scan"] },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(f.lpath AS TEXT), c.disk_id, c.state, f.state, d.state FROM copies c JOIN files f ON f.id = c.file_id JOIN disks d ON d.id = c.disk_id ORDER BY f.lpath, c.disk_id",
+      "rows": [["alone", "t1", "ok", "unavailable", "retired"], ["both", "t1", "surplus", "unprotected", "retired"], ["both", "t2", "ok", "unprotected", "online"]]
+    },
+    { "do": "expect_catalog", "query": "SELECT count(*) FROM copies WHERE state = 'unavailable'", "rows": [[0]] }
+  ]
+}

@@ -59,7 +59,7 @@ type BalanceMeasure struct {
 // MeasureBalance measures what balance.trigger compares, from a plan of the whole pool, writing nothing. A user copy is
 // never misplaced there: no setting moves one (specs.md §12.4).
 func MeasureBalance(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine) (*BalanceMeasure, error) {
-	misplaced, _, err := planBalance(ctx, db, c, m.Now(), false)
+	misplaced, _, err := planBalance(ctx, db, c, m.Now(), false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func MeasureBalance(ctx context.Context, db *sql.DB, c *config.Config, m disks.M
 // MisplacedFiles gives the files with a misplaced copy, from the plan MeasureBalance makes, writing nothing: the bytes
 // of the others are those correctly placed (specs.md §13.3, §15.11).
 func MisplacedFiles(ctx context.Context, db *sql.DB, c *config.Config, now int64) (map[string]bool, error) {
-	misplaced, _, err := planBalance(ctx, db, c, now, false)
+	misplaced, _, err := planBalance(ctx, db, c, now, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ func MisplacedFiles(ctx context.Context, db *sql.DB, c *config.Config, now int64
 // them, and --move-originals would, the only way one moves (specs.md §6.1, item 9, §13.3). It writes nothing, and makes
 // one plan of the pool.
 func UserCopiesMisplaced(ctx context.Context, db *sql.DB, c *config.Config, now int64) (int, error) {
-	misplaced, _, err := planBalance(ctx, db, c, now, true)
+	misplaced, _, err := planBalance(ctx, db, c, now, true, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -115,7 +115,7 @@ func UserCopiesMisplaced(ctx context.Context, db *sql.DB, c *config.Config, now 
 
 // planBalance makes the plan of atoll balance: the misplaced copies of each file, by disk position, and the copies
 // it wants of those files, writing nothing. With originals, a user copy can be misplaced too.
-func planBalance(ctx context.Context, db *sql.DB, c *config.Config, now int64, originals bool) (map[string][]string, map[string][]watch.PlannedJob, error) {
+func planBalance(ctx context.Context, db *sql.DB, c *config.Config, now int64, originals bool, leaves watch.Leaves) (map[string][]string, map[string][]watch.PlannedJob, error) {
 	misplaced := map[string][]string{}
 	var planned []watch.PlannedJob
 	rep := &watch.Replicate{Balance: true, DryRun: true, MoveOriginals: originals,
@@ -127,7 +127,7 @@ func planBalance(ctx context.Context, db *sql.DB, c *config.Config, now int64, o
 			misplaced[path] = disks
 			return nil
 		}}
-	if err := watch.SettleFor(ctx, db, c, now, rep); err != nil {
+	if err := watch.SettleFor(ctx, db, c, now, rep, leaves); err != nil {
 		return nil, nil, fmt.Errorf("%w", err)
 	}
 	byPath := map[string][]watch.PlannedJob{}
@@ -166,7 +166,7 @@ func balance(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine,
 	defer session.Close()
 	now := m.Now()
 	// The copies the plan wants of the files with a copy to move, and of no other.
-	misplaced, byPath, err := planBalance(ctx, db, c, now, originals)
+	misplaced, byPath, err := planBalance(ctx, db, c, now, originals, session.LeavesWildcards)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +224,7 @@ func balance(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine,
 		}
 	}
 	// The plan of the pool, with the copies made: an old copy a new one stands in for is surplus now.
-	if err := watch.Settle(ctx, db, c, now); err != nil {
+	if err := watch.Settle(ctx, db, c, now, session.LeavesWildcards); err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 	for _, path := range paths {

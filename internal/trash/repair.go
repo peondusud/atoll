@@ -58,6 +58,11 @@ func (s *Session) RepairChunks(ctx context.Context, f *catalog.FileRow, c *catal
 	if handle == nil {
 		return outcomeUnavailable, nil
 	}
+	// A copy left as it is, at a wildcard name on the type ntfs, is written to by nothing, as it goes to the trash by
+	// nothing: it stays corrupt, its name refused (specs.md §15.8, §16.1).
+	if handle.Leaves(place) {
+		return OutcomeNameRefused, nil
+	}
 	if s.full[c.Disk] {
 		return OutcomeNoRoom, nil
 	}

@@ -106,7 +106,7 @@ func JudgeMarker(v Verdict, s MarkerSeen, seen bool, poolID string, d *config.Di
 			return v, false
 		}
 		verdict := readOnly(OtherMarker, fmt.Sprintf("its %s is no regular file, and no marker this version reads: %s", layout.MarkerName, s.Note))
-		verdict.TimePrecisionNS, verdict.MountOwner, verdict.Source = v.TimePrecisionNS, v.MountOwner, v.Source
+		verdict.TimePrecisionNS, verdict.MountOwner, verdict.Source, verdict.LeavesWildcards = v.TimePrecisionNS, v.MountOwner, v.Source, v.LeavesWildcards
 		return verdict, false
 	case MarkerIOError:
 		return missing(IOError, fmt.Sprintf("its marker %s does not answer: %s", layout.MarkerName, s.Note)), false
@@ -156,7 +156,7 @@ func MarkerVerdict(v Verdict, text []byte, found, seen bool, poolID string, d *c
 		why = fmt.Sprintf("its marker names the filesystem %s, copied from another disk", m.FSUUID)
 	}
 	verdict := readOnly(OtherMarker, why)
-	verdict.TimePrecisionNS, verdict.MountOwner, verdict.Source = v.TimePrecisionNS, v.MountOwner, v.Source
+	verdict.TimePrecisionNS, verdict.MountOwner, verdict.Source, verdict.LeavesWildcards = v.TimePrecisionNS, v.MountOwner, v.Source, v.LeavesWildcards
 	return verdict, false
 }
 

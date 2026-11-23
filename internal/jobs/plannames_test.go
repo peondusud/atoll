@@ -135,7 +135,7 @@ func TestPlacingAFileHoldsNoNameOfItsDisk(t *testing.T) {
 		for range 3 {
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
-			err := watch.Settle(t.Context(), b.db, b.config, b.now)
+			err := watch.Settle(t.Context(), b.db, b.config, b.now, nil)
 			runtime.ReadMemStats(&after)
 			if err != nil {
 				t.Fatal(err)

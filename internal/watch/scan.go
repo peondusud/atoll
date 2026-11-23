@@ -130,14 +130,15 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 		report.Seen = nil
 		out.Disks = append(out.Disks, *report)
 	}
-	if err := Settle(ctx, db, c, now); err != nil {
+	leaves := LeavesOf(c, verdicts)
+	if err := Settle(ctx, db, c, now, leaves); err != nil {
 		return nil, err
 	}
 	if opts.Full {
 		if err := hashCopies(ctx, db, c, m, out, now); err != nil {
 			return nil, err
 		}
-		if err := Settle(ctx, db, c, now); err != nil {
+		if err := Settle(ctx, db, c, now, leaves); err != nil {
 			return nil, err
 		}
 	}
@@ -622,8 +623,30 @@ type settled struct {
 }
 
 // Settle gives each file its original, its policy and what the plan says, on the whole catalog.
-func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64) error {
-	return SettleFor(ctx, db, c, now, nil)
+func Settle(ctx context.Context, db *sql.DB, c *config.Config, now int64, leaves Leaves) error {
+	return SettleFor(ctx, db, c, now, nil, leaves)
+}
+
+// Leaves says of a disk, by its id, whether it leaves its copies at a wildcard name as they are: a disk of the type
+// ntfs, as a mount check of this run found it (disks.LeavesWildcards, specs.md §15.8). The plan reads nothing from such
+// a copy, moves it nowhere and marks it with nothing, and its file is name-incompatible. Nil leaves none, as a plan
+// from the catalog alone, which knows no mount, does.
+type Leaves func(id string) bool
+
+// LeavesOf gives what the mount checks of the disks of a configuration, in its order, say of each.
+func LeavesOf(c *config.Config, verdicts []disks.Verdict) Leaves {
+	leaves := map[string]bool{}
+	for i := range verdicts {
+		if i < len(c.Disks) && verdicts[i].LeavesWildcards {
+			leaves[c.Disks[i].ID] = true
+		}
+	}
+	return func(id string) bool { return leaves[id] }
+}
+
+// leftBy says whether leaves says so of a disk, nil saying no.
+func leftBy(leaves Leaves, id string) bool {
+	return leaves != nil && leaves(id)
 }
 
 // Replicate is what atoll replicate and the daemon ask of a plan (specs.md §14.1, §14.3).
@@ -659,8 +682,8 @@ type Only struct {
 }
 
 // SettleOnly is Settle for the files only says, and those it adds.
-func SettleOnly(ctx context.Context, db *sql.DB, c *config.Config, now int64, only *Only) error {
-	return settle(ctx, db, c, now, nil, only)
+func SettleOnly(ctx context.Context, db *sql.DB, c *config.Config, now int64, only *Only, leaves Leaves) error {
+	return settle(ctx, db, c, now, nil, only, leaves)
 }
 
 // PlannedJob is a job of the plan, with what queueing it needs of its file.
@@ -674,15 +697,15 @@ type PlannedJob struct {
 
 // SettleFor is Settle, and with a Replicate, also what atoll replicate asks of the plan. A file in
 // conflict is never given a job, as nothing says which version to copy (specs.md §14.1).
-func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate) error {
+func SettleFor(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate, leaves Leaves) error {
 	var only *Only
 	if rep != nil {
 		only = rep.Only
 	}
-	return settle(ctx, db, c, now, rep, only)
+	return settle(ctx, db, c, now, rep, only, leaves)
 }
 
-func settle(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate, only *Only) error {
+func settle(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *Replicate, only *Only, leaves Leaves) error {
 	diskList, err := catalog.Disks(ctx, db)
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
@@ -706,7 +729,7 @@ func settle(ctx context.Context, db *sql.DB, c *config.Config, now int64, rep *R
 	if err != nil {
 		return err
 	}
-	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace), Entries: planEntries(entries), Balance: rep != nil && rep.Balance,
+	input := solver.Input{MinFree: minFree, Disks: planDisks(diskList, now, grace, leaves), Entries: planEntries(entries), Balance: rep != nil && rep.Balance,
 		MoveOriginals: rep != nil && rep.Balance && rep.MoveOriginals, Taken: taken, NewFiles: newFiles, FillTo: fillTo, Equalize: EqualizeOf(c)}
 	var release func(string) bool
 	if rep != nil {
@@ -830,7 +853,7 @@ func NewFilesOf(c *config.Config) (string, value.Percent, error) {
 	return newFiles, fillTo, nil
 }
 
-func planDisks(list []catalog.Disk, now int64, grace time.Duration) []solver.Disk {
+func planDisks(list []catalog.Disk, now int64, grace time.Duration, leaves Leaves) []solver.Disk {
 	out := make([]solver.Disk, 0, len(list))
 	// Two disks on one physical disk count as one (R-06).
 	shared := catalog.SharedDevices(list)
@@ -842,6 +865,8 @@ func planDisks(list []catalog.Disk, now int64, grace time.Duration) []solver.Dis
 			// The plan looks at this only for a disk that is missing. A disk never seen holds nothing.
 			PastGrace: d.LastSeenNS > 0 && now-d.LastSeenNS > int64(grace),
 			Physical:  shared[d.ID],
+			// What a mount check of this run found of its driver (specs.md §15.8).
+			LeavesWildcards: leftBy(leaves, d.ID),
 		})
 	}
 	return out

@@ -31,7 +31,7 @@ func (p *pass) transfers(ctx context.Context) error {
 	}
 	p.copiesWaiting += waiting
 	p.copiesDue = earliest(p.copiesDue, next)
-	list, err := watch.CacheTransfers(ctx, p.db, p.config, p.now)
+	list, err := watch.CacheTransfers(ctx, p.db, p.config, p.now, p.session.LeavesWildcards)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
