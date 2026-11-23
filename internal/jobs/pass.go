@@ -257,6 +257,9 @@ type pass struct {
 	realMoves map[folderKey]bool
 	// by disk, the names of the operations left planned, which only a reprise can tell of
 	planned map[string][]string
+	// by disk, the old and new names of the renames left planned there, a folder's among them: a file with a copy on
+	// that disk below one decides nothing until its reprise (specs.md §15.12, flaw 16)
+	plannedRenames map[string][]string
 	// the operations utimens of the modifications, until every decision is out
 	metaOps []metaOp
 	// the files whose copy waits for settle, and the changed copies not yet due, and when the first of them is due
@@ -337,7 +340,7 @@ func newPass(db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sin
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink, closed: closed,
 		rows: map[string]int64{}, walked: map[string]bool{}, spared: map[string]bool{}, partial: map[string]bool{}, added: map[string]int64{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
 		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, requeued: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
-		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
+		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, plannedRenames: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
 }
 
@@ -457,6 +460,7 @@ func (p *pass) look(ctx context.Context) error {
 		// folders may have lost it.
 		look := &watch.Look{Write: p.apply, Own: p.ownFiles, Confirm: p.confirm, Planned: append(plannedOn(planned, d.ID), p.viewPlannedOn(d.ID)...)}
 		p.planned[d.ID] = look.Planned
+		p.plannedRenames[d.ID] = renamesOn(planned, d.ID)
 		looking, asked := toWalk[d.ID]
 		if toWalk != nil && !asked && verdict.State != disks.Missing {
 			// Nothing called for a look at it: nothing reads it, and its copies read as their rows say (specs.md §15.13).
@@ -617,6 +621,38 @@ func firstRefused(names []string) (int64, []string) {
 // plannedOn gives the logical paths of the operations left planned on a disk, which are only left on a
 // disk the reprise could not write to. Only a reprise can tell where those stand, and what a walk finds
 // there is no user's doing.
+// renamesOn gives the old and new names of the renames of ops left planned on a disk.
+func renamesOn(list []catalog.Op, disk string) []string {
+	var paths []string
+	for i := range list {
+		if op := &list[i]; op.Disk == disk && op.Kind == catalog.OpRename {
+			paths = append(paths, op.Path, op.Path2)
+		}
+	}
+	return paths
+}
+
+// belowAPlannedRename says whether a file has a copy on a disk below the old or new name of a rename left planned there,
+// a folder's: whether the folder went, and which of the copies below it with it, only that disk's reprise can say, so
+// the file decides nothing until then, as one with a job running (specs.md §15.12; conformance/models/README.md, flaw
+// 16, the maintainer's remedy, 2026-11-23). Decided while that disk is away, a rename back would clear its rows with
+// no disk operation and drop the job above them, and the reprise then carry in the catalog only the copies another
+// disk holds at their own path, the next walk reading Atoll's own rename of the others as the user's.
+func (p *pass) belowAPlannedRename(f *catalog.FileRow) bool {
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		// A pending copy sits nowhere on its disk yet (specs.md §14.1).
+		if c.State == string(solver.CopyPending) {
+			continue
+		}
+		place := c.Place(f)
+		if slices.ContainsFunc(p.plannedRenames[c.Disk], func(name string) bool { return strings.HasPrefix(place, name+"/") }) {
+			return true
+		}
+	}
+	return false
+}
+
 func plannedOn(list []catalog.Op, disk string) []string {
 	var paths []string
 	for i := range list {
@@ -1057,8 +1093,8 @@ func (p *pass) decidePage(ctx context.Context, page []catalog.FileRow, positions
 	for _, f := range queue {
 		file := p.propFile(f, "", positions)
 		// A file with a job running waits for its decisions: what that job makes may be at its target, and only the
-		// reprise of its operation can say (specs.md §14.1, §15.12).
-		file.Running = p.running[f.ID]
+		// reprise of its operation can say (specs.md §14.1, §15.12). So does one below a folder's rename left planned.
+		file.Running = p.running[f.ID] || p.belowAPlannedRename(f)
 		p.holdLanding(&file)
 		in.Files = append(in.Files, file)
 		rows[f.Path] = f

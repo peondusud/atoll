@@ -816,6 +816,20 @@ type FolderJob struct {
 	From, To string
 }
 
+// EntryKeyAt gives the inode a disk's entry at a path records, as its last walk found it: "" when there is no entry, or
+// one that records none.
+func EntryKeyAt(ctx context.Context, db *sql.DB, disk, path string) (string, error) {
+	var key sql.NullString
+	err := db.QueryRowContext(ctx, "SELECT file_key FROM entries WHERE lpath = ? AND disk_id = ?", []byte(path), disk).Scan(&key)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("entry %q: %w", path, err)
+	}
+	return key.String, nil
+}
+
 // The reads of the folder jobs: those of a disk, whatever their state, those of every disk, the job a rename on
 // two disks would queue twice, and those of a disk still to run, by id.
 const (

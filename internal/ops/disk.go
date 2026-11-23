@@ -38,6 +38,9 @@ var (
 	// ErrNamesDisagree says that a name leads to a file whose record no longer holds it, so that unlink
 	// cannot remove it: only a repair of the volume can say which name is the file's (specs.md §17.2).
 	ErrNamesDisagree = errors.New("a name and its file's record disagree: the volume needs a repair")
+	// ErrExchangedBack says that an exchange of two names took a file that is no copy of it, and that the two names
+	// were exchanged back and synced, each holding again what it held before: neither rename happened (specs.md §15.12).
+	ErrExchangedBack = errors.New("the exchange took a file that is no copy of it, and was exchanged back")
 )
 
 // Disk is a disk open for writing, through a handle on its top, which a mount check found to be the
@@ -1051,11 +1054,13 @@ func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, m
 	default:
 		return nil, nil, nil, nil, classify(err)
 	}
-	// Each known at its new name as a rename knows it, by the identity of §15.1, never by its inode alone.
-	if _, err := holds(dirB.Dir, nameB, sameFileAs(rowA)); err != nil {
-		return nil, nil, nil, nil, err
-	}
-	if _, err := holds(dirA.Dir, nameA, sameFileAs(rowB)); err != nil {
+	// Each known at its new name as a rename knows it, by the identity of §15.1, never by its inode alone. One name that
+	// did not hold its copy when the exchange ran, as a file a program saved there since the look right before, has the
+	// two exchanged back at once.
+	if err := exchanged(dirA.Dir, nameA, dirB.Dir, nameB, rowA, rowB); err != nil {
+		if errors.Is(err, ErrGone) && d.exchangeBack(dirA.Dir, nameA, dirB.Dir, nameB, timeA.Mtime, timeB.Mtime) {
+			return nil, nil, nil, nil, fmt.Errorf("%w: %w", ErrExchangedBack, err)
+		}
 		return nil, nil, nil, nil, err
 	}
 	d.machine.Checkpoint("moved")
@@ -1083,6 +1088,46 @@ func (d *Disk) ExchangeFiles(a, b *Op, rowA, rowB *catalog.KnownCopy) (movedA, m
 		return nil, nil, nil, nil, err
 	}
 	return movedA, movedB, &lookA, &lookB, nil
+}
+
+// exchanged says whether each of two names an exchange swapped holds the other's copy, by the identity of §15.1:
+// ErrGone when one does not.
+func exchanged(dirA fsx.Dir, nameA string, dirB fsx.Dir, nameB string, rowA, rowB *catalog.KnownCopy) error {
+	if _, err := holds(dirB, nameB, sameFileAs(rowA)); err != nil {
+		return err
+	}
+	_, err := holds(dirA, nameA, sameFileAs(rowB))
+	return err
+}
+
+// exchangeBack exchanges two names back, once the look after their exchange found that one of them did not hold its
+// copy when it ran: renameat2 with RENAME_EXCHANGE swaps whatever the names hold then, which a file a program saved at
+// one of them since the look right before may be, and that file went to the other name. Both names then hold again
+// what they held before the exchange, each synced, and both folders get their times back and are synced (specs.md
+// §15.12, §17.2; conformance/models/README.md, flaw 13, the maintainer's remedy, 2026-11-23), as a rename puts back
+// what it took from its old name (putBack). It says whether it did: what stops it leaves the names as they are, for
+// the table of §17.2 to say, with a line of the log.
+func (d *Disk) exchangeBack(dirA fsx.Dir, nameA string, dirB fsx.Dir, nameB string, timeA, timeB fsx.Time) bool {
+	if err := dirA.Exchange(nameA, dirB, nameB); err != nil {
+		slog.Warn("an exchange that took a file that is no copy of it is not exchanged back", "disk", d.ID, "name", nameA, "other", nameB, "error", err)
+		return false
+	}
+	d.machine.Checkpoint("put-back")
+	err := syncEntry(dirA, nameA)
+	if err == nil {
+		err = syncEntry(dirB, nameB)
+	}
+	if err == nil {
+		err = d.restoreBoth(dirA, dirB, timeA, timeB)
+	}
+	if err == nil {
+		err = dirA.Sync()
+	}
+	if err != nil {
+		slog.Warn("two names exchanged back after an exchange are not synced", "disk", d.ID, "name", nameA, "other", nameB, "error", err)
+		return false
+	}
+	return true
 }
 
 // restoreBoth gives both folders of a move their times back. They may be one folder, and then the time
@@ -1144,6 +1189,9 @@ func (d *Disk) RenameFolder(op *Op) error {
 		return err
 	}
 	if _, err := holdsFolder(target.Dir, newName, op.FileKey); err != nil {
+		if errors.Is(err, ErrGone) {
+			d.putBackFolder(source.Dir, name, target.Dir, newName, sourceTime.Mtime, targetTime.Mtime)
+		}
 		return err
 	}
 	d.machine.Checkpoint("moved")
@@ -1162,6 +1210,42 @@ func (d *Disk) RenameFolder(op *Op) error {
 	}
 	d.machine.Checkpoint("source-synced")
 	return nil
+}
+
+// putBackFolder moves what a folder's rename brought to its target, when that is not the folder journaled, back to the
+// name it took, the old one, once that is free again, without replacing anything, then syncs it there, gives both
+// folders their times back and syncs them: rename(2) moves what the old name holds when it runs, which a folder a
+// program made there since the look right before may be, as a tool that rotates a folder makes one (specs.md §15.12,
+// Folders, §17.2; conformance/models/README.md, flaw 14, the maintainer's remedy, 2026-11-23), as putBack does for a
+// file's rename. What stops it leaves what came where it is, for the table of §17.2 to say, with a line of the log.
+func (d *Disk) putBackFolder(source fsx.Dir, name string, target fsx.Dir, newName string, sourceTime, targetTime fsx.Time) {
+	arrived, err := target.Stat(newName)
+	if err != nil {
+		return
+	}
+	if _, err := source.Stat(name); !fsx.IsAbsent(err) {
+		return
+	}
+	if arrived.Kind == fsx.KindDir {
+		err = d.moveFolderNoReplace(target, newName, source, name)
+	} else {
+		err = d.moveNoReplace(target, newName, source, name, func(st *fsx.Stat) bool { return st.Ino == arrived.Ino })
+	}
+	if err != nil {
+		slog.Warn("what a folder's rename brought that is not the folder stays at the new name", "disk", d.ID, "name", newName, "error", err)
+		return
+	}
+	d.machine.Checkpoint("put-back")
+	err = syncEntry(source, name)
+	if err == nil {
+		err = d.restoreBoth(source, target, sourceTime, targetTime)
+	}
+	if err == nil {
+		err = source.Sync()
+	}
+	if err != nil {
+		slog.Warn("what a folder's rename put back is not synced", "disk", d.ID, "name", name, "error", err)
+	}
 }
 
 func holdsFolder(dir fsx.Dir, name, fileKey string) (fsx.Stat, error) {

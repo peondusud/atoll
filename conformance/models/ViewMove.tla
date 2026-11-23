@@ -32,7 +32,7 @@ CONSTANTS
     MaxDrop,    \* how many times a disk is lost
     NoRoom,     \* TRUE: the full disk's trash may have no room for the copy left
     MaxOps,     \* how many operations the view may journal
-    Fixes       \* the remedies proposed for the flaws found here and still open, by name (README.md)
+    Fixes       \* the remedies proposed for the flaws found here and still open, by name (README.md); {} is specs.md as it is
 
 Full == 1
 Target == 2
@@ -40,7 +40,8 @@ Disks == {Full, Target}
 Names == {"m", "p", "x"}      \* the logical path, the part in tmp/, the entry in trash/
 OpIds == 1..MaxOps
 
-ASSUME /\ UserActs \subseteq {"write", "rewrite", "delete"} /\ NoRoom \in BOOLEAN /\ Fixes \subseteq {"move-held", "move-look"}
+ASSUME /\ UserActs \subseteq {"write", "rewrite", "delete"} /\ NoRoom \in BOOLEAN
+       /\ Fixes = {}    \* no flaw open: flaws 15 and 17's remedies are specs.md's and the code's, and the model's
 
 NoOp == [k |-> "none", d |-> 0, key |-> 0, st |-> "none"]
 NoMove == [st |-> "none", op |-> 0, obj |-> 0, sm |-> 0, cg |-> 0, part |-> 0]
@@ -324,17 +325,18 @@ MPurgeJournal ==
 
 (* ops.PurgeEntry: the file in the trash looked at by its inode and unlinked, its folder synced; the purge done and the
    move done. A file there that is not that one stays, the purge undone. *)
-(* With move-look, the remedy proposed for flaw 17 (README.md), as flaw 8's xfer-look for the cache's transfer: right
-   before the purge, or the removal at its path, the target's path looked at, on a disk the view can read: one that no
-   longer holds the copy the move placed as it placed it, its inode, size, times and change time, deleted, replaced or
-   written into directly since, keeps the copy left, in the trash unpurged, or at its path. *)
+(* The look of flaw 17's remedy (the maintainer, 2026-11-23; README.md), as flaw 8's xfer-look for the cache's
+   transfer (writer.targetHolds): right before the purge, or the removal at its path, the target's path looked at, on a
+   disk the view can read: one that no longer holds the copy the move placed as it placed it, its inode, size, times and
+   change time, deleted, replaced or written into directly since, or that cannot be looked at, keeps the copy left, in
+   the trash unpurged, or at its path, the unlink undone. One step with the purge or the removal, as the look right
+   before a removal is (above). *)
 TargetHolds == /\ Ok(Target) /\ mv.part # 0 /\ vol[Target]["m"] = mv.part
                /\ objs[mv.part].sm = mv.sm /\ objs[mv.part].cg = 0
-Looks == "move-look" \in Fixes
 
 MPurge ==
     /\ S("pj") /\ Ok(Full)
-    /\ IF vol[Full]["x"] # ops[mv.op].key \/ (Looks /\ ~TargetHolds)
+    /\ IF vol[Full]["x"] # ops[mv.op].key \/ ~TargetHolds
        THEN /\ ops' = [ops EXCEPT ![mv.op].st = "undone"]
             /\ mv' = [mv EXCEPT !.st = "done"]
             /\ To("write")
@@ -359,7 +361,7 @@ MPurgeCommit ==
 MRemoveHere ==
     /\ S("rmj") /\ Ok(Full)
     /\ LET o == vol[Full]["m"] IN
-       IF ~AsLooked(o) \/ (Looks /\ ~TargetHolds)
+       IF ~AsLooked(o) \/ ~TargetHolds
        THEN /\ ops' = [ops EXCEPT ![mv.op].st = "undone"]
             /\ mv' = [mv EXCEPT !.st = "done"]
             /\ To("write")
@@ -497,15 +499,15 @@ VStart ==
     /\ UNCHANGED <<dstat, mgen, vf, cnt, nver>>
 
 (* Its check every 30 s: a disk found back on a mount of its own gets a new handle; a move left planned, no step of it
-   running, is then resolved as at a start (writer.Recheck, which holds back only a move during its copy). With
-   move-held, the remedy proposed for flaw 15 (README.md): a move whose file the program still holds open through the
-   handle that made it is that handle's, and waits for its close or the next start. *)
+   running, is then resolved as at a start (writer.Recheck), but for one whose file the program still holds open
+   through the handle that made it, which that handle holds until its close or the next start (writer.letGo; flaw 15's
+   remedy, the maintainer, 2026-11-23, README.md). *)
 VCheck ==
     /\ vpc = Idle
     /\ \/ \E d \in Disks : Up(d) /\ ~Ok(d)
-       \/ mv.st = "planned" /\ Ok(Full) /\ Ok(Target)
+       \/ mv.st = "planned" /\ Ok(Full) /\ Ok(Target) /\ ~vf.open
     /\ vsess' =[d \in Disks |-> IF Up(d) THEN mgen[d] + 1 ELSE vsess[d]]
-    /\ IF mv.st = "planned" /\ Up(Full) /\ Up(Target) /\ ~("move-held" \in Fixes /\ vf.open)
+    /\ IF mv.st = "planned" /\ Up(Full) /\ Up(Target) /\ ~vf.open
        THEN \E room \in IF NoRoom THEN BOOLEAN ELSE {TRUE} : Resolve(room)
        ELSE UNCHANGED <<objs, vol, dur, cat, ghost>>
     /\ UNCHANGED <<dstat, mgen, vf, vpc, cnt, nver>>
