@@ -1,0 +1,191 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a715.4, \u00a715.8, \u00a722",
+  "clock": "2030-01-01T00:00:00Z",
+  "description": "A copy left as it is on a disk of the type ntfs, at a name holding a wildcard character, may be the source of a copy to a disk whose filesystem takes the name (the maintainer, 2026-11-23): edited there, it is read, the copy on the ext4 disk goes to the trash as overwritten and is made again from it, and nothing is moved, written or journaled on its own disk. Its file stays name-incompatible.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "01D9F3A2B4C5E6F7",
+      "fs": "ntfs",
+      "capacity": 1000000,
+      "driver": "ntfs",
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "x",
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"01D9F3A2B4C5E6F7\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ntfs\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files",
+      "rows": [
+        [
+          "Who?/q?.mkv",
+          "name-incompatible"
+        ]
+      ]
+    },
+    {
+      "do": "write",
+      "disk": "t2",
+      "path": "media/Who?/q?.mkv",
+      "text": "y"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle",
+        "--json"
+      ],
+      "stdout_json": {
+        "dry_run": false,
+        "disks": [
+          {
+            "id": "t1",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          },
+          {
+            "id": "t2",
+            "state": "online",
+            "reason": null,
+            "message": null,
+            "walked": true
+          }
+        ],
+        "decisions": [
+          {
+            "path": "Who?/q?.mkv",
+            "decision": "modified"
+          }
+        ],
+        "operations": [
+          {
+            "disk": "t1",
+            "kind": "trash",
+            "path": "Who?/q?.mkv",
+            "reason": "overwritten",
+            "outcome": "trashed"
+          },
+          {
+            "disk": "t1",
+            "kind": "replicate",
+            "path": "Who?/q?.mkv",
+            "source": "t2",
+            "outcome": "replicated"
+          }
+        ],
+        "guards": [],
+        "waiting": 0,
+        "next_due": null
+      }
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t1",
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "y"
+        },
+        {
+          "path": "Atoll/trash/2030-01-01/*/Who?/q?.mkv",
+          "text": "x"
+        },
+        {
+          "path": "Atoll/tmp",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "do": "expect_tree",
+      "disk": "t2",
+      "tree": [
+        {
+          "path": "media/Who?/q?.mkv",
+          "text": "y"
+        }
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, created_by, state FROM copies ORDER BY disk_id",
+      "rows": [
+        [
+          "t1",
+          "atoll",
+          "ok"
+        ],
+        [
+          "t2",
+          "user",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), state FROM files",
+      "rows": [
+        [
+          "Who?/q?.mkv",
+          "name-incompatible"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM ops WHERE disk_id = 't2'",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM jobs",
+      "rows": [
+        [
+          0
+        ]
+      ]
+    }
+  ]
+}

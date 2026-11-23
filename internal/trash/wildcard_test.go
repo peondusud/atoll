@@ -1,11 +1,14 @@
 package trash
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/integrity"
 	"github.com/peondusud/atoll/internal/watch"
 )
 
@@ -37,6 +40,65 @@ func TestAPruneLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(b.dirs["t3"], "media", "Who?", "q?.mkv")); err != nil {
 		t.Errorf("the copy left: %v", err)
+	}
+}
+
+// TestARepairReadsAWildcardNameOnTheTypeNTFS: a copy left as it is on the type ntfs, at a name holding a wildcard
+// character, may be the healthy copy a repair reads (the maintainer, 2026-11-23): the corrupt copy on t1 is repaired from
+// it, and nothing is written, moved or journaled on its disk (specs.md §15.8, §16.1). A copy of the type ntfs that is
+// corrupt itself is never repaired in place: its name refused.
+func TestARepairReadsAWildcardNameOnTheTypeNTFS(t *testing.T) {
+	b := newBenchOf(t, "ntfs")
+	for _, id := range []string{"t1", "t2", "t3"} {
+		b.write(id, "Who?/a?", "x")
+	}
+	if _, err := watch.Scan(t.Context(), b.db, b.config, b, watch.Options{Full: true}); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	b.fail[b.dirs["t3"]] = func(call, name string) error {
+		switch call {
+		case "stat", "opendir", "openfile", "names", "fileinfo", "read", "readback", "dropcache", "sync", "syncentry", "syncfs", "xattrs":
+		default:
+			calls = append(calls, call+" "+name)
+		}
+		return nil
+	}
+	rotten := filepath.Join(b.dirs["t1"], "media", "Who?", "a?")
+	info, err := os.Stat(rotten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rotten, []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(rotten, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	f, err := catalog.FileAt(t.Context(), b.db, "Who?/a?")
+	if err != nil || f == nil {
+		t.Fatalf("%v", err)
+	}
+	c := copyOn(f, "t1")
+	c.CtimeNS = sql.NullInt64{Int64: ctimeOf(t, rotten), Valid: true}
+	h := copyOn(f, "t3")
+	healthy := &Healthy{Disk: "t3", Known: catalog.KnownCopy{Path: "Who?/a?", Size: h.Size, MtimeNS: h.MtimeNS, CtimeNS: h.CtimeNS, FileKey: h.FileKey}}
+	sum := integrity.ChunkSum([]byte("x"))
+	s := b.session(true)
+	if outcome, err := s.RepairChunks(t.Context(), f, c, []int64{0}, nil, healthy, sum[:]); err != nil || outcome != OutcomeRepaired {
+		t.Fatalf("the repair from t3: %s, %v", outcome, err)
+	}
+	if data, err := os.ReadFile(rotten); err != nil || string(data) != "x" {
+		t.Errorf("the copy repaired: %q, %v", data, err)
+	}
+	if outcome, err := s.RepairChunks(t.Context(), f, h, []int64{0}, nil, &Healthy{Disk: "t2", Known: healthy.Known}, sum[:]); err != nil || outcome != OutcomeNameRefused {
+		t.Errorf("a repair on t3: %s, %v", outcome, err)
+	}
+	if len(calls) > 0 {
+		t.Errorf("asked of t3: %v", calls)
+	}
+	if got := b.count("SELECT count(*) FROM ops WHERE disk_id = 't3'"); got != 0 {
+		t.Errorf("%d operations journaled on t3", got)
 	}
 }
 

@@ -30,7 +30,8 @@ func (b *bench) reopen(id string) {
 
 // TestTheViewLeavesAWildcardNameOnTheTypeNTFS: through Atoll's own view, a file presented from a disk of the type ntfs,
 // at a name holding a wildcard character, which that driver cannot move or remove without setting its whole volume
-// read-only, is neither deleted nor renamed, and an empty folder of such a name is not removed: each is refused, EINVAL,
+// read-only, is neither deleted, renamed, opened to write nor truncated, as a write of its content sets the volume
+// read-only once written back (measured), and an empty folder of such a name is not removed: each is refused, EINVAL,
 // before anything is journaled or asked of the disk, and stays (specs.md §15.8, §21.2). On ntfs3 the same deletion goes.
 func TestTheViewLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 	for _, fstype := range []string{"ntfs", "ntfs3"} {
@@ -55,10 +56,14 @@ func TestTheViewLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 				}
 				return
 			}
+			_, truncated := b.w.Setattr(ctx, "Films/q?.mkv", b.lookup("Films/q?.mkv"), &ops.UserAttrs{Size: ptr(int64(0))}, Asked{Caller: root})
 			for what, err := range map[string]error{
 				"a deletion":       b.w.Unlink(ctx, "Films/q?.mkv", root),
 				"a rename":         b.w.Rename(ctx, "Films/q?.mkv", "Films/q.mkv", true, root),
 				"a folder removed": b.w.Rmdir(ctx, "Films/Empty*", root),
+				// A write of its content sets the volume read-only once written back (measured): refused too.
+				"an open to write": closed(b.w.Open(ctx, "Films/q?.mkv", b.lookup("Films/q?.mkv"), root)),
+				"a truncation":     truncated,
 			} {
 				if !errors.Is(err, ErrRefused) && !errors.Is(err, ops.ErrNameRefused) {
 					t.Errorf("%s: %v, want it refused", what, err)

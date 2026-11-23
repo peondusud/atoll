@@ -192,7 +192,7 @@ func (s *Session) MountOwner(id string) bool {
 
 // LeavesWildcards says whether a disk of the configuration leaves its copies at a wildcard name as they are, as its
 // mount check found it: one of the type ntfs, which cannot move or remove such a name without setting its volume
-// read-only (specs.md §15.8). Such a copy is never read for a copy, moved, written to or sent to the trash.
+// read-only (specs.md §15.8). Such a copy is never moved, written to or sent to the trash; it may be read.
 func (s *Session) LeavesWildcards(id string) bool {
 	for i := range s.config.Disks {
 		if s.config.Disks[i].ID == id && i < len(s.verdicts) {

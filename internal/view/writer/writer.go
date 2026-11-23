@@ -612,6 +612,11 @@ func (w *Writer) open(ctx context.Context, path string, n *view.Node, who Caller
 	if n.Kind == view.NodeDir {
 		return nil, ErrIsFolder
 	}
+	// A write of the content of a wildcard name on the type ntfs sets its whole volume read-only once written back
+	// (measured): refused, as its move is (specs.md §15.8).
+	if w.leftOn(w.disk(n.Disk), path) {
+		return nil, ErrRefused
+	}
 	// One change of names at a time: a move of the file this opens again (specs.md §21.2) is over, or never starts.
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -717,6 +722,10 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node, wh
 func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.UserAttrs, how Asked) (*view.Node, error) {
 	if n.Kind == view.NodeDir && a.Size != nil {
 		return nil, ErrIsFolder
+	}
+	if a.Size != nil && n.Kind != view.NodeDir && w.leftOn(w.disk(n.Disk), path) {
+		// A change of its content's size is a write of it: refused, as an open to write is (specs.md §15.8).
+		return nil, ErrRefused
 	}
 	if a.Size != nil {
 		w.abandonAt(path, "truncated")
@@ -938,9 +947,9 @@ func (w *Writer) linkMovesTimes(d *config.Disk) bool {
 
 // leftOn says whether a disk leaves as it is what it holds at one of these paths: it is mounted with the type ntfs, as
 // its mount table says now, and a component of the path holds a wildcard character, which that driver cannot take out
-// of its folder, by a rename, an unlink or an rmdir, without setting its whole volume read-only (specs.md §15.8). The
-// view refuses such a move or removal, EINVAL, before it journals anything; a disk whose mount cannot be read now is
-// not one, as ops refuses it again there.
+// of its folder, by a rename, an unlink or an rmdir, nor write the content of, without setting its whole volume
+// read-only (specs.md §15.8). The view refuses such a move, removal or write, EINVAL, before it journals anything; a
+// disk whose mount cannot be read now is not one, as ops refuses a move or a removal again there.
 func (w *Writer) leftOn(d *config.Disk, paths ...string) bool {
 	if d == nil {
 		return false

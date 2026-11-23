@@ -752,8 +752,9 @@ func checkPlan(t reporter, round int, in Input, plan Plan) {
 	}
 }
 
-// checkLeftAsTheyAre checks that a copy at a wildcard name on a disk of the type ntfs is left as it is: no job reads
-// it, refreshes it or transfers it, no mark touches it, and its file is name-incompatible (specs.md §15.8).
+// checkLeftAsTheyAre checks that a copy at a wildcard name on a disk of the type ntfs is left as it is: no job writes
+// to it, refreshes it or transfers it, a job reads it only when no other copy of its file can be read, no mark touches
+// it, and its file is name-incompatible (specs.md §15.8).
 func checkLeftAsTheyAre(t reporter, round int, in Input, plan Plan, results map[string]*Result) {
 	t.Helper()
 	disks := map[string]*Disk{}
@@ -769,8 +770,12 @@ func checkLeftAsTheyAre(t reporter, round int, in Input, plan Plan, results map[
 			if !disks[c.Disk].LeavesWildcards || c.State == CopyPending || !names.HoldsWildcard(place) {
 				continue
 			}
+			other := slices.ContainsFunc(f.Copies, func(o Copy) bool {
+				d := &planDisk{Disk: disks[o.Disk]}
+				return !leftAsItIs(&planFile{File: &f}, &o, d) && isSource(&o, d)
+			})
 			for _, j := range plan.Jobs {
-				if j.Path == f.Path && (j.Src == c.Disk || j.Dst == c.Disk) {
+				if j.Path == f.Path && (j.Dst == c.Disk || j.Kind == JobTransfer && j.Src == c.Disk || j.Src == c.Disk && other) {
 					t.Errorf("round %d: job %+v of %q, left as it is on %s", round, j, f.Path, c.Disk)
 				}
 			}
@@ -864,6 +869,10 @@ func checkMarks(t reporter, round int, f File, r *Result, disks map[string]*Disk
 			if slices.Contains(r.Surplus, c.Disk) || f.Cache == CacheTransfer && slices.Contains(r.Back, c.Disk) {
 				t.Errorf("round %d: a copy on the cache has a mark: %+v, %+v", round, *c, *r)
 			}
+			continue
+		}
+		// A copy left as it is counts for nothing, and has no mark: checkLeftAsTheyAre.
+		if leftAsItIs(&planFile{File: &f}, c, d) {
 			continue
 		}
 		if !counts(c, d) {

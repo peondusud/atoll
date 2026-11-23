@@ -93,7 +93,8 @@ func (d *Disk) LinkMovesTimes() bool {
 // Leaves says whether a path of the disk, below its root or in its trash, is one Atoll leaves as it is: the disk was
 // mounted with the type ntfs when it was opened, and a component of the path holds a wildcard character, which that
 // driver cannot take out of its folder, by a rename or an unlink, without setting its whole volume read-only (measured,
-// specs.md §15.8, §22). Such a copy is never moved, sent to the trash, written to or copied from.
+// specs.md §15.8, §22). Such a copy is never moved, sent to the trash or written to; it may be read, the source of a
+// copy to a disk that takes its name.
 func (d *Disk) Leaves(path string) bool {
 	return disks.LeavesWildcards(d.driver) && names.HoldsWildcard(path)
 }
