@@ -2,6 +2,20 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-23 on the work of 2026-11-22 (specs.md §9, §13.3, §14, §15.12, §17, §19, §21.2, §22, §24.3, §25, §27)
+
+- **Confirmed**: every choice the entries of 2026-11-22 below listed as to confirm, up to "The TLA+ models of the SSD cache's transfer, the link guard and copies at once", whose list the remedies of flaws 8 to 12 rewrite: three had a question of their own, each answered with the option put first ("Confirmer"), the rest together ("Tout confirmer"):
+  - a file written at a rename's new name in the instant between the move and the look after it is put back at the old name too, nothing lost (§15.12);
+  - the view's reprise of a deletion compares with the copy's row, so that a deletion stopped at its move after a write through the view no pass took in is undone, the file kept, rather than a column journaling the look;
+  - a configuration key escaped the same way in the human text, `--json` and the log, the vector's U+0080 case so.
+  What the two sessions still at work choose alone (the remedies of flaws 8 to 12, the view's check on a disk that still fails) stays to confirm.
+- **Decided**, four questions, each answered with the option put first:
+  - the type `ntfs` mounted without `windows_names`: a name holding `" * < > ?` already on such a disk is left as it is, refused (`name-incompatible`): never copied, moved or sent to the trash, and reported; the disk is not made `readonly` for it (TODO.md, to make and measure);
+  - G14: documentation alone, no alert for a file that holds an ACL;
+  - the coverage of the loop-device tests stays local (`make cover-qemu`), the CI's `cover` job as it is;
+  - `jobs`' gate: once `beta` is pushed, the weekly matrix is run on demand on GitHub, and the gate set at its measure rounded down with a margin, as the others were.
+- The maintainer asked too that the remount of an ntfs-3g disk while Atoll's own view holds handles on it, which leaves `ENOTCONN` in qemu, be explained and, if Atoll's, fixed; and that the next TLA+ models be made (TODO.md).
+
 ## The TLA+ models of the SSD cache's transfer, the link guard and copies at once, and the five flaws they found, 2026-11-22 (specs.md §14, §17, §19, §27, §29.4)
 
 The three next TLA+ models of TODO.md, by risk, each finished before the next, on the branch `worktree-agent-a754daf6495f5c743` from `beta`'s `cea8b6d`. They found five flaws, 8 to 12, each shown on the code by a test of the build tag `flaws` seen failing; none is fixed, as the remedies are the maintainer's (`conformance/models/README.md` gives each step by step).
