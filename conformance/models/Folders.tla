@@ -49,7 +49,7 @@ CONSTANTS
     MaxDrop,    \* how many times a disk is lost
     MaxOps,     \* how many operations Atoll may journal
     UserActs,   \* some of "mvdir", "swapdir", "mv", "swap", "create", "delete", "replace", "mkdir", "rmdir"
-    Fixes       \* the remedies proposed for the flaws found here and still open, by name (README.md)
+    Fixes       \* the remedies proposed for the flaws found here and still open, by name (README.md); {} is specs.md as it is
 
 NDisks == 2
 Disks == 1..NDisks
@@ -60,7 +60,6 @@ None == <<0, 0>>
 FileIds == 1..NFiles
 OpIds == 1..MaxOps
 Acts == {"mvdir", "swapdir", "mv", "swap", "create", "delete", "replace", "mkdir", "rmdir"}
-FixNames == {"exchange-back", "folder-back", "folder-wait"}
 
 ASSUME /\ NFolders \in 1..3 /\ NNames \in 1..2 /\ NFiles \in 1..3
        /\ StartPath \in [FileIds -> Paths \cup {None}] /\ StartOn \in [FileIds -> SUBSET Disks]
@@ -68,7 +67,8 @@ ASSUME /\ NFolders \in 1..3 /\ NNames \in 1..2 /\ NFiles \in 1..3
        /\ \A f \in FileIds : (StartPath[f] = None) <=> (StartOn[f] = {})
        /\ \A f \in FileIds, d \in Disks : d \in StartOn[f] => StartPath[f][1] \in StartDirs[d]
        /\ \A f, g \in FileIds : f # g /\ StartPath[f] # None => StartPath[f] # StartPath[g]
-       /\ ExDisks \subseteq Disks /\ UserActs \subseteq Acts /\ Fixes \subseteq FixNames
+       /\ ExDisks \subseteq Disks /\ UserActs \subseteq Acts
+       /\ Fixes = {}    \* no flaw open: flaws 13, 14 and 16's remedies are specs.md's and the code's, and the model's
 
 PathLess(p, q) == p[1] < q[1] \/ (p[1] = q[1] /\ p[2] < q[2])
 MinPath(S) == CHOOSE p \in S : \A q \in S : p = q \/ PathLess(p, q)
@@ -489,12 +489,12 @@ WalkDone ==
    renamed: a copy of that disk sits below its new name with no clock, or one found moved there sat below its old
    name (jobs.isRealRename). *)
 
-(* With folder-wait, the remedy proposed for flaw 16 (README.md): a file with a copy below a folder's operation left
-   planned on its disk, at its old name or its new one, is decided nothing of, and follows no folder, as a file with a
-   job running is held (§15.12, Due), until that disk's reprise concludes the operation: the copy may have moved with
-   it, and a rename back would clear its old_lpath while it is at the new name. *)
+(* Flaw 16's remedy (the maintainer, 2026-11-23; README.md; jobs.belowAPlannedRename): a file with a copy below a
+   folder's operation left planned on its disk, at its old name or its new one, is decided nothing of, and follows no
+   folder, as a file with a job running is held (§15.12, Due), until that disk's reprise concludes the operation: the
+   copy may have moved with it, and a rename back would clear its old_lpath while it is at the new name. *)
 FolderPlannedOver(d, p) == \E o \in Planned(d) : ops[o].p[2] = 0 /\ p[1] \in {ops[o].p[1], ops[o].q[1]}
-Waits16(f) == "folder-wait" \in Fixes /\ \E d \in Disks : Ok2(f, d) /\ FolderPlannedOver(d, Place(f, d))
+Waits16(f) == \E d \in Disks : Ok2(f, d) /\ FolderPlannedOver(d, Place(f, d))
 MovedOn(f) == {d \in Session : Ok2(f, d) /\ cc[f][d].v = "moved"}
 Tgt(f) == cc[f][Min(MovedOn(f))].to
 Keep(S) == {f \in S :
@@ -632,7 +632,10 @@ FJPick ==
            free == {j \in J : ~\E k \in J : k # j /\ j[2] = k[1]}
            pool == IF free # {} THEN free ELSE J
            j == CHOOSE j \in pool : \A k \in pool : j[1] <= k[1]
+           \* the folder at the old name, the one the walk recorded there by its inode where its entry says one
+           \* (jobs.folderReady, catalog.EntryKeyAt; flaw 14's remedy, README.md)
            ready == free # {} /\ root[d][j[1]] # 0 /\ root[d][j[2]] = 0 /\ ~LandsBadly(d, j)
+                    /\ (ce[d][j[1]].obj = 0 \/ ce[d][j[1]].obj = root[d][j[1]])
        IN IF J = {}
           THEN /\ pc' = [ph |-> "round", d |-> d, done |-> {}, moved |-> FALSE, stuck |-> {}]
                /\ UNCHANGED <<fj, ops, nextOp>>
@@ -686,23 +689,24 @@ FJMove ==
     /\ UNCHANGED <<dstat, mgen, cf, moves, cdisk, nextOp, sess, cnt, nver>>
 
 (* The look after: the new name holds the folder, by its inode; otherwise the table at once, which leaves what is
-   there where it is for a rename. With folder-back, the remedy proposed for flaw 14 (README.md): what the move itself
-   took from the old name, a folder that is not the one journaled, goes back there first when that name is free,
-   without replacing anything, the root synced, as a file's rename puts back what it took (flaw 7); the operation is
-   then undone, and the job goes, its copies following one by one. *)
+   there where it is for a rename. Flaw 14's remedy (the maintainer, 2026-11-23; README.md; ops.Disk.putBackFolder):
+   what the move itself took from the old name, a folder that is not the one journaled, goes back there first when
+   that name is free, without replacing anything, the root synced, as a file's rename puts back what it took (flaw 7);
+   the operation is then undone, and the job goes, its copies following one by one. A stop before the job goes keeps
+   it (keep): the folder at its old name is then not the one its entry records, which FJPick does not take. *)
 FJAfter ==
     /\ pc.ph = "fstep" /\ pc.s = "moved" /\ Ok(pc.d)
     /\ LET d == pc.d
            F == pc.j[1]
            G == pc.j[2]
-           back == "folder-back" \in Fixes /\ root[d][G] = pc.mv /\ pc.mv # ops[pc.o].key /\ root[d][F] = 0
+           back == root[d][G] = pc.mv /\ pc.mv # ops[pc.o].key /\ root[d][F] = 0
        IN IF root[d][G] = ops[pc.o].key
           THEN /\ pc' = [pc EXCEPT !.s = "after"] /\ UNCHANGED <<root, objs, droot, cc, ce, fj, ops, ghost>>
           ELSE IF back
           THEN /\ root' = [root EXCEPT ![d][F] = root[d][G], ![d][G] = 0]
                /\ droot' = [droot EXCEPT ![d] = [root[d] EXCEPT ![F] = root[d][G], ![G] = 0]]
                /\ ops' = [ops EXCEPT ![pc.o].st = "undone"]
-               /\ fj' = [fj EXCEPT ![d] = @ \ {pc.j}]
+               /\ \E keep \in BOOLEAN : fj' = IF keep THEN fj ELSE [fj EXCEPT ![d] = @ \ {pc.j}]
                /\ pc' = [ph |-> "fjobs", d |-> d, done |-> pc.done \cup {pc.j}]
                /\ UNCHANGED <<objs, cc, ce, ghost>>
           ELSE /\ FResolve(TRUE) /\ UNCHANGED root
@@ -950,9 +954,10 @@ XLook ==
        ELSE XResolve
     /\ UNCHANGED <<root, dstat, mgen, cf, ce, fj, moves, cdisk, nextOp, sess, cnt, nver>>
 
-(* With exchange-back, the other remedy proposed: as a rename puts back what it took from its old name (flaw 7), what
-   the exchange took from either name that is not the copy the look found there goes back, by a second exchange,
-   before the table is asked. *)
+(* The exchange, then the look after it. Flaw 13's remedy (the maintainer, 2026-11-23; README.md), as a rename puts
+   back what it took from its old name (flaw 7): what the exchange took from either name that is not the copy the look
+   found there goes back, by a second exchange, synced, and both renames are undone (ops.Disk.exchangeBack,
+   ErrExchangedBack); what stops that is the table's. *)
 XSwap ==
     /\ pc.ph = "xstep" /\ pc.s = "looked" /\ Ok(pc.d)
     /\ LET d == pc.d IN
@@ -967,8 +972,8 @@ XAfter ==
     /\ pc.ph = "xstep" /\ pc.s = "swapped" /\ Ok(pc.d)
     /\ LET d == pc.d
            ok == At(d, PB) = ops[pc.oa].key /\ At(d, PA) = ops[pc.ob].key
-           \* exchange-back: the two names still hold what the exchange gave them, one of which is no copy of it
-           undo == "exchange-back" \in Fixes /\ At(d, PB) = pc.mv[1] /\ At(d, PA) = pc.mv[2]
+           \* the exchange back: the two names still hold what the exchange gave them, one of which is no copy of it
+           undo == At(d, PB) = pc.mv[1] /\ At(d, PA) = pc.mv[2]
        IN IF ok
           THEN /\ pc' = [pc EXCEPT !.s = "after"] /\ UNCHANGED <<objs, droot, cc, ops, ghost>>
           ELSE IF undo

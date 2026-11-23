@@ -1,7 +1,7 @@
 {
   "format_version": 1,
-  "spec": "specs.md \u00a717.2",
-  "description": "A folder's rename left planned, then renamed back with its disk away: the row says the copy is at its file's path, where it is not. Finishing says where it really is, and the user's last name wins.",
+  "spec": "specs.md \u00a715.12, \u00a717.2",
+  "description": "A folder's rename left planned, then renamed back with its disk away: the file below it decides nothing while that disk is away (flaw 16 of conformance/models/README.md, the maintainer's remedy). Back, the reprise finishes the folder's rename, the rename back is decided, and its job takes the folder back whole on that disk: the user's last name wins.",
   "disks": [
     {
       "id": "t1",
@@ -129,14 +129,23 @@
             "walked": false
           }
         ],
-        "decisions": [
+        "decisions": [],
+        "operations": [
           {
-            "path": "e/x",
-            "decision": "renamed",
-            "to": "d/x"
+            "disk": "t2",
+            "kind": "folder",
+            "path": "d",
+            "to": "e",
+            "outcome": "disk-unavailable"
+          },
+          {
+            "disk": "t2",
+            "kind": "rename",
+            "path": "d/x",
+            "to": "e/x",
+            "outcome": "disk-unavailable"
           }
         ],
-        "operations": [],
         "guards": [],
         "waiting": 0,
         "next_due": null
@@ -171,13 +180,19 @@
             "walked": true
           }
         ],
-        "decisions": [],
+        "decisions": [
+          {
+            "path": "e/x",
+            "decision": "renamed",
+            "to": "d/x"
+          }
+        ],
         "operations": [
           {
             "disk": "t2",
-            "kind": "rename",
-            "path": "e/x",
-            "to": "d/x",
+            "kind": "folder",
+            "path": "e",
+            "to": "d",
             "outcome": "renamed"
           }
         ],
@@ -203,10 +218,6 @@
         {
           "path": "media/d/x",
           "text": "1"
-        },
-        {
-          "path": "media/e",
-          "kind": "dir"
         }
       ]
     },

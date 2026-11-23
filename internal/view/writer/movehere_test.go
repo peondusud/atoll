@@ -200,7 +200,7 @@ func TestARemovalAtItsPathStoppedAtEachStep(t *testing.T) {
 		return b.machine.passed()
 	}()
 	from := slices.Index(all, "move-unlink-journaled")
-	if from < 0 || !slices.Equal(all[from:], []string{"move-unlink-journaled", "unlinked", "source-synced"}) {
+	if from < 0 || !slices.Equal(all[from:], []string{"move-unlink-journaled", "move-target-looked", "unlinked", "source-synced"}) {
 		t.Fatalf("the crash points of a removal at its path: %v", all)
 	}
 	for at := from; at < len(all); at++ {
@@ -239,7 +239,7 @@ func TestARemovalAtItsPathStoppedAtEachStep(t *testing.T) {
 				t.Errorf("the view presents %+v, t2 holds %q", n, b.on("t2", "Films/new.mkv"))
 			}
 			want, left := "t1>t2:done:unlink:done", "absent"
-			if point == "move-unlink-journaled" {
+			if point == "move-unlink-journaled" || point == "move-target-looked" {
 				want, left = "t1>t2:done:unlink:undone", first
 			}
 			if got := b.moves(); !slices.Equal(got, []string{want}) {

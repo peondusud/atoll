@@ -284,6 +284,16 @@ func (p *pass) folderReady(ctx context.Context, d *config.Disk, handle *ops.Disk
 	if !there || from.Kind != fsx.KindDir {
 		return false, from, nil
 	}
+	// The folder this disk's last walk found at that name, by its inode: another one, as a folder a program made there
+	// since, which a job's rename put back at its old name leaves when a stop came before the job went, is not the job's
+	// to carry, and the copies follow one by one (specs.md §15.12; conformance/models/README.md, flaw 14).
+	known, err := catalog.EntryKeyAt(ctx, p.db, d.ID, job.From)
+	if err != nil {
+		return false, from, fmt.Errorf("catalog: %w", err)
+	}
+	if known != "" && known != strconv.FormatUint(from.Ino, 10) {
+		return false, from, nil
+	}
 	// A folder left as it is, at or to a wildcard name on the type ntfs, cannot go as one operation: its copies follow
 	// one by one, each left as it is (specs.md §15.8).
 	if p.leftAsItIs(d.ID, job.From, job.To) {
@@ -720,9 +730,11 @@ func (p *pass) exchange(ctx context.Context, d *config.Disk, handle *ops.Disk, r
 	movedA, movedB, seenA, seenB, err := handle.ExchangeFiles(a, b, knownA, knownB)
 	if err != nil {
 		for _, op := range []*catalog.Op{a, b} {
-			// A swap the driver refused moved nothing, as no look is needed to tell: both are undone, with no event.
-			if errors.Is(err, ops.ErrPathTaken) {
-				if err := handle.Undo(ctx, p.db, op, false, p.now); err != nil {
+			// A swap the driver refused moved nothing, as no look is needed to tell: both are undone, with no event. One
+			// that took a file that is no copy of it was exchanged back, each name holding what it held before: both are
+			// undone, with an op-undone event each (specs.md §15.12; conformance/models/README.md, flaw 13).
+			if errors.Is(err, ops.ErrPathTaken) || errors.Is(err, ops.ErrExchangedBack) {
+				if err := handle.Undo(ctx, p.db, op, errors.Is(err, ops.ErrExchangedBack), p.now); err != nil {
 					return false, fmt.Errorf("%w", err)
 				}
 				continue
