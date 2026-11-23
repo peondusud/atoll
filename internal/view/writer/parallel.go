@@ -189,7 +189,7 @@ func (w *Writer) startPart(ctx context.Context, disk, source, path string, who C
 	if d == nil || !w.writableNow(ctx, disk) {
 		return nil
 	}
-	if !w.openPart(d) {
+	if !w.openPart(ctx, d) {
 		return nil
 	}
 	op, v, err := catalog.BeginViewPart(ctx, w.db, disk, path, source, w.now(), who.asker())
@@ -240,7 +240,7 @@ func (w *Writer) writableNow(ctx context.Context, disk string) bool {
 
 // openPart counts a part open on a disk, under its limit of copies at once, and measures its room past min_free when it is
 // the first open there.
-func (w *Writer) openPart(d *config.Disk) bool {
+func (w *Writer) openPart(ctx context.Context, d *config.Disk) bool {
 	w.par.mu.Lock()
 	defer w.par.mu.Unlock()
 	r := w.par.rooms[d.ID]
@@ -256,11 +256,40 @@ func (w *Writer) openPart(d *config.Disk) bool {
 		if err != nil || free <= reserved {
 			return false
 		}
-		r = &roomOf{room: free - reserved}
+		// The room a plan gave the pending copies of that disk is theirs: what they still have to write, each its size
+		// less what its part holds, comes off (specs.md §21.2; conformance/models/README.md, flaw 12).
+		held, err := w.pendingLeft(ctx, d.ID)
+		if err != nil || free-reserved <= held {
+			return false
+		}
+		r = &roomOf{room: free - reserved - held}
 		w.par.rooms[d.ID] = r
 	}
 	r.open++
 	return true
+}
+
+// pendingLeft gives what the pending copies of a disk still have to write there.
+func (w *Writer) pendingLeft(ctx context.Context, disk string) (int64, error) {
+	list, err := catalog.PendingOn(ctx, w.db, disk)
+	if err != nil {
+		return 0, fmt.Errorf("%w", err)
+	}
+	var left int64
+	for _, p := range list {
+		held := int64(0)
+		if p.Part != "" {
+			if err := w.handles.Use(disk, func(d *ops.Disk) error {
+				var err error
+				held, err = d.PartSize(p.Part)
+				return err //nolint:wrapcheck // ops says what failed
+			}); err != nil {
+				return 0, err
+			}
+		}
+		left += max(p.Size-held, 0)
+	}
+	return left, nil
 }
 
 // closePart counts a part no longer open on a disk; with none left there, the room is measured again for the next.

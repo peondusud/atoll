@@ -130,7 +130,65 @@ func (t *Tree) Open(ctx context.Context, path string, n *Node) (fsx.File, error)
 			first = err
 		}
 	}
+	// The copy presented may have just left its name, as a move of Atoll's own to the trash leaves it until its commit:
+	// the next copy in sync, in the order of §7, is opened in its place (specs.md §21.2; conformance/models/README.md,
+	// flaw 9, the maintainer's remedy).
+	if fsx.IsAbsent(first) && n.Kind == NodeFile && !n.Ignored {
+		next, err := t.nextCopies(ctx, path, n, order)
+		if err != nil {
+			return nil, err
+		}
+		for _, disk := range next {
+			if f, err := t.openOn(disk, path); err == nil {
+				return f, nil
+			}
+		}
+	}
 	return nil, first
+}
+
+// nextCopies gives the disks of the other copies that hold a file at its path, those Open did not try, in the order of
+// §7: the original among them, then the original of the rest, and so on. None when the path presents another thing now,
+// or what the view's own operations made, which no row holds.
+func (t *Tree) nextCopies(ctx context.Context, path string, n *Node, tried []string) ([]string, error) {
+	disks, err := t.disks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ops, err := t.ops(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s := Resolve(ops, path)
+	if s.Kind != FromCatalog {
+		return nil, nil
+	}
+	rows, err := catalog.ViewRowsOf(ctx, t.db, s.Paths)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: %w", err)
+	}
+	for _, p := range s.Paths {
+		file := fileOf(rows[p].File)
+		if file == nil {
+			continue
+		}
+		rest := *file
+		rest.Copies = slices.DeleteFunc(slices.Clone(file.Copies), func(c Copy) bool { return slices.Contains(tried, c.Disk) })
+		var out []string
+		for len(rest.Copies) > 0 {
+			got, err := Present(disks, &rest, nil, t.self)
+			if err != nil {
+				return nil, err
+			}
+			if got == nil || got.Kind != NodeFile || got.Ignored {
+				break
+			}
+			out = append(out, got.Disk)
+			rest.Copies = slices.DeleteFunc(rest.Copies, func(c Copy) bool { return c.Disk == got.Disk })
+		}
+		return out, nil
+	}
+	return nil, nil
 }
 
 // readOrder reads a file's rows again, and gives ReadOrder of them: the copy a node presents alone when the path

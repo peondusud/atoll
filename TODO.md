@@ -67,7 +67,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 - The loop-device tests of the five remedies (`test/loopdev/remedies_test.go`) pass in qemu on Linux 6.12 and 7.3, on every driver each applies to (DONE.md, 2026-11-22), and found:
   - the view's check every 30 s resolved on a disk that still failed: fixed on 2026-11-23 as the maintainer chose, both (a) and (b) (DONE.md);
   - ntfs-3g mounted again at once while the view has an operation planned on that disk: the new process read `/dev/fuse` with EPERM and unmounted itself in qemu, where the same remount works with the view running and nothing planned (DONE.md, 2026-11-23): to look at again, as the daemon's remount after a USB reset runs while `atoll mount` holds handles.
-- The remedies of flaws 8 to 12 of the TLA+ models (the SSD cache's transfer, the link guard, copies at once), the maintainer's to choose: `conformance/models/README.md`, DONE.md 2026-11-22; their tests wait behind the build tag `flaws`.
+- Flaws 8 to 12 of the TLA+ models, fixed on 2026-11-22 with the maintainer's remedies (DONE.md): the choices made without him, to confirm; copies at once stay off by default until a soak on a real SSD has run them (specs.md §14).
 - Next TLA+ models, by risk: folder renames across disks with their jobs, cycles and exchanges, and of Atoll's own view its rename, replacement, folders and the move of a file whose write ran out of space; then the SSD cache with the link guard (a purge drops the links that lead to its entry first), and copies at once of one file to several targets, with refreshes (`conformance/models/README.md`). tla2tools 1.8.0 once released: still a prerelease on 2026-11-22 (published 2026-11-19).
 
 ## The threat model after 2026-11-19 (DONE.md)

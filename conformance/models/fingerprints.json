@@ -14,7 +14,7 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "237316f362fbf6aeeca533d67d4e0322075a9801a09c884da2bc5dc690c13551"
+      "sha256": "bcfd5c7ad6d3c24f0af0d6f32dadf1d26c9187b4d5522eb0e313fd84a798ffd8"
     },
     {
       "section": "10",
@@ -29,17 +29,17 @@
     {
       "section": "14",
       "title": "## 14. Replication",
-      "sha256": "23db06005a7170d199fb5e82ddf7142e6726e5b798dac1b8b5bb20d794813a8b"
+      "sha256": "50f5e0cfd6e8429ac49dd411d6643a263eba3b1c7c390a27a8bce17b6d3ad299"
     },
     {
       "section": "14.1",
       "title": "### 14.1 Jobs and pending copies",
-      "sha256": "240ddc5b490ab6f5f418d49433661334b159b3ae03c096ed68841df0b874001a"
+      "sha256": "2b4d60cc14b7bd1abb20cdc8854a040826d9e9594344dc88508367cb9e6d5ee1"
     },
     {
       "section": "14.2",
       "title": "### 14.2 The operation `create`",
-      "sha256": "ef898d93f0e77a5af5b8cd2bacfde4ba560489c6046dc92fc68a44812f40f98b"
+      "sha256": "6f38599d05d55ec214eba15d53ffeb8401936fbaf03aaca41aa9b1af8b632ded"
     },
     {
       "section": "15.3",
@@ -69,7 +69,7 @@
     {
       "section": "17",
       "title": "## 17. Trash",
-      "sha256": "063f9f640847fd1f318fca0da2c0cd9a6f0e039fb92cfc408f702ca40ecf2111"
+      "sha256": "f5da85cc02e9f1f1c3893b046c36852b9a6daf60097ee683a44571d15bae68a0"
     },
     {
       "section": "17.1",
@@ -79,7 +79,7 @@
     {
       "section": "17.2",
       "title": "### 17.2 Reprise after a crash",
-      "sha256": "c4cf1396dfdfa1783d0c5b986890ebf7162f5fa1e6ba0fb3194cdbfcbc2ffc47"
+      "sha256": "7ca7a44fbd7117abd3c200bd3895df48b6dafd98910714e1dc5b505024726ecb"
     },
     {
       "section": "17.4",
@@ -94,7 +94,7 @@
     {
       "section": "19",
       "title": "## 19. SSD cache (phase 2b)",
-      "sha256": "9c550a7b2607483619f1446275e9a898198806c8ff7219ad7ed2df3af6e7344a"
+      "sha256": "22f96985cb8428d634d3b66b9668cc26c7b46518ed321dc8e752943ee41da3b2"
     },
     {
       "section": "20",
@@ -104,7 +104,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "ab8ee889e7be2820e8c7d8173ff4837979a990cacb6675d36951b0850efdfb7d"
+      "sha256": "f14c6a48f4be606b3be334608e044a23b630615ca80ed678ec27c9bc7ee3c7ed"
     }
   ]
 }

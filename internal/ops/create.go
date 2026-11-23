@@ -89,6 +89,18 @@ func (d *Disk) MakePart(op *Op) (*Part, error) {
 	return part, nil
 }
 
+// PartSize gives what a part in <workdir>/tmp/ holds, 0 when it is not there.
+func (d *Disk) PartSize(name string) (int64, error) {
+	if err := d.Verify(); err != nil {
+		return 0, err
+	}
+	st, there, err := d.stat(d.tmpPlace(name))
+	if err != nil || !there {
+		return 0, err
+	}
+	return st.Size, nil
+}
+
 // OpenPart opens the part an operation resumes, and gives ErrGone when it is not there.
 func (d *Disk) OpenPart(op *Op) (*Part, error) {
 	if err := d.Verify(); err != nil {

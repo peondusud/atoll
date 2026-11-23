@@ -29,6 +29,11 @@ type File struct {
 	movable bool
 	again   bool
 	moves   int
+	// held is the row of view_ops this handle holds open, holder its writer, heldCtx the context of the open that holds
+	// it, which no interrupt of the kernel's cancels: 0 and nil for none (specs.md §21.2, flaw 10).
+	held    int64
+	holder  *Writer
+	heldCtx context.Context
 }
 
 // OnDisk gives the disk the file is on now.
@@ -119,6 +124,10 @@ func (f *File) Close() error {
 	f.movable = false
 	if f.w != nil {
 		f.w.closed(f)
+	}
+	if f.holder != nil {
+		f.holder.closeHandle(f.heldCtx, f.held)
+		f.holder = nil
 	}
 	return err //nolint:wrapcheck // fsx says what failed
 }

@@ -56,8 +56,7 @@ ASSUME /\ NDisks \in Nat \ {0} /\ NFiles \in Nat \ {0} /\ Level \in 1..3
        /\ Phys \in [Disks -> Nat] /\ Start \in [Files -> SUBSET Disks]
        /\ LinkDisks \subseteq Disks
        /\ \A f \in Files : \A a, b \in Start[f] : a # b => Phys[a] # Phys[b]
-       \* the remedies proposed for the flaws still open (README.md, flaws 8 to 11)
-       /\ Fixes \subseteq {"xfer-look", "xfer-keep", "view-fallback", "xfer-hide", "view-held", "link-keep", "link-doubt"}
+       /\ Fixes = {}    \* no flaw open: each remedy is specs.md's and the code's, and the model's whatever Fixes says
        /\ UserActs \subseteq {"modify", "replace", "delete", "create", "rewrite"}
        /\ CacheDisks \subseteq Disks /\ CacheDisks \cap LinkDisks = {}
        /\ Guard \in {"none", "on", "off"} /\ (Guard # "none" => LinkDisks = {})
@@ -221,14 +220,14 @@ CatDisk(f) == IF cfile[f].on /\ Presenting(f) # {}
 ViewDisk(f) == IF OpenAt(f) = {} THEN CatDisk(f)
                ELSE LET v == Max(OpenAt(f)) IN IF vops[v].k = "unlink" THEN 0 ELSE vops[v].d
 AllOnline == \A e \in Disks : Up(e) /\ cdisk[e] = "online"
-(* What the view reads a file from (view.Tree.Open, read.policy = "oldest"): the disk it presents. With the remedy
-   view-fallback of README.md's flaw 9, the next copy that holds the file at its path, in the order of §7, when the one
-   it presents from the catalog is no longer at its name, as a move of Atoll's own leaves it until its commit. *)
+(* What the view reads a file from (view.Tree.Open, read.policy = "oldest"): the disk it presents, or the next copy that
+   holds the file at its path, in the order of §7, when the one it presents from the catalog is no longer at its name,
+   as a move of Atoll's own leaves it until its commit (README.md, flaw 9, fixed: the view once read nothing then). *)
 HereAt(f, e) == crow[f][e].obj # 0 /\ vol[e][M(f)] = crow[f][e].obj
 ReadDisk(f) ==
     LET d == ViewDisk(f)
         next == {e \in Presenting(f) : HereAt(f, e)}
-    IN IF "view-fallback" \in Fixes /\ d # 0 /\ OpenAt(f) = {} /\ cfile[f].on /\ ~HereAt(f, d) /\ next # {}
+    IN IF d # 0 /\ OpenAt(f) = {} /\ cfile[f].on /\ ~HereAt(f, d) /\ next # {}
        THEN CHOOSE e \in next : \A x \in next : crow[f][e].obj <= crow[f][x].obj
        ELSE d
 
@@ -584,18 +583,11 @@ RepriseCommit ==
                ELSE /\ ops' = [ops EXCEPT ![p].st = "undone"]
                     /\ UNCHANGED <<cfile, crow, rjob, tjob, tick, ghost>>
           ELSE IF ops[p].link
-          THEN \* a link or its removal: done, the copy's row takes the change time found now (§17.2); with the remedy
-               \* link-keep of README.md's flaw 11 it keeps the one it recorded, for the next look to read the change,
-               \* and with link-doubt it takes it unverified, as a copy's reprise with no record does (§14.2)
-               LET f == ops[p].f
-                   key == ops[p].key
-                   ours == pc.out = "done" /\ crow[f][d].st \in {"ok", "stale"} /\ crow[f][d].obj = key
-               IN /\ ops' = [ops EXCEPT ![p].st = pc.out]
-                  /\ crow' = IF ~ours \/ "link-keep" \in Fixes THEN crow
-                             ELSE IF "link-doubt" \in Fixes
-                             THEN [crow EXCEPT ![f][d].cg = objs[key].cg, ![f][d].verified = FALSE, ![f][d].doubt = TRUE]
-                             ELSE [crow EXCEPT ![f][d].cg = objs[key].cg]
-                  /\ UNCHANGED <<cfile, rjob, tjob, tick, ghost>>
+          THEN \* a link or its removal: done or undone, the copy's row keeping the change time it recorded, for the next
+               \* look to read the change (§17.2; README.md, flaw 11, fixed: the row once took the one found now, a write
+               \* that kept the dates with it)
+               /\ ops' = [ops EXCEPT ![p].st = pc.out]
+               /\ UNCHANGED <<cfile, crow, rjob, tjob, tick, ghost>>
           ELSE IF ops[p].k = "unlink"
           THEN /\ ops' = [ops EXCEPT ![p].st = pc.out]
                /\ UNCHANGED <<cfile, crow, rjob, tjob, tick, ghost>>
@@ -1310,10 +1302,12 @@ XHeir(f) ==
         S == IF U # {} THEN U ELSE H
         m == Min({crow[f][d].seen : d \in S})
     IN Min({d \in S : crow[f][d].seen = m})
-(* What the remedy xfer-look of README.md's flaw 8 sees right before the purge: each copy on a data disk that counts,
-   as its row says, by its inode, size and times, on a disk the session can read. *)
+(* What the transfer looks at right before its purge (trash.Session.dataCopiesHold; README.md, flaw 8, fixed): each copy
+   on a data disk that the catalog calls ok, as its row says, by its inode, size and times, on a disk the session can
+   read, and one at least. *)
 XHeld(f) ==
-    \A d \in XCounted(f) : Ok(d) /\ vol[d][M(f)] = crow[f][d].obj /\ crow[f][d].obj # 0
+    /\ XCounted(f) # {}
+    /\ \A d \in XCounted(f) : Ok(d) /\ vol[d][M(f)] = crow[f][d].obj /\ crow[f][d].obj # 0
                            /\ objs[crow[f][d].obj].gen = crow[f][d].gen /\ objs[crow[f][d].obj].cg = crow[f][d].cg
 
 XferPick ==
@@ -1346,22 +1340,19 @@ XferDone ==
        ELSE pc' = [ph |-> "settle"] /\ UNCHANGED <<sess, look>>
     /\ UNCHANGED <<phys, cat, cnt, nver, ghost>>
 
-(* §17.1 step 1: the operation trash, surplus, planned, and its trash row, in one transaction (catalog.BeginTrash). With
-   the remedy xfer-hide of README.md's flaw 9, the same transaction starts the copy's clock, as for one a look did not
-   find at its name, so that the view presents the file from a data disk before the copy leaves its name. *)
+(* §17.1 step 1: the operation trash, surplus, planned, and its trash row, in one transaction (catalog.BeginTrash). *)
 XferJournal ==
     /\ pc.ph = "xjournal"
     /\ LET f == pc.f
            c == pc.c
-       \* with the remedy view-held of README.md's flaw 10, the view's operations are read again in this transaction
-       IN IF nextOp > MaxOps \/ ("view-held" \in Fixes /\ OpenAt(f) # {})
-          THEN /\ pc' = [ph |-> "xfer", f |-> f + 1] /\ UNCHANGED <<ops, nextOp, crow>>     \* the model's bound
+       \* the view's operations read again in this transaction (README.md, flaw 10, fixed)
+       IN IF nextOp > MaxOps \/ OpenAt(f) # {}
+          THEN /\ pc' = [ph |-> "xfer", f |-> f + 1] /\ UNCHANGED <<ops, nextOp>>     \* the model's bound
           ELSE /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "trash", d |-> c, f |-> f, key |-> crow[f][c].obj, st |-> "planned",
                                                   part |-> 0, reason |-> "surplus", link |-> FALSE]]
                /\ nextOp' = nextOp + 1
-               /\ crow' = IF "xfer-hide" \in Fixes THEN [crow EXCEPT ![f][c].gone = "own"] ELSE crow
                /\ pc' = [ph |-> "xstep", f |-> f, p |-> nextOp, s |-> "journaled"]
-    /\ UNCHANGED <<phys, cfile, cdisk, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
 
 (* §17.1 steps 2 to 4: the copy compared with its row right before the move, then the move without replacing
    anything. Invariant 2: the copy that leaves the library is an Atoll copy, and its file keeps a user copy. *)
@@ -1375,17 +1366,16 @@ XferMove ==
                         /\ objs[key].gen = crow[f][d].gen /\ objs[key].cg = crow[f][d].cg
        IN /\ Ok(d)
           /\ IF ~untouched
-             THEN \* changed: nothing moved, undone at once; with xfer-hide, the copy's clock stops again
+             THEN \* changed: nothing moved, undone at once
                   /\ ops' = [ops EXCEPT ![p].st = "undone"]
-                  /\ crow' = IF "xfer-hide" \in Fixes /\ crow[f][d].st # "none" THEN [crow EXCEPT ![f][d].gone = "no"] ELSE crow
                   /\ pc' = [ph |-> "xfer", f |-> f + 1]
                   /\ UNCHANGED <<vol, ghost>>
              ELSE /\ vol' = [vol EXCEPT ![d][M(f)] = 0, ![d][X(p)] = key]
                   /\ ghost' = Flag(ghost, "inv2", crow[f][d].by = "user" \/
                                    ~\E e \in Disks \ {d} : crow[f][e].st = "ok" /\ crow[f][e].by = "user")
                   /\ pc' = [pc EXCEPT !.s = "moved"]
-                  /\ UNCHANGED <<ops, crow>>
-    /\ UNCHANGED <<objs, dur, dstat, mgen, cfile, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>
+                  /\ UNCHANGED ops
+    /\ UNCHANGED <<objs, dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>
 
 (* §17.1 step 5: fsync of the file at its new name and of the trash's folder, then of the source's folder. *)
 XferSync ==
@@ -1406,7 +1396,7 @@ XferCommit ==
            d == ops[p].d
        IN /\ TrashFinish(d, p)
           /\ ghost' = Flag(ghost, "inv7", ~Durable(d, X(p), ops[p].key) \/ dur[d][M(ops[p].f)] = ops[p].key)
-    /\ pc' = IF "xfer-keep" \in Fixes THEN [ph |-> "xfer", f |-> pc.f + 1] ELSE [ph |-> "xpurge", f |-> pc.f, p |-> pc.p]
+    /\ pc' = [ph |-> "xpurge", f |-> pc.f, p |-> pc.p]
     /\ UNCHANGED <<phys, cdisk, nextOp, tick, sess, look, cnt, nver>>
 
 (* §17.4: the purge of the entry, an operation unlink journaled (catalog.BeginFromTrash), whose file_key is the entry's. *)
@@ -1422,16 +1412,18 @@ XferPurgeJournal ==
                /\ pc' = [ph |-> "xstep", f |-> f, p |-> nextOp, s |-> "pjournaled"]
     /\ UNCHANGED <<phys, cfile, crow, cdisk, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
 
-(* ops.PurgeEntry: the file in the trash looked at by its inode, then unlinked: another file there stays, undone. With
-   the remedy xfer-look, the copies on data disks that count are looked at too, and one that is not as its row says, or
-   on a disk that cannot be read, keeps the entry in the trash, undone. *)
+(* ops.PurgeEntry: the file in the trash looked at by its inode, then unlinked: another file there stays, undone. The
+   copies on data disks are looked at right before (XHeld), which the model takes in the same step as the unlink, as
+   it takes the look and the act of the daemon's moves: one that is not as its row says, or on a disk that cannot be
+   read, undoes the purge, the entry kept in the cache's trash (README.md, flaw 8, fixed: the purge once leaned on the
+   catalog alone). *)
 XferPurge ==
     /\ pc.ph = "xstep" /\ pc.s = "pjournaled"
     /\ LET q == pc.p
            d == ops[q].d
            n == X(ops[q].part)
        IN /\ Ok(d)
-          /\ IF Seen(d, n, ops[q].key) = "other" \/ ("xfer-look" \in Fixes /\ ~XHeld(pc.f))
+          /\ IF Seen(d, n, ops[q].key) = "other" \/ ~XHeld(pc.f)
              THEN /\ ops' = [ops EXCEPT ![q].st = "undone"]
                   /\ pc' = [ph |-> "xfer", f |-> pc.f + 1]
                   /\ UNCHANGED vol
@@ -1728,10 +1720,10 @@ Agrees(f) ==
 TakeIn ==
     /\ pc.ph = "takein"
     /\ LET held(f) == LET H == {v \in OpenAt(f) : vops[v].st # "done"} IN IF H = {} THEN MaxVOps + 1 ELSE Min(H)
-           \* with the remedy view-held of README.md's flaw 10, what the view holds open to write stays open until closed
+           \* what the view holds open to write stays open until closed (README.md, flaw 10, fixed)
            T0 == {v \in VIds : vops[v].k \in {"create", "write", "unlink"} /\ vops[v].st = "done" /\ ~vops[v].taken
                                /\ v < held(vops[v].f) /\ Agrees(vops[v].f)
-                               /\ ~("view-held" \in Fixes /\ vfile.open /\ vfile.f = vops[v].f)}
+                               /\ ~(vfile.open /\ vfile.f = vops[v].f)}
        IN vops' = [v \in VIds |-> IF v \in T0 THEN [vops[v] EXCEPT !.taken = TRUE] ELSE vops[v]]
     /\ AfterTakeIn
     /\ UNCHANGED <<phys, cat, cnt, nver, ghost, nextV, vpc, vsess, vpart, vfile>>
@@ -2026,8 +2018,8 @@ VWriteOpen(f) ==
            again == latest # 0 /\ vops[latest].k \in {"create", "write"} /\ vops[latest].d = d
        IN /\ d # 0 /\ VOk(d) /\ vol[d][M(f)] # 0
           /\ again \/ nextV <= MaxVOps
-          \* with the remedy view-held of README.md's flaw 10, it waits while a move of Atoll's own of that copy is planned
-          /\ ~("view-held" \in Fixes /\ \E p \in OpIds : ops[p].k = "trash" /\ ops[p].st = "planned" /\ ops[p].d = d
+          \* it waits while a move of Atoll's own of that copy is planned (README.md, flaw 10, fixed)
+          /\ ~(\E p \in OpIds : ops[p].k = "trash" /\ ops[p].st = "planned" /\ ops[p].d = d
                                                           /\ ops[p].f = f /\ ~ViewNamed(p))
           /\ vops' = IF again THEN vops ELSE [vops EXCEPT ![nextV] = [NoVOp EXCEPT !.k = "write", !.d = d, !.f = f, !.st = "done"]]
           /\ nextV' = IF again THEN nextV ELSE nextV + 1

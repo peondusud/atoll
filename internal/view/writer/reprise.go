@@ -44,6 +44,12 @@ type Ready func(disk string) (before int64, ok bool)
 // runs, only the rows ready allows, of a disk back on a mount of its own and confirmed, journaled before that mount
 // (the maintainer, 2026-11-23).
 func (w *Writer) reprise(ctx context.Context, ready Ready) error {
+	if ready == nil {
+		// At its start the view holds nothing open: what a stopped view held is let go of (specs.md §21.2, flaw 10).
+		if err := catalog.ReleaseViewOps(ctx, w.db); err != nil {
+			return fmt.Errorf("%w", err)
+		}
+	}
 	open, err := catalog.OpenViewOps(ctx, w.db)
 	if err != nil {
 		return fmt.Errorf("%w", err)

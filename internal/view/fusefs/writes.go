@@ -58,6 +58,8 @@ func errnoOf(what, p string, err error) syscall.Errno {
 		return syscall.EXDEV
 	case errors.Is(err, writer.ErrNoSpace):
 		return syscall.ENOSPC
+	case errors.Is(err, writer.ErrBusy):
+		return syscall.EBUSY
 	case errors.Is(err, writer.ErrNoHandle):
 		return syscall.EROFS
 	case errors.Is(err, writer.ErrXattrOnLink):

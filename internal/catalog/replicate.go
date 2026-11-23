@@ -154,6 +154,42 @@ func HandOver(ctx context.Context, db *sql.DB, fileID int64, from, to string) er
 	return nil
 }
 
+// Pending is a pending copy of a disk, as the room it holds there counts it: its file's size, and the part in
+// <workdir>/tmp/ its job owns, empty for none yet.
+type Pending struct {
+	Size int64
+	Part string
+}
+
+// PendingOn gives the pending copies of a disk: what a plan made them hold the room of there (specs.md §13.4), which
+// what else writes to that disk leaves them (§21.2; conformance/models/README.md, flaw 12).
+func PendingOn(ctx context.Context, db *sql.DB, disk string) ([]Pending, error) {
+	rows, err := db.QueryContext(ctx, `SELECT f.size, j.payload FROM copies c JOIN files f ON f.id = c.file_id
+		LEFT JOIN jobs j ON j.file_id = c.file_id AND j.dst_disk = c.disk_id AND j.kind = 'replicate' AND j.state IN ('queued', 'running')
+		WHERE c.disk_id = ? AND c.state = 'pending' ORDER BY c.file_id`, disk)
+	if err != nil {
+		return nil, fmt.Errorf("pending copies: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Pending
+	for rows.Next() {
+		var size int64
+		var payload sql.NullString
+		if err := rows.Scan(&size, &payload); err != nil {
+			return nil, fmt.Errorf("pending copies: %w", err)
+		}
+		var j ReplicateJob
+		if err := j.readPayload(payload); err != nil {
+			return nil, err
+		}
+		out = append(out, Pending{Size: size, Part: j.Part})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pending copies: %w", err)
+	}
+	return out, nil
+}
+
 // QueueReplicate queues copies, each a job and its pending copy on the target, in one transaction. The
 // pending copy holds the room and the name for later plans, and keeps the file from being queued twice
 // (specs.md §14.1).
