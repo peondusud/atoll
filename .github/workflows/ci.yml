@@ -231,7 +231,7 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04-arm
     container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -243,7 +243,8 @@ jobs:
             ~/.cache/go-build
           key: go-test-${{ runner.arch }}-${{ hashFiles('go.sum') }}
           restore-keys: go-test-${{ runner.arch }}-
-      - run: go test ./...
+      # 40 minutes rather than go test's 10: jobs' tests alone ran past 10 on these runners (2026-11-23).
+      - run: go test -timeout 40m ./...
       # What the CPU has, whether SVE2, the code zeebo/blake3 takes on it, and its throughput, to the log and the summary.
       - run: bash test/ci/blake3.sh
 
