@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## A prerelease's `.deb` under the name GitHub serves, 2026-11-23 (specs.md §26)
+
+- **Found on `v0.1.0-rc.1`'s draft**, the first try of the release (run 45253723596 on `4128f72`). Every job passed, and every file matched `SHA256SUMS`, by the digests GitHub gives. But the `.deb` files, named by nfpm `atoll_0.1.0~rc.1-1_amd64.deb`, as Debian names them, were served as `atoll_0.1.0.rc.1-1_amd64.deb`: GitHub renames on upload a name holding anything but letters, digits, `.`, `-` and `_`. `SHA256SUMS` kept the `~`, so the check the notes give, `sha256sum --ignore-missing -c SHA256SUMS`, passed over both packages without a word. A release with no suffix has no `~`, and was not touched.
+- **The check first**: `test/ci/release-names.sh` refuses a name of `SHA256SUMS` that GitHub would change, and an empty or missing `SHA256SUMS`. It failed on that draft's `SHA256SUMS`. The release's build runs it on `dist/` after GoReleaser, as `make release-snapshot` and the README's recipe for Windows do.
+- **Then the fix**: `.goreleaser.yaml` names the `.deb` as nfpm does, with a `.` for the `~`, so the name `SHA256SUMS` gives is the one GitHub serves. The package's version keeps its `~`, and `0.1.0~rc.1-1` still comes before `0.1.0-1`.
+- **Checked** by a snapshot built on this machine with the README's recipe, on `f845b59` with this change: `atoll_0.0.1.snapshot.f845b59-1_amd64.deb` and its arm64 twin, each of version `0.0.1~snapshot.f845b59-1` by `dpkg-deb -f`; the check passes on its six names. `dpkg --compare-versions` puts `0.1.0~rc.1-1` before `0.1.0-1`.
+- **Chosen alone**, as the safest: a `.` rather than another character, as GitHub served it on the draft; and a name with a `+`, as a tag with build metadata would give, is refused too, since GitHub's rule renames every character that is not a letter or a digit but those it was seen to keep.
+
 ## `jobs`' mutation gate from its first measure, and the CI run once on the ready pull request, 2026-11-23 (specs.md §27)
 
 - **The weekly matrix, dispatched on `beta`** (run 45195450459 on `a68c6de`, as the maintainer chose): every job passed. `ops`, `trash` and `watch` passed their gates on GitHub's runners too. `jobs`, merged from its 14 parts by `jobs-score`: 1,601 killed, 337 lived, 249 not covered, 40 timed out, efficacy 82.61 %, mutator coverage 88.61 %, no equivalent named. Its gate is set at that measure rounded down, 82 and 88, a margin of 11 and 13 mutants (`test/ci/gates.txt`).

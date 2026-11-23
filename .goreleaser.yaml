@@ -62,7 +62,10 @@ nfpms:
   - id: atoll
     ids: [atoll]
     package_name: atoll
-    file_name_template: "{{ .ConventionalFileName }}"
+    # Debian's name, but for the '~' of a prerelease, which GitHub would make '.' on upload, so that SHA256SUMS names
+    # the file GitHub serves: atoll_0.1.0.rc.1-1_amd64.deb, its version 0.1.0~rc.1-1 all the same, which comes before
+    # 0.1.0-1 (test/ci/release-names.sh).
+    file_name_template: '{{ replace .ConventionalFileName "~" "." }}'
     # The Debian revision, as Debian's policy gives a package that is not native: 0.1.0-1, and 0.1.0-2 for a package
     # made again with no change of code or tag (the maintainer, 2026-11-19).
     release: "1"

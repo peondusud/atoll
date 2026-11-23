@@ -96,6 +96,9 @@ jobs:
           distribution: goreleaser
           version: v2.20.3
           args: release --clean --skip=publish
+      # Each file under the name GitHub will serve it by: one it would rename on upload, SHA256SUMS would not check.
+      - name: The names
+        run: sh test/ci/release-names.sh dist
       # The notes: how to check a download, then the commits since the last tag, as GoReleaser wrote them.
       - name: The notes
         env:
