@@ -17,6 +17,9 @@ var ErrNotEmpty = errors.New("the folder is not empty")
 // it is empty, then gives its parent its time back and syncs it (specs.md §17.5). ErrGone means that the name no
 // longer holds that folder, and ErrNotEmpty that it holds something: either way it stays.
 func (d *Disk) RemoveFolder(op *Op) error {
+	if err := d.refuseLeft(op.Path); err != nil {
+		return err
+	}
 	if err := d.Verify(); err != nil {
 		return err
 	}

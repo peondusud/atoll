@@ -51,7 +51,7 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 - Measure on the maintainer's Windows machine, with their go-ahead, what a report says is not established: which reserved names Windows 11 still refuses, and what Windows does with `Film.mkv` beside `film.mkv` on an NTFS volume (a VHD).
 - `$LogFile` is read since 2026-11-21 (DONE.md), measured with restart pages written on the device, never with Windows: what Windows writes there at Fast Startup and at a full shutdown, on a data volume (a VHD), with the maintainer's go-ahead, and what ntfs3 then does with a journal it can replay.
-- The type `ntfs` without `windows_names` (§22): `windows_names` is recommended since 2026-11-19, as the maintainer chose; whether Atoll leaves a name holding `" * < > ?` alone on a disk mounted without it, as a name refused, is still to decide, and its own trash move on such a name is still to measure there.
+- Wildcard names on the type `ntfs` (§15.8, §22): made on 2026-11-23 as the maintainer chose (DONE.md): a copy at a name holding `" * < > ?` on a disk of that type is left as it is, `name-incompatible`, never copied, moved or sent to the trash, the disk online; Atoll's own trash move of such a name, measured there, is a rename that sets the volume read-only. Left: the rule holds with `windows_names` too, as that rename sets the volume read-only there as well (to confirm); measured on mainline 7.3.5 alone, not on Debian sid's 7.3.3; a volume a program set read-only by making such a name without `windows_names` stays `readonly`, `read-only-mount`, until it is mounted again (§10), which Atoll does not do.
 - The type `ntfs`: `test/loopdev` ran whole on it in qemu on mainline 7.3.5 on 2026-11-22 (DONE.md), 91 subtests, each passing; still to consider, booting Debian sid's 7.3.3, the kernel with no ntfs3 (point 7 of the report). Measured in `docs/research/ntfs-driver.md`, whose last section lists the decisions it needs. Until then a disk mounted with it is `readonly`.
 
 ## GitHub Actions and releases (DONE.md, 2026-11-19)
@@ -63,7 +63,6 @@ Still open, though the solver, the scanner and `atoll names check` are built:
 
 - A file renamed while a job runs reappears at its old name on that disk once the reprise finishes the copy: the reprise could take `first_seen_ns` from the operation's `started_ns`.
 - `atoll scan` and `conflicts resolve` still touch a running job; `restore --to` records the look after its syncs.
-- The copy state `unavailable`: say what sets it, or say in §4 that nothing does.
 - The loop-device tests of the five remedies (`test/loopdev/remedies_test.go`) pass in qemu on Linux 6.12 and 7.3, on every driver each applies to (DONE.md, 2026-11-22), and found:
   - the view's check every 30 s resolved on a disk that still failed: fixed on 2026-11-23 as the maintainer chose, both (a) and (b) (DONE.md);
   - ntfs-3g mounted again at once while the view has an operation planned on that disk: the new process read `/dev/fuse` with EPERM and unmounted itself in qemu, where the same remount works with the view running and nothing planned (DONE.md, 2026-11-23): to look at again, as the daemon's remount after a USB reset runs while `atoll mount` holds handles.

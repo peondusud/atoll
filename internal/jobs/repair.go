@@ -424,6 +424,10 @@ func findHealthy(ctx context.Context, session *trash.Session, f *catalog.FileRow
 			continue
 		}
 		place := c.Place(f)
+		// Nothing is ever copied from a copy left as it is, at a wildcard name on the type ntfs (specs.md §15.8).
+		if handle.Leaves(place) {
+			continue
+		}
 		known := catalog.KnownCopy{Path: place, FileID: f.ID, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey}
 		// A copy that cannot be read whole is no healthy copy, whatever its disk says.
 		bad, err := badChunks(handle, &known, chunks, nil)

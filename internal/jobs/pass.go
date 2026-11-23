@@ -922,9 +922,21 @@ func (p *pass) propFile(f *catalog.FileRow, follow string, positions map[string]
 			Disk: c.Disk, Position: positions[c.Disk], Verdict: verdict, Target: s.Target, Due: due, GoneNS: gone,
 			CreatedBy: c.CreatedBy, FirstSeenNS: c.FirstSeenNS, Verified: c.VerifiedNS.Valid, OldPath: c.OldPath,
 			GuardHeld: p.heldBy(c.Disk, gone), Size: c.Size.Int64, ThroughView: p.wentThroughView(c.Disk, c.FileKey.String),
+			Left: p.leftAsItIs(c.Disk, c.Place(f)),
 		})
 	}
 	return file
+}
+
+// leftAsItIs says that a disk leaves as they are its copies at one of these paths: it is of the type ntfs, as its mount
+// check in this pass found it, and a component of the path holds a wildcard character, which that driver cannot take out
+// of its folder without setting its whole volume read-only. Such a copy is never moved, sent to the trash, written to or
+// copied from, and nothing is journaled for it (specs.md §15.8).
+func (p *pass) leftAsItIs(disk string, paths ...string) bool {
+	if !p.session.LeavesWildcards(disk) {
+		return false
+	}
+	return slices.ContainsFunc(paths, names.HoldsWildcard)
 }
 
 func (p *pass) positions(ctx context.Context) (map[string]int, error) {
@@ -1752,7 +1764,7 @@ func (p *pass) settleAgain(ctx context.Context) error {
 		return nil
 	}
 	only := &watch.Only{Names: p.only.Names, IDs: p.ran}
-	if err := watch.SettleOnly(ctx, p.db, p.config, p.now, only); err != nil {
+	if err := watch.SettleOnly(ctx, p.db, p.config, p.now, only, p.session.LeavesWildcards); err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	return nil

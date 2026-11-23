@@ -367,7 +367,7 @@ func (p *pass) planOverwrites(f *catalog.FileRow, stale []string, src string) {
 	for _, disk := range stale {
 		if c := copyOn(f, disk); c.FileKey.Valid {
 			plan := p.planOf(disk)
-			plan.overwrites = append(plan.overwrites, overwrite{place: c.Place(f), held: held})
+			plan.overwrites = append(plan.overwrites, overwrite{place: c.Place(f), held: held, left: p.leftAsItIs(disk, c.Place(f))})
 		}
 	}
 }
@@ -377,6 +377,8 @@ func (p *pass) planOverwrites(f *catalog.FileRow, stale []string, src string) {
 type overwrite struct {
 	place string
 	held  bool
+	// left says that the copy is left as it is, at a wildcard name on the type ntfs: its name refused (specs.md §15.8).
+	left bool
 }
 
 func (o *overwrite) operation(disk string, unavailable bool) Operation {
@@ -384,6 +386,8 @@ func (o *overwrite) operation(disk string, unavailable bool) Operation {
 	switch {
 	case o.held:
 		op.Outcome = OutcomeHeld
+	case o.left:
+		op.Outcome = trash.OutcomeNameRefused
 	case unavailable:
 		op.Outcome = OutcomeUnavailable
 	}

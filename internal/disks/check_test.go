@@ -205,7 +205,9 @@ type checkCase struct {
 	State       string `json:"state"`
 	Reason      string `json:"reason"`
 	MountOwner  bool   `json:"mount_owner"`
-	Note        string `json:"note"`
+	// LeavesWildcards says that the disk leaves its copies at a wildcard name as they are (specs.md §15.8).
+	LeavesWildcards bool   `json:"leaves_wildcards"`
+	Note            string `json:"note"`
 }
 
 func or[T any](p *T, fallback T) T {
@@ -361,6 +363,9 @@ func TestCheck(t *testing.T) {
 		if got.MountOwner != c.MountOwner {
 			t.Errorf("case %d: the mount's owner %v, want %v (%s)", i, got.MountOwner, c.MountOwner, c.Note)
 		}
+		if got.LeavesWildcards != c.LeavesWildcards {
+			t.Errorf("case %d: leaves wildcards %v, want %v (%s)", i, got.LeavesWildcards, c.LeavesWildcards, c.Note)
+		}
 	}
 }
 
@@ -461,7 +466,8 @@ func TestDiskCheckCoversEveryReason(t *testing.T) {
 }
 
 // The type ntfs is the one whose EINVAL from renameat2 with RENAME_NOREPLACE is a name refused, where on the other
-// drivers link tells (specs.md §17.1), and the one whose link moves its file's modification time (§22).
+// drivers link tells (specs.md §17.1), the one whose link moves its file's modification time (§22), and the one that
+// cannot take a wildcard name out of its folder without setting its volume read-only (§15.8).
 func TestWhatTheTypeNTFSDoesOtherwise(t *testing.T) {
 	for fstype, want := range map[string]bool{"ntfs": true, "ntfs3": false, "fuseblk": false, "ext4": false, "xfs": false, "btrfs": false, "": false} {
 		if got := RenameTellsNames(fstype); got != want {
@@ -469,6 +475,9 @@ func TestWhatTheTypeNTFSDoesOtherwise(t *testing.T) {
 		}
 		if got := LinkMovesTimes(fstype); got != want {
 			t.Errorf("a link on %q: %v", fstype, got)
+		}
+		if got := LeavesWildcards(fstype); got != want {
+			t.Errorf("a wildcard name on %q: %v", fstype, got)
 		}
 	}
 }

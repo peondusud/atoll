@@ -936,6 +936,19 @@ func (w *Writer) linkMovesTimes(d *config.Disk) bool {
 	return seen.Entry == nil || seen.Entry.FSType == "ntfs"
 }
 
+// leftOn says whether a disk leaves as it is what it holds at one of these paths: it is mounted with the type ntfs, as
+// its mount table says now, and a component of the path holds a wildcard character, which that driver cannot take out
+// of its folder, by a rename, an unlink or an rmdir, without setting its whole volume read-only (specs.md §15.8). The
+// view refuses such a move or removal, EINVAL, before it journals anything; a disk whose mount cannot be read now is
+// not one, as ops refuses it again there.
+func (w *Writer) leftOn(d *config.Disk, paths ...string) bool {
+	if d == nil {
+		return false
+	}
+	seen := w.machine.Mount(d.Mount)
+	return seen.Entry != nil && disks.LeavesWildcards(seen.Entry.FSType) && slices.ContainsFunc(paths, names.HoldsWildcard)
+}
+
 // Unlink deletes what a path presents, but a folder: a file goes to the trash from the disk it is presented from,
 // `deleted`, and the pass sends its other copies (specs.md §15.5, §21.2); a symbolic link is removed.
 func (w *Writer) Unlink(ctx context.Context, path string, who Caller) error {
@@ -953,6 +966,9 @@ func (w *Writer) Unlink(ctx context.Context, path string, who Caller) error {
 	}
 	if err := w.mayDelete(ctx, asking(who), n.Disk, path, n); err != nil {
 		return err
+	}
+	if w.leftOn(w.disk(n.Disk), path) {
+		return ErrRefused
 	}
 	if n.Kind == view.NodeSymlink {
 		v := &catalog.ViewOp{Kind: catalog.ViewUnlink, Disk: n.Disk, Path: path}
@@ -1092,6 +1108,9 @@ func (w *Writer) Rmdir(ctx context.Context, path string, who Caller) error {
 		if err := w.mayDelete(ctx, asker, id, path, n); err != nil && !errors.Is(err, ErrNoHandle) {
 			return err
 		}
+		if w.leftOn(w.disk(id), path) {
+			return ErrRefused
+		}
 	}
 	v := &catalog.ViewOp{Kind: catalog.ViewRmdir, Disk: holders[0], Path: path, Folder: true}
 	if err := w.journal(ctx, v, who); err != nil {
@@ -1178,6 +1197,9 @@ func (w *Writer) refusedBy(ctx context.Context, holders []string, from, to strin
 		d := w.disk(id)
 		if d == nil {
 			continue
+		}
+		if w.leftOn(d, from, to) {
+			return ErrRefused
 		}
 		refused, err := w.refusedOn(ctx, d, to, from)
 		if err != nil {

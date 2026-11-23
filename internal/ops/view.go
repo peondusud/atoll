@@ -249,6 +249,9 @@ func (d *Disk) OpenUserFile(logical string) (fsx.WritableFile, fsx.Stat, error) 
 // RenameUser moves a file or a folder from one logical path to another on this disk, after the folders missing on the
 // way to the new one, and never onto anything. fileKey is the inode of what moves, as a look right before found it.
 func (d *Disk) RenameUser(from, to string, isFolder bool, fileKey string, like Like) error {
+	if err := d.refuseLeft(from, to); err != nil {
+		return err
+	}
 	if err := d.Verify(); err != nil {
 		return err
 	}
@@ -342,6 +345,9 @@ func (d *Disk) PlaceUserPart(op *Op, logical string, like Like) (fsx.Stat, error
 // (§17.1, step 4); ErrGone says that it does not, and it stays. The folder it leaves gets its time back, as Atoll's own
 // operations give it, and is synced.
 func (d *Disk) RemoveLeft(op *Op, row *catalog.KnownCopy) error {
+	if err := d.refuseLeft(op.Path); err != nil {
+		return err
+	}
 	if err := d.Verify(); err != nil {
 		return err
 	}
@@ -458,6 +464,9 @@ func (d *Disk) LinkUser(from, to string, fileKey string, like Like) (fsx.Stat, e
 // RemoveUser removes a folder that holds nothing, or a symbolic link, at a logical path: a regular file goes to the
 // trash, never this way (specs.md §21.2).
 func (d *Disk) RemoveUser(logical string, isFolder bool) error {
+	if err := d.refuseLeft(logical); err != nil {
+		return err
+	}
 	if err := d.Verify(); err != nil {
 		return err
 	}

@@ -94,6 +94,21 @@ Names that ntfs-3g wrote, read through `ntfs` and ntfs3:
 
 So such a file can never reach Atoll's trash on `ntfs`: an operation on it ends with an error that is neither a disk lost nor a name refused. The unpaired surrogate behaves as on ntfs3, which §15.10 already covers (`unreadable`).
 
+**Under `errors=remount-ro`, measured on Linux 7.3.5 on 2026-11-23** (`TestWhatTheTypeNTFSDoesWithAWildcardName`, in qemu): each operation on a fresh volume holding `q?.mkv`, `d*x/f.mkv` and `ok.mkv`, all written by ntfs-3g, then a folder made at the top, which says whether the volume is still writable:
+
+| Operation on the type `ntfs` | Without `windows_names` | With `windows_names` |
+|---|---|---|
+| `lstat`, listing, reading (`O_NOATIME` or not, past `relatime`), opening to write, `fsync`, `chmod`, `utimes`, `chown`, `setxattr`, `listxattr` of `q?.mkv` | work; the volume stays writable | the same |
+| `renameat2(NOREPLACE)` of `q?.mkv` into `Atoll/trash/` | **`ERANGE`, and the volume is set read-only** ("Filesystem has been set read-only") | **the same** |
+| `link` of `q?.mkv` to a name in the trash | works; writable | works; writable |
+| `unlink` of `q?.mkv` | **`EROFS`, the volume set read-only by it** | `EINVAL`; writable |
+| read, `chmod`, rename out of, file made in `d*x/` | work; writable | the same |
+| `renameat2(NOREPLACE)` of `ok.mkv` to `w?.mkv` | works; writable right after | `EINVAL`; writable |
+
+`windows_names` shows among the superblock options (`…,errors=remount-ro,mft_zone_multiplier=1,windows_names,…`). So what sets the volume read-only is taking such a name out of its folder's index: the move of Atoll's own to the trash, a rename, the removal; with `windows_names` the removal is refused first, the rename is not. Everything that reads it, or changes it in place, is harmless. The earlier finding stands beside it: a name of that kind the type `ntfs` itself makes, without `windows_names`, meets the error once its file is closed (`TestAForbiddenNameOnTheTypeNTFS`).
+
+**Decided on 2026-11-23**: such a name already on a disk of that type is left as it is, refused (`name-incompatible`): never copied, moved or sent to the trash, and reported; the disk is not made `readonly` for it. As the rename sets the volume read-only with `windows_names` too, the rule holds on that type whatever its options (specs.md §15.8, §22; to confirm, DONE.md). `TestAWildcardNameLeftOnTheTypeNTFS` checks it on a real volume: a pass, a deletion of the copy on the other disk and a prune leave the name there, with its row, the disk online and the volume writable.
+
 ### Case and short names
 
 | | Default (`case_sensitive`) | `nocase` |

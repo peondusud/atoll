@@ -117,14 +117,14 @@ func TestACatalogThatCannotBeRead(t *testing.T) {
 	all := func(string) bool { return true }
 	for what, call := range map[string]func() error{
 		"scan":     func() error { _, err := Scan(ctx, b.db, c, b, Options{}); return err },
-		"settle":   func() error { return Settle(ctx, b.db, c, b.now) },
+		"settle":   func() error { return Settle(ctx, b.db, c, b.now, nil) },
 		"compare":  func() error { _, err := Compare(ctx, b.db, c, b); return err },
 		"capacity": func() error { _, err := Capacity(ctx, b.db, c, b.now); return err },
 		"targets": func() error {
 			_, err := ParallelTargets(ctx, b.db, c, b.now, "b", "t1", func(string) (int64, bool) { return 0, false }, all)
 			return err
 		},
-		"transfers": func() error { _, err := CacheTransfers(ctx, b.db, c, b.now); return err },
+		"transfers": func() error { _, err := CacheTransfers(ctx, b.db, c, b.now, nil); return err },
 		"waits":     func() error { _, _, err := CacheWaits(ctx, b.db, c, b.now); return err },
 		"status": func() error {
 			_, err := ReadStatus(ctx, b.db, "", nil, func(*catalog.FileRow) error { return nil })

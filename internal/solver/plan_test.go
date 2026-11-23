@@ -49,6 +49,8 @@ type diskVector struct {
 	Root      *string  `json:"root"`
 	PastGrace bool     `json:"past_grace"`
 	Physical  string   `json:"physical"`
+	// LeavesWildcards is a disk of the type ntfs, whose copies at a wildcard name are left as they are (specs.md §15.8).
+	LeavesWildcards bool `json:"leaves_wildcards"`
 }
 
 type copyVector struct {
@@ -148,6 +150,7 @@ func (v *planVector) input() (Input, error) {
 			State: DiskState(or(d.State, "online")), Role: or(d.Role, "data"),
 			FS: names.Filesystem(or(d.FS, "ext4")), Domain: d.Domain, Tags: d.Tags,
 			Mount: or(d.Mount, "/mnt/"+d.ID), Root: or(d.Root, "media"), PastGrace: d.PastGrace, Physical: d.Physical,
+			LeavesWildcards: d.LeavesWildcards,
 		})
 	}
 	for _, f := range v.Files {
@@ -722,6 +725,7 @@ func checkPlan(t reporter, round int, in Input, plan Plan) {
 		placed[j.Path]++
 	}
 	checkCollisions(t, round, in, plan)
+	checkLeftAsTheyAre(t, round, in, plan, results)
 	for _, f := range in.Files {
 		r := results[f.Path]
 		if r == nil {
@@ -744,6 +748,43 @@ func checkPlan(t reporter, round int, in Input, plan Plan) {
 	for _, r := range plan.Results {
 		if r.States == nil && r.Surplus == nil && r.Back == nil && r.Cancel == nil {
 			t.Errorf("round %d: a result with nothing to say: %+v", round, r)
+		}
+	}
+}
+
+// checkLeftAsTheyAre checks that a copy at a wildcard name on a disk of the type ntfs is left as it is: no job reads
+// it, refreshes it or transfers it, no mark touches it, and its file is name-incompatible (specs.md §15.8).
+func checkLeftAsTheyAre(t reporter, round int, in Input, plan Plan, results map[string]*Result) {
+	t.Helper()
+	disks := map[string]*Disk{}
+	for i := range in.Disks {
+		disks[in.Disks[i].ID] = &in.Disks[i]
+	}
+	for _, f := range in.Files {
+		for _, c := range f.Copies {
+			place := f.Path
+			if c.OldPath != "" {
+				place = c.OldPath
+			}
+			if !disks[c.Disk].LeavesWildcards || c.State == CopyPending || !names.HoldsWildcard(place) {
+				continue
+			}
+			for _, j := range plan.Jobs {
+				if j.Path == f.Path && (j.Src == c.Disk || j.Dst == c.Disk) {
+					t.Errorf("round %d: job %+v of %q, left as it is on %s", round, j, f.Path, c.Disk)
+				}
+			}
+			r := results[f.Path]
+			if r == nil {
+				t.Errorf("round %d: %q, left as it is on %s, is not reported", round, f.Path, c.Disk)
+				continue
+			}
+			if slices.Contains(r.Surplus, c.Disk) || slices.Contains(r.Back, c.Disk) || slices.Contains(r.Cancel, c.Disk) || slices.Contains(r.Misplaced, c.Disk) {
+				t.Errorf("round %d: %q, left as it is on %s, is marked: %+v", round, f.Path, c.Disk, *r)
+			}
+			if !slices.Contains(r.States, StateNameIncompatible) {
+				t.Errorf("round %d: %q, left as it is on %s, is %v", round, f.Path, c.Disk, r.States)
+			}
 		}
 	}
 }
