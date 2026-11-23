@@ -678,3 +678,105 @@ func TestADebounceOfZeroIsOne(t *testing.T) {
 		t.Errorf("at its event: %d ripe, %d waiting", len(ripe), waiting)
 	}
 }
+
+// A look at a copy finds what its row says only when its size, its modification time, its change time and its inode are
+// all the row's, the row holding each (specs.md §15.10).
+func TestAFileIsUnchangedOnlyAsItsRowSaysOfAll(t *testing.T) {
+	valid := func(n int64) sql.NullInt64 { return sql.NullInt64{Int64: n, Valid: true} }
+	row := func() *catalog.KnownCopy {
+		return &catalog.KnownCopy{Size: valid(4), MtimeNS: valid(1), CtimeNS: valid(5), FileKey: sql.NullString{String: "7", Valid: true}}
+	}
+	f := &FoundFile{Size: 4, MtimeNS: 1, CtimeNS: 5, FileKey: "7"}
+	if !Unchanged(f, row()) {
+		t.Error("all as its row says, and changed")
+	}
+	for name, change := range map[string]func(k *catalog.KnownCopy){
+		"another size":              func(k *catalog.KnownCopy) { k.Size.Int64 = 5 },
+		"no size":                   func(k *catalog.KnownCopy) { k.Size.Valid = false },
+		"another modification time": func(k *catalog.KnownCopy) { k.MtimeNS.Int64 = 2 },
+		"no modification time":      func(k *catalog.KnownCopy) { k.MtimeNS.Valid = false },
+		"another change time":       func(k *catalog.KnownCopy) { k.CtimeNS.Int64 = 6 },
+		"no change time":            func(k *catalog.KnownCopy) { k.CtimeNS.Valid = false },
+		"another inode":             func(k *catalog.KnownCopy) { k.FileKey.String = "8" },
+		"no inode":                  func(k *catalog.KnownCopy) { k.FileKey.Valid = false },
+	} {
+		k := row()
+		change(k)
+		if Unchanged(f, k) {
+			t.Errorf("%s, and unchanged", name)
+		}
+	}
+}
+
+// A scan confirms a disk past the cache before it writes what its walk found when that says a copy moved, went, or is
+// uncertain or Atoll's own, and never for a copy there, edited, replaced or not reached (specs.md §10, §15.10).
+func TestWhatAScanConfirmsBeforeWriting(t *testing.T) {
+	for _, tc := range []struct {
+		v    solver.CopyVerdict
+		want bool
+	}{
+		{solver.VerdictMoved, true}, {solver.VerdictGone, true}, {solver.VerdictUncertain, true}, {solver.VerdictOwn, true},
+		{solver.VerdictThere, false}, {solver.VerdictEdited, false}, {solver.VerdictReplaced, false}, {solver.VerdictUnknown, false},
+	} {
+		r := &Report{Seen: []CopySeen{{FileID: 1, Verdict: solver.VerdictThere}, {FileID: 2, Verdict: tc.v}}}
+		if got := needsConfirming(r); got != tc.want {
+			t.Errorf("%s: %v", tc.v, got)
+		}
+	}
+	if needsConfirming(&Report{}) {
+		t.Error("nothing seen, and confirmed")
+	}
+}
+
+// The verdict about a copy is found by its file, and none for a file the look said nothing of.
+func TestTheVerdictOfACopyIsFoundByItsFile(t *testing.T) {
+	list := []CopySeen{{FileID: 9, Verdict: solver.VerdictGone}, {FileID: 3, Verdict: solver.VerdictMoved}, {FileID: 5, Verdict: solver.VerdictThere}}
+	SortSeen(list)
+	for id, want := range map[int64]solver.CopyVerdict{3: solver.VerdictMoved, 5: solver.VerdictThere, 9: solver.VerdictGone} {
+		if got := SeenOf(list, id); got == nil || got.Verdict != want || got.FileID != id {
+			t.Errorf("%d: %+v", id, got)
+		}
+	}
+	if got := SeenOf(list, 4); got != nil {
+		t.Errorf("a file not seen: %+v", got)
+	}
+	if got := SeenOf(list, 5); got != &list[1] {
+		t.Error("not the verdict of the list itself")
+	}
+}
+
+// A row the walk could not get to says nothing of its copy: unknown, as its row when the name holds it unchanged or a
+// reprise is to tell of it; a file of another inode at its name is one a copy may have gone to (specs.md §15.10).
+func TestARowNotReachedSaysNothingOfItsCopy(t *testing.T) {
+	valid := func(n int64) sql.NullInt64 { return sql.NullInt64{Int64: n, Valid: true} }
+	k := &catalog.KnownCopy{Path: "d/a", FilePath: "d/a", FileID: 3, Size: valid(4), MtimeNS: valid(1), CtimeNS: valid(5), BtimeNS: valid(9),
+		FileKey: sql.NullString{String: "7", Valid: true}}
+	nine, eight := int64(9), int64(8)
+	for _, tc := range []struct {
+		name    string
+		at      *FoundFile
+		planned map[string]bool
+		asRow   bool
+		others  int
+	}{
+		{"as its row", &FoundFile{Path: "d/a", Size: 4, MtimeNS: 1, CtimeNS: 5, BtimeNS: &nine, FileKey: "7"}, nil, true, 0},
+		{"edited", &FoundFile{Path: "d/a", Size: 6, MtimeNS: 2, CtimeNS: 6, BtimeNS: &nine, FileKey: "7"}, nil, false, 0},
+		{"another file", &FoundFile{Path: "d/a", Size: 4, MtimeNS: 1, CtimeNS: 5, BtimeNS: &eight, FileKey: "8"}, nil, false, 1},
+		{"nothing found", nil, nil, false, 0},
+		{"nothing found, planned", nil, map[string]bool{"d": true}, true, 0},
+	} {
+		found := 0
+		c := &compared{r: &Report{}, notReached: map[string]bool{"d": true}, planned: tc.planned, found: func(*FoundFile) { found++ }}
+		c.row(k, tc.at)
+		want := CopySeen{FileID: 3, Verdict: solver.VerdictUnknown, AsRow: tc.asRow}
+		unreached := 0
+		if tc.at == nil {
+			unreached = 1
+		} else if found != 1 {
+			t.Errorf("%s: found %d times", tc.name, found)
+		}
+		if len(c.r.Seen) != 1 || c.r.Seen[0] != want || len(c.others) != tc.others || len(c.unreached) != unreached || len(c.open) != 0 {
+			t.Errorf("%s: seen %+v, %d others, %d unreached, %d open", tc.name, c.r.Seen, len(c.others), len(c.unreached), len(c.open))
+		}
+	}
+}

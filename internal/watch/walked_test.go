@@ -647,3 +647,36 @@ func TestAFileOfAChunkSharesItsTransaction(t *testing.T) {
 		t.Errorf("killed at c, the catalog holds the hashes of %q, want none", got)
 	}
 }
+
+// A name given twice to a look limited to names is looked at once, deleted when either says so, and the names after it
+// all the same: a copy gone from a name an event said was deleted is gone, and one gone from a name no event said so of
+// says nothing, but that the disk is to be walked whole (specs.md §15.13).
+func TestANameGivenTwiceIsLookedAtOnce(t *testing.T) {
+	b := newBench(t, "t1")
+	b.write("t1", "a", "x")
+	b.write("t1", "b", "y")
+	b.scan(Options{})
+	media := filepath.Join(b.dirs["t1"], "media")
+	for _, name := range []string{"a", "b"} {
+		if err := os.Remove(filepath.Join(media, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	verdicts, err := disks.CheckAll(t.Context(), b, b.config.Disks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []Named{{Path: "a"}, {Path: ""}, {Path: "a", Deleted: true}, {Path: "b"}}
+	r, err := LookAtDisk(t.Context(), b.db, b.config, b, &b.config.Disks[0], verdicts[0], b.now, &Look{Names: names})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verdict := map[int64]solver.CopyVerdict{}
+	for _, seen := range r.Seen {
+		verdict[seen.FileID] = seen.Verdict
+	}
+	id := func(path string) int64 { return int64(b.count("SELECT id FROM files WHERE lpath = ?", []byte(path))) }
+	if verdict[id("a")] != solver.VerdictGone || verdict[id("b")] != solver.VerdictUnknown || !r.Whole || !slices.Equal(r.Looked, []string{"a", "b"}) {
+		t.Errorf("verdicts %v (a %d, b %d), whole %v, looked %q", verdict, id("a"), id("b"), r.Whole, r.Looked)
+	}
+}
