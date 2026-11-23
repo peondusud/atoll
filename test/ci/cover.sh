@@ -52,7 +52,8 @@ trap 'rm -rf "$work"' EXIT
 failed=()
 start=$SECONDS
 echo "==== the unit tests"
-"$go" test -coverpkg=./... -coverprofile="$out/cover.out" ./... || failed+=("the unit tests")
+# 45 minutes, as the race detector has: jobs' tests run past go test's 10 under -coverpkg on a loaded machine.
+"$go" test -timeout 45m -coverpkg=./... -coverprofile="$out/cover.out" ./... || failed+=("the unit tests")
 unit_time=$((SECONDS - start))
 
 start=$SECONDS

@@ -13,7 +13,7 @@ build:
 
 # Unit and property tests, including conformance/vectors; no root.
 test:
-	$(GO) test ./...
+	$(GO) test -timeout 45m ./...
 
 # Mandatory before any commit touching jobs, ops, watch, integrity or catalog.
 test-race:
