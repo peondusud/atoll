@@ -10,22 +10,112 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/view"
 	"github.com/peondusud/atoll/internal/view/writer"
 )
 
 // awayMachine is machine, with disks a test takes away and gives back: a disk away is a mount point with nothing
-// mounted.
+// mounted. Each disk's mount has an id, which a test moves on to stand for the disk mounted again; a device a test
+// fails answers its mount check from the page cache, and fails a read past it; fail makes calls through a handle on a
+// disk's top fail, as fsx.Fault does; its clock moves on at each question.
 type awayMachine struct {
 	machine
-	mu   sync.Mutex
-	away map[string]bool
+	mu      sync.Mutex
+	away    map[string]bool
+	mountID map[string]uint64
+	failing map[string]bool
+	gone    map[string]bool
+	fail    map[string]func(call, name string) error
+	now     int64
+}
+
+func (m *awayMachine) remount(mount string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mountID == nil {
+		m.mountID = map[string]uint64{}
+	}
+	m.mountID[mount]++
+}
+
+func (m *awayMachine) setFailing(mount string, failing bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failing == nil {
+		m.failing = map[string]bool{}
+	}
+	m.failing[mount] = failing
+}
+
+func (m *awayMachine) setGone(mount string, gone bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.gone == nil {
+		m.gone = map[string]bool{}
+	}
+	m.gone[mount] = gone
+}
+
+// Device says that the device of a disk a test took away is gone, its mount left as it was.
+func (m *awayMachine) Device(fs names.Filesystem, e *disks.MountEntry) disks.DeviceSeen {
+	m.mu.Lock()
+	gone := m.gone[e.MountPoint]
+	m.mu.Unlock()
+	if gone {
+		return disks.DeviceSeen{Device: disks.DeviceGoneAway, Note: "no such device"}
+	}
+	return m.machine.Device(fs, e)
+}
+
+func (m *awayMachine) setFail(mount string, fail func(call, name string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail == nil {
+		m.fail = map[string]func(call, name string) error{}
+	}
+	m.fail[mount] = fail
+}
+
+func (m *awayMachine) Now() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.now += 1_000_000_000
+	return m.now
+}
+
+func (m *awayMachine) ReadPastCache(fs names.Filesystem, e *disks.MountEntry) disks.DeviceSeen {
+	m.mu.Lock()
+	failing := m.failing[e.MountPoint]
+	m.mu.Unlock()
+	if failing {
+		return disks.DeviceSeen{Device: disks.DeviceUnreadable, Note: "input/output error"}
+	}
+	return m.machine.ReadPastCache(fs, e)
+}
+
+func (m *awayMachine) OpenTop(mount string) (fsx.Dir, error) {
+	top, err := m.machine.OpenTop(mount)
+	if err != nil {
+		return nil, err
+	}
+	return fsx.Fault(top, func(call, name string) error {
+		m.mu.Lock()
+		fail := m.fail[mount]
+		m.mu.Unlock()
+		if fail == nil {
+			return nil
+		}
+		return fail(call, name)
+	}), nil
 }
 
 func (m *awayMachine) setAway(mount string, away bool) {
@@ -40,7 +130,9 @@ func (m *awayMachine) Mount(mount string) disks.MountSeen {
 	if m.away[mount] {
 		return disks.MountSeen{Path: disks.PathOK}
 	}
-	return m.machine.Mount(mount)
+	seen := m.machine.Mount(mount)
+	seen.Entry.ID = 100 + m.mountID[mount]
+	return seen
 }
 
 // fakeServed is a view served by no kernel: Done once the test ends it, Unmount answering as the test says.
@@ -317,5 +409,109 @@ func TestAFailedDiskIsNeitherReadNorWritten(t *testing.T) {
 	ch.check(t.Context())
 	if !strings.Contains(b.said(), "which disks' own marker was seen is not read now") {
 		t.Errorf("the log:\n%s", b.said())
+	}
+}
+
+// plannedOnT2 deletes Films/a.mkv through the view's writer, its move to the trash meeting EIO on t2, which presents
+// it: a disk that cannot be relied on, the deletion left planned (specs.md §17.1, §21.2).
+func (b *runBench) plannedOnT2() {
+	b.t.Helper()
+	t2 := b.config.Disks[1].Mount
+	b.machine.setFail(t2, func(call, _ string) error {
+		if call == "rename" {
+			return syscall.EIO
+		}
+		return nil
+	})
+	root := writer.Caller{Creds: &view.Credentials{Caps: ^view.Caps(0)}}
+	if err := b.w.Unlink(b.t.Context(), "Films/a.mkv", root); err == nil {
+		b.t.Fatal("the deletion went through a disk that fails")
+	}
+	b.machine.setFail(t2, nil)
+	if got := b.planned(); got != 1 {
+		b.t.Fatalf("%d operations of the view planned, want the deletion's", got)
+	}
+}
+
+// planned counts the operations of the view left planned.
+func (b *runBench) planned() int {
+	b.t.Helper()
+	var n int
+	if err := b.o.DB.QueryRowContext(b.t.Context(), "SELECT count(*) FROM view_ops WHERE state = 'planned'").Scan(&n); err != nil {
+		b.t.Fatal(err)
+	}
+	return n
+}
+
+// checks lets the view's check run some twenty times.
+func (b *runBench) checks() {
+	time.Sleep(20 * b.o.Every)
+}
+
+// The view's check every 30 s resolves what a disk lost left planned only once a check found that disk lost, missing
+// or on another mount, and a later one finds it there again on a mount of its own, confirmed past the page cache, as a
+// session of the daemon confirms a disk (the maintainer, 2026-11-23; specs.md §10, §21.2). A disk whose device fails
+// while it stays mounted answers its mount check from the page cache: never found lost, it resolves nothing; found
+// lost and back, but failing a read past the cache, it resolves nothing either; back on a mount of its own and
+// confirmed, it resolves the deletion, nothing having moved, as undone, the copy at its name.
+func TestTheViewsCheckResolvesOnlyADiskBackAndConfirmed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// lose takes t2 away and gives it back, as the test says, once the deletion is planned.
+		lose func(b *runBench, t2 string)
+		want int
+	}{
+		{"failing while still mounted, never found lost", func(b *runBench, t2 string) {
+			b.machine.setFailing(t2, true)
+			b.checks()
+		}, 1},
+		{"found missing, back on a mount of its own, failing a read past the cache", func(b *runBench, t2 string) {
+			b.machine.setAway(t2, true)
+			b.waitSaid("a disk cannot be read")
+			b.machine.setFailing(t2, true)
+			b.machine.remount(t2)
+			b.machine.setAway(t2, false)
+			b.waitSaid("a disk can be read again")
+			b.checks()
+		}, 1},
+		{"found missing, its device gone, back on the same mount", func(b *runBench, t2 string) {
+			b.machine.setGone(t2, true)
+			b.waitSaid("a disk cannot be read")
+			b.machine.setGone(t2, false)
+			b.waitSaid("a disk can be read again")
+			b.checks()
+		}, 1},
+		{"found missing, back on a mount of its own, confirmed", func(b *runBench, t2 string) {
+			b.machine.setAway(t2, true)
+			b.waitSaid("a disk cannot be read")
+			b.machine.remount(t2)
+			b.machine.setAway(t2, false)
+			b.waitSaid("a disk can be read again")
+			b.checks()
+		}, 0},
+		{"on another mount between two checks, confirmed", func(b *runBench, t2 string) {
+			b.machine.remount(t2)
+			b.checks()
+		}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newRunBench(t)
+			b.o.Writes = true
+			ctx, stop := context.WithCancel(t.Context())
+			ended := b.start(ctx)
+			b.plannedOnT2()
+			t2 := b.config.Disks[1].Mount
+			tc.lose(b, t2)
+			if got := b.planned(); got != tc.want {
+				t.Errorf("%d operations of the view planned once its check ran, want %d:\n%s", got, tc.want, b.said())
+			}
+			if _, err := os.Stat(filepath.Join(t2, "media", "Films", "a.mkv")); err != nil {
+				t.Errorf("the copy is not at its name on t2: %v", err)
+			}
+			stop()
+			if err := <-ended; err != nil {
+				t.Errorf("the view ended with %v", err)
+			}
+		})
 	}
 }

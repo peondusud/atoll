@@ -147,7 +147,7 @@ func Run(ctx context.Context, o Options) error {
 			c.check(ctx)
 			if w != nil {
 				// What a disk lost left planned is resolved once it is there again, not at the next start alone.
-				if err := w.Recheck(ctx); err != nil {
+				if err := w.Recheck(ctx, c.ready()); err != nil {
 					o.Log.Warn("what the view left planned is not resolved now", "error", err)
 				}
 			}
@@ -209,6 +209,26 @@ type checker struct {
 	readable map[string]bool
 	// seen is which disks' own marker the catalog recorded seen, as the check read it last (specs.md §10).
 	seen disks.Seen
+	// mounts is the mount each disk was on at the last check that found it there, and since when; a disk its check
+	// found with nothing mounted at its path has none: whatever is mounted there next is another mount, even where the
+	// kernel gives it the same id, as the per-mount readings of §10 take it.
+	mounts map[string]diskMount
+	// started says that a check ran: the mounts the first finds are where the view started, not mounts of their own.
+	started bool
+}
+
+// diskMount is the mount a disk is on, as a check found it: the id of the mount table, the device, and the unique id
+// of Linux 6.8 and later, 0 before; since is the time of the check that first found it there, 0 for a mount the view
+// started on.
+type diskMount struct {
+	id           uint64
+	major, minor uint32
+	unique       uint64
+	since        int64
+}
+
+func (m diskMount) same(o diskMount) bool {
+	return m.id == o.id && m.major == o.major && m.minor == o.minor && m.unique == o.unique
 }
 
 // check runs the mount check of every disk, with the question of its marker, which the machine reads once per mount
@@ -222,6 +242,8 @@ func (c *checker) check(ctx context.Context) {
 	} else {
 		c.seen = disks.Seen(seen)
 	}
+	now := c.o.Machine.Now()
+	defer func() { c.started = true }()
 	for i := range c.o.Config.Disks {
 		d := &c.o.Config.Disks[i]
 		v := disks.CheckKnown(c.o.Machine, d, c.o.Config.PoolID, c.seen.Of(d))
@@ -229,6 +251,7 @@ func (c *checker) check(ctx context.Context) {
 		if c.handles != nil {
 			c.handleOf(d, v, root != nil)
 		}
+		c.follow(d, v, root != nil, now)
 		if root == nil {
 			c.roots.Drop(d.ID)
 			if was, seen := c.readable[d.ID]; was || !seen {
@@ -243,6 +266,80 @@ func (c *checker) check(ctx context.Context) {
 		}
 		c.readable[d.ID] = true
 	}
+}
+
+// follow keeps the mount a disk is on: a disk found with nothing mounted at its path has none; one found there on a
+// mount other than the one it had, or than none, is on a mount of its own since this check, but at the view's start.
+func (c *checker) follow(d *config.Disk, v disks.Verdict, there bool, now int64) {
+	if v.State == disks.Missing && v.Reason == disks.NotMounted {
+		delete(c.mounts, d.ID)
+		return
+	}
+	if !there {
+		return
+	}
+	seen, ok := c.mountOf(d)
+	if !ok {
+		return
+	}
+	if was, had := c.mounts[d.ID]; had && was.same(seen) {
+		return
+	}
+	if c.started {
+		seen.since = now
+	}
+	if c.mounts == nil {
+		c.mounts = map[string]diskMount{}
+	}
+	c.mounts[d.ID] = seen
+}
+
+// mountOf tells the mount at a disk's path, false where it cannot be told now.
+func (c *checker) mountOf(d *config.Disk) (diskMount, bool) {
+	seen := c.o.Machine.Mount(d.Mount)
+	if seen.Entry == nil {
+		return diskMount{}, false
+	}
+	unique, ok, err := fsx.UniqueMountID(d.Mount)
+	if err != nil {
+		return diskMount{}, false
+	}
+	if !ok {
+		unique = 0
+	}
+	return diskMount{id: seen.Entry.ID, major: seen.Entry.Major, minor: seen.Entry.Minor, unique: unique}, true
+}
+
+// ready gives the writer's recheck what it may resolve of each disk while the view runs (specs.md §21.2; the
+// maintainer, 2026-11-23): what was journaled before the mount the disk is on now, once that is a mount of its own,
+// the disk lost since the view started and there again, and once the disk is confirmed past the page cache, as a
+// session of the daemon confirms a disk (§10), so that a disk whose device fails while it stays mounted, its answers
+// from the cache, is never taken for there. A disk that does not confirm resolves nothing now.
+func (c *checker) ready() writer.Ready {
+	return func(id string) (int64, bool) {
+		m, had := c.mounts[id]
+		if !had || m.since == 0 {
+			return 0, false
+		}
+		d := c.disk(id)
+		if d == nil {
+			return 0, false
+		}
+		if v := disks.Confirm(c.o.Machine, d); v.State == disks.Missing {
+			c.o.Log.Warn("what the view left planned on a disk stays planned: it does not confirm", "disk", id, "reason", v.Message)
+			return 0, false
+		}
+		return m.since, true
+	}
+}
+
+func (c *checker) disk(id string) *config.Disk {
+	for i := range c.o.Config.Disks {
+		if c.o.Config.Disks[i].ID == id {
+			return &c.o.Config.Disks[i]
+		}
+	}
+	return nil
 }
 
 // handleOf opens a handle on the top of a disk its check found online, and confirms it there (invariant 3); a disk the

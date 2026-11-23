@@ -16,27 +16,57 @@ import (
 // still does; a rename onto a name whose copy reached the trash is finished. An operation on a disk the view cannot
 // write to now stays planned, for its next start.
 func (w *Writer) Reprise(ctx context.Context) error {
-	return w.reprise(ctx, false)
+	return w.reprise(ctx, nil)
 }
 
 // Recheck resolves, while the view runs, what it left planned, as its start does, under the writer's lock, so that no
 // operation of the view is under way meanwhile: what a disk that could not be relied on left planned, once the view's
 // check every 30 s finds that disk there again (specs.md §21.2). A row that work under way still answers for, a part
 // being written or closed or a move during its copy, is that work's, and stays as it is.
-func (w *Writer) Recheck(ctx context.Context) error {
+func (w *Writer) Recheck(ctx context.Context, ready Ready) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.reprise(ctx, true)
+	return w.reprise(ctx, ready)
 }
 
-func (w *Writer) reprise(ctx context.Context, running bool) error {
+// readyAnswer is what Ready gave of a disk, asked once a recheck.
+type readyAnswer struct {
+	before int64
+	ok     bool
+}
+
+// Ready says, of a disk the view left an operation planned on, up to when what the view journaled there may be
+// resolved while it runs: the time of the check that first found it on the mount it is on now, once that is a mount of
+// its own after the disk was lost, confirmed past the page cache; false otherwise (specs.md §21.2).
+type Ready func(disk string) (before int64, ok bool)
+
+// reprise resolves what the view left planned: at its start, ready nil, every row of a disk it has a handle on; while it
+// runs, only the rows ready allows, of a disk back on a mount of its own and confirmed, journaled before that mount
+// (the maintainer, 2026-11-23).
+func (w *Writer) reprise(ctx context.Context, ready Ready) error {
 	open, err := catalog.OpenViewOps(ctx, w.db)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
+	running := ready != nil
+	asked := map[string]readyAnswer{}
+	allows := func(disk string, at int64) bool {
+		if !running || disk == "" {
+			return true
+		}
+		a, done := asked[disk]
+		if !done {
+			a.before, a.ok = ready(disk)
+			asked[disk] = a
+		}
+		return a.ok && at < a.before
+	}
 	for i := range open {
 		v := &open[i]
 		if v.State != catalog.OpPlanned || running && w.isHeld(v.ID) {
+			continue
+		}
+		if !allows(v.Disk, v.AtNS) || !allows(v.Disk2, v.AtNS) {
 			continue
 		}
 		if v.Kind == catalog.ViewMove {

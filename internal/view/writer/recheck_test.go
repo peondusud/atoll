@@ -28,7 +28,7 @@ func TestARecheckResolvesWhatADiskLostLeftPlanned(t *testing.T) {
 		t.Fatalf("%d operations planned, want the deletion's", b.planned())
 	}
 	b.machine.setFail(b.mount[disk], nil)
-	if err := b.w.Recheck(t.Context()); err != nil {
+	if err := b.w.Recheck(t.Context(), everything); err != nil {
 		t.Fatal(err)
 	}
 	if b.planned() != 0 {
@@ -48,7 +48,7 @@ func TestARecheckResolvesWhatADiskLostLeftPlanned(t *testing.T) {
 func TestARecheckLeavesAPartBeingWritten(t *testing.T) {
 	b := parallelBench(t, "", 400)
 	f := b.writeNew("Films/new.mkv", "new file")
-	if err := b.w.Recheck(t.Context()); err != nil {
+	if err := b.w.Recheck(t.Context(), everything); err != nil {
 		t.Fatal(err)
 	}
 	if got := b.partRows(); len(got) != 1 || got[0] != "t2:planned:planned" {
@@ -56,7 +56,7 @@ func TestARecheckLeavesAPartBeingWritten(t *testing.T) {
 	}
 	_ = f.Close()
 	b.w.Wait()
-	if err := b.w.Recheck(t.Context()); err != nil {
+	if err := b.w.Recheck(t.Context(), everything); err != nil {
 		t.Fatal(err)
 	}
 	if got := b.partRows(); len(got) != 1 || got[0] != "t2:done:planned" {
