@@ -50,13 +50,15 @@ func fillTo(t *testing.T, at string, room int64) {
 // conformance/models/README.md, flaw 12): once the copy of a file of four chunks is journaled, a file of the user's own
 // leaves its target 6 MiB past min_free, 32 MiB, room the plan counted on and the copy needs 16 MiB of, and enough for
 // the copy itself. The copy stops no-room before it takes the disk past min_free, its part gone and nothing at the
-// file's name; the user's file removed, the next run makes the copy, read back through a cold cache.
+// file's name; the user's file removed, the next run makes the copy, read back through a cold cache. On btrfs, whose
+// free space counts a write only once it is flushed, the disk's word alone let the copy write on past min_free: the
+// copy counts what it wrote since its first look too.
 func TestACopyStopsAtMinFreeOnEachDriver(t *testing.T) {
 	needRoot(t)
 	for _, tc := range trashDrivers {
 		t.Run(tc.name, func(t *testing.T) {
 			options := driverOptions(t, tc.driver)
-			v := newVolumeSized(t, tc.fs, 256)
+			v := newVolume(t, tc.fs)
 			at := mountPoint(t)
 			mountVolume(t, v, tc.driver, at, options...)
 			b := newPassBenchWith(t, v, at, "[placement]\nmin_free = [\"32MiB\"]\n")
@@ -85,7 +87,13 @@ func TestACopyStopsAtMinFreeOnEachDriver(t *testing.T) {
 			if err := os.Remove(filepath.Join(at, "filler")); err != nil {
 				t.Fatal(err)
 			}
-			unix.Sync()
+			// XFS gives a removed file's blocks back in the background, after its unlink and a sync, on Linux 6.12.
+			for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
+				unix.Sync()
+				if _, free, err := fsx.Space(at); err == nil && free >= (32+16+2)<<20 || time.Since(start) > 30*time.Second {
+					break
+				}
+			}
 			items = b.replicate("")
 			if len(items) != 1 || items[0].Outcome != jobs.OutcomeReplicated {
 				t.Fatalf("with room again: %+v", items)

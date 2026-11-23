@@ -4,8 +4,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/peondusud/atoll/internal/integrity"
 )
 
 // roomBench is a pool whose copy of a to t2 finds, once journaled, that another writer has left t2 with less free space
@@ -70,6 +73,32 @@ func TestACopyStopsBeforeItTakesItsDiskPastMinFree(t *testing.T) {
 		t.Errorf("%d operations undone", n)
 	}
 	b.roomBack()
+}
+
+// A disk whose free space does not count a copy's writes until they are flushed, as btrfs's does (test/loopdev,
+// TestACopyStopsAtMinFreeOnEachDriver, in qemu): the copy counts what it wrote itself since its first look, so that a
+// file of four chunks with room for one and a half past min_free still stops, where the disk's word alone, which never
+// moves here, let it write on past min_free.
+func TestACopyCountsWhatItWroteWhereItsDiskDoesNotYet(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "a", strings.Repeat("x", 4*integrity.ChunkSize))
+	b.scan(false)
+	b.now += settleNS
+	if b.spaces == nil {
+		b.spaces = map[string][2]int64{}
+	}
+	mount := b.dirs["t2"]
+	b.at["journaled"] = func() {
+		// 100 MiB, min_free 5 % of it: 6 MiB past it, as the disk says it all the copy long.
+		b.spaces[mount] = [2]int64{100 << 20, 5<<20 + 6<<20}
+	}
+	out := b.pass()
+	if got := outcomeOf(out, KindReplicate, "a"); got != OutcomeNoRoom {
+		t.Errorf("the copy says %q: %+v", got, out.Operations)
+	}
+	if n := b.partsOf("t2"); n != 0 {
+		t.Errorf("tmp/ of t2 holds %d parts", n)
+	}
 }
 
 // A pass stopped, as by kill -9, as a copy that found no room past min_free drops its part, before the part goes and

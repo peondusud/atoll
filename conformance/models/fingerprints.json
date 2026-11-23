@@ -29,7 +29,7 @@
     {
       "section": "14",
       "title": "## 14. Replication",
-      "sha256": "f41730126aebf8c0ec1bb15f530636ab581c68a5e1ab45aca31be6fcdba2825d"
+      "sha256": "50f5e0cfd6e8429ac49dd411d6643a263eba3b1c7c390a27a8bce17b6d3ad299"
     },
     {
       "section": "14.1",
@@ -39,7 +39,7 @@
     {
       "section": "14.2",
       "title": "### 14.2 The operation `create`",
-      "sha256": "a27c8f537acefaeae168f98b9b1be462a9349952b39bdd4a0ff8576c47c285eb"
+      "sha256": "6f38599d05d55ec214eba15d53ffeb8401936fbaf03aaca41aa9b1af8b632ded"
     },
     {
       "section": "15.3",
@@ -104,7 +104,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "77fd89e6e81011ffb2484765e59f08e557c8d206c59d0aa23754dac4032dc88e"
+      "sha256": "ed886a8b1607a9e82813183558bcaac741326710db1dd1203f76cd9c311d54df"
     }
   ]
 }

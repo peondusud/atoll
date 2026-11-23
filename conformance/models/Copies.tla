@@ -390,7 +390,7 @@ CopyStep(f, d) ==
                  /\ UNCHANGED <<crow, rjob, ghost>>
             [] r.s = "made" ->
                  \* the copy, read from the source: ENOSPC, or a write that would take the disk past min_free
-                 \* (replicator.roomPast; README.md's flaw 12, the remedy copy-room), is no-room: the part goes,
+                 \* (room.keeps; README.md's flaw 12, the remedy copy-room), is no-room: the part goes,
                  \* undone, the job queued again
                  /\ Ok(src)
                  /\ LET grow == Size[f] - objs[r.o].size

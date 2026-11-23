@@ -2,6 +2,8 @@ package writer
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -128,6 +130,32 @@ func TestARowTheCatalogKeepsOpenIsLetGoOfAtTheNextStart(t *testing.T) {
 	if got := b.viewStates("write"); got[0] != catalog.OpDone {
 		t.Errorf("after the start: %v", got)
 	}
+}
+
+// An open to write that cannot open the copy it journaled its write on, a copy gone from its disk behind the catalog's
+// back here, undoes that write: the view presents nothing from a copy it never opened, and nothing is held open.
+func TestAnOpenToWriteThatFailsUndoesItsWrite(t *testing.T) {
+	b := newBench(t, "ext4")
+	if err := os.Remove(filepath.Join(b.mount["t2"], "media", "Films", "a.mkv")); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := b.openToWrite(); err == nil {
+		_ = f.Close()
+		t.Fatal("it opened a copy that is gone")
+	}
+	if got := b.viewStates("write"); len(got) != 1 || got[0] != catalog.OpUndone {
+		t.Errorf("the write's row: %v", got)
+	}
+	// Opened again once the copy is back, it journals a write of its own and holds it open.
+	mustWrite(t, filepath.Join(b.mount["t2"], "media", "Films", "a.mkv"), "from t2")
+	f, err := b.openToWrite()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.viewStates("write"); len(got) != 2 || got[1] != catalog.ViewHeld {
+		t.Errorf("opened again: %v", got)
+	}
+	_ = f.Close()
 }
 
 // planMove journals a move of Atoll's own of the copy of Films/a.mkv on t2 to its trash, as the SSD cache's transfer

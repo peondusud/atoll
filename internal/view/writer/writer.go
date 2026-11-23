@@ -106,6 +106,15 @@ func (w *Writer) closeHandle(ctx context.Context, id int64) {
 	}
 }
 
+// forgetHandle counts a handle closed whose row is not let go of but undone.
+func (w *Writer) forgetHandle(id int64) {
+	w.heldMu.Lock()
+	defer w.heldMu.Unlock()
+	if w.opened[id]--; w.opened[id] <= 0 {
+		delete(w.opened, id)
+	}
+}
+
 // hold says that work under way answers for a row of the view's journal, until release.
 func (w *Writer) hold(id int64) {
 	w.heldMu.Lock()
@@ -563,8 +572,19 @@ func (w *Writer) Open(ctx context.Context, path string, n *view.Node, who Caller
 	if n.Kind == view.NodeDir {
 		return nil, ErrIsFolder
 	}
+	lookedAgain := false
 	for waited := time.Duration(0); ; waited += moveTry {
 		f, err := w.open(ctx, path, n, who)
+		if (errors.Is(err, ops.ErrGone) || fsx.IsAbsent(err)) && !lookedAgain {
+			// The copy the kernel looked up left its name since, as a move of Atoll's own leaves it once done: what the
+			// view presents now is opened, once, as a read falls back to the next copy (flaws 9 and 10).
+			lookedAgain = true
+			again, lerr := w.tree.Lookup(ctx, path)
+			if lerr == nil && again != nil && again.Kind == n.Kind && again.Disk != n.Disk {
+				n = again
+				continue
+			}
+		}
 		if !errors.Is(err, catalog.ErrMovePlanned) {
 			return f, err
 		}
@@ -615,7 +635,7 @@ func (w *Writer) open(ctx context.Context, path string, n *view.Node, who Caller
 	}
 	// Opened again to be written, a file is no new file written once: its copies in parallel go.
 	w.abandonAt(path, "opened again to be written")
-	id, err := w.journalWrite(ctx, path, n, who, true)
+	id, fresh, err := w.journalWrite(ctx, path, n, who, true)
 	if err != nil {
 		return nil, err
 	}
@@ -631,7 +651,15 @@ func (w *Writer) open(ctx context.Context, path string, n *view.Node, who Caller
 		w.openHandle(ctx, file, id)
 	}
 	if err != nil {
-		if id != 0 {
+		switch {
+		case fresh:
+			// Nothing was opened: the write it journaled is undone, never done, so that the view presents nothing from a
+			// copy it could not open, one a move of Atoll's own took from its name among them (Open).
+			w.forgetHandle(id)
+			if uerr := catalog.FinishViewOp(ctx, w.db, &catalog.ViewOp{ID: id, Path: path}, catalog.OpUndone, false, w.now()); uerr != nil {
+				return nil, errors.Join(err, fmt.Errorf("%w", uerr))
+			}
+		case id != 0:
 			w.closeHandle(ctx, id)
 		}
 		return nil, err
@@ -640,12 +668,12 @@ func (w *Writer) open(ctx context.Context, path string, n *view.Node, who Caller
 }
 
 // journalWrite journals a write on a path's presented copy, unless one is open already that presents it from there.
-// With held, for an open to write, the row is held open, and its id given: one done already is held open again, and
-// a new one waits while a move of Atoll's own of that copy is planned (catalog.ErrMovePlanned).
-func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node, who Caller, held bool) (int64, error) {
+// With held, for an open to write, the row is held open, and its id given, fresh when the row is new: one done already
+// is held open again, and a new one waits while a move of Atoll's own of that copy is planned (catalog.ErrMovePlanned).
+func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node, who Caller, held bool) (int64, bool, error) {
 	open, err := catalog.OpenViewOps(ctx, w.db)
 	if err != nil {
-		return 0, fmt.Errorf("%w", err)
+		return 0, false, fmt.Errorf("%w", err)
 	}
 	for i := len(open) - 1; i >= 0; i-- {
 		v := &open[i]
@@ -659,14 +687,14 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node, wh
 		}
 		if (v.Kind == catalog.ViewWrite || v.Kind == catalog.ViewCreate) && v.Path == path && v.Disk == n.Disk {
 			if !held {
-				return 0, nil
+				return 0, false, nil
 			}
 			if v.State == catalog.OpDone {
 				if err := catalog.HoldViewOp(ctx, w.db, v.ID); err != nil {
-					return 0, fmt.Errorf("%w", err)
+					return 0, false, fmt.Errorf("%w", err)
 				}
 			}
-			return v.ID, nil
+			return v.ID, false, nil
 		}
 		break
 	}
@@ -675,12 +703,12 @@ func (w *Writer) journalWrite(ctx context.Context, path string, n *view.Node, wh
 		v.State = catalog.ViewHeld
 	}
 	if err := w.journal(ctx, v, who); err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if v.State != catalog.ViewHeld {
-		return 0, nil
+		return 0, false, nil
 	}
-	return v.ID, nil
+	return v.ID, true, nil
 }
 
 // Setattr changes what a user may change of a path: the owner, the mode, the size and the times. A file or a symbolic
@@ -718,7 +746,7 @@ func (w *Writer) Setattr(ctx context.Context, path string, n *view.Node, a *ops.
 			changes[id] = change
 		}
 	}
-	if _, err := w.journalWrite(ctx, path, &view.Node{Kind: n.Kind, Disk: targets[0]}, how.Caller, false); err != nil {
+	if _, _, err := w.journalWrite(ctx, path, &view.Node{Kind: n.Kind, Disk: targets[0]}, how.Caller, false); err != nil {
 		return nil, err
 	}
 	var first *fsx.Stat

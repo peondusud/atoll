@@ -83,6 +83,41 @@ func TestAWriteOpenedThroughTheViewDuringATransferWaitsForIt(t *testing.T) {
 	}
 }
 
+// The kernel looked the file up on the cache, then the transfer moved that copy to the trash before the program's
+// open to write came: the open finds nothing at the name it looked up, and opens what the view presents now, on a data
+// disk, as a read falls back (flaw 9): it once failed with ENOENT, a file of the library missing for the program, as
+// TestAWriteOpenedThroughTheViewDuringATransferWaitsForIt showed once in twenty runs when its open came late.
+func TestAnOpenToWriteAfterTheTransferOpensWhatTheViewPresents(t *testing.T) {
+	b := cacheBench(t, "[cache]\nenabled = true\nmin_age = \"0s\"\n"+windowOpen)
+	b.write("c", "show/e1.mkv", "episode")
+	b.write("t1", "show/e1.mkv", "episode")
+	b.write("t2", "show/e1.mkv", "episode")
+	b.scan(true)
+	w, tree := b.viewOf(), b.treeOf()
+	n, err := tree.Lookup(t.Context(), "show/e1.mkv")
+	if err != nil || n == nil || n.Disk != "c" {
+		t.Fatalf("the view presents %+v (%v)", n, err)
+	}
+	if got := outcomeOf(b.pass(), KindTransfer, "show/e1.mkv"); got != OutcomeTransferred {
+		t.Fatalf("the transfer %s", got)
+	}
+	f, err := w.Open(t.Context(), "show/e1.mkv", n, viewer)
+	if err != nil {
+		t.Fatalf("open to write: %v", err)
+	}
+	if f.Disk == "c" {
+		t.Errorf("opened on the cache")
+	}
+	const better = "a better release"
+	if _, err := f.WriteAt([]byte(better), 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	if at := b.contentAnywhere(better); len(at) != 1 || !strings.Contains(at[0], "media/show/e1.mkv") {
+		t.Errorf("what the program wrote is at %v", at)
+	}
+}
+
 // The transfer reads the view's operations again in the transaction that journals its move: a file opened to write
 // through the view after the pass read them, as the transfer of another file ran, is not moved under the program, and
 // waits (flaw 10).
