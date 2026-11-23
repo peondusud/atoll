@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -224,16 +225,40 @@ func TestADeletionThroughTheViewEditedAtItsMoveOnEachDriver(t *testing.T) {
 	}
 }
 
-// forceBack unmounts a disk of a kernel driver at once, as a USB reset leaves it, and mounts it again: a mount of its
-// own, which the view's check must find and open again.
+// forceBack unmounts a disk at once and mounts it again, as the daemon's remount after a USB reset does (umount -l,
+// then mount; specs.md §10), killing nothing: a mount of its own, which the view's check must find and open again.
+// While the view's handles keep the mount unmounted alive, the kernel gives the new mount the very superblock they
+// keep, whatever the driver; on ntfs-3g and lowntfs-3g, the new process then finds its FUSE device bound to no
+// connection and exits, and the old one serves the new mount (docs/research/ntfs-driver.md, 2026-11-23).
 func forceBack(t *testing.T, v *volume, driver, at string, options []string) {
 	t.Helper()
+	fuse := !renamesNoReplace(driver)
+	var before []int
+	if fuse {
+		before = fusePids(driver, v.device)
+	}
 	must(t, "umount", "-l", at)
 	if err := remount(t, v, driver, at, options); err != nil {
 		t.Fatalf("the volume did not mount again: %v", err)
 	}
 	got := check(t, diskOf(v, at))
 	t.Logf("mounted again: %s; its check %s %s %s", findmnt(at), got.State, got.Reason, got.Message)
+	if fuse {
+		t.Logf("%s's processes on %s: %v before, %v once mounted again", driver, v.device, before, fusePids(driver, v.device))
+	}
+}
+
+// fusePids gives the processes of a FUSE driver serving a device, as its command line names them, started as the
+// driver or as its mount helper (mount.ntfs-3g).
+func fusePids(driver, device string) []int {
+	out, _ := exec.CommandContext(context.Background(), "pgrep", "-f", driver+" .*"+device+" ").Output()
+	var pids []int
+	for _, field := range strings.Fields(string(out)) {
+		if n, err := strconv.Atoi(field); err == nil {
+			pids = append(pids, n)
+		}
+	}
+	return pids
 }
 
 // findmnt says what is mounted at a path, every mount stacked there.
@@ -247,10 +272,14 @@ func findmnt(at string) string {
 
 // TestTheViewsRecheckAfterADiskLostOnEachDriver: a deletion through the view meets EIO at its move, a disk that cannot
 // be relied on, the fault layer's hook at the move's call standing for it, and stays planned; the disk is then
-// unmounted at once and mounted again, as after a USB reset, while the view runs, before its next check. The view's
-// check finds it there again and resolves the operation, with no restart: nothing moved, so it is undone, the copy at
-// its name (specs.md §17.1, §17.2, §21.2; flaw 5). The file can then be deleted through the view, and a pass takes
-// that in. TestTheViewsRecheckOnADiskStillFailing is the case of a check while the disk fails, mounted.
+// unmounted at once and mounted again, as the daemon's remount after a USB reset does, while the view runs, before its
+// next check. The view's check finds it there again and resolves the operation, with no restart: nothing moved, so it
+// is undone, the copy at its name (specs.md §17.1, §17.2, §21.2; flaw 5). The file can then be deleted through the
+// view, and a pass takes that in. On every driver, ntfs-3g and lowntfs-3g too: their process killed before the mount
+// again, as this test once did, the mount the kernel gives back to the view's handles is one no process serves
+// (ENOTCONN), which the daemon's next try mounts again once the view lets go of them
+// (TestTheDaemonsRemountUnderTheViewOnEachFUSEDriver). TestTheViewsRecheckOnADiskStillFailing is the case of a check
+// while the disk fails, mounted.
 func TestTheViewsRecheckAfterADiskLostOnEachDriver(t *testing.T) {
 	needRoot(t)
 	for _, tc := range trashDrivers {
@@ -260,14 +289,8 @@ func TestTheViewsRecheckAfterADiskLostOnEachDriver(t *testing.T) {
 			at := mountPoint(t)
 			mountVolume(t, v, tc.driver, at, options...)
 			b := viewPool(t, v, at)
-			var lost atomic.Bool
 			real := b.machine
-			b.machine = &faultTop{Machine: real, fail: map[string]func(call, name string) error{at: func(call, name string) error {
-				if (call == "rename" || call == "link") && name == "a.mkv" && lost.CompareAndSwap(false, true) {
-					return syscall.EIO
-				}
-				return nil
-			}}}
+			b.machine = failingMove(real, at, "a.mkv")
 			point := filepath.Join(t.TempDir(), "view")
 			mustDo(t, os.Mkdir(point, 0o755))
 			served, err := serveViewEvery(t, b, point, true, 3*time.Second)
@@ -279,23 +302,7 @@ func TestTheViewsRecheckAfterADiskLostOnEachDriver(t *testing.T) {
 			if got := b.viewOps(); got != "unlink planned" {
 				t.Fatalf("the view's journal once the disk failed: %s", got)
 			}
-			if renamesNoReplace(tc.driver) {
-				forceBack(t, v, tc.driver, at, options)
-			} else {
-				// ntfs-3g mounted again at once, its old process killed, while the view runs there with an operation it
-				// left planned, mounted, then read /dev/fuse with EPERM ("fuse: reading device: Operation not
-				// permitted") and unmounted itself, in qemu, where the same remount works with the view running and
-				// nothing planned (DONE.md, 2026-11-23). The disk stays mounted here: never lost, it is not there again,
-				// and the view's check leaves the deletion planned for ten checks; its next start resolves it.
-				time.Sleep(10 * 3 * time.Second)
-				if got := b.viewOps(); got != "unlink planned" {
-					t.Fatalf("the view's journal, its disk never lost: %s, want the deletion planned", got)
-				}
-				served.stop()
-				mustDo(t, served.wait())
-				served, err = serveViewEvery(t, b, point, true, 3*time.Second)
-				mustDo(t, err)
-			}
+			forceBack(t, v, tc.driver, at, options)
 			waitFor(t, "the deletion resolved by the view's check", func() bool { return !strings.Contains(b.viewOps(), "planned") })
 			if got := b.viewOps(); got != "unlink undone" {
 				t.Errorf("the view's journal once the disk is back: %s", got)
@@ -339,8 +346,9 @@ func TestTheViewsRecheckAfterADiskLostOnEachDriver(t *testing.T) {
 // 2026-11-23; specs.md §21.2). It once was resolved done from the cache, within 40 to 350 ms on ext4, ntfs3 and
 // ntfs-3g, and once the disk was back the copy was at its name. The view is then stopped, the disk brought back and the
 // view started again, whose reprise resolves the deletion by what the disk holds, and the pass takes it in, the
-// library and the catalog agreeing. Stopped first, as the remount of a kernel driver under the view's handles gives
-// back the very superblock they keep alive, aborted, which no USB reset does.
+// library and the catalog agreeing. Stopped first, as a mount again under the view's handles gives back the very
+// superblock they keep alive, aborted on a kernel driver, and on ntfs-3g served by no process once bringBack killed it,
+// which no USB reset does, as it brings the disk back as another device.
 func TestTheViewsRecheckOnADiskStillFailing(t *testing.T) {
 	needRoot(t)
 	for _, tc := range failingDrivers {

@@ -317,6 +317,107 @@ func TestDaemonRemountsAfterAReset(t *testing.T) {
 	}
 }
 
+// TestTheDaemonsRemountUnderTheViewOnEachFUSEDriver: the daemon's remount after a reset (umount -l, then mount from the
+// fstab entry; specs.md §10), while atoll mount runs in a process of its own, holding its handles on the disk, with a
+// deletion it left planned there (§21.2), on ntfs-3g and lowntfs-3g. Two resets: the device goes from under the mount
+// and comes back under another name, its numbers the same, as in TestDaemonRemountsAfterAReset; and the FUSE process
+// killed, the device staying, as a crash of it leaves the mount (ENOTCONN). A mount of a device whose superblock is
+// alive gets that superblock, and the view's handles keep the old mount, unmounted lazily, alive until its next check
+// (docs/research/ntfs-driver.md, 2026-11-23). So, renamed: the new process finds its FUSE device bound to no connection
+// and exits, and the old one, alive, serves the new mount. Killed: the same leaves at the path a mount no process
+// serves, until the view's check, finding the disk lost, lets go of its handles; the daemon's next check, the disk still
+// missing, unmounts that and mounts again, a superblock of its own, a new process serving it. Either way the disk is
+// back, and the view's check, finding it on a mount of its own and confirmed, resolves the deletion: nothing moved, so it
+// is undone, the copy at its name.
+func TestTheDaemonsRemountUnderTheViewOnEachFUSEDriver(t *testing.T) {
+	needRoot(t)
+	for _, driver := range []string{"ntfs-3g", "lowntfs-3g"} {
+		for _, reset := range []string{"renamed", "killed"} {
+			t.Run(driver+"/"+reset, func(t *testing.T) {
+				// Where mount(8) looks for the helper of an fstab entry's type.
+				if _, err := os.Stat("/sbin/mount." + driver); err != nil {
+					t.Skipf("no mount.%s: %v", driver, err)
+				}
+				m := newMapped(t, names.NTFS)
+				at := mountPoint(t)
+				mountVolume(t, m.volume, driver, at)
+				source := m.device
+				if reset == "renamed" {
+					source = "/dev/mapper/" + m.name + "-again"
+					t.Cleanup(func() {
+						_ = exec.CommandContext(context.Background(), "umount", "-l", at).Run()
+						time.Sleep(200 * time.Millisecond)
+						_ = exec.CommandContext(context.Background(), "dmsetup", "remove", "-f", "--noudevsync", m.name+"-again").Run()
+					})
+				}
+				b := viewPool(t, m.volume, at)
+				fstab := filepath.Join(t.TempDir(), "fstab")
+				mustDo(t, os.WriteFile(fstab, []byte(source+" "+at+" "+driver+" defaults 0 0\n"), 0o644))
+				point := filepath.Join(t.TempDir(), "view")
+				mustDo(t, os.Mkdir(point, 0o755))
+				view := startViewWith(t, b, point, nil, childWritesEnv+"=1", childEveryEnv+"=3s", childFailMoveEnv+"="+filepath.Join(at, "a.mkv"))
+				view.mounted(t)
+				if err := os.Remove(filepath.Join(point, "Films", "a.mkv")); err == nil {
+					t.Fatalf("the deletion went through a disk that failed:\n%s", view.said())
+				}
+				if got := b.viewOps(); got != "unlink planned" {
+					t.Fatalf("the view's journal once the disk failed: %s\n%s", got, view.said())
+				}
+
+				passes, stop := runDaemon(t, b, fstab)
+				waitPass(t, passes, daemon.BecauseStart)
+				before := fusePids(driver, m.device)
+				switch reset {
+				case "renamed":
+					must(t, "dmsetup", "rename", m.name, m.name+"-again")
+					must(t, "dmsetup", "mknodes")
+				case "killed":
+					for _, pid := range before {
+						mustDo(t, syscall.Kill(pid, syscall.SIGKILL))
+					}
+				}
+				waitPass(t, passes, daemon.BecauseGone)
+				waitPass(t, passes, daemon.BecauseBack)
+				stop()
+				// The old process names the device as it was mounted, a new one as the fstab entry names it.
+				after := fusePids(driver, m.device)
+				if source != m.device {
+					after = append(after, fusePids(driver, source)...)
+				}
+				t.Logf("back: %s; %s's processes %v before the reset, %v once back", findmnt(at), driver, before, after)
+				if len(after) == 0 {
+					t.Errorf("no %s process serves the disk once back", driver)
+				}
+				if reset == "killed" && slices.ContainsFunc(after, func(pid int) bool { return slices.Contains(before, pid) }) {
+					t.Errorf("a process killed serves the disk: %v", after)
+				}
+				if data, err := os.ReadFile(filepath.Join(at, "media", "Films", "a.mkv")); err != nil || string(data) != "a film" {
+					t.Errorf("the copy once back: %q, %v", data, err)
+				}
+
+				// The daemon gone, the bench reads the catalog again, and the view resolves the deletion.
+				db, err := catalog.OpenPool(t.Context(), b.catalog, "p")
+				mustDo(t, err)
+				t.Cleanup(func() { _ = db.Close() })
+				b.db = db
+				waitFor(t, "the deletion resolved by the view's check", func() bool { return !strings.Contains(b.viewOps(), "planned") })
+				if got := b.viewOps(); got != "unlink undone" {
+					t.Errorf("the view's journal once the disk is back: %s\n%s", got, view.said())
+				}
+				if got := readOr(filepath.Join(at, "media", "Films", "a.mkv")); got != "a film" {
+					t.Errorf("v holds %q at the copy's name", got)
+				}
+				if got := trashFiles(t, at); len(got) != 0 {
+					t.Errorf("the trash of v holds %v", got)
+				}
+				if got := b.text("SELECT count(*) FROM ops WHERE state = 'planned'"); got != "0" {
+					t.Errorf("%s operations left planned", got)
+				}
+			})
+		}
+	}
+}
+
 // unitCapabilities are those deploy/atoll.service gives the dedicated user, and no others.
 const unitCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown,+fowner,+fsetid,+sys_rawio"
 
