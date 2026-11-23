@@ -114,10 +114,14 @@ func TestReadonlyMount(t *testing.T) {
 // mountCapabilities are those deploy/atoll-mount.service gives the dedicated user, and no others.
 const mountCapabilities = "-all,+sys_admin,+dac_read_search,+dac_override,+chown,+fowner,+fsetid"
 
-// childEnv names the configuration TestReadonlyMountChild serves the view of, at the point childPointEnv names.
+// childEnv names the configuration TestReadonlyMountChild serves the view of, at the point childPointEnv names; with
+// childWritesEnv the view writes, as atoll mount at view.mount does, and childKillAtEnv names a crash point where the
+// process kills itself, as kill -9 would.
 const (
-	childEnv      = "ATOLL_READONLY_CHILD"
-	childPointEnv = "ATOLL_READONLY_POINT"
+	childEnv       = "ATOLL_READONLY_CHILD"
+	childPointEnv  = "ATOLL_READONLY_POINT"
+	childWritesEnv = "ATOLL_VIEW_WRITES"
+	childKillAtEnv = "ATOLL_VIEW_KILL_AT"
 )
 
 // TestReadonlyMountAsTheUnit: the view served as deploy/atoll-mount.service serves it, as another account than root,
@@ -200,11 +204,29 @@ func TestReadonlyMountChild(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	machine, err := disks.NewMachine()
 	mustDo(t, err)
+	if point := os.Getenv(childKillAtEnv); point != "" {
+		machine = &killedAt{Machine: machine, point: point}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
 	mustDo(t, readonly.Run(ctx, readonly.Options{
 		Config: c, DB: db, Machine: machine, Point: os.Getenv(childPointEnv), Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Writes: os.Getenv(childWritesEnv) != "",
 	}))
+}
+
+// killedAt is a machine whose process kills itself with SIGKILL at a crash point, as kill -9 does: nothing of it runs
+// past that point, not even its deferred calls.
+type killedAt struct {
+	disks.Machine
+	point string
+}
+
+func (k *killedAt) Checkpoint(point string) {
+	if point == k.point {
+		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+		select {} // what the signal ends
+	}
 }
 
 // viewProcess is a view TestReadonlyMountChild serves, in a process of its own.
@@ -231,12 +253,18 @@ func childFlags() []string {
 // setpriv: the process ends at the end of the test, and the view is detached.
 func startView(t *testing.T, b *passBench, point string, before []string) *viewProcess {
 	t.Helper()
+	return startViewWith(t, b, point, before)
+}
+
+// startViewWith is startView with more of the child's environment, NAME=value each.
+func startViewWith(t *testing.T, b *passBench, point string, before []string, env ...string) *viewProcess {
+	t.Helper()
 	file := filepath.Join(filepath.Dir(b.catalog), "atoll.toml")
 	mustDo(t, os.WriteFile(file, []byte(b.configText), 0o644))
 	args := append(append(append([]string{}, before...), os.Args[0], "-test.run=^TestReadonlyMountChild$", "-test.v"), childFlags()...)
 	p := &viewProcess{out: &bytes.Buffer{}, exited: make(chan struct{}), point: point}
 	p.cmd = exec.CommandContext(context.Background(), args[0], args[1:]...)
-	p.cmd.Env = append(os.Environ(), childEnv+"="+file, childPointEnv+"="+point)
+	p.cmd.Env = append(append(os.Environ(), childEnv+"="+file, childPointEnv+"="+point), env...)
 	p.cmd.Stdout, p.cmd.Stderr = p.out, p.out
 	mustDo(t, p.cmd.Start())
 	go func() {
@@ -296,11 +324,17 @@ func serveReadonly(t *testing.T, b *passBench, point string) (*served, error) {
 // or returns.
 func serveView(t *testing.T, b *passBench, point string, writes bool) (*served, error) {
 	t.Helper()
+	return serveViewEvery(t, b, point, writes, 100*time.Millisecond)
+}
+
+// serveViewEvery is serveView with its disks checked every so often.
+func serveViewEvery(t *testing.T, b *passBench, point string, writes bool, every time.Duration) (*served, error) {
+	t.Helper()
 	ctx, stop := context.WithCancel(context.Background())
 	s := &served{stop: stop, done: make(chan error, 1)}
 	ready := make(chan struct{})
 	opts := readonly.Options{
-		Config: b.config, DB: b.db, Machine: b.machine, Point: point, Every: 100 * time.Millisecond, Writes: writes,
+		Config: b.config, DB: b.db, Machine: b.machine, Point: point, Every: every, Writes: writes,
 		Ready: func() { close(ready) }, Log: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 	}
 	go func() { s.done <- readonly.Run(ctx, opts) }()
