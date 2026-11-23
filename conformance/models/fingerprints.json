@@ -2,7 +2,9 @@
   "models": [
     "Replication.tla",
     "Rename.tla",
-    "Copies.tla"
+    "Copies.tla",
+    "Folders.tla",
+    "ViewMove.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -29,7 +31,7 @@
     {
       "section": "14",
       "title": "## 14. Replication",
-      "sha256": "50f5e0cfd6e8429ac49dd411d6643a263eba3b1c7c390a27a8bce17b6d3ad299"
+      "sha256": "558da4d237a3abeacd9a11b187a4750fec49d9c03921b269b052ec09fee5f123"
     },
     {
       "section": "14.1",
@@ -64,7 +66,7 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "44229c340fa9a3c3b39000fd5f2807dde518186884c89eb61107d3b76acb2c16"
+      "sha256": "23c6651d34716750e0220313905134cf0f6cc2b865664cb0ab6055c23eade7e7"
     },
     {
       "section": "17",
@@ -94,7 +96,7 @@
     {
       "section": "19",
       "title": "## 19. SSD cache (phase 2b)",
-      "sha256": "22f96985cb8428d634d3b66b9668cc26c7b46518ed321dc8e752943ee41da3b2"
+      "sha256": "e807602f8220535ffed37d906e464f3fe470615eb2c1980a2b922918eb90e3aa"
     },
     {
       "section": "20",
@@ -104,7 +106,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "f14c6a48f4be606b3be334608e044a23b630615ca80ed678ec27c9bc7ee3c7ed"
+      "sha256": "369a8caad9a2eb442190a3332a229600e8ab0e280dc7f5958c5db3d4a3232503"
     }
   ]
 }

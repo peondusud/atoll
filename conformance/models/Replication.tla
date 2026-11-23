@@ -1396,21 +1396,73 @@ XferCommit ==
            d == ops[p].d
        IN /\ TrashFinish(d, p)
           /\ ghost' = Flag(ghost, "inv7", ~Durable(d, X(p), ops[p].key) \/ dur[d][M(ops[p].f)] = ops[p].key)
-    /\ pc' = [ph |-> "xpurge", f |-> pc.f, p |-> pc.p]
+    /\ pc' = [ph |-> "xpurge", f |-> pc.f, p |-> pc.p, l |-> FALSE]
     /\ UNCHANGED <<phys, cdisk, nextOp, tick, sess, look, cnt, nver>>
 
-(* §17.4: the purge of the entry, an operation unlink journaled (catalog.BeginFromTrash), whose file_key is the entry's. *)
+(* §17.4: the purge of the entry, an operation unlink journaled (catalog.BeginFromTrash), whose file_key is the entry's.
+   With the link guard, or with links left of one, the links that lead to the entry go first (§17, A purge;
+   trash.Session.dropLinksOf, ops.Disk.OwnLinksOf): Atoll sent that data to the trash itself, and a link left behind
+   would keep it once purged, then send it back to the trash at the next pass, as deleted, its file's row gone with the
+   move. Each such link an operation unlink of the guard, journaled, the link removed, its folder synced, committed
+   (linkOps); the purge goes on then, whatever that removal ended in, as the code's does. *)
 XferPurgeJournal ==
     /\ pc.ph = "xpurge"
     /\ LET p == pc.p
            f == pc.f
+           d == ops[p].d
+           linked == ~pc.l /\ Guard # "none" /\ vol[d][Ln(f)] = ops[p].key
        IN IF nextOp > MaxOps
           THEN /\ pc' = [ph |-> "xfer", f |-> f + 1] /\ UNCHANGED <<ops, nextOp>>     \* the model's bound
-          ELSE /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "unlink", d |-> ops[p].d, f |-> f, key |-> ops[p].key, st |-> "planned",
+          ELSE IF linked
+          THEN /\ ops' = [ops EXCEPT ![nextOp] = [NoOp EXCEPT !.k = "unlink", !.d = d, !.f = f, !.key = ops[p].key, !.st = "planned",
+                                                  !.link = TRUE]]
+               /\ nextOp' = nextOp + 1
+               /\ pc' = [ph |-> "xstep", f |-> f, p |-> nextOp, s |-> "ljournaled", e |-> p]
+          ELSE /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "unlink", d |-> d, f |-> f, key |-> ops[p].key, st |-> "planned",
                                                   part |-> p, reason |-> "surplus", link |-> FALSE]]
                /\ nextOp' = nextOp + 1
                /\ pc' = [ph |-> "xstep", f |-> f, p |-> nextOp, s |-> "pjournaled"]
     /\ UNCHANGED <<phys, cfile, crow, cdisk, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
+
+(* ops.DropLink, for the purge: the link must lead to the entry's inode, which must have another name, the entry; one
+   gone already is fine; one that leads to another file, or that is its data's last name, stays, undone. *)
+XferLinkDrop ==
+    /\ pc.ph = "xstep" /\ pc.s = "ljournaled"
+    /\ LET q == pc.p
+           d == ops[q].d
+           f == pc.f
+           key == ops[q].key
+           seen == Seen(d, Ln(f), key)
+       IN /\ Ok(d)
+          /\ IF seen = "absent"
+             THEN /\ pc' = [pc EXCEPT !.s = "lunlinked"] /\ UNCHANGED <<objs, vol, ops>>
+             ELSE IF seen = "other" \/ ~\E n \in Names \ {Ln(f)} : vol[d][n] = key
+             THEN /\ ops' = [ops EXCEPT ![q].st = "undone"]
+                  /\ pc' = [ph |-> "xpurge", f |-> f, p |-> pc.e, l |-> TRUE]
+                  /\ UNCHANGED <<objs, vol>>
+             ELSE /\ vol' = [vol EXCEPT ![d][Ln(f)] = 0]
+                  /\ objs' = [objs EXCEPT ![key].cg = @ + 1]
+                  /\ pc' = [pc EXCEPT !.s = "lunlinked"]
+                  /\ UNCHANGED ops
+    /\ UNCHANGED <<dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver, ghost>>
+
+XferLinkSync ==
+    /\ pc.ph = "xstep" /\ pc.s = "lunlinked"
+    /\ LET d == ops[pc.p].d
+           n == Ln(pc.f)
+       IN /\ Ok(d)
+          /\ dur' = [dur EXCEPT ![d][n] = vol[d][n]]
+          /\ objs' = SyncObjs(objs, {vol[d][n]} \ {0})
+    /\ pc' = [pc EXCEPT !.s = "lsynced"]
+    /\ UNCHANGED <<vol, dstat, mgen, cat, sess, look, cnt, nver, ghost>>
+
+(* catalog.EndLinks: done; the entry has no row to take the change time the removal gave it. Then the purge. *)
+XferLinkCommit ==
+    /\ pc.ph = "xstep" /\ pc.s = "lsynced"
+    /\ ops' = [ops EXCEPT ![pc.p].st = "done"]
+    /\ ghost' = Flag(ghost, "inv7", dur[ops[pc.p].d][Ln(pc.f)] = ops[pc.p].key)
+    /\ pc' = [ph |-> "xpurge", f |-> pc.f, p |-> pc.e, l |-> TRUE]
+    /\ UNCHANGED <<phys, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>
 
 (* ops.PurgeEntry: the file in the trash looked at by its inode, then unlinked: another file there stays, undone. The
    copies on data disks are looked at right before (XHeld), which the model takes in the same step as the unlink, as
@@ -1471,8 +1523,10 @@ XferLost ==
    last copy-gone event of the disk gives it once the file's row went. *)
 
 GuardOn == Guard = "on" \/ (Guard = "off" /\ cnt.off = 0)
-(* The inodes of the entries of a disk's trash, as the catalog has them (catalog.TrashKeys). *)
-TrashKeys(d) == {ops[p].key : p \in {q \in OpIds : ops[q].k = "trash" /\ ops[q].d = d /\ ops[q].st = "done"}}
+(* The inodes of the entries of a disk's trash, as the catalog has them (catalog.TrashKeys): the trash rows, which a
+   purge done removes (catalog.FinishPurge). *)
+Purged(p) == \E q \in OpIds : ops[q].k = "unlink" /\ ~ops[q].link /\ ops[q].part = p /\ ops[q].st = "done"
+TrashKeys(d) == {ops[p].key : p \in {q \in OpIds : ops[q].k = "trash" /\ ops[q].d = d /\ ops[q].st = "done" /\ ~Purged(q)}}
 (* The inodes of the copies of a disk that the last look found there. *)
 CopyKeys(d) == {crow[g][d].obj : g \in {h \in Files : crow[h][d].st \in {"ok", "stale"} /\ crow[h][d].gone = "no"}}
 (* What becomes of the link of file f on disk d (PlanLinks). *)
@@ -2192,7 +2246,8 @@ Atoll ==
     \/ CopyPick \/ CopyPart \/ CopyKey \/ CopySourceLost \/ CopyData \/ CopyRecheck \/ CopyVerify
     \/ CopyRename \/ CopyUnlink \/ CopyRecord \/ CopySync \/ CopyCommit \/ CopyLost
     \/ XferPick \/ XferSkip \/ XferDone \/ XferJournal \/ XferMove \/ XferSync \/ XferCommit
-    \/ XferPurgeJournal \/ XferPurge \/ XferPurgeSync \/ XferPurgeCommit \/ XferLost
+    \/ XferPurgeJournal \/ XferLinkDrop \/ XferLinkSync \/ XferLinkCommit \/ XferPurge \/ XferPurgeSync \/ XferPurgeCommit
+    \/ XferLost
     \/ GuardPick \/ GuardEnd \/ GuardDrop \/ GuardLink \/ GuardSync \/ GuardCommit \/ GuardTrash \/ GuardTrashSync
     \/ GuardTrashCommit \/ GuardLost
 
