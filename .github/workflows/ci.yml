@@ -6,12 +6,16 @@
 # this workflow to pass on its commit, which it finds by this file's name (release.yml).
 name: CI
 
+# Not on each push to beta (the maintainer, 2026-11-23): a pull request runs it once it is ready for review, and again
+# on each push while it is, never while it is a draft; main runs it on each push, as a release waits for a push's or a
+# dispatch's run on its commit (release.yml); and it can be run by hand on any ref. beta's other pull requests are
+# Dependabot's (.github/dependabot.yml), never drafts.
 on:
   push:
-    branches: [beta, main]
-  # beta's pull requests are Dependabot's (.github/dependabot.yml).
+    branches: [main]
   pull_request:
     branches: [main, beta]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
@@ -32,6 +36,7 @@ concurrency:
 
 jobs:
   race:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     # The image of test/ci/run.sh: its golangci-lint, and root, as the local CI runs the tests. Its GOTOOLCHAIN is auto:
     # its go fetches go.mod's version of Go when newer than its own, checked against sum.golang.org, and kept in the cache.
@@ -55,6 +60,7 @@ jobs:
   # Then its floor (test/ci/gates.txt): a total of the unit tests, or a merged one, under it fails the job, as a failing
   # test or scenario does. test/ci/run.sh leaves it out.
   cover:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 45
@@ -84,6 +90,7 @@ jobs:
           retention-days: 30
 
   integration:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
@@ -101,6 +108,7 @@ jobs:
       - run: make test-integration
 
   conformance:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
@@ -118,6 +126,7 @@ jobs:
       - run: make conformance
 
   lint:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
@@ -141,6 +150,7 @@ jobs:
   # The TLA+ model of conformance/models/, each instance against what it expects (specs.md §27), by TLC in the image of
   # test/tla/run.sh, which runs it there with --inside: 2 workers, the jar's SHA-256 checked, the jar kept in the cache.
   tla:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: eclipse-temurin@sha256:b4f9d2a0bc273417cf5219b7b832bbf0493ed500b7b57d5001d9f83374659060 # 21.0.13_9-jre-noble
     # The instances of 2026-11-22, the view's and the renames', took the whole to some 32 minutes on a loaded machine.
@@ -157,6 +167,7 @@ jobs:
       - run: bash test/tla/run.sh --inside
 
   govulncheck:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -175,6 +186,7 @@ jobs:
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
   qemu:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
@@ -216,6 +228,7 @@ jobs:
 
   # The unit tests and the conformance vectors on arm64, BLAKE3's NEON and SVE2 code included, and its throughput there.
   arm64:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04-arm
     container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 30
@@ -236,6 +249,7 @@ jobs:
 
   # The throughput of the hashing on amd64, and whether the CPU has AVX-512, which zeebo/blake3 then takes.
   blake3-amd64:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
     timeout-minutes: 15

@@ -80,7 +80,7 @@ test/ci/run.sh [REV]    # every check of a commit, with only git and Docker
 make release-snapshot   # a release as a tag makes one, into dist/, with only Docker: nothing is uploaded
 ```
 
-GitHub Actions runs the same checks on each push to `beta` and `main` and each pull request (`.github/workflows/ci.yml`), with the unit tests on arm64 too. Once the workflows are on `main`, it also runs the fuzz targets and the mutation tests each night, and the media-server test each week.
+GitHub Actions runs the same checks on each push to `main` and on each pull request once it is ready for review, never a draft (`.github/workflows/ci.yml`), with the unit tests on arm64 too. Once the workflows are on `main`, it also runs the fuzz targets and the mutation tests each night, and the media-server test each week.
 
 ## Releasing
 
