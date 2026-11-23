@@ -247,8 +247,7 @@ func findmnt(at string) string {
 
 // TestTheViewsRecheckAfterADiskLostOnEachDriver: a deletion through the view meets EIO at its move, a disk that cannot
 // be relied on, the fault layer's hook at the move's call standing for it, and stays planned; the disk is then
-// unmounted at once and mounted again, as after a USB reset, while the view runs, before its next check (but on
-// ntfs-3g and lowntfs-3g, below). The view's
+// unmounted at once and mounted again, as after a USB reset, while the view runs, before its next check. The view's
 // check finds it there again and resolves the operation, with no restart: nothing moved, so it is undone, the copy at
 // its name (specs.md §17.1, §17.2, §21.2; flaw 5). The file can then be deleted through the view, and a pass takes
 // that in. TestTheViewsRecheckOnADiskStillFailing is the case of a check while the disk fails, mounted.
@@ -283,11 +282,19 @@ func TestTheViewsRecheckAfterADiskLostOnEachDriver(t *testing.T) {
 			if renamesNoReplace(tc.driver) {
 				forceBack(t, v, tc.driver, at, options)
 			} else {
-				// Measured in qemu: unmounted at once with its process killed while the view holds handles there, then
-				// mounted again, ntfs-3g leaves a mount no process serves (ENOTCONN, no ntfs-3g running), where the same
-				// remount works with no view running (bringBack); not explained yet (TODO.md). The disk stays mounted
-				// here: the EIO the fault layer gave is the disk lost, and its end the disk back.
-				t.Log("ntfs-3g: the disk stays mounted, the fault layer's EIO alone standing for it lost")
+				// ntfs-3g mounted again at once, its old process killed, while the view runs there with an operation it
+				// left planned, mounted, then read /dev/fuse with EPERM ("fuse: reading device: Operation not
+				// permitted") and unmounted itself, in qemu, where the same remount works with the view running and
+				// nothing planned (DONE.md, 2026-11-23). The disk stays mounted here: never lost, it is not there again,
+				// and the view's check leaves the deletion planned for ten checks; its next start resolves it.
+				time.Sleep(10 * 3 * time.Second)
+				if got := b.viewOps(); got != "unlink planned" {
+					t.Fatalf("the view's journal, its disk never lost: %s, want the deletion planned", got)
+				}
+				served.stop()
+				mustDo(t, served.wait())
+				served, err = serveViewEvery(t, b, point, true, 3*time.Second)
+				mustDo(t, err)
 			}
 			waitFor(t, "the deletion resolved by the view's check", func() bool { return !strings.Contains(b.viewOps(), "planned") })
 			if got := b.viewOps(); got != "unlink undone" {
@@ -326,17 +333,16 @@ func TestTheViewsRecheckAfterADiskLostOnEachDriver(t *testing.T) {
 }
 
 // TestTheViewsRecheckOnADiskStillFailing: as TestTheViewsRecheckAfterADiskLostOnEachDriver, but the disk stays mounted
-// while its device fails, for ten of the view's checks, before it is unmounted and mounted again. While it fails it is
-// not there again (specs.md §21.2: "once that disk is there again"), and what its page cache still answers says
-// nothing of what reached it (invariant 4, §10): the deletion stays planned until the disk is back, and is then resolved
-// by what the disk holds, the library and the catalog agreeing.
+// while its device fails (dm-error), for ten of the view's checks. While it fails it is not there again, and what its
+// page cache still answers says nothing of what reached it (invariant 4, §10): the deletion stays planned, as the check
+// resolves only a disk found lost and back on a mount of its own, confirmed past the page cache (the maintainer,
+// 2026-11-23; specs.md §21.2). It once was resolved done from the cache, within 40 to 350 ms on ext4, ntfs3 and
+// ntfs-3g, and once the disk was back the copy was at its name. The view is then stopped, the disk brought back and the
+// view started again, whose reprise resolves the deletion by what the disk holds, and the pass takes it in, the
+// library and the catalog agreeing. Stopped first, as the remount of a kernel driver under the view's handles gives
+// back the very superblock they keep alive, aborted, which no USB reset does.
 func TestTheViewsRecheckOnADiskStillFailing(t *testing.T) {
 	needRoot(t)
-	// A finding of 2026-11-22 (TODO.md): on ext4, ntfs3 and ntfs-3g, of Linux 6.12 and 7.3, the view's check resolves
-	// the deletion while the device fails, as done from what the page cache answers, and once the disk is back the
-	// copy is at its name, the journal saying done; XFS, and the type ntfs on 7.3, pass. The remedy is the
-	// maintainer's to choose: this skip goes with it.
-	t.Skip("a finding of 2026-11-22, left for the maintainer's remedy (TODO.md)")
 	for _, tc := range failingDrivers {
 		t.Run(tc.name, func(t *testing.T) {
 			options := driverOptions(t, tc.driver)
@@ -356,20 +362,39 @@ func TestTheViewsRecheckOnADiskStillFailing(t *testing.T) {
 			}
 			time.Sleep(time.Second) // ten checks, the disk failing and still mounted
 			failing := b.viewOps()
-			bringBack(t, m, tc.driver, at, options)
-			waitFor(t, "the deletion resolved by the view's check", func() bool { return !strings.Contains(b.viewOps(), "planned") })
 			served.stop()
 			mustDo(t, served.wait())
-			b.machine = real
-			dropCaches(t)
-			library := readOr(filepath.Join(at, "media", "Films", "a.mkv"))
-			state := b.viewOps()
-			t.Logf("while the disk failed: %s; once back: %s, the library %q, the trash %v", failing, state, library, trashFiles(t, at))
 			if failing != "unlink planned" {
 				t.Errorf("the view's journal while the disk failed: %s, want the deletion planned", failing)
 			}
+			bringBack(t, m, tc.driver, at, options)
+			b.machine = real
+			served, err = serveView(t, b, point, true)
+			mustDo(t, err)
+			served.stop()
+			mustDo(t, served.wait())
+			dropCaches(t)
+			library := readOr(filepath.Join(at, "media", "Films", "a.mkv"))
+			state := b.viewOps()
+			t.Logf("while the disk failed: %s; once back and the view started again: %s, the library %q, the trash %v",
+				failing, state, library, trashFiles(t, at))
+			if strings.Contains(state, "planned") {
+				t.Fatalf("the view's journal once its reprise ran: %s", state)
+			}
 			if (state == "unlink done") != (library == "absent") {
 				t.Errorf("the view's journal says %s, and v holds %q at the copy's name", state, library)
+			}
+			b.settle()
+			open, err := catalog.OpenViewOps(t.Context(), b.db)
+			mustDo(t, err)
+			if len(open) != 0 {
+				t.Errorf("not taken in: %+v", open)
+			}
+			want := map[string]string{"unlink done": "absent", "unlink undone": "a film"}[state]
+			for _, top := range []string{b.keep, at} {
+				if got := readOr(filepath.Join(top, "media", "Films", "a.mkv")); got != want {
+					t.Errorf("%s holds %q, the deletion %s", top, got, state)
+				}
 			}
 		})
 	}
