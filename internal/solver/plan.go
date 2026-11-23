@@ -575,6 +575,7 @@ func checkFile(f *File) error {
 // then keeps the level's number of them.
 func (p *planner) addCopies(f *planFile) error {
 	var source *planDisk
+	sourceLeft := false
 	var counted []countedCopy
 	seen := make([]*planDisk, 0, len(f.Copies))
 	for i := range f.Copies {
@@ -610,13 +611,13 @@ func (p *planner) addCopies(f *planFile) error {
 			}
 			d.old[c.OldPath] = true
 		}
-		if leftAsItIs(f, c, d) {
-			// It holds its disk and its name, counts for nothing, is no source and gets no mark: no job reads it,
-			// moves it or sends it to the trash, and its file is reported (specs.md §15.8).
+		left := leftAsItIs(f, c, d)
+		if left {
+			// It holds its disk and its name, counts for nothing and gets no mark: no job moves it, writes to it or
+			// sends it to the trash, and its file is reported. It may be read, the source of a copy to a disk that
+			// takes its name, after any other (specs.md §15.8).
 			f.held = true
-			continue
-		}
-		if f.Cache != CacheNone && d.Role == RoleCache {
+		} else if f.Cache != CacheNone && d.Role == RoleCache {
 			p.cacheCopy(f, c, d)
 		} else if slices.Contains(f.misplacedDisks(), d) {
 			// It counts for nothing, so that one is made where the setting wants it; it is no loss.
@@ -629,8 +630,8 @@ func (p *planner) addCopies(f *planFile) error {
 				f.mark().cancel = append(f.mark().cancel, d)
 			}
 		}
-		if isSource(c, d) && (source == nil || betterSource(d, source)) {
-			source = d
+		if isSource(c, d) && (source == nil || sourceLeft && !left || sourceLeft == left && betterSource(d, source)) {
+			source, sourceLeft = d, left
 		}
 	}
 	if f.Cache != CacheNone && !slices.ContainsFunc(f.holding, func(d *planDisk) bool { return d.Role == RoleCache }) {

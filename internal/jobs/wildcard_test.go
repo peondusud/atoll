@@ -53,11 +53,13 @@ func leftThere(t *testing.T, b *bench, calls *[]string, at string) {
 }
 
 // TestADeletionLeavesAWildcardNameOnTheTypeNTFS: a file deleted on t1 goes to the trash of t3, and its copy on t2 stays
-// where it is, with its row: the file stays, name-incompatible, with that copy alone, which nothing is copied from
-// (specs.md §15.8, §15.12).
+// where it is, with its row, its own job of the deletion refused at each pass, nothing journaled: the file stays,
+// name-incompatible, with that copy alone, and waits as one whose deletion is decided, so that nothing is copied from it
+// again, however many passes go by (specs.md §15.8, §15.12).
 func TestADeletionLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 	b, calls := wildcardPool(t, "")
 	b.remove("t1", "Who?/q?.mkv")
+	b.settle()
 	b.settle()
 	out := b.settle()
 	leftThere(t, b, calls, "Who?/q?.mkv")
@@ -73,8 +75,13 @@ func TestADeletionLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 	if got := b.count("SELECT count(*) FROM trash WHERE disk_id = 't3'"); got != 1 {
 		t.Errorf("%d entries in the trash of t3", got)
 	}
-	if slices.ContainsFunc(out.Operations, func(o Operation) bool { return o.Disk == "t2" }) {
-		t.Errorf("an operation on t2: %+v", out.Operations)
+	if !slices.ContainsFunc(out.Operations, func(o Operation) bool {
+		return o.Disk == "t2" && o.Kind == KindTrash && o.Reason == reasonDeleted && o.Outcome == trash.OutcomeNameRefused
+	}) || slices.ContainsFunc(out.Operations, func(o Operation) bool { return o.Kind == KindReplicate }) {
+		t.Errorf("the last pass: %+v", out.Operations)
+	}
+	if got := b.text("SELECT group_concat(kind || ' ' || state || ' ' || dst_disk) FROM jobs"); got != "trash queued t2" {
+		t.Errorf("the jobs: %q", got)
 	}
 }
 
@@ -144,10 +151,10 @@ func TestAnEditLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 	}
 }
 
-// TestAnEditThereIsNeverCopied: the copy on t2 edited, the others go stale and to the trash, as overwritten, and
-// nothing is copied from it: the file is left with that copy alone, name-incompatible, every version kept (specs.md
-// §15.4, §15.8).
-func TestAnEditThereIsNeverCopied(t *testing.T) {
+// TestAnEditThereRefreshesTheOthers: the copy on t2 edited, the others go stale, to the trash as overwritten, and are
+// made again from it, the source of a copy as any (the maintainer, 2026-11-23): every version kept, nothing written,
+// moved or journaled on t2, the file name-incompatible (specs.md §15.4, §15.8).
+func TestAnEditThereRefreshesTheOthers(t *testing.T) {
 	b, calls := wildcardPool(t, "")
 	b.write("t2", "Who?/q?.mkv", "a longer film")
 	b.now = b.ctimeOf("t2", "Who?/q?.mkv") + settleNS
@@ -159,13 +166,16 @@ func TestAnEditThereIsNeverCopied(t *testing.T) {
 	if len(*calls) > 0 {
 		t.Errorf("asked of t2: %v", *calls)
 	}
+	if got := b.count("SELECT count(*) FROM ops WHERE disk_id = 't2'"); got != 0 {
+		t.Errorf("%d operations journaled on t2", got)
+	}
 	for _, id := range []string{"t1", "t3"} {
-		if data, err := os.ReadFile(filepath.Join(b.dirs[id], "media", "Who?", "q?.mkv")); err == nil {
-			t.Errorf("a copy on %s: %q", id, data)
+		if data, err := os.ReadFile(filepath.Join(b.dirs[id], "media", "Who?", "q?.mkv")); err != nil || string(data) != "a longer film" {
+			t.Errorf("the copy on %s: %q, %v", id, data, err)
 		}
 	}
-	if got := b.count("SELECT count(*) FROM trash"); got != 2 {
-		t.Errorf("%d entries in the trash", got)
+	if got := b.count("SELECT count(*) FROM trash WHERE reason = 'overwritten'"); got != 2 {
+		t.Errorf("%d versions in the trash", got)
 	}
 	if got := b.text("SELECT state FROM files"); got != "name-incompatible" {
 		t.Errorf("the file is %q", got)
@@ -190,23 +200,26 @@ func TestATimeLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 }
 
 // TestARepairLeavesAWildcardNameOnTheTypeNTFS: a copy left as it is that a scrub finds corrupt stays where it is and as
-// it is, neither repaired in place nor sent to the trash, its name refused; and a corrupt copy elsewhere is never
-// repaired from it, as nothing is copied from it (specs.md §15.8, §16.1).
+// it is, neither repaired in place nor sent to the trash, its name refused; and a corrupt copy elsewhere is repaired from
+// it, the healthy copy, which is only read (specs.md §15.8, §16.1).
 func TestARepairLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
-	setup := func(t *testing.T) (*bench, *[]string, []byte) {
-		b := newBench(t, "t1", "t2")
+	setup := func(t *testing.T, ids ...string) (*bench, *[]string, []byte) {
+		if len(ids) == 0 {
+			ids = []string{"t1", "t2"}
+		}
+		b := newBench(t, ids...)
 		b.config.Disks[1].FS = names.NTFS
 		b.types = map[string]string{b.dirs["t2"]: "ntfs"}
 		var calls []string
 		b.fail[b.dirs["t2"]] = func(call, name string) error {
-			if (call == "openwrite" || call == "rename" || call == "unlink" || call == "write") && strings.ContainsAny(name, names.Wildcards) {
+			if (call == "openwrite" || call == "rename" || call == "unlink" || call == "write" || call == "openfile") && strings.ContainsAny(name, names.Wildcards) {
 				calls = append(calls, call+" "+name)
 			}
 			return nil
 		}
 		data := film()
-		for _, id := range []string{"t1", "t2"} {
-			b.write(id, "Who?/a.mkv", string(data))
+		for _, id := range ids {
+			b.write(id, "Who?/a?.mkv", string(data))
 		}
 		b.scan(true)
 		b.now += int64(month)
@@ -214,13 +227,13 @@ func TestARepairLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 	}
 	t.Run("corrupt there", func(t *testing.T) {
 		b, calls, data := setup(t)
-		rotten := b.rotChunks("t2", "Who?/a.mkv", data, 1)
+		rotten := b.rotChunks("t2", "Who?/a?.mkv", data, 1)
 		b.scrub(ScrubOptions{Apply: true})
 		done := b.repair(RepairOptions{Apply: true})
 		if len(done.Items) != 1 || done.Items[0].Disk != "t2" || done.Items[0].Outcome != trash.OutcomeNameRefused {
 			t.Errorf("%+v", done)
 		}
-		if b.read("t2", "Who?/a.mkv") != string(rotten) || len(*calls) > 0 {
+		if b.read("t2", "Who?/a?.mkv") != string(rotten) || slices.ContainsFunc(*calls, func(c string) bool { return !strings.HasPrefix(c, "openfile ") }) {
 			t.Errorf("written to: %v", *calls)
 		}
 		if got := b.count("SELECT count(*) FROM ops WHERE disk_id = 't2'"); got != 0 {
@@ -232,12 +245,29 @@ func TestARepairLeavesAWildcardNameOnTheTypeNTFS(t *testing.T) {
 	})
 	t.Run("the healthy copy there", func(t *testing.T) {
 		b, calls, data := setup(t)
-		b.rotChunks("t1", "Who?/a.mkv", data, 1)
+		b.rotChunks("t1", "Who?/a?.mkv", data, 1)
 		b.scrub(ScrubOptions{Apply: true})
-		done := b.repair(RepairOptions{Apply: true})
-		if len(done.Items) != 1 || done.Items[0].Disk != "t1" || done.Items[0].Outcome != OutcomeNoHealthyCopy {
-			t.Errorf("%+v", done)
+		b.repair(RepairOptions{Apply: true})
+		if b.read("t1", "Who?/a?.mkv") != string(data) {
+			t.Error("the copy on t1 is not repaired")
 		}
+		if slices.ContainsFunc(*calls, func(c string) bool { return !strings.HasPrefix(c, "openfile ") }) {
+			t.Errorf("asked of t2: %v", *calls)
+		}
+		if got := b.count("SELECT count(*) FROM ops WHERE disk_id = 't2'"); got != 0 {
+			t.Errorf("%d operations journaled on t2", got)
+		}
+	})
+	t.Run("the healthy copy there and another", func(t *testing.T) {
+		b, calls, data := setup(t, "t1", "t2", "t3")
+		b.rotChunks("t1", "Who?/a?.mkv", data, 1)
+		b.scrub(ScrubOptions{Apply: true})
+		*calls = nil
+		b.repair(RepairOptions{Apply: true})
+		if b.read("t1", "Who?/a?.mkv") != string(data) {
+			t.Error("the copy on t1 is not repaired")
+		}
+		// The repair reads the copy on t3, after t2 by position: the copy left as it is is read last.
 		if len(*calls) > 0 {
 			t.Errorf("asked of t2: %v", *calls)
 		}

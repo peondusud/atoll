@@ -1054,10 +1054,7 @@ func (p *pass) jobStands(ctx context.Context, d *config.Disk, job *catalog.Trash
 			return false
 		}
 		v := p.verdictOf(f, &o).Verdict
-		// A copy left as it is, at a wildcard name on the type ntfs, gets no job of the deletion and stays where it is,
-		// as the decision said (specs.md §15.8).
-		uncovered := !slices.Contains(covered, o.Disk) && !p.leftAsItIs(o.Disk, o.Place(f))
-		return uncovered || (o.Disk != d.ID && (v == solver.VerdictMoved || p.isMovedOutOfReach(&o, v)))
+		return !slices.Contains(covered, o.Disk) || (o.Disk != d.ID && (v == solver.VerdictMoved || p.isMovedOutOfReach(&o, v)))
 	})
 	return (p.direct == "propagate" || p.deletedThroughView(f.Path)) && !bad && !gained, nil
 }

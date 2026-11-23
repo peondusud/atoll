@@ -930,8 +930,9 @@ func (p *pass) propFile(f *catalog.FileRow, follow string, positions map[string]
 
 // leftAsItIs says that a disk leaves as they are its copies at one of these paths: it is of the type ntfs, as its mount
 // check in this pass found it, and a component of the path holds a wildcard character, which that driver cannot take out
-// of its folder without setting its whole volume read-only. Such a copy is never moved, sent to the trash, written to or
-// copied from, and nothing is journaled for it (specs.md §15.8).
+// of its folder without setting its whole volume read-only. Such a copy is never moved, sent to the trash or written
+// to, and nothing is journaled for it; it may be read, the source of a copy to a disk that takes its name (specs.md
+// §15.8).
 func (p *pass) leftAsItIs(disk string, paths ...string) bool {
 	if !p.session.LeavesWildcards(disk) {
 		return false

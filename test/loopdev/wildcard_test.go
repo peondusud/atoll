@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -17,17 +18,19 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/peondusud/atoll/internal/disks"
+	"github.com/peondusud/atoll/internal/jobs"
 	"github.com/peondusud/atoll/internal/names"
 	"github.com/peondusud/atoll/internal/trash"
 )
 
 // TestWhatTheTypeNTFSDoesWithAWildcardName pins what the type ntfs does with a name holding one of " * < > ?, the
 // wildcard characters of Windows, that ntfs-3g wrote, mounted as the mount check asks (errors=remount-ro), with and
-// without windows_names: each operation on a fresh volume, then a folder made at its top, which says whether the volume
-// is still writable (measured on Linux 7.3.5, docs/research/ntfs-driver.md). Taking such a name out of its folder, by a
-// rename or an unlink, meets an error that sets the whole volume read-only, windows_names or not for a rename; every
-// other operation leaves it writable, a read, a change of mode, owner, time or attribute, a link to it, a rename of a
-// name below a folder of such a name, a file made there, and a rename to such a name without windows_names. So Atoll
+// without windows_names: each operation on a fresh volume, its volume synced, then a folder made at its top, which
+// says whether the volume is still writable (measured on Linux 7.3.5, docs/research/ntfs-driver.md). Taking such a name
+// out of its folder, by a rename or an unlink, meets an error that sets the whole volume read-only, windows_names or not
+// for a rename, and so does a write of its content once written back, whatever the options; every other operation
+// leaves it writable, a read, a change of mode, owner, time or attribute, a link to it, a rename of a name below a
+// folder of such a name, a file made there, and a rename to such a name without windows_names. So Atoll
 // leaves a copy at such a path on that type as it is (specs.md §15.8, §22): a kernel that changes this fails here.
 func TestWhatTheTypeNTFSDoesWithAWildcardName(t *testing.T) {
 	needRoot(t)
@@ -77,6 +80,8 @@ func TestWhatTheTypeNTFSDoesWithAWildcardName(t *testing.T) {
 			}
 			return errors.Join(f.Sync(), f.Close())
 		}, ok, ok},
+		{"a write of its content", func(dir string) error { return os.WriteFile(in(dir, file), []byte("rewritten"), 0o644) },
+			answer{nil, true}, answer{nil, true}},
 		{"chmod", func(dir string) error { return os.Chmod(in(dir, file), 0o600) }, ok, ok},
 		{"utimes", func(dir string) error {
 			when := time.Unix(1600000000, 0)
@@ -112,8 +117,11 @@ func TestWhatTheTypeNTFSDoesWithAWildcardName(t *testing.T) {
 				}
 				t.Cleanup(func() { _ = syscall.Unmount(dir, 0) })
 				err := p.do(dir)
+				// What the call left dirty is written back first: an error the driver meets there sets the volume
+				// read-only as one it meets in the call does.
+				synced := syncVolume(dir)
 				after := os.Mkdir(filepath.Join(dir, "after"), 0o755)
-				t.Logf("%s%s: %v; a folder made after it: %v", p.name, options, err, after)
+				t.Logf("%s%s: %v; synced: %v; a folder made after it: %v", p.name, options, err, synced, after)
 				matched := err == nil && want.err == nil
 				for _, e := range want.err {
 					matched = matched || errors.Is(err, e)
@@ -144,6 +152,16 @@ func TestWhatTheTypeNTFSDoesWithAWildcardName(t *testing.T) {
 			}
 		}
 	})
+}
+
+// syncVolume writes back what the volume of a folder holds dirty, as syncfs does.
+func syncVolume(dir string) error {
+	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(fd) }()
+	return unix.Syncfs(fd)
 }
 
 func readAll(path string, flags int) error {
@@ -187,9 +205,11 @@ func ntfsImageWrittenBy3g(t *testing.T, file, folder, inner string) (string, str
 // windows_names, holding names with a wildcard character that ntfs-3g wrote, beside an ext4 disk holding the same: a
 // pass reads, moves and writes nothing of them, and their files are name-incompatible; Atoll's own trash, asked to take
 // one as surplus, of a file x1 whose copy on the ext4 disk is verified, refuses its name and journals nothing; and the
-// deletion of the ext4 copy of the other leaves the copy there where it is, with its row. The volume stays writable and
-// the disk online throughout: nothing set it read-only (specs.md §15.8, §22). The name with no wildcard beside them is
-// a copy as any.
+// deletion of the ext4 copy of another leaves the copy there where it is, with its row, its job of the deletion refused,
+// and nothing made again from it; and an edit made to a third there, by ntfs-3g, reaches the ext4 copy, the copy there
+// read as the source of a copy (the maintainer, 2026-11-23), nothing renamed, unlinked, written or journaled on its
+// volume. The volume stays writable and the disk online throughout: nothing set it read-only (specs.md §15.8, §22). The
+// name with no wildcard beside them is a copy as any.
 func TestAWildcardNameLeftOnTheTypeNTFS(t *testing.T) {
 	needRoot(t)
 	options := driverOptions(t, "ntfs")
@@ -200,14 +220,14 @@ func TestAWildcardNameLeftOnTheTypeNTFS(t *testing.T) {
 	at := mountPoint(t)
 	mustDo(t, os.MkdirAll(at, 0o755))
 	run(t, "ntfs-3g", v.device, at)
-	for _, logical := range []string{"Who?/q?.mkv", "plain.mkv", "Single/r?.mkv"} {
+	for _, logical := range []string{"Who?/q?.mkv", "plain.mkv", "Single/r?.mkv", "Edit?/e?.mkv"} {
 		write(t, at, logical, "film")
 	}
 	run(t, "umount", at)
 	time.Sleep(500 * time.Millisecond)
 	mountVolume(t, v, "ntfs", at, options...)
 	b := newPassBenchWith(t, v, at, "[[rule]]\nlabel = \"single\"\npath = \"Single/**\"\nreplicas = 0\n")
-	for _, logical := range []string{"Who?/q?.mkv", "plain.mkv", "Single/r?.mkv"} {
+	for _, logical := range []string{"Who?/q?.mkv", "plain.mkv", "Single/r?.mkv", "Edit?/e?.mkv"} {
 		write(t, b.keep, logical, "film")
 	}
 	writable := func(when string) {
@@ -226,7 +246,7 @@ func TestAWildcardNameLeftOnTheTypeNTFS(t *testing.T) {
 		}
 	}
 	b.scan(true)
-	if got := b.text("SELECT group_concat(CAST(lpath AS TEXT) || ' ' || state, ', ') FROM (SELECT * FROM files ORDER BY lpath)"); got != "Single/r?.mkv name-incompatible, Who?/q?.mkv name-incompatible, plain.mkv ok" {
+	if got := b.text("SELECT group_concat(CAST(lpath AS TEXT) || ' ' || state, ', ') FROM (SELECT * FROM files ORDER BY lpath)"); got != "Edit?/e?.mkv name-incompatible, Single/r?.mkv name-incompatible, Who?/q?.mkv name-incompatible, plain.mkv ok" {
 		t.Errorf("after the scan: %s", got)
 	}
 	b.settle()
@@ -260,6 +280,39 @@ func TestAWildcardNameLeftOnTheTypeNTFS(t *testing.T) {
 	if got := b.text("SELECT state FROM files WHERE CAST(lpath AS TEXT) = 'Who?/q?.mkv'"); got != "name-incompatible" {
 		t.Errorf("the file is %q", got)
 	}
+	b.settle()
+	if _, err := os.Lstat(filepath.Join(b.keep, "media", "Who?", "q?.mkv")); !os.IsNotExist(err) {
+		t.Errorf("the deleted copy made again: %v", err)
+	}
+	if got := b.text("SELECT group_concat(kind || ' ' || reason || ' ' || dst_disk) FROM jobs"); got != "trash deleted v" {
+		t.Errorf("the jobs: %q", got)
+	}
+
+	// An edit made to the copy there, by ntfs-3g, as Windows would make it: a write of its content through the type ntfs
+	// itself sets the volume read-only once written back (TestWhatTheTypeNTFSDoesWithAWildcardName). The copy on the
+	// ext4 disk goes to the trash, overwritten, and is made again from it, once its settle has passed.
+	run(t, "umount", at)
+	run(t, "ntfs-3g", v.device, at)
+	write(t, at, "Edit?/e?.mkv", "a longer film")
+	run(t, "umount", at)
+	time.Sleep(500 * time.Millisecond)
+	mountVolume(t, v, "ntfs", at, options...)
+	writable("after an edit by ntfs-3g")
+	b.pass()
+	b.machine = &later{Machine: b.machine, by: 11 * time.Minute}
+	out := b.pass()
+	for _, want := range []jobs.Operation{
+		{Disk: "k", Kind: jobs.KindTrash, Path: "Edit?/e?.mkv", Reason: "overwritten", Outcome: "trashed"},
+		{Disk: "k", Kind: jobs.KindReplicate, Path: "Edit?/e?.mkv", Source: "v", Outcome: jobs.OutcomeReplicated},
+	} {
+		if !slices.Contains(out.Operations, want) {
+			t.Errorf("no %+v in %+v", want, out.Operations)
+		}
+	}
+	dropCaches(t)
+	wantContent(t, b.keep, "Edit?/e?.mkv", "a longer film")
+	wantContent(t, at, "Edit?/e?.mkv", "a longer film")
+	writable("after the edit reached the ext4 disk")
 	dropCaches(t)
 	wantContent(t, at, "plain.mkv", "film")
 	_ = exec.CommandContext(context.Background(), "sync").Run()

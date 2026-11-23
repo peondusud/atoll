@@ -409,8 +409,20 @@ func badChunks(handle *ops.Disk, known *catalog.KnownCopy, chunks []byte, unread
 }
 
 // findHealthy gives another copy of the file, ok on a disk that can be read, that holds what its hashes say, read
-// whole now: the first by disk position, and nil when there is none (specs.md §16).
+// whole now: the first by disk position, and nil when there is none (specs.md §16). A copy left as it is, at a wildcard
+// name on the type ntfs, is read only once no other is healthy, as the source of any copy (specs.md §15.8).
 func findHealthy(ctx context.Context, session *trash.Session, f *catalog.FileRow, notOn string, chunks []byte) (*trash.Healthy, error) {
+	for _, left := range []bool{false, true} {
+		healthy, err := findHealthyOf(ctx, session, f, notOn, chunks, left)
+		if err != nil || healthy != nil {
+			return healthy, err
+		}
+	}
+	return nil, nil
+}
+
+// findHealthyOf is findHealthy among the copies left as they are, or among the others.
+func findHealthyOf(ctx context.Context, session *trash.Session, f *catalog.FileRow, notOn string, chunks []byte, left bool) (*trash.Healthy, error) {
 	for i := range f.Copies {
 		c := &f.Copies[i]
 		if c.Disk == notOn || c.State != string(solver.CopyOK) || !session.Readable(c.Disk) {
@@ -424,8 +436,7 @@ func findHealthy(ctx context.Context, session *trash.Session, f *catalog.FileRow
 			continue
 		}
 		place := c.Place(f)
-		// Nothing is ever copied from a copy left as it is, at a wildcard name on the type ntfs (specs.md §15.8).
-		if handle.Leaves(place) {
+		if handle.Leaves(place) != left {
 			continue
 		}
 		known := catalog.KnownCopy{Path: place, FileID: f.ID, Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey}

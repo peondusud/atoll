@@ -333,8 +333,9 @@ func LinkMovesTimes(fstype string) bool {
 // LeavesWildcards says whether, on a mount of that type, Atoll leaves as it is a copy at a path one of whose components
 // holds a wildcard character, names.Wildcards: the type ntfs cannot take such a name out of its folder, by a rename or
 // an unlink, without setting its whole volume read-only, measured on names ntfs-3g wrote, and its rename does so with
-// windows_names too (docs/research/ntfs-driver.md). So such a copy there is never moved, sent to the trash, written to
-// or copied from, and its file is name-incompatible (specs.md §15.8, §22). ntfs3 and ntfs-3g move and remove it.
+// windows_names too (docs/research/ntfs-driver.md). So such a copy there is never moved, sent to the trash or written
+// to, and its file is name-incompatible; reading it is harmless, so it may be the source of a copy to a disk that takes
+// its name (specs.md §15.8, §22). ntfs3 and ntfs-3g move and remove it.
 func LeavesWildcards(fstype string) bool {
 	return fstype == "ntfs"
 }
