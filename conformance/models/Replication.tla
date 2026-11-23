@@ -1371,8 +1371,11 @@ XferMove ==
                   /\ pc' = [ph |-> "xfer", f |-> f + 1]
                   /\ UNCHANGED <<vol, ghost>>
              ELSE /\ vol' = [vol EXCEPT ![d][M(f)] = 0, ![d][X(p)] = key]
+                  \* (since 2026-11-23: a file with no user copy left, as a user's deletion of the copy a hand-over
+                  \* made the user's leaves it, Kept, loses none to the move: README.md, modelling mistakes)
                   /\ ghost' = Flag(ghost, "inv2", crow[f][d].by = "user" \/
-                                   ~\E e \in Disks \ {d} : crow[f][e].st = "ok" /\ crow[f][e].by = "user")
+                                   ((\E e \in Disks : crow[f][e].st \in {"ok", "stale"} /\ crow[f][e].by = "user")
+                                    /\ ~\E e \in Disks \ {d} : crow[f][e].st = "ok" /\ crow[f][e].by = "user"))
                   /\ pc' = [pc EXCEPT !.s = "moved"]
                   /\ UNCHANGED ops
     /\ UNCHANGED <<objs, dur, dstat, mgen, cfile, crow, cdisk, nextOp, rjob, tjob, tick, sess, look, cnt, nver>>

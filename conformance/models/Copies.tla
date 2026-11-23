@@ -79,12 +79,14 @@ SumFiles(S) == IF S = {} THEN 0 ELSE LET x == CHOOSE x \in S : TRUE IN Size[x] +
 
 (* A copy's row: ok, pending or stale, its inode, verified, and the content it describes (rver). *)
 NoRow == [st |-> "none", obj |-> 0, verified |-> FALSE, rver |-> 0]
-(* A replicate job; wait says that its source was found changed in this run, as settle has it wait (§14.1). *)
-NoJob == [on |-> FALSE, src |-> 0, part |-> 0, running |-> FALSE, wait |-> FALSE]
+(* A replicate job; wait says that its source was found changed in this run, as settle has it wait (§14.1); with MaxEdit,
+   hv is the content its part had when verified, which the job records with its hash (§14.2). *)
+NoJob == [on |-> FALSE, src |-> 0, part |-> 0, running |-> FALSE, wait |-> FALSE, hv |-> 0]
 NoTJob == [on |-> FALSE, src |-> 0]
 NoOp == [k |-> "none", d |-> 0, f |-> 0, key |-> 0, st |-> "none", part |-> 0]
-(* A copy under way: its step, its operation, its part, and the content of its source when it began. *)
-NoRun == [s |-> "none", p |-> 0, o |-> 0, sv |-> 0]
+(* A copy under way: its step, its operation, its part, the content of its source when it began, and the content of its
+   part when it was verified, which its row takes (§14.2, flaw 1's remedy). *)
+NoRun == [s |-> "none", p |-> 0, o |-> 0, sv |-> 0, pv |-> 0]
 Idle == [ph |-> "idle"]
 NoSess == [d \in Disks |-> 0]
 
@@ -293,7 +295,8 @@ RepCommit ==
              THEN /\ IF pc.out = "done" THEN TrashDone(f, d) ELSE UNCHANGED <<crow, rjob, tjob>>
                   /\ UNCHANGED ghost
              ELSE IF pc.out = "done"
-             THEN /\ crow' = [crow EXCEPT ![f][d] = [st |-> "ok", obj |-> ops[p].key, verified |-> owned, rver |-> objs[ops[p].key].ver]]
+             THEN /\ crow' = [crow EXCEPT ![f][d] = [st |-> "ok", obj |-> ops[p].key, verified |-> owned,
+                                                       rver |-> IF MaxEdit > 0 /\ owned THEN rjob[f][d].hv ELSE objs[ops[p].key].ver]]
                   /\ rjob' = [rjob EXCEPT ![f][d] = NoJob]
                   /\ ghost' = Flag(ghost, "inv7", dur[d][M(f)] # ops[p].key)
                   /\ UNCHANGED tjob
@@ -491,7 +494,7 @@ CopyStart(f, d) ==
                /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "create", d |-> d, f |-> f, key |-> 0, st |-> "planned", part |-> q]]
                /\ nextOp' = nextOp + 1
                /\ rjob' = [rjob EXCEPT ![f][d].running = TRUE, ![f][d].part = q]
-               /\ run' = [run EXCEPT ![f][d] = [s |-> "journaled", p |-> nextOp, o |-> 0, sv |-> objs[s.obj].ver]]
+               /\ run' = [run EXCEPT ![f][d] = [s |-> "journaled", p |-> nextOp, o |-> 0, sv |-> objs[s.obj].ver, pv |-> 0]]
                /\ UNCHANGED <<crow, sess, cdisk>>
     /\ UNCHANGED <<disk, tjob, fver, pc, cnt, ghost>>
 
@@ -568,8 +571,9 @@ CopyStep(f, d) ==
                       /\ run' = [run EXCEPT ![f][d] = NoRun]
                       /\ UNCHANGED <<objs, crow, ghost>>
                  ELSE /\ objs' = [objs EXCEPT ![r.o].dsize = objs[r.o].size]
-                      /\ run' = [run EXCEPT ![f][d].s = "verified"]
-                      /\ UNCHANGED <<vol, dur, crow, rjob, ops, ghost>>
+                      /\ run' = [run EXCEPT ![f][d].s = "verified", ![f][d].pv = objs[r.o].ver]
+                      /\ rjob' = IF MaxEdit > 0 THEN [rjob EXCEPT ![f][d].hv = objs[r.o].ver] ELSE rjob
+                      /\ UNCHANGED <<vol, dur, crow, ops, ghost>>
             [] r.s = "verified" ->
                  \* the rename without replacing anything: a path taken since is conflict, nothing overwritten
                  IF vol[d][M(f)] # 0
@@ -588,7 +592,7 @@ CopyStep(f, d) ==
             [] r.s = "synced" ->
                  \* the commit: a replica exists only now
                  /\ ops' = [ops EXCEPT ![p].st = "done"]
-                 /\ crow' = [crow EXCEPT ![f][d] = [st |-> "ok", obj |-> r.o, verified |-> TRUE, rver |-> objs[r.o].ver]]
+                 /\ crow' = [crow EXCEPT ![f][d] = [st |-> "ok", obj |-> r.o, verified |-> TRUE, rver |-> r.pv]]
                  /\ rjob' = [rjob EXCEPT ![f][d] = NoJob]
                  /\ run' = [run EXCEPT ![f][d] = NoRun]
                  /\ ghost' = Flag(ghost, "inv7", dur[d][M(f)] # r.o \/ objs[r.o].dsize # Size[f])

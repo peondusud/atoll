@@ -40,10 +40,10 @@ Disks == {Full, Target}
 Names == {"m", "p", "x"}      \* the logical path, the part in tmp/, the entry in trash/
 OpIds == 1..MaxOps
 
-ASSUME /\ UserActs \subseteq {"write", "rewrite", "delete"} /\ NoRoom \in BOOLEAN /\ Fixes = {}
+ASSUME /\ UserActs \subseteq {"write", "rewrite", "delete"} /\ NoRoom \in BOOLEAN /\ Fixes \subseteq {"move-held", "move-look"}
 
 NoOp == [k |-> "none", d |-> 0, key |-> 0, st |-> "none"]
-NoMove == [st |-> "none", op |-> 0, obj |-> 0, sm |-> 0, cg |-> 0]
+NoMove == [st |-> "none", op |-> 0, obj |-> 0, sm |-> 0, cg |-> 0, part |-> 0]
 Idle == [ph |-> "idle"]
 Down == [ph |-> "down"]
 
@@ -75,6 +75,9 @@ Ok(d) == Up(d) /\ vsess[d] = mgen[d] + 1
 Flag(g, name, cond) == IF cond THEN [g EXCEPT !.flags = @ \cup {name}] ELSE g
 Sync(os, S) == [o \in DOMAIN os |-> IF o \in S THEN [os[o] EXCEPT !.dver = os[o].ver, !.dsm = os[o].sm, !.dcg = os[o].cg] ELSE os[o]]
 Durable(d, n) == dur' = [dur EXCEPT ![d][n] = vol[d][n]]
+(* A name holds the object, as the kernel shows it: a file a user deleted under the program's handle has none, and what
+   the program writes there then is the user's to lose. *)
+Named(o) == \E d \in Disks, n \in Names : vol[d][n] = o
 Holds(os, ds, v) == \E d \in Disks, n \in {"m", "x"} : ds[d][n] # 0 /\ os[ds[d][n]].dver = v
 (* The full disk's copy as the move's look found it: its inode, size, times and change time (writer.sameAs). *)
 AsLooked(o) == o # 0 /\ o = mv.obj /\ objs[o].sm = mv.sm /\ objs[o].cg = mv.cg
@@ -121,7 +124,7 @@ UserOn(d, os1, vol1, old, newv) ==
 UserWrite(d) ==
     /\ "write" \in UserActs /\ cnt.user < MaxUser /\ Up(d) /\ vol[d]["m"] # 0
     /\ LET o == vol[d]["m"] IN
-       UserOn(d, [objs EXCEPT ![o].ver = nver + 1, ![o].sm = @ + 1], vol, objs[o].ver, nver + 1)
+       UserOn(d, [objs EXCEPT ![o].ver = nver + 1, ![o].sm = nver + 1], vol, objs[o].ver, nver + 1)
 
 (* A write that keeps the size and the dates, or sets them back: only the change time moves. *)
 UserRewrite(d) ==
@@ -144,7 +147,7 @@ Return(d) ==
     /\ dstat' = [dstat EXCEPT ![d] = "up"]
     /\ mgen' = [mgen EXCEPT ![d] = @ + 1]
     /\ vol' = [vol EXCEPT ![d] = dur[d]]
-    /\ objs' = [o \in DOMAIN objs |-> IF objs[o].d = d THEN [objs[o] EXCEPT !.ver = @.dver, !.sm = @.dsm, !.cg = @.dcg] ELSE objs[o]]
+    /\ objs' = [o \in DOMAIN objs |-> IF objs[o].d = d THEN [objs[o] EXCEPT !.ver = objs[o].dver, !.sm = objs[o].dsm, !.cg = objs[o].dcg] ELSE objs[o]]
     /\ UNCHANGED <<dur, vsess, vf, cat, vpc, cnt, nver, ghost>>
 
 (* atoll mount stopped short: the program's handle goes with it, and what the move was doing stops where it is. *)
@@ -157,7 +160,7 @@ VStop ==
 PowerCut ==
     /\ cnt.cut < MaxCut
     /\ vol' = dur
-    /\ objs' = [o \in DOMAIN objs |-> [objs[o] EXCEPT !.ver = @.dver, !.sm = @.dsm, !.cg = @.dcg]]
+    /\ objs' = [o \in DOMAIN objs |-> [objs[o] EXCEPT !.ver = objs[o].dver, !.sm = objs[o].dsm, !.cg = objs[o].dcg]]
     /\ vpc' = Down /\ vf' = [vf EXCEPT !.open = FALSE] /\ vsess' = [d \in Disks |-> 0]
     /\ cnt' = [cnt EXCEPT !.cut = @ + 1]
     /\ UNCHANGED <<dur, dstat, mgen, cat, nver, ghost>>
@@ -172,13 +175,17 @@ World ==
    move: the view's own new file, open through that one handle, never moved before, still at its path there and as it
    is (mayMove); otherwise ENOSPC, nothing journaled. *)
 
+(* The handle writes its object wherever its names went, as an open file does (Replication.tla's VData): one a move
+   sent to the trash under it takes the write there. *)
 PWrite ==
-    /\ vpc = Idle /\ vf.open /\ cnt.write < MaxWrite /\ Ok(vf.d) /\ vol[vf.d]["m"] = vf.o
+    /\ vpc = Idle /\ vf.open /\ cnt.write < MaxWrite /\ Ok(vf.d)
     /\ LET o == vf.o
-           os1 == [objs EXCEPT ![o].ver = nver + 1, ![o].dver = nver + 1, ![o].sm = @ + 1, ![o].dsm = @ + 1]
+           os1 == [objs EXCEPT ![o].ver = nver + 1, ![o].dver = nver + 1, ![o].sm = nver + 1, ![o].dsm = nver + 1]
        IN /\ objs' = os1
-          /\ ghost' = [ghost EXCEPT !.written = @ \cup {nver + 1}, !.vlatest = nver + 1, !.direct = FALSE,
-                                    !.udest = IF Gone(os1, dur, objs[o].ver) THEN @ \cup {objs[o].ver} ELSE @]
+          /\ ghost' = [ghost EXCEPT !.written = @ \cup {nver + 1}, !.vlatest = nver + 1,
+                                    !.direct = IF Named(o) THEN FALSE ELSE @,
+                                    !.udest = (IF Gone(os1, dur, objs[o].ver) THEN @ \cup {objs[o].ver} ELSE @)
+                                              \cup (IF Named(o) THEN {} ELSE {nver + 1})]
     /\ nver' = nver + 1
     /\ cnt' = [cnt EXCEPT !.write = @ + 1]
     /\ UNCHANGED <<vol, dur, dstat, mgen, vsess, vf, cat, vpc>>
@@ -187,7 +194,7 @@ PWrite ==
 PWriteFull ==
     /\ vpc = Idle /\ vf.open /\ cnt.write < MaxWrite /\ vf.d = Full /\ Ok(Full)
     /\ mv.st = "none" /\ vol[Full]["m"] = vf.o /\ nextOp <= MaxOps
-    /\ mv' = [st |-> "planned", op |-> nextOp, obj |-> vf.o, sm |-> objs[vf.o].sm, cg |-> objs[vf.o].cg]
+    /\ mv' = [st |-> "planned", op |-> nextOp, obj |-> vf.o, sm |-> objs[vf.o].sm, cg |-> objs[vf.o].cg, part |-> 0]
     /\ ops' = [ops EXCEPT ![nextOp] = [k |-> "create", d |-> Target, key |-> 0, st |-> "planned"]]
     /\ nextOp' = nextOp + 1
     /\ vpc' = [ph |-> "move", s |-> "journaled"]
@@ -224,8 +231,9 @@ MMake ==
     /\ vol' = [vol EXCEPT ![Target]["p"] = Len(objs) + 1]
     /\ dur' = [dur EXCEPT ![Target]["p"] = Len(objs) + 1]
     /\ ops' = [ops EXCEPT ![COp].key = Len(objs) + 1]
+    /\ mv' = [mv EXCEPT !.part = Len(objs) + 1]
     /\ To("made")
-    /\ UNCHANGED <<dstat, mgen, vsess, vf, mv, nextOp, cnt, nver, ghost>>
+    /\ UNCHANGED <<dstat, mgen, vsess, vf, nextOp, cnt, nver, ghost>>
 
 (* Steps 2 to 4: the full disk's copy read into the part, each chunk hashed, then looked at again: moved, the move
    stops; the part given the copy's times and synced, read again without its cache. One step. *)
@@ -270,7 +278,7 @@ MTrashJournal ==
 (* Step 7: the part's handle becomes the file's. *)
 MSwap ==
     /\ S("trashj")
-    /\ vf' = [vf EXCEPT !.d = Target, !.o = vol[Target]["m"]]
+    /\ vf' = [vf EXCEPT !.d = Target, !.o = mv.part]
     /\ To("swapped")
     /\ UNCHANGED <<disk, vsess, cat, cnt, nver, ghost>>
 
@@ -286,9 +294,8 @@ MTrash ==
             /\ To("write")
             /\ UNCHANGED <<objs, vol, dur, nextOp, ghost>>
        ELSE /\ vol' = [vol EXCEPT ![Full]["m"] = 0, ![Full]["x"] = o]
-            /\ ghost' = Flag(ghost, "moved-first", ~(dur[Target]["m"] # 0 /\ objs[dur[Target]["m"]].dver = objs[o].ver))
             /\ To("tmoved")
-            /\ UNCHANGED <<objs, dur, ops, mv, nextOp>>
+            /\ UNCHANGED <<objs, dur, ops, mv, nextOp, ghost>>
     /\ UNCHANGED <<dstat, mgen, vsess, vf, cnt, nver>>
 
 MNoRoom ==
@@ -317,16 +324,24 @@ MPurgeJournal ==
 
 (* ops.PurgeEntry: the file in the trash looked at by its inode and unlinked, its folder synced; the purge done and the
    move done. A file there that is not that one stays, the purge undone. *)
+(* With move-look, the remedy proposed for flaw 17 (README.md), as flaw 8's xfer-look for the cache's transfer: right
+   before the purge, or the removal at its path, the target's path looked at, on a disk the view can read: one that no
+   longer holds the copy the move placed as it placed it, its inode, size, times and change time, deleted, replaced or
+   written into directly since, keeps the copy left, in the trash unpurged, or at its path. *)
+TargetHolds == /\ Ok(Target) /\ mv.part # 0 /\ vol[Target]["m"] = mv.part
+               /\ objs[mv.part].sm = mv.sm /\ objs[mv.part].cg = 0
+Looks == "move-look" \in Fixes
+
 MPurge ==
     /\ S("pj") /\ Ok(Full)
-    /\ IF vol[Full]["x"] # ops[mv.op].key
+    /\ IF vol[Full]["x"] # ops[mv.op].key \/ (Looks /\ ~TargetHolds)
        THEN /\ ops' = [ops EXCEPT ![mv.op].st = "undone"]
             /\ mv' = [mv EXCEPT !.st = "done"]
             /\ To("write")
             /\ UNCHANGED <<vol, dur, ghost>>
        ELSE /\ vol' = [vol EXCEPT ![Full]["x"] = 0]
             /\ dur' = [dur EXCEPT ![Full]["x"] = 0]
-            /\ ghost' = Flag(ghost, "moved-first", ~(dur[Target]["m"] # 0 /\ objs[dur[Target]["m"]].dver = objs[vol[Full]["x"]].ver))
+            /\ ghost' = Flag(ghost, "moved-first", ~(mv.part # 0 /\ dur[Target]["m"] = mv.part))
             /\ To("purged")
             /\ UNCHANGED <<ops, mv>>
     /\ UNCHANGED <<objs, dstat, mgen, vsess, vf, nextOp, cnt, nver>>
@@ -344,14 +359,14 @@ MPurgeCommit ==
 MRemoveHere ==
     /\ S("rmj") /\ Ok(Full)
     /\ LET o == vol[Full]["m"] IN
-       IF ~AsLooked(o)
+       IF ~AsLooked(o) \/ (Looks /\ ~TargetHolds)
        THEN /\ ops' = [ops EXCEPT ![mv.op].st = "undone"]
             /\ mv' = [mv EXCEPT !.st = "done"]
             /\ To("write")
             /\ UNCHANGED <<vol, dur, ghost>>
        ELSE /\ vol' = [vol EXCEPT ![Full]["m"] = 0]
             /\ dur' = [dur EXCEPT ![Full]["m"] = 0]
-            /\ ghost' = Flag(ghost, "moved-first", ~(dur[Target]["m"] # 0 /\ objs[dur[Target]["m"]].dver = objs[o].ver))
+            /\ ghost' = Flag(ghost, "moved-first", ~(mv.part # 0 /\ dur[Target]["m"] = mv.part))
             /\ To("removed")
             /\ UNCHANGED <<ops, mv>>
     /\ UNCHANGED <<objs, dstat, mgen, vsess, vf, nextOp, cnt, nver>>
@@ -366,13 +381,15 @@ MRemoveCommit ==
 (* Step 10: the write that ran out of space made on the target, through the handle that is the part's now. *)
 MWrite ==
     /\ S("write")
-    /\ IF Ok(vf.d) /\ vf.open /\ vol[vf.d]["m"] = vf.o
+    /\ IF Ok(vf.d) /\ vf.open
        THEN LET o == vf.o
-                os1 == [objs EXCEPT ![o].ver = nver + 1, ![o].dver = nver + 1, ![o].sm = @ + 1, ![o].dsm = @ + 1]
+                os1 == [objs EXCEPT ![o].ver = nver + 1, ![o].dver = nver + 1, ![o].sm = nver + 1, ![o].dsm = nver + 1]
             IN /\ objs' = os1
                /\ nver' = nver + 1
-               /\ ghost' = [ghost EXCEPT !.written = @ \cup {nver + 1}, !.vlatest = nver + 1, !.direct = FALSE,
-                                         !.udest = IF Gone(os1, dur, objs[o].ver) THEN @ \cup {objs[o].ver} ELSE @]
+               /\ ghost' = [ghost EXCEPT !.written = @ \cup {nver + 1}, !.vlatest = nver + 1,
+                                         !.direct = IF Named(o) THEN FALSE ELSE @,
+                                         !.udest = (IF Gone(os1, dur, objs[o].ver) THEN @ \cup {objs[o].ver} ELSE @)
+                                                   \cup (IF Named(o) THEN {} ELSE {nver + 1})]
        ELSE UNCHANGED <<objs, nver, ghost>>
     /\ vpc' = Idle
     /\ UNCHANGED <<vol, dur, dstat, mgen, vsess, vf, cat, cnt>>
@@ -480,11 +497,15 @@ VStart ==
     /\ UNCHANGED <<dstat, mgen, vf, cnt, nver>>
 
 (* Its check every 30 s: a disk found back on a mount of its own gets a new handle; a move left planned, no step of it
-   running, is then resolved as at a start. *)
+   running, is then resolved as at a start (writer.Recheck, which holds back only a move during its copy). With
+   move-held, the remedy proposed for flaw 15 (README.md): a move whose file the program still holds open through the
+   handle that made it is that handle's, and waits for its close or the next start. *)
 VCheck ==
-    /\ vpc = Idle /\ \E d \in Disks : Up(d) /\ ~Ok(d)
-    /\ vsess' = [d \in Disks |-> IF Up(d) THEN mgen[d] + 1 ELSE vsess[d]]
-    /\ IF mv.st = "planned" /\ Up(Full) /\ Up(Target)
+    /\ vpc = Idle
+    /\ \/ \E d \in Disks : Up(d) /\ ~Ok(d)
+       \/ mv.st = "planned" /\ Ok(Full) /\ Ok(Target)
+    /\ vsess' =[d \in Disks |-> IF Up(d) THEN mgen[d] + 1 ELSE vsess[d]]
+    /\ IF mv.st = "planned" /\ Up(Full) /\ Up(Target) /\ ~("move-held" \in Fixes /\ vf.open)
        THEN \E room \in IF NoRoom THEN BOOLEAN ELSE {TRUE} : Resolve(room)
        ELSE UNCHANGED <<objs, vol, dur, cat, ghost>>
     /\ UNCHANGED <<dstat, mgen, vf, vpc, cnt, nver>>
@@ -508,8 +529,8 @@ FairSpec == Spec /\ WF_vars(View) /\ \A d \in Disks : WF_vars(Return(d))
    disks included, unless a write in place or a deletion of a user's took its last copy. *)
 NoUserDataLost == \A v \in ghost.written \ ghost.udest : Holds(objs, dur, v)
 
-(* §21.2, invariant 2: the copy on the full disk leaves its path, or the trash, only once the target holds the same
-   content durably at its path. *)
+(* §21.2, invariant 2: the copy on the full disk leaves its path, or the trash, only once the target holds the copy the
+   move placed durably at its path, its content the copied one, or what a user wrote into it since. *)
 Inv2_MovedFirst == "moved-first" \notin ghost.flags
 
 (* 14 and §21.2, What it presents: while the view runs and both disks are there, the path presents the content the

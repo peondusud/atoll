@@ -5,6 +5,7 @@ package jobs
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -65,6 +66,57 @@ func TestFlawAFileSavedBeforeAnExchangeFollowsIt(t *testing.T) {
 	}
 	if n := b.count("SELECT count(*) FROM ops WHERE kind = 'rename' AND state = 'planned'"); n != 0 {
 		t.Errorf("%d renames left planned", n)
+	}
+}
+
+// Flaw 16 of conformance/models/README.md (Folders.tla, FlawFolderBack.cfg, RenamesAreUsers): a folder renamed on t1,
+// its job run on t2, whose rename of the folder goes through and whose sync fails: the operation stays planned, t2
+// missing. The user renames the folder back on t1. The next pass, t2 away, decides the rename back: t2's copies get
+// old_lpath NULL with no disk operation, and the job above them goes (specs.md §15.12, A disk away). Back, t2's reprise
+// finishes the folder's operation, its new name holding the folder: of its copies, only those with another copy at its
+// own path elsewhere follow (§17.2), so a file that only t2 holds keeps its row at the old name while it sits at the
+// new one, and the next walk reads Atoll's own rename as the user's: the file takes the folder's new name, which the
+// user had taken back.
+func TestFlawAFolderJobLeftPlannedMovesAFileARenameBackClears(t *testing.T) {
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "D/x", "the file at D/x")
+	b.write("t2", "D/x", "the file at D/x")
+	b.write("t2", "D/y", "a file t2 alone holds")
+	b.scan(true)
+	b.rename("t1", "D", "E")
+	b.pass()
+	b.now += 30_000_000_000
+	// The folder's job on t2: the rename goes through, the sync of the folder at its new name fails.
+	once := false
+	b.fail[b.dirs["t2"]] = func(call, name string) error {
+		if call == "syncentry" && name == "E" && !once {
+			once = true
+			return syscall.EIO
+		}
+		return nil
+	}
+	b.pass()
+	if !once {
+		t.Fatal("no folder job reached t2")
+	}
+	b.fail[b.dirs["t2"]] = nil
+	if n := b.count("SELECT count(*) FROM ops WHERE kind = 'rename' AND state = 'planned' AND disk_id = 't2'"); n != 1 {
+		t.Fatalf("%d renames planned on t2, want the folder's", n)
+	}
+	// The user renames the folder back on t1, while t2 is away.
+	b.rename("t1", "E", "D")
+	b.gone[b.dirs["t2"]] = true
+	b.settle()
+	b.now += 30_000_000_000
+	b.settle()
+	b.gone[b.dirs["t2"]] = false
+	for range 3 {
+		b.now += 30_000_000_000
+		b.settle()
+	}
+	path := b.text("SELECT CAST(f.lpath AS TEXT) FROM files f JOIN copies c ON c.file_id = f.id WHERE c.disk_id = 't2' AND CAST(f.lpath AS TEXT) LIKE '%/y'")
+	if path != "D/y" || !b.exists("t2", "media/D/y") {
+		t.Errorf("the file t2 alone holds is at %s (D/y there: %v), where the user renamed its folder back to D", path, b.exists("t2", "media/D/y"))
 	}
 }
 

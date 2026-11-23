@@ -60,7 +60,7 @@ None == <<0, 0>>
 FileIds == 1..NFiles
 OpIds == 1..MaxOps
 Acts == {"mvdir", "swapdir", "mv", "swap", "create", "delete", "replace", "mkdir", "rmdir"}
-FixNames == {"exchange-back", "folder-back"}
+FixNames == {"exchange-back", "folder-back", "folder-wait"}
 
 ASSUME /\ NFolders \in 1..3 /\ NNames \in 1..2 /\ NFiles \in 1..3
        /\ StartPath \in [FileIds -> Paths \cup {None}] /\ StartOn \in [FileIds -> SUBSET Disks]
@@ -188,13 +188,18 @@ Init ==
     /\ sess = NoSess
     /\ cnt = [user |-> 0, crash |-> 0, cut |-> 0, drop |-> 0]
     /\ nver = NFiles
-    /\ ghost = [written |-> {f \in FileIds : StartPath[f] # None}, udest |-> {}, flags |-> {}, umoved |-> {}]
+    /\ ghost = [written |-> {f \in FileIds : StartPath[f] # None}, udest |-> {}, flags |-> {}, umoved |-> {},
+                fmap |-> [F \in FNames |-> F]]
 
 -----------------------------------------------------------------------------
 (* The world. A user acts on one disk, durably, with what came before on that disk, as in Rename.tla; a folder a
-   file needs is made first. umoved: each object a user moved, with the path it went to, for RenamesAreUsers. *)
+   file needs is made first. umoved: each object a user moved, with the path it went to, for RenamesAreUsers; fmap:
+   for each folder name, the latest name a user's folder renames, on any disk, gave a folder that had it, so that a file
+   below a folder takes the folder's latest name as a user's rename would give it (§15.12, "A row at its own file's
+   path, as of a file new on that disk, was told nothing: ... the next look finds it moved, as a user's rename would
+   be"), and never one a user took back. *)
 
-UserDo(d, objs1, root1, gone, newv, moved) ==
+UserDoG(d, objs1, root1, gone, newv, moved, fm) ==
     LET objs2 == DiskSynced(objs1, d)
         droot2 == [droot EXCEPT ![d] = root1[d]]
         held(v) == \E e \in Disks, p \in Paths :
@@ -205,8 +210,10 @@ UserDo(d, objs1, root1, gone, newv, moved) ==
        /\ cnt' = [cnt EXCEPT !.user = @ + 1]
        /\ ghost' = [ghost EXCEPT !.written = IF newv = 0 THEN @ ELSE @ \cup {newv},
                                  !.udest = IF gone # 0 /\ ~held(gone) THEN @ \cup {gone} ELSE @,
-                                 !.umoved = @ \cup moved]
+                                 !.umoved = @ \cup moved, !.fmap = fm]
        /\ UNCHANGED <<dstat, mgen, cat, pc, sess>>
+
+UserDo(d, objs1, root1, gone, newv, moved) == UserDoG(d, objs1, root1, gone, newv, moved, ghost.fmap)
 
 Allowed(a) == a \in UserActs /\ cnt.user < MaxUser
 NewDir(d) == [kind |-> "dir", d |-> d, ver |-> 0, dver |-> 0, kids |-> NoKids, dkids |-> NoKids, by |-> "user"]
@@ -216,13 +223,15 @@ FilesIn(o, G) == {<<objs[o].kids[n], <<G, n>>>> : n \in {m \in Names : objs[o].k
 (* §15.3, §15.12: mv D E on one disk, with all it holds. *)
 UMvDir(d, F, G) ==
     /\ Allowed("mvdir") /\ Up(d) /\ F # G /\ root[d][F] # 0 /\ root[d][G] = 0
-    /\ UserDo(d, objs, [root EXCEPT ![d][G] = root[d][F], ![d][F] = 0], 0, 0, FilesIn(root[d][F], G))
+    /\ UserDoG(d, objs, [root EXCEPT ![d][G] = root[d][F], ![d][F] = 0], 0, 0, FilesIn(root[d][F], G),
+               [x \in FNames |-> IF ghost.fmap[x] = F THEN G ELSE ghost.fmap[x]])
 
 (* Two folders swap their names, through a third. *)
 USwapDir(d, F, G) ==
     /\ Allowed("swapdir") /\ Up(d) /\ F < G /\ root[d][F] # 0 /\ root[d][G] # 0
-    /\ UserDo(d, objs, [root EXCEPT ![d][G] = root[d][F], ![d][F] = root[d][G]], 0, 0,
-              FilesIn(root[d][F], G) \cup FilesIn(root[d][G], F))
+    /\ UserDoG(d, objs, [root EXCEPT ![d][G] = root[d][F], ![d][F] = root[d][G]], 0, 0,
+               FilesIn(root[d][F], G) \cup FilesIn(root[d][G], F),
+               [x \in FNames |-> IF ghost.fmap[x] = F THEN G ELSE IF ghost.fmap[x] = G THEN F ELSE ghost.fmap[x]])
 
 UMv(d, p, q) ==
     /\ Allowed("mv") /\ Up(d) /\ p # q /\ At(d, p) # 0 /\ At(d, q) = 0
@@ -480,6 +489,12 @@ WalkDone ==
    renamed: a copy of that disk sits below its new name with no clock, or one found moved there sat below its old
    name (jobs.isRealRename). *)
 
+(* With folder-wait, the remedy proposed for flaw 16 (README.md): a file with a copy below a folder's operation left
+   planned on its disk, at its old name or its new one, is decided nothing of, and follows no folder, as a file with a
+   job running is held (§15.12, Due), until that disk's reprise concludes the operation: the copy may have moved with
+   it, and a rename back would clear its old_lpath while it is at the new name. *)
+FolderPlannedOver(d, p) == \E o \in Planned(d) : ops[o].p[2] = 0 /\ p[1] \in {ops[o].p[1], ops[o].q[1]}
+Waits16(f) == "folder-wait" \in Fixes /\ \E d \in Disks : Ok2(f, d) /\ FolderPlannedOver(d, Place(f, d))
 MovedOn(f) == {d \in Session : Ok2(f, d) /\ cc[f][d].v = "moved"}
 Tgt(f) == cc[f][Min(MovedOn(f))].to
 Keep(S) == {f \in S :
@@ -495,11 +510,11 @@ RealMove(d, m) ==
 
 DecideFiles ==
     /\ pc.ph = "decide"
-    /\ LET S0 == {f \in FileIds : cf[f].on /\ MovedOn(f) # {}}
+    /\ LET S0 == {f \in FileIds : cf[f].on /\ MovedOn(f) # {} /\ ~Waits16(f)}
            R == Fix(S0)
            row(f, d) ==
                LET r == cc[f][d] IN
-               IF r.st # "ok" THEN r
+               IF r.st # "ok" \/ Waits16(f) THEN r
                ELSE IF ~InSess(d) THEN IF f \in R THEN [r EXCEPT !.old = IF Place(f, d) = Tgt(f) THEN None ELSE Place(f, d)] ELSE r
                ELSE IF f \in R
                THEN CASE r.v = "moved" /\ r.to = Tgt(f) -> [r EXCEPT !.old = None, !.gk = "none"]
@@ -524,10 +539,12 @@ DecideFiles ==
                     \* what no pass can take from below a folder: replaced, or moved to a name another file holds
                     stay |-> {<<f, d>> \in FileIds \X Disks : Ok2(f, d) /\ (cc[f][d].v = "replaced" \/ (cc[f][d].v = "moved" /\ f \notin R))},
                     moved |-> S0]
-          \* a file takes only a path a user moved one of its copies to; a copy that caught up with its file's own path
-          \* is no rename
+          \* a file takes only a path a user moved one of its copies to, or the latest name a user gave its folder; a
+          \* copy that caught up with its file's own path is no rename
           /\ ghost' = Flag(ghost, "rename-reverted",
-                           \E f \in R : Tgt(f) # cf[f].path /\ <<cc[f][Min(MovedOn(f))].obj, Tgt(f)>> \notin ghost.umoved)
+                           \E f \in R : /\ Tgt(f) # cf[f].path
+                                        /\ <<cc[f][Min(MovedOn(f))].obj, Tgt(f)>> \notin ghost.umoved
+                                        /\ Tgt(f) # <<ghost.fmap[cf[f].path[1]], cf[f].path[2]>>)
     /\ UNCHANGED <<disk, ce, moves, cdisk, ops, nextOp, sess, cnt, nver>>
 
 (* The folders found renamed, each in its own step, in the order of their jobs (jobs.movesInOrder): one that lands in
@@ -548,6 +565,7 @@ DecideFolder ==
            below == {f \in FileIds : Ok2(f, d) /\ Place(f, d)[1] = F /\ <<f, d>> \notin pc.stay}
            followers == {g \in FileIds : cf[g].on /\ cf[g].path[1] = F /\ ~Ok2(g, d) /\ g \notin pc.moved
                                          /\ \E e \in Disks : Ok2(g, e)}
+           held == \E g \in FileIds : cf[g].on /\ cf[g].path[1] = F /\ Waits16(g)
            to(g) == <<G, cf[g].path[2]>>
            follows == {g \in followers : ~\E h \in FileIds : h # g /\ cf[h].on /\ cf[h].path = to(g)}
            cf1 == [g \in FileIds |-> IF g \in follows THEN [cf[g] EXCEPT !.path = to(g)] ELSE cf[g]]
@@ -558,7 +576,7 @@ DecideFolder ==
                                                           /\ (IF cc1[g][e].old # None THEN cc1[g][e].old ELSE cf1[g].path)[1] = F}
            jobs == MovedJobs(F, G)
        IN /\ pc' = [pc EXCEPT !.left = @ \ {x}]
-          /\ IF below # {}
+          /\ IF below # {} \/ held
              THEN UNCHANGED <<cf, cc, ce, fj>>
              ELSE IF ~x[3]
              THEN /\ ce' = Entries(d, F, G) /\ fj' = jobs
