@@ -153,8 +153,10 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: eclipse-temurin@sha256:b4f9d2a0bc273417cf5219b7b832bbf0493ed500b7b57d5001d9f83374659060 # 21.0.13_9-jre-noble
-    # The instances of 2026-11-22, the view's and the renames', took the whole to some 32 minutes on a loaded machine.
-    timeout-minutes: 45
+    # The instances of 2026-11-22, the view's and the renames', took the whole to some 32 minutes on a loaded machine;
+    # those of 2026-11-24, the view's names and folders below folders, to 33 minutes on this machine, some 37 expected
+    # on GitHub's: 60, as the maintainer chose on 2026-11-24, rather than fewer instances.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
