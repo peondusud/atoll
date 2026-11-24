@@ -2,6 +2,24 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Folders below folders and names a disk refuses in TLA+, no flaw found, 2026-11-24 (specs.md §15.3, §15.8, §15.12, §27, §29.4)
+
+Items 2 and 3 of the next models of TODO.md, by risk, on the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `3a58ef7`: `conformance/models/Nested.tla` with `MCNested.tla` and eight instances. TLC found no flaw.
+
+- **The model**: two disks; paths of folders one or two names deep, each folder with one file; a user moving a folder anywhere with its subtree, making one, or moving a file; a disk refusing a name, as NTFS a name with ":"; Atoll killed, a disk lost and mounted again. The passes as `Folders.tla` has them, each operation of Atoll one step: the walks and the folders found renamed, a folder and its subfolder each; the decisions; the folders decided in the order of their jobs, the entries rewritten below the new name, the jobs moved on by a further rename at or below their target, below their own old name included; the folder jobs in `jobs.folderOrder`'s order, run when ready or dropped; the renames of copies behind round after round, a refused name leaving the copy behind; and the trash jobs `reason = renamed` of those, once another copy is at the file's path. Invariants `NoUserDataLost`, `LastCopyKept`, `RenamesAreUsers`, `OneRowAnObject`, and `EventuallyFollowed` with fairness (README.md, Folders below folders, and names a disk refuses).
+- **Instances**: `NestedInto` 272,990 states, `NestedBelow` 1,083,470, `NestedSub` 166,464, `NestedRefused` 345,806, and their liveness instances, the user on disk 1 alone, 70,499, 204,884, 51,336 and 232,739, every one passing; the eight in 2 min 24 s of TLC.
+- **Each pool reaches what it is for**, an invariant that must break checked on trial pools of the same shape: a job below its own old name, one past two names, a trash job, a copy in the trash.
+- **Modelling mistakes**, fixed (README.md): a job's target past the model's two names, as the code holds any depth, refused as a branch's limit would and dropped; `RenamesAreUsers` reading as Atoll's a subfolder's name that a folder's job carried, which §15.12 makes the user's; liveness pools with a user on both disks, which can leave two files claiming one path for good, every version kept.
+- **How sensitive it is**: the trash job's check of another copy (`LastCopyKept`), and the copies behind following a folder's job (`EventuallyFollowed`); nothing broke without the jobs moved on, the wait for copies below the old name, the jobs' order, the entry's inode, `landsBadly` or the name checks, each costing a pass or a needless operation here, which no invariant of the model states.
+- **specs.md**: §15.12's sentence naming the models gives `Nested.tla`; its fingerprint updated, the module added to `fingerprints.json`. Nothing else in specs.md.
+- **Checked**: `test/tla/run.sh`, every one of the 83 instances as it expects, every earlier one the very same states, 27 min 7 s of TLC; `go test ./conformance/models`; no Go code touched, so no gofmt, vet or lint to run beyond it.
+- **To confirm**, chosen alone:
+  - a module of its own beside `Folders.tla`, where the scope said in `Folders.tla`: its flat paths are in every step, nested ones would have meant the module written again and its instances, among the largest of the set, multiplied;
+  - each operation of Atoll one step there, as `Folders.tla` and `Rename.tla` check their steps, and so no power cut;
+  - two names of depth, a deeper job refused as a branch's limit would refuse it;
+  - the liveness pools with the user on disk 1 alone;
+  - no Go test and no scenario, as nothing was found.
+
 ## Flaws 18 to 22 of the TLA+ models fixed with the maintainer's remedies, 2026-11-24 (specs.md §9, §15.12, §21.2)
 
 On the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `d838894`, one flaw after another: each test of the build tag `flaws` made a regular test, seen failing on the code before the remedy, with cases of faults and kill -9 around it; then the code and specs.md; then the model, where each remedy is what every instance does, each flaw's instance a regression instance expecting `pass`, and `Fixes` back to `{}`; then the fingerprints (README.md of the models, Atoll's own view, its renames and folders).

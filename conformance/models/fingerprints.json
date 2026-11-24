@@ -5,7 +5,8 @@
     "Copies.tla",
     "Folders.tla",
     "ViewMove.tla",
-    "ViewNames.tla"
+    "ViewNames.tla",
+    "Nested.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -67,7 +68,7 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "672feb7e8deaa94ea0c210bfec4b8afa44ae406ab31800a53df7a5d5efdf0541"
+      "sha256": "21419882e779677dfd93dbe59e259c05657c0fb50254dbefe0ed62092f78d40a"
     },
     {
       "section": "17",
