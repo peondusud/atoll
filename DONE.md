@@ -13,7 +13,7 @@ Items 2 and 3 of the next models of TODO.md, by risk, on the branch `worktree-ag
 - **How sensitive it is**: the trash job's check of another copy (`LastCopyKept`), and the copies behind following a folder's job (`EventuallyFollowed`); nothing broke without the jobs moved on, the wait for copies below the old name, the jobs' order, the entry's inode, `landsBadly` or the name checks, each costing a pass or a needless operation here, which no invariant of the model states.
 - **specs.md**: §15.12's sentence naming the models gives `Nested.tla`; its fingerprint updated, the module added to `fingerprints.json`. Nothing else in specs.md.
 - **Checked**: `test/tla/run.sh`, every one of the 83 instances as it expects, every earlier one the very same states, 27 min 7 s of TLC; `go test ./conformance/models`; no Go code touched, so no gofmt, vet or lint to run beyond it.
-- **To confirm**, chosen alone:
+- **Confirmed by the maintainer on 2026-11-24** ("Tout confirmer"), chosen alone:
   - a module of its own beside `Folders.tla`, where the scope said in `Folders.tla`: its flat paths are in every step, nested ones would have meant the module written again and its instances, among the largest of the set, multiplied;
   - each operation of Atoll one step there, as `Folders.tla` and `Rename.tla` check their steps, and so no power cut;
   - two names of depth, a deeper job refused as a branch's limit would refuse it;
