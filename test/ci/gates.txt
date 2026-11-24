@@ -23,9 +23,12 @@ mutation ./internal/ops 94 76
 mutation ./internal/trash 93 90
 mutation ./internal/watch 93 80
 # jobs, each week in 14 parts by test, its four sweeps of a whole pass left out, merged into one score (jobs-score), at
-# its first measure rounded down (the maintainer, 2026-11-23): run 45195450459 on a68c6de, 1,601 killed, 337 lived,
-# 249 not covered, 40 timed out, 82.61 % and 88.61 %, a margin of 11 and 13 mutants.
-mutation ./internal/jobs 82 88
+# its first measure rounded down (the maintainer, 2026-11-23): run 45195450459 on a68c6de, 82.61 % and 88.61 %. Raised
+# on 2026-11-24 by tests, to confirm (DONE.md): run 45455893963 on 2c05cf4 measured 80.58 % and 89.02 %, under the gate,
+# the code of flaws 18 to 23 in; the same 14 parts measured locally with the tests and the 5 equivalents named, 1,762
+# killed, 339 lived, 254 not covered, 38 timed out, 84.06 % and 89.21 %. The efficacy stays at 83: 84 would leave one
+# mutant of margin, 83 leaves 26, and the coverage 5.
+mutation ./internal/jobs 83 89
 #
 # cover <part> <share>: test/ci/cover.sh, the CI's cover job (make cover): the share of the module's statements that
 # the unit tests run (unit), and that the unit tests or the scenarios run (merged), in all, rounded to a tenth as the

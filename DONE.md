@@ -2,6 +2,32 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## jobs' lived mutants killed by tests, and its mutation gate raised, 2026-11-24 (specs.md §27)
+
+TODO.md's item of the gates, `jobs`' part, the next step of the hardening: tests only, no code of the program changed, as no mutant looked at showed a bug; and one fix of the CI's own script. On `worktree-agent-ac714d5b6ac74a1ef`, on `beta`'s `2c05cf4`, in the one commit that records them.
+
+- **The fresh measure**: the weekly workflow dispatched on `beta` (run 45455893963, on `2c05cf4`), `jobs`' 14 parts merged by `jobs-score`: 1,685 killed, 406 lived, 258 not covered, 44 timed out, 80.58 % and 89.02 %, under its gate of 82, the code of flaws 18 to 23 and of observation 5 in (`viewops.go` 78 lived, `pass.go` 106, `work.go` 47). The same run: `ops` 96.25 % and 76.81 %, `trash` 93.95 % and 91.54 %, both passing; `watch`'s job cut by a shutdown of its runner, no score.
+- **A bug of the CI's script, fixed**: each part of the matrix gated its own figures against the package's gate, so that 12 of the 14 parts failed though only their merge is to be gated: a part leaves out the rest of the package, and with `MUTATION_LINES` counts the not covered of its whole file. `test/ci/mutation.sh` now only measures a part (`MUTATION_FILES` or `MUTATION_LINES` set) under its gate, "a part, measured", and `jobs-score` gates the parts together, as before.
+- **Tests** (`internal/jobs/`), each of a behavior the lived mutants said no test checked:
+  - `transferheir_test.go`: the heir of a copy leaving the SSD cache, by user copy, first seen, position, never a stale copy, a disk the list does not know, a missing or cache disk; an operation of the view holding a path at, above or below either name; a transfer that waits for the view, counted once and due a debounce on, to the nanosecond.
+  - `devices_test.go`: a start records the physical disks of every disk after a failed one, one not mounted and one without its mount entry; a catalog that refuses the record says so for each disk.
+  - `balancesums_test.go`: `MeasureBalance`, `UserCopiesMisplaced`, `atoll balance` and `atoll replicate` summing every file, one of two copies.
+  - `scrubedges_test.go`: a corrupt copy that is its file's first mended, found now or taken again; a file of one chunk exactly and an empty file, scrubbed and repaired; a failed disk never scrubbed; a scrub's budget spent to the nanosecond.
+  - `firstchanged_test.go`: the guard of a modification is its first changed copy by position; a copy whose mode changes during its read, its change time alone moving, gives nothing to decide.
+  - `passstart_test.go`: a start records the physical disks, a dry run and a later pass do not; a pass goes past a failed disk, and one of the daemon spares each disk before the one it walks; a pass sums the bytes it copies.
+  - `scopeadd_test.go`: a scope's names add up, a disk walked whole stays so; the renames left planned on a disk; which filesystems exchange names; a target in one folder by case alone; a slice of reads at its time reads nothing.
+  - `viewopsof_test.go` and `viewpartsof_test.go`: what an operation of the view touches, and whether a later one does; its operations under way on a disk, a move's on both; what it deleted; what a folder's rename through it keeps; the parts it handed over and what it holds; the top moves of a look; whether a row holds the change time a look found.
+  - `guardcount_test.go`: the mass-deletion guard counts its window's events and the copies gone since, in a pass and in a dry run, events alone holding nothing.
+- **Named equivalent** (`test/ci/mutation-equivalents.txt`), 5, each argued there: `devices.go:24:46`, `modguard.go:75:50`, `pass.go:601:6` and `1470:51`, `passcopies.go:137:37`.
+- **The new measure**, locally, the 14 parts as the matrix runs them, through `heavy.sh`, one container, a Go build cache of its own: 1,762 killed, 339 lived, 254 not covered, 38 timed out, 84.06 % with the 5 named, 89.21 %; 67 mutants fewer live than in the run on GitHub, 77 more killed. Parts 02 and 13 again for the last two tests.
+- **The gate** (`test/ci/gates.txt`): 83 and 89 (were 82 and 88), the efficacy one under the measure rounded down, as 84 would leave one mutant of margin; 26 and 5 mutants of margin.
+- **What lives still**: 334 beside the named, `pass.go` 96, `viewops.go` 62, `work.go` 41, `replicate.go` 31, `scrub.go` 25: mostly a pass's scoped looks, the guards' counts and reads, the view's folder renames, and a part resumed across commits.
+- **Verified**: each new test alone, `go test -race ./internal/jobs/...`, gofmt, `go vet` and the three lints, shellcheck on `mutation.sh`, `hidden.py`. **Not verified**: a run on GitHub of the new tests and gate, the measure being local; `make conformance`, as no test changed what a scenario covers.
+- **Decided without the maintainer, to confirm**:
+  - the gate at 83 and 89, from a local measure, its efficacy one under the rounded measure;
+  - the 5 mutants named equivalent;
+  - a part of the weekly matrix only measured under the package's gate, the parts together gated by `jobs-score`.
+
 ## The maintainer's answers of 2026-11-24 on flaw 23's fix
 
 - **The full form kept**, `back-pass` with `back-files`, as the restricted variant did not hold (the entry below). Its cost is accepted: while a folder's rename through the view stands, until the next pass in the usual case, a user's direct rename of that folder back on another disk is put back. Nothing is lost, only the name changes.
