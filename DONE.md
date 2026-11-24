@@ -2,6 +2,12 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-24 on flaw 23's fix
+
+- **The full form kept**, `back-pass` with `back-files`, as the restricted variant did not hold (the entry below). Its cost is accepted: while a folder's rename through the view stands, until the next pass in the usual case, a user's direct rename of that folder back on another disk is put back. Nothing is lost, only the name changes.
+- **For format version 2**: the view's journal recording each holder a folder's rename reached or missed, which would allow the restricted variant. It is noted in TODO.md, and version 1 is unchanged.
+- **The rest of the entry's choices**: confirmed together ("Tout confirmer").
+
 ## Flaw 23 of the TLA+ models fixed, 2026-11-24 (specs.md §15.12, §21.2)
 
 The maintainer chose the restricted variant first (the entry below). It does not hold, in the model or in the code, so the remedy is `back-pass` with `back-files`, as the experiment made them, the fallback he named. On the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `825c98d`.
@@ -12,7 +18,7 @@ The maintainer chose the restricted variant first (the entry below). It does not
 - **specs.md**: §15.12, Folders, a paragraph after observation 5's: the rename that stands, the waits, the pass's rename on a disk that missed it, a dry run listing it, and a user's rename back on such a disk put back with it; §21.2, Taken in: the take-in waits while the catalog holds a file below the old name, and the pass makes the rename on a disk that missed it. Their fingerprints updated; `Replication.tla`, `Rename.tla`, `Copies.tla`, `Folders.tla`, `ViewMove.tla` and `Nested.tla`, which cite them, model no folder's rename of the view, and are unchanged.
 - **The model**: the remedy is what every instance does, `Fixes = {}`, the proposals gone from `ViewNames.tla`; `FlawViewFolderBackLost` expects `pass` (62,178 states), `FlawViewFolderBackLostLive` checks its liveness (62,178), `ViewFolders` checks `ViewNamesSettled` (271,377); `BackKeepsUser` stated and checked by no instance, as it fails; a modelling mistake fixed, a rename of the view standing only once its disk was walked by the pass, as the code reads it (`HolderSeen`, no verdict changed). Each part taken out in a copy of the module not kept: the folder's wait, `ViewNamesSettled` in `FlawViewFolderRenameBack` and `ViewFolders`; the copy's wait, nothing, the walks deciding a disk at a time; the rename and the take-in's wait, `ViewNamesSettled` in the flaw's pool and `ViewFolders`, and more (README.md).
 - **Checked**: `go test -race` of `internal/jobs`, `internal/ops`, `internal/catalog` and `internal/view/...`; in the CI image, `go test -timeout 60m ./...`, `make conformance`, `make model-flaws` (no flaw test left), gofmt, go vet (default, `conformance`, `loopdev`, `flaws`), golangci-lint on the three builds (default, `loopdev`, `flaws`); `go test ./conformance/models`; in qemu, the loop-device tests of the view's renames, replacements and folders, flaw 23's among them, and of the daemon's renames, swaps, exchanges back, folder put-backs and devices failing during a rename, on Linux 6.12 (Debian) and 7.3 (mainline), on every driver, all passing; `test/tla/run.sh`, every one of the 87 instances as it expects, the other modules' the very same states, in 34 min 43 s of TLC.
-- **To confirm** (choices made alone):
+- **Confirmed by the maintainer on 2026-11-24** ("Tout confirmer", the answers above) (choices made alone):
   - the unrestricted form made, the restricted one not holding, as he named it the fallback;
   - a user's direct rename back, on another disk, of a folder the view renamed, while that rename stands, put back, as specs.md now says;
   - the waits on every disk, the rename's own included, as the experiment and the model have them;
