@@ -10,6 +10,7 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
+	"github.com/peondusud/atoll/internal/ops"
 	"github.com/peondusud/atoll/internal/view"
 	"github.com/peondusud/atoll/internal/watch"
 )
@@ -72,6 +73,7 @@ func (p *pass) viewFolderMoves(ctx context.Context) error {
 			continue
 		}
 		p.kept = append(p.kept, watch.FolderMove{From: v.Path, To: v.Path2})
+		p.keptOps = append(p.keptOps, v)
 		touches := func(path string) bool { return touchesEither(v, path) }
 		if slices.ContainsFunc(p.moves[v.Disk], func(m watch.FolderMove) bool { return touches(m.From) || touches(m.To) }) ||
 			slices.ContainsFunc(p.unfound[v.Disk], touches) {
@@ -157,7 +159,10 @@ func (p *pass) viewKeeps(place, target string) bool {
 // 2026-11-24): one a disk that holds the folder, by the catalog's entries at either name, was not looked at by this
 // pass, as it may have missed it; and the last operation of the view at its names, done on the disk its journal names,
 // which another disk missed: that disk holds at the old name the folder its entry records at either name, and nothing
-// at the new. A disk failed is never read again, and holds nothing back.
+// at the new; and one whose old name the catalog still holds a file below, no user having undone it, as the take-in
+// compares the folder's names alone (conformance/models/README.md, flaw 23, the maintainer's remedy, 2026-11-24): a
+// disk that missed it is still to follow, and the rename then goes on to the catalog (viewFolderMoves). A disk
+// failed is never read again, and holds nothing back.
 func (p *pass) missedViewOps(ctx context.Context, open []catalog.ViewOp) (map[int64]bool, error) {
 	held := map[int64]bool{}
 	failed := map[string]bool{}
@@ -189,9 +194,94 @@ func (p *pass) missedViewOps(ctx context.Context, open []catalog.ViewOp) (map[in
 		}
 		if missed {
 			held[v.ID] = true
+			continue
+		}
+		// Nor while the catalog holds a file below the old name, which the view presents at the new one, but as a user
+		// undid it (flaw 23).
+		below, err := p.filesBelow(ctx, v)
+		if err != nil {
+			return nil, err
+		}
+		if below {
+			held[v.ID] = true
 		}
 	}
 	return held, nil
+}
+
+// backRenames renames, on a disk, each folder's rename of the view that stands, which that disk missed (backRenamesOn;
+// specs.md §15.12, §21.2; conformance/models/README.md, flaw 23, the maintainer's remedy, 2026-11-24). The pass that
+// finds it makes it, as a folder's job it runs at once (runFolderJob), after the jobs of that disk, never queued: a job
+// could outlive the rename it carries out, which a later rename back undoes. Meanwhile, a folder found renamed and a
+// copy found moved against that rename wait (viewKeeps).
+func (p *pass) backRenames(ctx context.Context, d *config.Disk, handle *ops.Disk) error {
+	jobs, err := p.backRenamesOn(ctx, d)
+	if err != nil {
+		return err
+	}
+	for i := range jobs {
+		if !p.session.Writable(d.ID) {
+			return nil
+		}
+		if err := p.runFolderJob(ctx, d, handle, &jobs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// backRenamesOn gives the folders' renames of the view that stand which a disk this pass walked missed: it holds at the
+// old name the folder its entry records at either name, and nothing at the new.
+func (p *pass) backRenamesOn(ctx context.Context, d *config.Disk) ([]catalog.FolderJob, error) {
+	var jobs []catalog.FolderJob
+	for _, v := range p.keptOps {
+		if v.Disk == d.ID {
+			continue
+		}
+		old, found, looked, err := p.statLooked(ctx, d.ID, v.Path)
+		if err != nil {
+			return nil, err
+		}
+		if !looked || !found || old.Kind != fsx.KindDir {
+			continue
+		}
+		_, taken, _, err := p.statLooked(ctx, d.ID, v.Path2)
+		if err != nil {
+			return nil, err
+		}
+		if taken {
+			continue
+		}
+		key := strconv.FormatUint(old.Ino, 10)
+		records := false
+		for _, path := range []string{v.Path, v.Path2} {
+			known, err := catalog.EntryKeyAt(ctx, p.db, d.ID, path)
+			if err != nil {
+				return nil, fmt.Errorf("catalog: %w", err)
+			}
+			records = records || known == key
+		}
+		if records {
+			jobs = append(jobs, catalog.FolderJob{From: v.Path, To: v.Path2})
+		}
+	}
+	return jobs, nil
+}
+
+// filesBelow says that the catalog holds a file below the old name of a folder's rename of the view no user undid.
+func (p *pass) filesBelow(ctx context.Context, v *catalog.ViewOp) (bool, error) {
+	page, err := catalog.FilesBelow(ctx, catalog.NewFileReader(p.db), v.Path)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if len(page) == 0 {
+		return false, nil
+	}
+	undone, err := p.folderUndone(ctx, v)
+	if err != nil {
+		return false, err
+	}
+	return !undone, nil
 }
 
 // configured says whether a disk is one of the pool's.

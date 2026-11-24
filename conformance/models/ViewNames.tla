@@ -19,13 +19,16 @@
    copies to the trash, when deletes.direct is propagate or the copy went through the view's deletion; kept otherwise,
    the copy made again), the folders found renamed, below which the files that only other disks hold follow, and the
    folder entries, each change decided once a later walk of that disk finds it still (the debounce) and no copy of its
-   file on another disk waits; then a folder's rename of the view no walk finds, decided as a folder renamed on its
-   disk (jobs.viewFolderMoves); then on each disk its walk found, on that mount, its folder jobs, each as one
-   operation, and what follows, a copy at a time: a copy behind renamed, unless it would go against a folder's
+   file on another disk waits, a folder found renamed or a copy found moved against a folder's rename of the view
+   that stands waiting too (flaw 23); then a folder's rename of the view no walk finds, decided as a folder renamed
+   on its disk (jobs.viewFolderMoves); then on each disk its walk found, on that mount, its folder jobs, each as one
+   operation, the rename of the view that stands which that disk missed, made at once (jobs.backRenames), and what
+   follows, a copy at a time: a copy behind renamed, unless it would go against a folder's
    rename of the view that stands (jobs.viewKeeps), one to delete to the trash, one to make again or to refresh, a
    conflict when its name holds another file, a folder of Atoll's own its rename leaves empty removed; then the
    take-in of the view's operations the pass read when it began, done then (jobs.readViewOps, view.TakenIn), a
-   folder's rename waiting for every disk that holds it and for a disk that missed it (jobs.missedViewOps).
+   folder's rename waiting for every disk that holds it, for a disk that missed it, and while the catalog holds a
+   file below its old name (jobs.missedViewOps).
 
    What it leaves out: the daemon's own journal and its crashes (each of its operations is one step here; Folders.tla
    and Replication.tla have their steps), the guards and the settle, two copies of a file found moved to two names
@@ -68,9 +71,8 @@ ASSUME /\ NFolders \in 1..2 /\ NNames \in 1..2 /\ NFiles \in 1..2
        /\ Direct \in {"propagate", "restore"}
        /\ ViewActs \subseteq {"rename", "replace", "mvdir", "rmdir"}
        /\ UserActs \subseteq {"mv", "create", "delete", "save", "write", "mkdir", "rmdir", "mvdir"}
-       \* flaws 18 to 22's and observation 5's remedies are specs.md's, the code's and the model's; flaw 23 is open,
-       \* its remedies proposed here, the maintainer's to choose (README.md)
-       /\ Fixes \subseteq {"back-wait", "back-follow", "back-pass", "back-files"}
+       \* flaws 18 to 23's and observation 5's remedies are specs.md's, the code's and the model's; no flaw open
+       /\ Fixes = {}
 
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 NoKids == [n \in Names |-> 0]
@@ -121,6 +123,10 @@ view == <<vops, nextV, vpc, vsess>>
 Up(d) == dstat[d] = "up"
 VUp(d) == Up(d) /\ vsess[d] = mgen[d] + 1
 Flag(g, name, cond) == IF cond THEN [g EXCEPT !.flags = @ \cup {name}] ELSE g
+(* ghost.ur: on each disk, the folder a user renamed there directly last, from and to, while nothing else renamed
+   it since. *)
+NoUr == <<0, 0, 0>>
+ClearUr(g, d, k) == IF g.ur[d][1] = k THEN [g EXCEPT !.ur[d] = NoUr] ELSE g
 AtIn(os, rt, d, nm) == IF nm[2] = 0 THEN rt[d][nm[1]]
                        ELSE IF rt[d][nm[1]] = 0 THEN 0 ELSE os[rt[d][nm[1]]].kids[nm[2]]
 At(d, nm) == AtIn(objs, root, d, nm)
@@ -236,7 +242,7 @@ Init ==
     /\ pc = PIdle
     /\ cnt = [user |-> 0, stop |-> 0, drop |-> 0]
     /\ nver = NFiles
-    /\ ghost = [written |-> FileIds, udest |-> {}, flags |-> {}, direct |-> FALSE]
+    /\ ghost = [written |-> FileIds, udest |-> {}, flags |-> {}, direct |-> FALSE, ur |-> [d \in Disks |-> NoUr]]
 
 -----------------------------------------------------------------------------
 (* The world: a user directly on a disk, through mergerfs or the disk itself; a disk lost and mounted again; atoll
@@ -246,14 +252,16 @@ HeldIn(os, rt, tr, v) == \E d \in Disks :
     \/ \E p \in Paths : AtIn(os, rt, d, p) # 0 /\ os[AtIn(os, rt, d, p)].ver = v
     \/ \E o \in tr[d] : os[o].ver = v
 
-UserOn(os, rt, gone, newv) ==
+UserOnUr(os, rt, gone, newv, ur) ==
     /\ objs' = os /\ root' = rt
     /\ nver' = IF newv = 0 THEN nver ELSE newv
     /\ cnt' = [cnt EXCEPT !.user = @ + 1]
     /\ ghost' = [ghost EXCEPT !.written = IF newv = 0 THEN @ ELSE @ \cup {newv},
                               !.udest = IF gone # 0 /\ ~HeldIn(os, rt, trash, gone) THEN @ \cup {gone} ELSE @,
-                              !.direct = TRUE]
+                              !.direct = TRUE, !.ur = ur]
     /\ UNCHANGED <<trash, dstat, mgen, cat, view, pc>>
+
+UserOn(os, rt, gone, newv) == UserOnUr(os, rt, gone, newv, ghost.ur)
 
 UAllowed(a) == a \in UserActs /\ cnt.user < MaxUser
 
@@ -290,7 +298,8 @@ URmdir(d, F) ==
 
 UMvDir(d, F, G) ==
     /\ UAllowed("mvdir") /\ Up(d) /\ F # G /\ root[d][F] # 0 /\ root[d][G] = 0
-    /\ UserOn(objs, [root EXCEPT ![d][G] = root[d][F], ![d][F] = 0], 0, 0)
+    /\ UserOnUr(objs, [root EXCEPT ![d][G] = root[d][F], ![d][F] = 0], 0, 0,
+                [ghost.ur EXCEPT ![d] = <<root[d][F], F, G>>])
 
 Drop(d) ==
     /\ cnt.drop < MaxDrop /\ Up(d)
@@ -458,7 +467,8 @@ VMvDirStep ==
           /\ vops' = [vops EXCEPT ![vpc.v].did = @ \/ moves,
                                   ![vpc.v].d = IF named THEN h ELSE @,
                                   ![vpc.v].key = IF named THEN root[h][F] ELSE @]
-    /\ UNCHANGED <<objs, trash, dstat, mgen, cat, nextV, vsess, pc, cnt, nver, ghost>>
+          /\ ghost' = IF moves THEN ClearUr(ghost, h, root[h][F]) ELSE ghost
+    /\ UNCHANGED <<objs, trash, dstat, mgen, cat, nextV, vsess, pc, cnt, nver>>
 
 VMvDirEnd ==
     /\ VStep("dir") /\ vpc.left = {}
@@ -612,18 +622,19 @@ FMovesFound(d) == {m \in FNames \X FNames :
                  /\ m[1] # m[2] /\ ce[d][m[1]] # 0 /\ root[d][m[1]] # ce[d][m[1]]
                  /\ root[d][m[2]] = ce[d][m[1]] /\ ce[d][m[2]] = 0
                  /\ ~Waited(d, <<m[1], 0>>) /\ ~Waited(d, <<m[2], 0>>)}
-(* Flaw 23's remedy (a), `back-wait`, proposed (README.md): the last folder's rename of the view at its names, done
-   and not taken in, stands on its disk while that disk, there, holds the folder it names at the new name; a folder
-   found renamed, or a copy found moved, from at or below that new name to at or below its old name, on another disk,
-   is that disk having missed it, and waits, as observation 5's ViewKept has a copy's rename wait. *)
+(* Flaw 23's remedy (README.md; jobs.viewFolderMoves, viewKeeps, backRenames): the last folder's rename of the view at
+   its names, done and not taken in, stands while its disk, which the pass walked, or of a disk this pass has not
+   walked yet, would walk, holds the folder it names at the new name; a folder found renamed, but one the view made
+   there, and a copy found moved, from at or below that new name to at or below its old name, is its disk having
+   missed it, and waits, as observation 5's ViewKept has a copy's rename wait; the pass makes that rename there
+   (BackRename). *)
+HolderSeen(h) == IF pc.ph = "walk" THEN (\E w \in pc.wk : w[1] = h) \/ (h >= pc.d /\ Up(h))
+                 ELSE \E w \in pc.wk : w[1] = h
 StandsV(v) ==
     /\ v \in OpenOps /\ vops[v].k = "mvdir" /\ vops[v].st = "done" /\ vops[v].key # 0
-    /\ Up(vops[v].d) /\ root[vops[v].d][vops[v].q[1]] = vops[v].key
+    /\ HolderSeen(vops[v].d) /\ root[vops[v].d][vops[v].q[1]] = vops[v].key
     /\ ~\E w \in OpenOps : w > v /\ \E x \in {vops[w].p, vops[w].q} \ {None} : x[1] \in {vops[v].p[1], vops[v].q[1]}
-Stands(from, to) == \E v \in OpenOps : StandsV(v) /\ from[1] = vops[v].q[1] /\ to[1] = vops[v].p[1]
-(* back-pass, proposed after back-wait failed: the same waits, the rename of a disk that missed it made by the pass
-   that finds it, never queued as a job that could outlive it (BackRename). *)
-BackWaits(from, to) == ("back-wait" \in Fixes \/ "back-pass" \in Fixes) /\ Stands(from, to)
+BackWaits(from, to) == \E v \in OpenOps : StandsV(v) /\ from[1] = vops[v].q[1] /\ to[1] = vops[v].p[1]
 FMoves(d) == {m \in FMovesFound(d) \cap fseen[d] :
                  /\ ~\E f \in FileIds : cf[f].on /\ cf[f].path[1] = m[1] /\ OtherWaits(f, d)
                  /\ ~BackWaits(<<m[1], 0>>, <<m[2], 0>>)}
@@ -646,12 +657,7 @@ WalkFile(f, d) ==
             THEN LET q == <<(CHOOSE m \in mv : TRUE)[2], cf[f].path[2]>> IN
                  [same EXCEPT !.path = q, !.rows = Behind(f, d, q)]
             ELSE same
-       ELSE CASE \* flaw 23's remedy (b), `back-follow`, proposed: below a folder found renamed here, a copy of this
-                 \* disk its row puts at the file's new path already follows with its file
-                 "back-follow" \in Fixes /\ vd.v = "there" /\ mv # {} /\ ~Waited(d, cf[f].path)
-                 /\ r.old = <<(CHOOSE m \in mv : TRUE)[2], cf[f].path[2]>> /\ ~takenBy(r.old) ->
-                   [same EXCEPT !.path = r.old, !.rows = [Behind(f, d, r.old) EXCEPT ![d] = [r EXCEPT !.old = None]]]
-              [] vd.v \in {"unknown", "there"} \/ ~Due(f, d) -> same
+       ELSE CASE vd.v \in {"unknown", "there"} \/ ~Due(f, d) -> same
               [] vd.v = "moved" /\ BackWaits(Place(f, d), vd.to) -> same
               [] vd.v = "moved" /\ r.old = None ->
                    IF takenBy(vd.to) THEN same
@@ -767,20 +773,15 @@ ViewBackFile(f, d, P, Q) ==
              rows |-> [Behind(f, d, q) EXCEPT ![d] = IF here.st = "ok" THEN [here EXCEPT !.old = None] ELSE here]]
        ELSE [path |-> cf[f].path, rows |-> cc[f]]
 
-(* back-wait: a disk this pass walked that missed a rename standing, holding at its old name, and nothing at its new,
-   the folder its entry records at either name, gets a job from the old name to the new, unless it has one. *)
+(* Flaw 23's remedy: a disk this pass walked that missed a rename standing, holding at its old name, and nothing at
+   its new, the folder its entry records at either name, gets that rename, made by this pass (pc.bj), never queued
+   as a job that could outlive it. *)
 Missed(v, e) ==
     /\ StandsV(v) /\ vops[v].d # e /\ \E w \in pc.wk : w[1] = e
     /\ root[e][vops[v].p[1]] # 0 /\ root[e][vops[v].q[1]] = 0
     /\ root[e][vops[v].p[1]] \in {ce[e][vops[v].p[1]], ce[e][vops[v].q[1]]}
     /\ ~\E j \in fj[e] : j[1] = vops[v].p[1] /\ j[2] = vops[v].q[1]
-BackJobs(e) ==
-    IF "back-wait" \notin Fixes THEN {}
-    ELSE {<<vops[v].p[1], vops[v].q[1], DecidedN>> : v \in {v \in VIds : Missed(v, e)}}
-(* back-pass: the renames of the disks that missed one, to make in this pass (pc.bj), when each runs. *)
-BackRenames(e) ==
-    IF "back-pass" \notin Fixes THEN {}
-    ELSE {<<vops[v].p[1], vops[v].q[1]>> : v \in {v \in VIds : Missed(v, e)}}
+BackRenames(e) == {<<vops[v].p[1], vops[v].q[1]>> : v \in {v \in VIds : Missed(v, e)}}
 
 PassViewBack ==
     /\ pc.ph = "view"
@@ -789,8 +790,7 @@ PassViewBack ==
        IN IF due = {}
           THEN /\ pc' = [ph |-> "follow", d |-> 1, done |-> {}, n |-> pc.n, wk |-> pc.wk,
                          bj |-> [e \in Disks |-> BackRenames(e)], top |-> pc.top, dn |-> pc.dn]
-               /\ fj' = [e \in Disks |-> fj[e] \cup BackJobs(e)]
-               /\ UNCHANGED <<cf, cc, ce, fseen, vseen>>
+               /\ UNCHANGED <<cf, cc, ce, fj, fseen, vseen>>
           ELSE LET v == Min(due)
                    d == vops[v].d
                    P == vops[v].p[1]
@@ -804,7 +804,7 @@ PassViewBack ==
                              THEN {<<P, Q, DecidedN>>} ELSE {}
                IN /\ cf' = [f \in FileIds |-> [cf[f] EXCEPT !.path = paths[f]]]
                   /\ cc' = rows
-                  /\ fj' = [e \in Disks |-> kept(e) \cup new(e) \cup BackJobs(e)]
+                  /\ fj' = [e \in Disks |-> kept(e) \cup new(e)]
                   /\ pc' = [ph |-> "follow", d |-> 1, done |-> {}, n |-> pc.n, wk |-> pc.wk,
                             bj |-> [e \in Disks |-> BackRenames(e)], top |-> pc.top, dn |-> pc.dn]
                   /\ UNCHANGED <<ce, fseen, vseen>>
@@ -859,7 +859,7 @@ FolderJob(d) ==
                                                             ELSE <<G, cc[f][d].old[2]>>]
                               ELSE cc[f][d]]]
                   /\ ce' = IF ce[d][F] # 0 THEN [ce EXCEPT ![d][G] = ce[d][F], ![d][F] = 0] ELSE ce
-                  /\ ghost' = Flag(ghost, "name-taken-back", GivenSince(d, F, j[3]))
+                  /\ ghost' = ClearUr(Flag(ghost, "name-taken-back", GivenSince(d, F, j[3])), d, root[d][F])
              ELSE UNCHANGED <<root, cc, ce, ghost>>
     /\ UNCHANGED <<objs, trash, dstat, mgen, cf, fseen, vseen, view, pc, cnt, nver>>
 Source(f, d) == {e \in Disks \ {d} : CopyAtPath(f, e) /\ Up(e) /\ At(e, cf[f].path) = cc[f][e].obj}
@@ -922,28 +922,30 @@ FollowFile(f, d) ==
                       ELSE /\ cf' = [cf EXCEPT ![f].st = "conflict"]
                            /\ UNCHANGED <<objs, root, trash, cc>>
 
-(* back-pass: a rename of a disk that missed a folder's rename of the view, made in the pass that found it, once its
-   folder jobs ran: on the folder at the old name its entry records at either name, the new name free, the rename
-   still standing and nothing of the view holding it back, as a folder's job runs (jobs.runFolderJob); otherwise it
-   is not made, and a later pass finds it again if it is still to make. *)
+(* Flaw 23's remedy: a rename of a disk that missed a folder's rename of the view, made in the pass that found it,
+   once its folder jobs ran: on the folder at the old name its entry records at either name, the new name free, the
+   rename still standing and nothing of the view holding it back, as a folder's job runs (jobs.runFolderJob, at once
+   in jobs.backRenames); otherwise it is not made, and a later pass finds it again if it is still to make. *)
 BackRename(d) ==
     /\ pc.ph = "follow" /\ pc.d <= NDisks /\ Workable(pc.d) /\ pc.d = d /\ fj[d] = {} /\ pc.bj[d] # {}
     /\ LET j == CHOOSE j \in pc.bj[d] : TRUE
            F == j[1]
            G == j[2]
            ready == /\ root[d][F] # 0 /\ root[d][G] = 0 /\ root[d][F] \in {ce[d][F], ce[d][G]}
-                    /\ Stands(<<G, 0>>, <<F, 0>>) /\ ~ViewHolds(<<F, 0>>, <<G, 0>>, 1)
+                    /\ BackWaits(<<G, 0>>, <<F, 0>>) /\ ~ViewHolds(<<F, 0>>, <<G, 0>>, 1)
        IN /\ pc' = [pc EXCEPT !.bj[d] = @ \ {j}]
           /\ IF ready
              THEN /\ root' = [root EXCEPT ![d][G] = root[d][F], ![d][F] = 0]
+                  /\ ghost' = ClearUr(Flag(ghost, "back-undid-user", ghost.ur[d] = <<root[d][F], G, F>>), d,
+                                      root[d][F])
                   /\ cc' = [f \in FileIds |-> [cc[f] EXCEPT ![d] =
                               IF cc[f][d].st = "ok" /\ cc[f][d].old # None /\ cc[f][d].old[1] = F
                               THEN [cc[f][d] EXCEPT !.old = IF cf[f].path = <<G, cc[f][d].old[2]>> THEN None
                                                             ELSE <<G, cc[f][d].old[2]>>]
                               ELSE cc[f][d]]]
                   /\ ce' = IF ce[d][F] # 0 THEN [ce EXCEPT ![d][G] = ce[d][F], ![d][F] = 0] ELSE ce
-             ELSE UNCHANGED <<root, cc, ce>>
-    /\ UNCHANGED <<objs, trash, dstat, mgen, cf, fj, fseen, vseen, view, cnt, nver, ghost>>
+             ELSE UNCHANGED <<root, cc, ce, ghost>>
+    /\ UNCHANGED <<objs, trash, dstat, mgen, cf, fj, fseen, vseen, view, cnt, nver>>
 
 PassFollow ==
     /\ pc.ph = "follow" /\ pc.d <= NDisks /\ Workable(pc.d) /\ fj[pc.d] = {} /\ pc.bj[pc.d] = {}
@@ -1012,10 +1014,9 @@ TakeSet(i, held, taken) ==
              \* and a folder's rename waits for every disk that holds the folder, by the catalog's entries at either
              \* name, to be looked at, not only those the pass could read: one away may have missed it
              away == o.k = "mvdir" /\ \E e \in holders : ~Up(e)
-             \* back-files, proposed for flaw 23: nor while the catalog holds a file below its old name, which the
-             \* view presents at the new one, as the take-in compares the folder's names alone
-             below == /\ "back-files" \in Fixes /\ o.k = "mvdir"
-                      /\ \E f \in FileIds : cf[f].on /\ cf[f].path[1] = F
+             \* flaw 23's remedy: nor while the catalog holds a file below its old name, which the view presents at
+             \* the new one, as the take-in compares the folder's names alone
+             below == o.k = "mvdir" /\ \E f \in FileIds : cf[f].on /\ cf[f].path[1] = F
          IN IF ~blocked /\ o.st = "done" /\ i \in pc.dn /\ ~missed /\ ~away /\ (moot \/ (~below /\ \A x \in ps : Agrees(x, PassOps)))
             THEN TakeSet(i + 1, held, taken \cup {i})
             ELSE TakeSet(i + 1, held \cup ps, taken)
@@ -1071,6 +1072,12 @@ ViewReadable == (vpc = VIdle /\ ~ghost.direct /\ \A v \in VIds : vops[v].st # "p
 (* Atoll's own work never takes from a folder the name a user gave it through the view after Atoll decided that work:
    a job a pass decided before a rename of the view never carries the folder back from the name the view gave it. *)
 ViewNamesKept == "name-taken-back" \notin ghost.flags
+
+(* The rename a pass makes on a disk that missed a folder's rename of the view (flaw 23's remedy) never takes a folder
+   back from the name a user gave it directly on that disk, nothing having renamed it since. It does not hold, and no
+   instance checks it: a user's rename back on one disk while the view's rename stands is put back, as the code cannot
+   tell it from that disk having missed the view's rename (README.md, flaw 23). *)
+BackKeepsUser == "back-undid-user" \notin ghost.flags
 
 (* A folder's rename through the view is kept: once all is still (nothing of the view planned or not taken in, no pass
    under way, every disk there, no job, no change a walk would find or found and has not decided, nothing to follow),

@@ -92,6 +92,9 @@ func (p *pass) workOn(ctx context.Context, d *config.Disk, handle *ops.Disk) err
 	if err := p.runFolderJobs(ctx, d, handle); err != nil {
 		return err
 	}
+	if err := p.backRenames(ctx, d, handle); err != nil {
+		return err
+	}
 	refused, err := p.runRenames(ctx, d, handle)
 	if err != nil {
 		return err
@@ -1379,6 +1382,12 @@ func (p *pass) listWork(ctx context.Context, d *config.Disk) error {
 		return err
 	}
 	plan.trashes = append(waiting, plan.trashes...)
+	// What a real pass renames at once on a disk that missed a folder's rename of the view (backRenames).
+	back, err := p.backRenamesOn(ctx, d)
+	if err != nil {
+		return err
+	}
+	plan.folders = append(plan.folders, back...)
 	// What a real pass drops as it decides.
 	plan.folders = slices.DeleteFunc(plan.folders, func(j catalog.FolderJob) bool {
 		return slices.ContainsFunc(p.cleared[d.ID], func(place string) bool { return strings.HasPrefix(place, j.From+"/") })

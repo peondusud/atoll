@@ -258,9 +258,11 @@ type pass struct {
 	// the folders found renamed that copies came with, as the rows said before any decision of this pass
 	realMoves map[folderKey]bool
 	// the folders the view renamed that no walk found renamed, found so by the view's journal, and their new names; and
-	// the folders' renames of the view no copy's rename goes against (viewFolderMoves, viewKeeps)
+	// the folders' renames of the view that stand, which no copy's rename goes against and a disk that missed one
+	// follows (viewFolderMoves, viewKeeps, backRenames)
 	viewMoves map[folderKey]string
 	kept      []watch.FolderMove
+	keptOps   []*catalog.ViewOp
 	// by disk, the names of the operations left planned, which only a reprise can tell of
 	planned map[string][]string
 	// by disk, the old and new names of the renames left planned there, a folder's among them: a file with a copy on
@@ -958,6 +960,11 @@ func (p *pass) propFile(f *catalog.FileRow, follow string, positions map[string]
 		s := p.verdictOf(f, c)
 		gone := p.goneSince(c, s.Verdict)
 		verdict, due := s.Verdict, p.isDue(c)
+		// A copy found moved against a folder's rename of the view that stands waits: its disk missed that rename,
+		// which the pass makes there (backRenames; specs.md §15.12, flaw 23).
+		if verdict == solver.VerdictMoved && p.viewKeeps(c.Place(f), s.Target) {
+			due = false
+		}
 		// What becomes of its file waits for a look that can get there, as the guard does not count what is gone
 		// beside it, and a deletion would go around that (specs.md §15.6).
 		if p.isMovedOutOfReach(c, s.Verdict) {
@@ -1466,6 +1473,12 @@ func isBelowAnother(list []watch.FolderMove, move watch.FolderMove) bool {
 }
 
 func (p *pass) decideFolder(ctx context.Context, disk string, move watch.FolderMove, positions map[string]int) error {
+	// A folder found renamed against a folder's rename of the view that stands waits, but one the view made there: its
+	// disk missed that rename, which the pass makes there (backRenames; specs.md §15.12, flaw 23).
+	if _, byView := p.viewMoves[folderKey{disk, move.From}]; !byView && p.viewKeeps(move.From, move.To) {
+		p.waited[disk] = append(p.waited[disk], move.From)
+		return nil
+	}
 	// The copies that are there: one yet to make was never below the old name, and would hold the folder for good.
 	waiting, err := catalog.MadeBelow(ctx, p.db, disk, move.From)
 	if err != nil {

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"errors"
+	"slices"
 	"syscall"
 	"testing"
 
@@ -475,6 +476,44 @@ func TestARenameBackThroughTheViewWhileAPassDecidesTheFirst(t *testing.T) {
 	b.renamedBackEverywhere("e1")
 }
 
+// The same with t1's looks failing once that pass walked it, as a disk lost then (TLC's trace of the folder's wait,
+// FlawViewFolderRenameBack): the rename back stands on t1, as that walk found, and t2's copy found moved from Shows/D
+// to Shows/E, against it, is t2 having missed it, never a user's rename: it waits, and with it the folder found renamed
+// above it, and the pass renames t2's folder back to Shows/D (specs.md §15.12; conformance/models/README.md, flaw 23,
+// the maintainer's remedy, 2026-11-24). Nothing gives t1 a job that, t1 unable to run it before the rename back is
+// taken in, would carry its folder from the name the view gave it back in the next pass.
+func TestARenameBackThroughTheViewWhileAPassDecidesTheFirstWithT1Lost(t *testing.T) {
+	b := viewFolderPool(t)
+	w := b.viewOf()
+	if err := w.Rename(t.Context(), "Shows/D", "Shows/E", false, viewer); err != nil {
+		t.Fatal(err)
+	}
+	b.fail[b.dirs["t2"]] = func(string, string) error {
+		if b.exists("t1", "media/Shows/D") {
+			panic(errStopped) //nolint:forbidigo // what stands for kill -9
+		}
+		return nil
+	}
+	b.stopped(func() { _ = w.Rename(t.Context(), "Shows/E", "Shows/D", false, viewer) })
+	b.fail[b.dirs["t2"]] = nil
+	b.passes(1)
+	if err := b.viewOf().Reprise(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// t1's looks fail once a job of this pass waits for t1, past the walks and the decisions.
+	b.fail[b.dirs["t1"]] = func(call, name string) error {
+		if call == "stat" && b.count("SELECT count(*) FROM jobs WHERE kind = 'rename' AND file_id IS NULL AND dst_disk = 't1'") > 0 {
+			return syscall.EIO
+		}
+		return nil
+	}
+	b.pass()
+	b.fail[b.dirs["t1"]] = nil
+	b.now += 31_000_000_000
+	b.passes(6)
+	b.renamedBackEverywhere("e1")
+}
+
 // renameBackOnT1 renames Shows/D to Shows/E through the view, made on both disks, then back, made on t1 alone: t2's
 // rename fails with EIO, or atoll mount stops short before it, and its reprise calls the rename back done.
 func (b *bench) renameBackOnT1(stop bool) {
@@ -672,5 +711,159 @@ func TestACycleOfRenamesWaitsForTheView(t *testing.T) {
 	b.pass()
 	if got1, got2 := b.readMedia("t2", "a"), b.readMedia("t2", "b"); got1 != "the file at b, longer" || got2 != "the file at a" {
 		t.Errorf("t2 holds %q at a and %q at b: no exchange", got1, got2)
+	}
+}
+
+// lostAtTheRenameBack runs flaw 23's trace (conformance/models/README.md, FlawViewFolderBackLost): Shows/D with e1 on
+// both disks and e2 on t2 alone, renamed through the view to Shows/E on both, its journal naming t1, the first holder;
+// a pass finds that rename on both disks; a disk is lost, and the pass with it away decides the rename from the other
+// disk's walk; the view renames Shows/E back to Shows/D while that disk is away: made on the other, failed on it (EIO
+// here, standing for the lost disk), done. One pass later it is back, its folder at Shows/E, which its entry records at
+// Shows/D.
+func lostAtTheRenameBack(t *testing.T, lost string) *bench {
+	t.Helper()
+	b := newBench(t, "t1", "t2")
+	b.write("t1", "Shows/D/e1.mkv", "the episode")
+	b.write("t2", "Shows/D/e1.mkv", "the episode")
+	b.write("t2", "Shows/D/e2.mkv", "the next episode")
+	b.scan(true)
+	b.now += 60_000_000_000
+	w := b.viewOf()
+	if err := w.Rename(t.Context(), "Shows/D", "Shows/E", false, viewer); err != nil {
+		t.Fatal(err)
+	}
+	b.passes(1)
+	b.gone[b.dirs[lost]] = true
+	b.passes(1)
+	b.fail[b.dirs[lost]] = func(call, name string) error {
+		if call == "rename" && name == "D" {
+			return syscall.EIO
+		}
+		return nil
+	}
+	if err := w.Rename(t.Context(), "Shows/E", "Shows/D", false, viewer); err != nil {
+		t.Fatal(err)
+	}
+	b.fail[b.dirs[lost]] = nil
+	b.passes(1)
+	b.gone[b.dirs[lost]] = false
+	return b
+}
+
+// keptBack says what the rename back leaves once the passes took it to the disk that missed it: e1 at Shows/D on both
+// disks, e2 there on t2, in the catalog and in the view, nothing at Shows/E, and nothing left to do.
+func (b *bench) keptBack() {
+	b.t.Helper()
+	for _, id := range []string{"t1", "t2"} {
+		if !b.exists(id, "media/Shows/D/e1.mkv") || b.exists(id, "media/Shows/E") {
+			b.t.Errorf("%s does not hold e1 at Shows/D alone, the name the view gave it back", id)
+		}
+	}
+	if !b.exists("t2", "media/Shows/D/e2.mkv") {
+		b.t.Error("t2 does not hold e2 at Shows/D")
+	}
+	if got := b.text("SELECT group_concat(CAST(lpath AS TEXT), ' ') FROM (SELECT lpath FROM files ORDER BY lpath)"); got != "Shows/D/e1.mkv Shows/D/e2.mkv" {
+		b.t.Errorf("the catalog holds %s", got)
+	}
+	for _, name := range []string{"e1", "e2"} {
+		if n, err := b.viewOf().Tree().Lookup(b.t.Context(), "Shows/D/"+name+".mkv"); err != nil || n == nil {
+			b.t.Errorf("the view presents nothing at Shows/D/%s.mkv (%v)", name, err)
+		}
+	}
+	if open := b.openViewOps(); len(open) != 0 {
+		b.t.Errorf("not taken in: %+v", open)
+	}
+	if got := b.count("SELECT count(*) FROM jobs WHERE kind = 'rename'"); got != 0 {
+		b.t.Errorf("%d renames left to do", got)
+	}
+	if got := b.count("SELECT count(*) FROM ops WHERE state = 'planned'"); got != 0 {
+		b.t.Errorf("%d operations left planned", got)
+	}
+}
+
+// A folder's rename back through the view missed by a disk lost at its turn is kept: on that disk, back with its folder
+// at the old name, a folder found renamed and a copy found moved from the rename back's new name to its old wait, and
+// the pass renames that folder to the new name, at once, as a folder's job it never queues; the rename back is taken
+// in once the catalog holds no file below its old name (specs.md §15.12, §21.2; conformance/models/README.md, flaw 23,
+// the maintainer's remedy, 2026-11-24). Before, the lost disk's walk read the first rename as a user's while the other
+// disk's walk found the rename back, and the pass, deciding both together, left e1 as two files, at Shows/D and at
+// Shows/E, the operations of the view never taken in. The same whichever disk is lost, the one the first rename's
+// journal names or the other, with that rename failing once, and with the daemon killed at each point of it.
+func TestARenameBackMissedByALostDiskIsKept(t *testing.T) {
+	for _, lost := range []string{"t1", "t2"} {
+		for _, point := range []string{"", "eio", "decided", "journaled", "moved", "target-synced", "source-synced"} {
+			t.Run(lost+"/"+point, func(t *testing.T) {
+				b := lostAtTheRenameBack(t, lost)
+				switch point {
+				case "":
+				case "eio":
+					failed := false
+					b.fail[b.dirs[lost]] = func(call, name string) error {
+						if call == "rename" && name == "D" && !failed {
+							failed = true
+							return syscall.EIO
+						}
+						return nil
+					}
+					b.passes(3)
+					b.fail[b.dirs[lost]] = nil
+					if !failed {
+						t.Fatal("no rename of the folder on the disk back")
+					}
+				default:
+					killed := false
+					b.at[point] = func() {
+						// At each point of the pass's rename on the disk back, and at the first decision.
+						if point != "decided" && b.count("SELECT count(*) FROM ops WHERE state = 'planned' AND kind = 'rename' AND disk_id = ? AND CAST(path AS TEXT) = 'Shows/E' AND CAST(path2 AS TEXT) = 'Shows/D'", lost) == 0 {
+							return
+						}
+						killed = true
+						panic(errStopped) //nolint:forbidigo // what stands for kill -9
+					}
+					for range 6 {
+						func() {
+							defer func() {
+								if r := recover(); r != nil && r != errStopped { //nolint:errorlint // the very value
+									panic(r) //nolint:forbidigo // not the kill
+								}
+							}()
+							_, _ = Run(t.Context(), b.db, b.config, b, true)
+						}()
+						b.now += 31_000_000_000
+					}
+					delete(b.at, point)
+					if !killed {
+						t.Fatalf("no pass reached %s", point)
+					}
+				}
+				b.passes(8)
+				b.keptBack()
+			})
+		}
+	}
+}
+
+// A dry run lists the rename a pass makes on a disk that missed a folder's rename of the view, as a folder's job, and
+// does nothing: the disk back still holds the folder at the old name (specs.md §15.12; invariant 17).
+func TestADryRunListsTheRenameOfADiskThatMissedIt(t *testing.T) {
+	for _, lost := range []string{"t1", "t2"} {
+		t.Run(lost, func(t *testing.T) {
+			b := lostAtTheRenameBack(t, lost)
+			dry, err := Run(t.Context(), b.db, b.config, b, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := slices.ContainsFunc(dry.Operations, func(op Operation) bool {
+				return op.Disk == lost && op.Kind == KindFolder && op.Path == "Shows/E" && op.To == "Shows/D" && op.Outcome == OutcomeToRename
+			})
+			if !listed {
+				t.Errorf("the dry run does not list the rename of Shows/E to Shows/D on %s: %+v", lost, dry.Operations)
+			}
+			if !b.exists(lost, "media/Shows/E/e1.mkv") || b.exists(lost, "media/Shows/D") {
+				t.Errorf("the dry run moved %s's folder", lost)
+			}
+			b.passes(8)
+			b.keptBack()
+		})
 	}
 }

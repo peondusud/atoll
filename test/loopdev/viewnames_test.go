@@ -11,10 +11,10 @@ import (
 	"testing"
 )
 
-// The loop-device tests of the remedies of flaws 18 to 21 (the maintainer, 2026-11-24; conformance/models/README.md):
-// Atoll's own view, served over FUSE, renaming files and folders on the bench's ext4 disk k and the driver under test v,
-// then the passes taking each operation in. Flaw 22's needs atoll mount stopped short between two disks, which the
-// tests of internal/jobs do.
+// The loop-device tests of the remedies of flaws 18 to 21 and 23 (the maintainer, 2026-11-24;
+// conformance/models/README.md): Atoll's own view, served over FUSE, renaming files and folders on the bench's ext4
+// disk k and the driver under test v, then the passes taking each operation in. Flaw 22's needs atoll mount stopped
+// short between two disks, which the tests of internal/jobs do.
 
 // takenIn runs passes, the debounce going by between them, until no operation of the view is left to take in.
 func (b *passBench) takenIn() {
@@ -212,6 +212,55 @@ func TestAFolderRenamedThroughTheViewOntoAUsersFolderOnEachDriver(t *testing.T) 
 			dropCaches(t)
 			for _, top := range []string{b.keep, at} {
 				wantContent(t, top, "Shows/E/e1.mkv", "the episode")
+			}
+			if got := b.text("SELECT count(*) FROM ops WHERE state = 'planned'"); got != "0" {
+				t.Errorf("%s operations left planned", got)
+			}
+		})
+	}
+}
+
+// TestARenameBackMissedByADiskUnmountedOnEachDriver: Shows/D renamed through the view to Shows/E on both disks; v, the
+// driver under test, unmounted, and a pass with it missing decides that rename from k's walk; the view renames Shows/E
+// back to Shows/D, made on k alone, v having no handle. v mounted again holds the folder at Shows/E, which its entry
+// records at Shows/D: the pass renames it to Shows/D, the rename back stands, and as a cold cache reads them, both disks
+// hold the file at Shows/D and nothing at Shows/E, the catalog one file, and every operation is taken in (specs.md
+// §15.12, §21.2; flaw 23).
+func TestARenameBackMissedByADiskUnmountedOnEachDriver(t *testing.T) {
+	needRoot(t)
+	for _, tc := range trashDrivers {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, v, tc.driver, at, options...)
+			b := viewedPool(t, v, at, benchGuards, "Shows/D/e1.mkv", "the episode")
+			point, s := viewPoint(t, b)
+			mustDo(t, os.Rename(filepath.Join(point, "Shows", "D"), filepath.Join(point, "Shows", "E")))
+			s.stop()
+			mustDo(t, s.wait())
+			b.pass()
+			unmountFor(t, tc.driver, at)
+			b.settle()
+			if got := b.text("SELECT state FROM disks WHERE id = 'v'"); got != "missing" {
+				t.Fatalf("v unmounted is %s", got)
+			}
+			point, s = viewPoint(t, b)
+			mustDo(t, os.Rename(filepath.Join(point, "Shows", "E"), filepath.Join(point, "Shows", "D")))
+			s.stop()
+			mustDo(t, s.wait())
+			b.pass()
+			mountVolume(t, v, tc.driver, at, options...)
+			b.takenIn()
+			dropCaches(t)
+			for _, top := range []string{b.keep, at} {
+				wantContent(t, top, "Shows/D/e1.mkv", "the episode")
+				if _, err := os.Stat(filepath.Join(top, "media", "Shows", "E")); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("%s still holds Shows/E: %v", top, err)
+				}
+			}
+			if got := b.text("SELECT group_concat(CAST(lpath AS TEXT), ' ') FROM files"); got != "Shows/D/e1.mkv" {
+				t.Errorf("the catalog holds %s", got)
 			}
 			if got := b.text("SELECT count(*) FROM ops WHERE state = 'planned'"); got != "0" {
 				t.Errorf("%s operations left planned", got)

@@ -68,7 +68,7 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "443567d760ae42a11bab09c942ea0fa4ede7a96a594f5aa7f379237416cddf34"
+      "sha256": "f4675deff207fe9eae0ae9c8ef4c7691e511e927c28b789e82f7259c5eb1c0fe"
     },
     {
       "section": "17",
@@ -108,7 +108,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "369e198e0173bfdd86e338b06bc72cbd9d9eb64c1aa6223854b798357e4f610d"
+      "sha256": "64259f910d49df8e0c1a212fdfedbf09a67ee0f2f4b69b935cb993384ce15bba"
     }
   ]
 }
