@@ -4,7 +4,8 @@
     "Rename.tla",
     "Copies.tla",
     "Folders.tla",
-    "ViewMove.tla"
+    "ViewMove.tla",
+    "ViewNames.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -106,7 +107,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "e5af384aaa1e4fbdd1bb6b11645ccad242016b4da040c176537eb70d00e0832b"
+      "sha256": "5ff2d0e624ccb0af5c2ff47e7c7de1650adbf5ea07a606c0ab325146b9f76944"
     }
   ]
 }
