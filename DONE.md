@@ -2,6 +2,17 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-24 on flaws 18 to 22 (specs.md §15.12, §21.2)
+
+Put as six questions in two dialogs, each with its options and what each costs; the maintainer took the option put first every time.
+
+- **Flaw 18**: `replace-gone`, the copy a replacement through the view sent to the trash is the view's, as a deletion's is, and its file's deletion propagates whatever `deletes.direct` says, as §21.2's "Taken in" says.
+- **Flaw 19**: `folder-key`, a folder's rename through the view records its first holder's folder inode, and its reprise calls it done only when that disk holds that folder at the new name, or another holder holds a folder at the new name and none at the old.
+- **Flaws 20 and 21**: `view-moot`, an operation of the view a user undid directly is taken in as it is once a pass walked its disk, the catalog then presenting what the disks hold; without the view's refusal, `EEXIST`, of a folder's rename onto a name a holder has, which the model showed is not enough alone and not needed with it.
+- **Flaw 22**: `job-view-held`, a folder's job decided before an operation of the view at, below or above its names goes when it would run, for a later pass to decide anew, and a copy's rename by a pass waits for such an operation.
+- **Observation 4** stays no flaw: a file the view presents may not open for the window of one pass, after a folder's rename that missed a disk with no handle or behind a later planned operation; documented.
+- **The model's choices made alone**, listed in the entry below: all confirmed together.
+
 ## Atoll's own view's renames, replacements and folders in TLA+, and the five flaws it found, open, 2026-11-23 (specs.md §15.12, §21.2, §27, §29.4)
 
 The first of the next models of TODO.md, by risk, on the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `79ca5c8`: `conformance/models/ViewNames.tla` with `MCViewNames.tla`, and its instances. TLC found five flaws, 18 to 22, recorded and not fixed, as the rule is; folders below folders and refused names in `Folders.tla`, the next two, wait for the maintainer's remedies.
@@ -18,7 +29,7 @@ The first of the next models of TODO.md, by risk, on the branch `worktree-agent-
 - **Modelling mistakes**, found by TLC and fixed (README.md): among them the debounce, which the first version left out: a job decided from a walk older than the view's rename broke `ViewNamesKept`, and a test of the code showed that no pass decides from such a walk; the model decides now as the code does.
 - **specs.md**: §21.2's sentence naming the models gives `ViewNames.tla`; its fingerprint updated, the module added to `fingerprints.json`.
 - **Checked**: `test/tla/run.sh`, every one of the 75 instances as it expects, every earlier one the very same states, 26 min 55 s of TLC; `go test ./conformance/models`; `make model-flaws` failing on the five tests, as it should; `go vet -tags flaws ./internal/jobs/`; gofmt; golangci-lint on `internal/jobs`, plain and with `-tags flaws`, 0 issues.
-- **To confirm**, chosen alone:
+- **Confirmed on 2026-11-24** ("Tout confirmer", the maintainer's answers above), chosen alone:
   - the remedies proposed are mine, each the smallest that passed its flaw's pool and every instance; the maintainer chooses;
   - `ViewNamesKept`, an invariant of the model's, not a sentence of specs.md: no folder job a pass decided before an operation of the view takes a folder from the name that operation gave it;
   - flaw 22 recorded as a flaw although the code shows it only with `atoll mount` stopped short and a disk lost together: what it loses is the user's rename back, which a stop alone may lose too;
