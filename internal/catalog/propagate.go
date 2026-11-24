@@ -999,22 +999,65 @@ func PendingRenames(ctx context.Context, db *sql.DB, disk string, after string, 
 
 // BeginRename journals a rename on a disk, before anything is written to it.
 func BeginRename(ctx context.Context, db *sql.DB, disk, path, target, fileKey string, nowNS int64) (*Op, error) {
-	op := &Op{Disk: disk, Kind: OpRename, Path: path, Path2: target, FileKey: fileKey}
+	return BeginHeldRename(ctx, db, disk, path, target, fileKey, nowNS, nil)
+}
+
+// ViewHold is what a rename of a pass waits for of Atoll's own view (specs.md §15.12, §21.2; conformance/models/
+// README.md, flaw 22, the maintainer's remedy, 2026-11-24): an operation of the view no pass has taken in, at, below or
+// above either name, of an id at Since or past it, other than the same rename, which is what the pass carries out.
+type ViewHold struct {
+	Since int64
+}
+
+// BeginHeldRename is BeginRename, which first reads, in its transaction, what hold asks of the view's journal:
+// ErrViewHolds, and nothing journaled, when such an operation is there. A nil hold asks nothing.
+func BeginHeldRename(ctx context.Context, db *sql.DB, disk, path, target, fileKey string, nowNS int64, hold *ViewHold) (*Op, error) {
+	ops, err := BeginHeldRenames(ctx, db, disk, []Rename{{Path: path, Target: target, FileKey: fileKey}}, nowNS, hold)
+	if err != nil {
+		return nil, err
+	}
+	return ops[0], nil
+}
+
+// Rename is one rename BeginHeldRenames journals.
+type Rename struct {
+	Path, Target, FileKey string
+}
+
+// BeginHeldRenames journals renames on a disk in one transaction, each with its event, as the two of an exchange are
+// (specs.md §15.12, A cycle), after what hold asks of the view's journal for each: ErrViewHolds, and nothing journaled,
+// when such an operation is there.
+func BeginHeldRenames(ctx context.Context, db *sql.DB, disk string, renames []Rename, nowNS int64, hold *ViewHold) ([]*Op, error) {
+	ops := make([]*Op, len(renames))
 	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, path2, file_key, started_ns, state) VALUES (?, 'rename', ?, ?, ?, ?, 'planned')",
-			disk, []byte(path), []byte(target), fileKey, nowNS)
-		if err != nil {
-			return fmt.Errorf("journal: %w", err)
+		if hold != nil {
+			for _, r := range renames {
+				if held, err := viewHoldsRename(ctx, tx, r.Path, r.Target, hold.Since); err != nil || held {
+					return cmpErr(err, ErrViewHolds)
+				}
+			}
 		}
-		if op.ID, err = result.LastInsertId(); err != nil {
-			return fmt.Errorf("journal: %w", err)
+		for i, r := range renames {
+			op := &Op{Disk: disk, Kind: OpRename, Path: r.Path, Path2: r.Target, FileKey: r.FileKey}
+			result, err := tx.ExecContext(ctx, "INSERT INTO ops(disk_id, kind, path, path2, file_key, started_ns, state) VALUES (?, 'rename', ?, ?, ?, ?, 'planned')",
+				disk, []byte(r.Path), []byte(r.Target), r.FileKey, nowNS)
+			if err != nil {
+				return fmt.Errorf("journal: %w", err)
+			}
+			if op.ID, err = result.LastInsertId(); err != nil {
+				return fmt.Errorf("journal: %w", err)
+			}
+			if err := writeEvent(ctx, tx, nowNS, "info", OpRename, op, ""); err != nil {
+				return err
+			}
+			ops[i] = op
 		}
-		return writeEvent(ctx, tx, nowNS, "info", OpRename, op, "")
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%q: %w", path, err)
+		return nil, fmt.Errorf("%q: %w", renames[0].Path, err)
 	}
-	return op, nil
+	return ops, nil
 }
 
 // RenameDone is what a rename of a file leaves.

@@ -63,7 +63,7 @@ func TestAFileTakenInWhenItsOriginalMovedToAnotherCopy(t *testing.T) {
 				}
 				return &Node{Kind: NodeFile, Disk: "t1", Size: tc.size, MtimeNS: 9, Mode: 0o644, Nlink: 1}, true, nil
 			}
-			taken, err := TakenIn(ctx, db, open, true, false, look)
+			taken, err := TakenIn(ctx, db, open, true, false, look, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

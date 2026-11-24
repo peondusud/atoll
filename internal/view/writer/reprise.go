@@ -118,8 +118,14 @@ func (w *Writer) resolve(ctx context.Context, d *ops.Disk, v *catalog.ViewOp) (s
 	case catalog.ViewRmdir:
 		return catalog.OpDone, false, nil
 	case catalog.ViewRename, catalog.ViewLink:
-		// A hard link is done when its new name leads to the file it linked, and undone otherwise.
-		at, err := holdsAt(d, v.Path2, v.FileKey, v.Folder)
+		// A hard link is done when its new name leads to the file it linked, and undone otherwise. A folder's rename
+		// is done when the disk the journal names holds at the new name the folder it names by its inode; one that
+		// names none renamed nothing (specs.md §21.2; conformance/models/README.md, flaw 19, the maintainer's remedy,
+		// 2026-11-24).
+		if v.Folder && v.FileKey == "" {
+			return catalog.OpUndone, false, nil
+		}
+		at, err := holdsAt(d, v.Path2, v.FileKey)
 		return doneIf(at), false, err
 	case catalog.ViewUnlink:
 		if v.OpID == 0 {
@@ -169,10 +175,10 @@ func (w *Writer) resolveReplace(ctx context.Context, d *ops.Disk, v *catalog.Vie
 	if err != nil || state != catalog.OpDone {
 		return state, warn, err
 	}
-	if moved, err := holdsAt(d, v.Path2, v.FileKey, false); err != nil || moved {
+	if moved, err := holdsAt(d, v.Path2, v.FileKey); err != nil || moved {
 		return catalog.OpDone, false, err
 	}
-	if left, err := holdsAt(d, v.Path, v.FileKey, false); err != nil || !left {
+	if left, err := holdsAt(d, v.Path, v.FileKey); err != nil || !left {
 		// What was to move is gone: what was replaced is in the trash, which is all there is to finish.
 		return catalog.OpDone, true, err
 	}
@@ -276,7 +282,7 @@ func (w *Writer) noRoomStays(ctx context.Context, d *ops.Disk, v *catalog.ViewOp
 	if !noRoom(why) {
 		return nil
 	}
-	left, err := holdsAt(d, v.Path, op.FileKey, false)
+	left, err := holdsAt(d, v.Path, op.FileKey)
 	if err != nil {
 		return err
 	}
@@ -398,17 +404,14 @@ func (w *Writer) trashed(ctx context.Context, d *ops.Disk, opID int64) (bool, er
 	return found && fmt.Sprintf("%d", st.Ino) == op.FileKey, nil
 }
 
-// holdsAt says whether a path holds what an operation moved: the file of that inode, or with no inode recorded, a
-// folder.
-func holdsAt(d *ops.Disk, path, key string, isFolder bool) (bool, error) {
+// holdsAt says whether a path holds what an operation moved: the file or the folder of that inode.
+func holdsAt(d *ops.Disk, path, key string) (bool, error) {
 	st, found, err := d.StatRoot(path)
 	switch {
 	case err != nil:
 		return false, fmt.Errorf("%w", err)
 	case !found:
 		return false, nil
-	case isFolder && key == "":
-		return st.Kind == fsx.KindDir, nil
 	}
 	return fmt.Sprintf("%d", st.Ino) == key, nil
 }

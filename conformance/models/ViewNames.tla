@@ -11,8 +11,8 @@
    root and the files in each, by object (an inode, with the version it holds), and its trash; the catalog's files (a
    path, on or off, in conflict or not), their copies (ok, a deletion to make, a copy to make again, or a refresh to
    make; where each sits, its old_lpath) and the entries of the folders; the view's journal, view_ops (kind, disk,
-   paths, the inode a file's operation names, a replacement's copy sent to the trash and its operation trash, state,
-   taken in), the view's process and its handles. A pass: on each disk its walk, which waits at the paths of the view's
+   paths, the inode a file's operation names or a folder's its holder's folder, a replacement's copy sent to the trash
+   and its operation trash, state, taken in), the view's process and its handles. A pass: on each disk its walk, which waits at the paths of the view's
    operations planned there (jobs.viewPlannedOn), finds each copy there, moved (a rename, its file's path following,
    the other copies behind), replaced (a modification, the other copies to refresh) or gone (a deletion, its other
    copies to the trash, when deletes.direct is propagate or the copy went through the view's deletion; kept otherwise,
@@ -52,7 +52,6 @@ Paths == FNames \X Names
 None == <<0, 0>>
 FileIds == 1..NFiles
 VIds == 1..MaxView
-FixNames == {"replace-gone", "folder-key", "view-moot", "job-view-held"}
 
 ASSUME /\ NFolders \in 1..2 /\ NNames \in 1..2 /\ NFiles \in 1..2
        /\ StartPath \in [FileIds -> Paths] /\ StartOn \in [FileIds -> (SUBSET Disks) \ {{}}]
@@ -62,18 +61,21 @@ ASSUME /\ NFolders \in 1..2 /\ NNames \in 1..2 /\ NFiles \in 1..2
        /\ Direct \in {"propagate", "restore"}
        /\ ViewActs \subseteq {"rename", "replace", "mvdir", "rmdir"}
        /\ UserActs \subseteq {"mv", "create", "delete", "save", "write", "mkdir", "rmdir", "mvdir"}
-       /\ Fixes \subseteq FixNames
+       /\ Fixes = {}    \* no flaw open: flaws 18 to 22's remedies are specs.md's and the code's, and the model's
 
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 NoKids == [n \in Names |-> 0]
 NoCopy == [st |-> "none", obj |-> 0, old |-> None]
-(* An operation of the view: kind, the disk it names (a folder's, the first that holds it), its two paths (a folder's
-   <<F, 0>>), the inode a file's names (key), a replacement's copy sent to the trash with the version it held at the
-   look (tkey, tver) and that operation trash's state (ts), its state, whether a pass took it in, and for a folder the
-   folders its holders held at the old name then, each with its disk, and whether the view itself made what it names on
-   a disk (real and did, for the invariants alone: the code records no inode of a folder). *)
+(* An operation of the view: kind, the disk it names (a folder's, below), its two paths (a folder's <<F, 0>>), the
+   inode a file's names (key), a replacement's copy sent to the trash with the version it held at the look (tkey, tver)
+   and that operation trash's state (ts), its state, whether a pass took it in, and for a folder the folders its holders
+   held at the old name then, each with its disk, and whether the view itself made what it names on a disk (real and
+   did, for the invariants alone). *)
 NoV == [k |-> "none", d |-> 0, p |-> None, q |-> None, key |-> 0, tkey |-> 0, tver |-> 0, st |-> "none", ts |-> "none",
         taken |-> FALSE, real |-> {}, did |-> FALSE]
+(* d and key, of a folder's rename, are the holder its first rename moves the folder on and that folder, which the
+   journal names before that rename, its first holder and 0 until then (view_ops.disk_id and file_key, flaw 19's
+   remedy). *)
 VDown == [ph |-> "down"]
 VIdle == [ph |-> "idle"]
 PIdle == [ph |-> "idle"]
@@ -408,7 +410,9 @@ VReplaceOnto ==
 (* A folder renamed on every disk that holds it (writer.renameFolder), onto a name that presents nothing: one
    operation, of the first disk that holds it, journaled with no inode; then on each holder in turn, its folder looked
    at and renamed without replacing: a disk with no handle or no folder there skipped, one whose name is taken or that
-   cannot be relied on failed. Done once it reached one; with none, undone, or left planned when a disk failed so. *)
+   cannot be relied on failed. Until a rename went through, the journal names, in a transaction of its own before each,
+   the holder and its folder by inode (catalog.NameViewFolder, flaw 19's remedy; one step with the look here). Done once
+   it reached one; with none, undone, or left planned when a disk failed so. *)
 VMvDir(F, G) ==
     /\ VAct("mvdir") /\ F # G
     /\ PresentFolder(F, OpenOps) /\ ~PresentFolder(G, OpenOps)
@@ -428,6 +432,7 @@ VMvDirStep ==
            G == o.q[1]
            rest == vpc.left \ {h}
            moves == vsess[h] # 0 /\ VUp(h) /\ root[h][F] # 0 /\ root[h][G] = 0
+           named == VUp(h) /\ root[h][F] # 0 /\ vpc.moved = 0
        IN /\ CASE vsess[h] = 0 \/ (VUp(h) /\ root[h][F] = 0) ->
                     /\ vpc' = [vpc EXCEPT !.left = rest, !.missed = @ \/ vsess[h] = 0] /\ UNCHANGED root
                [] ~VUp(h) \/ root[h][G] # 0 ->
@@ -436,7 +441,9 @@ VMvDirStep ==
                [] OTHER ->
                     /\ root' = [root EXCEPT ![h][G] = root[h][F], ![h][F] = 0]
                     /\ vpc' = [vpc EXCEPT !.left = rest, !.moved = @ + 1]
-          /\ vops' = [vops EXCEPT ![vpc.v].did = @ \/ moves]
+          /\ vops' = [vops EXCEPT ![vpc.v].did = @ \/ moves,
+                                  ![vpc.v].d = IF named THEN h ELSE @,
+                                  ![vpc.v].key = IF named THEN root[h][F] ELSE @]
     /\ UNCHANGED <<objs, trash, dstat, mgen, cat, nextV, vsess, pc, cnt, nver, ghost>>
 
 VMvDirEnd ==
@@ -500,14 +507,9 @@ Resolve(v) ==
                  ELSE UNCHANGED <<objs, root, vops, ghost>>
             ELSE /\ SetSt(v, "done", objs, root, FALSE) /\ UNCHANGED <<objs, root>>
        ELSE IF o.k = "mvdir"
-       THEN \* with folder-key, the remedy proposed for flaw 19 (README.md): its first holder's folder inode, which
-            \* the operation records as a file's does (file_key), held at the new name there; or another holder's new
-            \* name holding a folder and its old name none
-            LET F == o.p[1]
-                G == o.q[1]
-                keyed == \E r \in o.real : r[1] = d /\ root[d][G] = r[2]
-                others == \E r \in o.real : r[1] # d /\ VUp(r[1]) /\ root[r[1]][G] # 0 /\ root[r[1]][F] = 0
-                there == IF "folder-key" \in Fixes THEN keyed \/ others ELSE root[d][G] # 0
+       THEN \* flaw 19's remedy (README.md): the folder the journal names by its inode, held at the new name on
+            \* the disk it names; none named, nothing was renamed (writer.resolve)
+            LET there == o.key # 0 /\ root[d][o.q[1]] = o.key
             IN /\ SetSt(v, IF there THEN "done" ELSE "undone", objs, root, FALSE)
                /\ UNCHANGED <<objs, root>>
        ELSE /\ SetSt(v, "done", objs, root, FALSE) /\ UNCHANGED <<objs, root>>
@@ -557,11 +559,10 @@ Waited(d, p) == \E v \in VIds :
        \/ vops[v].k \in {"mvdir", "rmdir"} /\ p[1] \in {vops[v].p[1], vops[v].q[1]}
 
 RowObj(d, o) == \E g \in FileIds : cc[g][d].st # "none" /\ cc[g][d].obj = o
-(* A copy that went through the view's deletion to the trash, whose file's deletion propagates whatever deletes.direct
-   says (jobs.readViewOps marks only a deletion's, Replication.tla's, none here). With replace-gone, the remedy proposed
-   for flaw 18 (README.md), the copy a replacement sent to the trash too, as §21.2 says of "a copy the view sent to the
-   trash". *)
-ThroughView(d, o) == "replace-gone" \in Fixes /\ \E v \in OpenOps : vops[v].k = "replace" /\ vops[v].d = d /\ vops[v].tkey = o
+(* A copy that went through the view to the trash, whose file's deletion propagates whatever deletes.direct says: a
+   deletion's (Replication.tla's, none here) and the copy a replacement sent there, as §21.2 says of "a copy the view
+   sent to the trash" (jobs.sentToTrash, flaw 18's remedy). *)
+ThroughView(d, o) == \E v \in OpenOps : vops[v].k = "replace" /\ vops[v].d = d /\ vops[v].tkey = o
 
 (* A copy's verdict on the walk of d; a change, decided once the walk before found it too (pass.isDue). *)
 Verdict(f, d) ==
@@ -677,13 +678,15 @@ PassWalk ==
 Work(f, d) == \/ cc[f][d].st = "ok" /\ cc[f][d].old # None
               \/ cc[f][d].st \in {"del", "pending", "stale"}
 
-(* An operation of the view, taken in or not, at, below or above a name, of an id at or past n: with job-view-held,
-   the remedy proposed for flaw 22 (README.md), a folder's job decided before one, planned when the pass decided it or
-   journaled since, goes, read in the transaction that would journal its rename, for the next pass to decide anew from
-   what the disks hold; a file's rename waits for one planned when the pass began or journaled since; one done before,
-   or that is the same rename, is what the job carries out. *)
-ViewHolds(from, to, n) == "job-view-held" \in Fixes /\ \E v \in VIds :
-    /\ v >= n /\ vops[v].st \in {"planned", "done"}
+(* Flaw 22's remedy (README.md), read in the transaction that would journal Atoll's rename (catalog.BeginRename,
+   ViewHold): an operation of the view no pass has taken in, at, below or above a name, other than the same rename,
+   which is what the job carries out; for a file's rename by a pass, only one planned when the pass began or journaled
+   since, of an id at or past n, as one done before is what the pass decided from. A folder's job goes for it, for a
+   later pass to decide anew from what the disks hold; a copy's rename waits. The job's own n, what the view had done
+   when it was decided, serves ViewNamesKept alone: the code keeps no such mark, and the hold asks of every operation
+   not taken in. *)
+ViewHolds(from, to, n) == \E v \in OpenOps :
+    /\ v >= n
     /\ ~(vops[v].k \in {"mvdir", "rename"} /\ vops[v].p = from /\ vops[v].q = to)
     /\ \E nm \in {from, to}, x \in {vops[v].p, vops[v].q} \ {None} : AtOrBelow(nm, x) \/ AtOrBelow(x, nm)
 
@@ -698,7 +701,7 @@ FolderJob(d) ==
     /\ LET j == CHOOSE j \in fj[d] : TRUE
            F == j[1]
            G == j[2]
-           ready == root[d][F] # 0 /\ root[d][F] = ce[d][F] /\ root[d][G] = 0 /\ ~ViewHolds(<<F, 0>>, <<G, 0>>, j[3])
+           ready == root[d][F] # 0 /\ root[d][F] = ce[d][F] /\ root[d][G] = 0 /\ ~ViewHolds(<<F, 0>>, <<G, 0>>, 1)
        IN /\ fj' = [fj EXCEPT ![d] = @ \ {j}]
           /\ IF ready
              THEN /\ root' = [root EXCEPT ![d][G] = root[d][F], ![d][F] = 0]
@@ -789,20 +792,23 @@ TakeSet(i, held, taken) ==
     ELSE LET o == vops[i]
              ps == {o.p, o.q} \ {None}
              blocked == \E x \in ps, h \in held : AtOrBelow(x, h) \/ AtOrBelow(h, x)
-             \* with view-moot, the remedy proposed for flaw 20 (README.md): a rename or a replacement whose new name
-             \* its disk no longer holds the inode of, as a user moved or removed it directly since, once a pass
-             \* walked that disk, taken in as it is, the catalog then presenting what the disks hold
-             \* and a folder's whose old name a disk that is there holds a folder at, which no job of that disk will
-             \* move: another than the ones it named, as a user made one there directly since, or one it named left
-             \* empty there, its copies having followed one by one
-             moot == "view-moot" \in Fixes /\
-                     \/ o.k \in {"rename", "replace"} /\ Up(o.d) /\ At(o.d, o.q) # o.key
-                     \/ o.k = "mvdir" /\ \E e \in Disks :
-                            /\ Up(e) /\ root[e][o.p[1]] # 0
-                            /\ (root[e][o.p[1]] \notin {r[2] : r \in o.real} \/ objs[root[e][o.p[1]]].kids = NoKids)
-                            /\ ~\E j \in fj[e] : j[1] = o.p[1]
-                     \* or whose new name none of its holders holds the folder it named at any more
-                     \/ o.k = "mvdir" /\ \A r \in o.real : Up(r[1]) /\ root[r[1]][o.q[1]] # r[2]
+             \* flaw 20 and 21's remedy (README.md; jobs.mootViewOps): an operation a user undid directly is taken in
+             \* as it is once a pass walked its disks, the catalog then presenting what the disks hold: a rename or a
+             \* replacement whose new name its disk no longer holds the inode of; a folder's rename whose new name
+             \* holds the folder it renamed on no disk whose entry holds it at either name, on its first holder the
+             \* one it records by its inode, on another any folder; and a folder's whose old name a disk holds a
+             \* folder at that no job of that disk will move, on its first holder another than the one it records, or
+             \* one the catalog holds nothing of that disk below
+             F == o.p[1]
+             G == o.q[1]
+             holders == {e \in Disks : ce[e][F] # 0 \/ ce[e][G] # 0} \cup {o.d}
+             gone(e) == IF e = o.d /\ o.key # 0 THEN root[e][G] # o.key ELSE root[e][G] = 0
+             emptyHere(e) == ~\E f \in FileIds : cc[f][e].st \in {"ok", "del", "stale"} /\ Place(f, e)[1] = F
+             again(e) == /\ Up(e) /\ root[e][F] # 0 /\ ~\E j \in fj[e] : j[1] = F
+                         /\ ((e = o.d /\ o.key # 0 /\ root[e][F] # o.key) \/ emptyHere(e))
+             moot == \/ o.k \in {"rename", "replace"} /\ Up(o.d) /\ At(o.d, o.q) # o.key
+                     \/ o.k = "mvdir" /\ \A e \in holders : Up(e) /\ gone(e)
+                     \/ o.k = "mvdir" /\ \E e \in Disks : again(e)
          IN IF ~blocked /\ o.st = "done" /\ (moot \/ \A x \in ps : Agrees(x))
             THEN TakeSet(i + 1, held, taken \cup {i})
             ELSE TakeSet(i + 1, held \cup ps, taken)

@@ -17,7 +17,7 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "bcfd5c7ad6d3c24f0af0d6f32dadf1d26c9187b4d5522eb0e313fd84a798ffd8"
+      "sha256": "74709f6b17e5992c64a348ec3d739b05b469869569f5c5c169ccbad9dbae2e86"
     },
     {
       "section": "10",
@@ -67,7 +67,7 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "102ffd6fc085cd3899a1dc9413cdd1185e4eeaf8e6bca4d607427ea683987280"
+      "sha256": "672feb7e8deaa94ea0c210bfec4b8afa44ae406ab31800a53df7a5d5efdf0541"
     },
     {
       "section": "17",
@@ -107,7 +107,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "5ff2d0e624ccb0af5c2ff47e7c7de1650adbf5ea07a606c0ab325146b9f76944"
+      "sha256": "1aec17ec9553452fd60437be9a1b282e8d7e79265fda20a80cf19d5f42285edf"
     }
   ]
 }

@@ -397,8 +397,16 @@ func (p *pass) runFolderJob(ctx context.Context, d *config.Disk, handle *ops.Dis
 		}
 		return err
 	}
-	op, err := catalog.BeginRename(ctx, p.db, d.ID, job.From, job.To, strconv.FormatUint(from.Ino, 10), p.now)
-	if err != nil {
+	// A job that meets an operation of the view no pass has taken in, at, below or above its names, but the very rename
+	// it carries out, goes, read in the transaction that would journal it: it may have been decided before that
+	// operation, and a later pass decides anew from what the disks hold, the copies following one by one meanwhile
+	// (specs.md §15.12; conformance/models/README.md, flaw 22, the maintainer's remedy, 2026-11-24).
+	op, err := catalog.BeginHeldRename(ctx, p.db, d.ID, job.From, job.To, strconv.FormatUint(from.Ino, 10), p.now, &catalog.ViewHold{})
+	switch {
+	case errors.Is(err, catalog.ErrViewHolds):
+		slog.Info("a folder's job goes: an operation of the view touches its names", "disk", d.ID, "from", job.From, "to", job.To)
+		return drop()
+	case err != nil:
 		return fmt.Errorf("catalog: %w", err)
 	}
 	p.machine.Checkpoint("journaled")
@@ -717,14 +725,18 @@ func canExchange(fs names.Filesystem) bool {
 // which is its own target, or the next one round the cycle, from where a later round goes on. Each is journaled as a
 // rename, so that a reprise finishes or undoes it as any other (specs.md §15.12, §17.2).
 func (p *pass) exchange(ctx context.Context, d *config.Disk, handle *ops.Disk, r, s *catalog.RenameRow) (bool, error) {
-	a, err := catalog.BeginRename(ctx, p.db, d.ID, r.Place, r.Target, r.FileKey.String, p.now)
-	if err != nil {
+	// Both journaled at once, each waiting for the view as a copy's rename does (flaw 22's remedy).
+	journaled, err := catalog.BeginHeldRenames(ctx, p.db, d.ID, []catalog.Rename{
+		{Path: r.Place, Target: r.Target, FileKey: r.FileKey.String}, {Path: s.Place, Target: r.Place, FileKey: s.FileKey.String},
+	}, p.now, &catalog.ViewHold{Since: p.viewSince})
+	switch {
+	case errors.Is(err, catalog.ErrViewHolds):
+		// Nothing to say: the copies wait where they are, for a later pass.
+		return false, nil
+	case err != nil:
 		return false, fmt.Errorf("catalog: %w", err)
 	}
-	b, err := catalog.BeginRename(ctx, p.db, d.ID, s.Place, r.Place, s.FileKey.String, p.now)
-	if err != nil {
-		return false, fmt.Errorf("catalog: %w", err)
-	}
+	a, b := journaled[0], journaled[1]
 	p.machine.Checkpoint("journaled")
 	knownA, knownB := rowOfRename(r), rowOfRename(s)
 	movedA, movedB, seenA, seenB, err := handle.ExchangeFiles(a, b, knownA, knownB)
@@ -870,6 +882,13 @@ func (p *pass) renameOne(ctx context.Context, d *config.Disk, handle *ops.Disk, 
 	case !goOn:
 		return outcome, nil
 	}
+	// It waits for an operation of the view at either name that this pass did not decide from, planned when it began
+	// or journaled since, read before anything is made for it and again in the transaction that would journal it
+	// (specs.md §15.12; conformance/models/README.md, flaw 22, the maintainer's remedy, 2026-11-24).
+	hold := &catalog.ViewHold{Since: p.viewSince}
+	if held, err := catalog.ViewHoldsRename(ctx, p.db, r.Place, r.Target, hold); err != nil || held {
+		return "", err //nolint:wrapcheck // the catalog says what failed
+	}
 	if err := p.makeParents(ctx, d, handle, r.Target, r.FileID); err != nil {
 		switch {
 		case errors.Is(err, ops.ErrNameRefused):
@@ -879,8 +898,12 @@ func (p *pass) renameOne(ctx context.Context, d *config.Disk, handle *ops.Disk, 
 		}
 		return "", err
 	}
-	op, err := catalog.BeginRename(ctx, p.db, d.ID, r.Place, r.Target, r.FileKey.String, p.now)
-	if err != nil {
+	op, err := catalog.BeginHeldRename(ctx, p.db, d.ID, r.Place, r.Target, r.FileKey.String, p.now, hold)
+	switch {
+	case errors.Is(err, catalog.ErrViewHolds):
+		// Nothing to say: the copy waits where it is, for a later pass.
+		return "", nil
+	case err != nil:
 		return "", fmt.Errorf("catalog: %w", err)
 	}
 	p.machine.Checkpoint("journaled")

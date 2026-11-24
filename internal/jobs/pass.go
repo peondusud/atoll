@@ -183,9 +183,11 @@ type PendingRead struct {
 
 type pass struct {
 	// viewOps are the operations of Atoll's own view no pass has taken in, and throughView the copies, by disk and
-	// inode, it sent to the trash (specs.md §21.2).
+	// inode, it sent to the trash (specs.md §21.2); viewSince the smallest id of an operation of the view this pass
+	// decides nothing from: the first planned when it began, or the next to come (flaw 22's remedy).
 	viewOps     []catalog.ViewOp
 	throughView map[string]bool
+	viewSince   int64
 	db          *sql.DB
 	config      *config.Config
 	machine     disks.Machine
