@@ -2,6 +2,10 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answer of 2026-11-24 on flaw 23 (specs.md §15.12, §21.2)
+
+- **Flaw 23**: the restricted variant first. `back-pass` would act only on a disk whose folder the view's earlier rename put at the old name, so that a user's own rename of that folder back on another disk is never undone. It is to be checked by TLC and by the code's test, then made if it holds; otherwise `back-pass` with `back-files` as the experiment made them (`bin/flaw23-experiment.patch`, the entry below). The option put first.
+
 ## The maintainer's answers of 2026-11-24 on observation 5's fix, and the CI's TLC given 60 minutes (specs.md §27)
 
 - **Observation 5's remedy in five parts** (the entry below, `58b53bc`): its four parts beyond the sketch confirmed, the option put first. A copy's rename waits while it would take a copy back under a rename back's old name; the take-in waits while another disk holds the folder at the old name; a folder's rename is taken in only once every disk that holds it was looked at; and a pass's rename that carries out an operation of the view is not held back by the older ones it undoes.
