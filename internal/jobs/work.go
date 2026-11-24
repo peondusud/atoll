@@ -644,8 +644,9 @@ func (p *pass) renameRound(ctx context.Context, d *config.Disk, handle *ops.Disk
 				stayed = append(stayed, Operation{Disk: d.ID, Kind: KindRename, Path: row.Place, To: row.Target, Outcome: OutcomeUnavailable})
 				continue
 			}
-			// What a job still here will carry waits for it, and what would land in its old name would be carried too.
-			if belowAJob(waiting, row.Place) || landsBelowAJob(waiting, row.Target) {
+			// What a job still here will carry waits for it, and what would land in its old name would be carried too; so
+			// does a copy a folder's rename of the view that stands keeps where it put it.
+			if belowAJob(waiting, row.Place) || landsBelowAJob(waiting, row.Target) || p.viewKeeps(row.Place, row.Target) {
 				continue
 			}
 			outcome, err := p.renameOne(ctx, d, handle, row)
@@ -1519,7 +1520,7 @@ func (p *pass) listOn(ctx context.Context, d *config.Disk, handle *ops.Disk, pla
 	for i := range plan.renames {
 		r := &plan.renames[i]
 		// What a folder's operation carries to its target needs no operation of its own.
-		if belowAJob(waiting, r.Place) || landsBelowAJob(waiting, r.Target) || slices.ContainsFunc(whole, func(j catalog.FolderJob) bool { return carries(&j, r.Place, r.Target) }) {
+		if belowAJob(waiting, r.Place) || landsBelowAJob(waiting, r.Target) || p.viewKeeps(r.Place, r.Target) || slices.ContainsFunc(whole, func(j catalog.FolderJob) bool { return carries(&j, r.Place, r.Target) }) {
 			continue
 		}
 		outcome, goOn, err := p.lookBefore(ctx, d, handle, r)

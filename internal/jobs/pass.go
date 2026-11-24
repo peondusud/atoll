@@ -257,6 +257,10 @@ type pass struct {
 	stuck map[string]map[int64]bool
 	// the folders found renamed that copies came with, as the rows said before any decision of this pass
 	realMoves map[folderKey]bool
+	// the folders the view renamed that no walk found renamed, found so by the view's journal, and their new names; and
+	// the folders' renames of the view no copy's rename goes against (viewFolderMoves, viewKeeps)
+	viewMoves map[folderKey]string
+	kept      []watch.FolderMove
 	// by disk, the names of the operations left planned, which only a reprise can tell of
 	planned map[string][]string
 	// by disk, the old and new names of the renames left planned there, a folder's among them: a file with a copy on
@@ -342,7 +346,7 @@ func newPass(db *sql.DB, c *config.Config, m disks.Machine, apply bool, sink Sin
 		db: db, config: c, machine: m, apply: apply, now: m.Now(), sink: sink, closed: closed,
 		rows: map[string]int64{}, walked: map[string]bool{}, spared: map[string]bool{}, partial: map[string]bool{}, added: map[string]int64{}, seen: map[string][]watch.CopySeen{}, moves: map[string][]watch.FolderMove{},
 		guards: map[string]*guardState{}, modGuards: map[string]*modGuard{}, plans: map[string]*diskPlan{}, jobsDropped: map[int64]bool{}, requeued: map[int64]bool{}, conflictCleared: map[int64]bool{}, pulled: map[int64]bool{}, stayed: map[int64]bool{},
-		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, planned: map[string][]string{}, plannedRenames: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
+		stuck: map[string]map[int64]bool{}, realMoves: map[folderKey]bool{}, viewMoves: map[folderKey]string{}, planned: map[string][]string{}, plannedRenames: map[string][]string{}, unfound: map[string][]string{}, cleared: map[string][]string{}, waited: map[string][]string{}, out: &Outcome{DryRun: !apply},
 	}
 }
 
@@ -510,6 +514,9 @@ func (p *pass) look(ctx context.Context) error {
 			line.NewFolders = slices.Sorted(slices.Values(report.NewFolders))
 		}
 		p.out.Disks = append(p.out.Disks, line)
+	}
+	if err := p.viewFolderMoves(ctx); err != nil {
+		return err
 	}
 	if p.sink != nil {
 		p.sinkErr = p.sink.Disks(p.out.Disks)
@@ -1385,9 +1392,13 @@ func (p *pass) readFolders(ctx context.Context) error {
 	for i := range p.config.Disks {
 		id := p.config.Disks[i].ID
 		for _, move := range p.moves[id] {
-			real, err := p.isRealRename(ctx, id, move)
-			if err != nil {
-				return err
+			// One the view renamed is a rename of the folder it presents, which every disk that holds it follows.
+			_, real := p.viewMoves[folderKey{id, move.From}]
+			if !real {
+				var err error
+				if real, err = p.isRealRename(ctx, id, move); err != nil {
+					return err
+				}
 			}
 			p.realMoves[folderKey{id, move.From}] = real
 		}
@@ -1602,14 +1613,23 @@ func (p *pass) isRealRename(ctx context.Context, disk string, move watch.FolderM
 // followers works out what is asked of the files of a page below a folder renamed with copies on other disks
 // only. A file with a copy that moved was decided already, on what that copy did, and until then it says that
 // the folder waits: its operation would carry the other copies, and the file would read as two. In a dry run a
-// copy gone there still has its row, which a real pass decided away.
+// copy gone there still has its row, which a real pass decided away. Below a folder the view renamed that no walk
+// found renamed, a copy of that disk its row says sits at the new name already, where the view put it, follows too:
+// its row is at the file's new path then (viewFolderMoves).
 func (p *pass) followers(ctx context.Context, page []catalog.FileRow, disk string, move watch.FolderMove, positions map[string]int) (in *solver.PropInput, rows map[string]*catalog.FileRow, waits bool, err error) {
 	in = &solver.PropInput{Direct: p.direct}
 	rows = make(map[string]*catalog.FileRow, len(page))
+	_, byView := p.viewMoves[folderKey{disk, move.From}]
 	for i := range page {
 		f := &page[i]
+		target := move.To + strings.TrimPrefix(f.Path, move.From)
 		held := slices.ContainsFunc(f.Copies, func(c catalog.CopyRow) bool {
-			return c.Disk == disk && (p.apply || !isGoneLike(p.verdictOf(f, &c).Verdict))
+			if c.Disk != disk {
+				return false
+			}
+			v := p.verdictOf(f, &c).Verdict
+			there := byView && v == solver.VerdictThere && c.OldPath != nil && *c.OldPath == target
+			return !there && (p.apply || !isGoneLike(v))
 		})
 		if held {
 			continue
@@ -1631,7 +1651,6 @@ func (p *pass) followers(ctx context.Context, page []catalog.FileRow, disk strin
 		if !p.apply && !slices.ContainsFunc(f.Copies, func(c catalog.CopyRow) bool { return !isGoneLike(p.verdictOf(f, &c).Verdict) }) && !p.keepsHeld(f) {
 			continue
 		}
-		target := move.To + strings.TrimPrefix(f.Path, move.From)
 		holder, err := catalog.FileAt(ctx, p.db, target)
 		if err != nil {
 			return nil, nil, false, fmt.Errorf("catalog: %w", err)
