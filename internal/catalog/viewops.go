@@ -255,33 +255,50 @@ func viewTouches(ctx context.Context, tx *sql.Tx, path string) (bool, error) {
 }
 
 // viewHoldsRename says whether an operation of the view no pass has taken in, of an id at since or past it, is at, below
-// or above path or target, other than the rename of path to target itself (ViewHold).
+// or above path or target, other than the rename of path to target itself (ViewHold), and other than one before such a
+// rename not taken in: what Atoll's rename carries out then is that rename of the view, which undoes the earlier ones at
+// its names (conformance/models/README.md, observation 5, the maintainer's choice, 2026-11-24).
 func viewHoldsRename(ctx context.Context, tx *sql.Tx, path, target string, since int64) (bool, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT kind, lpath, COALESCE(lpath2, x'') FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone' AND id >= ?", since)
+	rows, err := tx.QueryContext(ctx, "SELECT id, kind, lpath, COALESCE(lpath2, x'') FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone' ORDER BY id")
 	if err != nil {
 		return false, fmt.Errorf("view journal: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	below := func(p, at string) bool { return p == at || strings.HasPrefix(p, at+"/") }
+	type open struct {
+		id            int64
+		kind          string
+		lpath, lpath2 string
+	}
+	var list []open
+	var same int64
 	for rows.Next() {
-		var kind string
+		var o open
 		var lpath, lpath2 []byte
-		if err := rows.Scan(&kind, &lpath, &lpath2); err != nil {
+		if err := rows.Scan(&o.id, &o.kind, &lpath, &lpath2); err != nil {
 			return false, fmt.Errorf("view journal: %w", err)
 		}
-		if kind == ViewRename && string(lpath) == path && string(lpath2) == target {
+		o.lpath, o.lpath2 = string(lpath), string(lpath2)
+		if o.kind == ViewRename && o.lpath == path && o.lpath2 == target {
+			same = o.id
 			continue
 		}
-		for _, at := range []string{string(lpath), string(lpath2)} {
+		list = append(list, o)
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("view journal: %w", err)
+	}
+	below := func(p, at string) bool { return p == at || strings.HasPrefix(p, at+"/") }
+	for _, o := range list {
+		if o.id < since || o.id < same {
+			continue
+		}
+		for _, at := range []string{o.lpath, o.lpath2} {
 			for _, p := range []string{path, target} {
 				if at != "" && (below(p, at) || below(at, p)) {
 					return true, nil
 				}
 			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("view journal: %w", err)
 	}
 	return false, nil
 }

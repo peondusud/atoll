@@ -8,8 +8,10 @@ import (
 	"strconv"
 
 	"github.com/peondusud/atoll/internal/catalog"
+	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/view"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // What a pass makes of the operations of Atoll's own view (specs.md §21.2): it waits at the paths of those under way,
@@ -40,6 +42,203 @@ func (p *pass) readViewOps(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// viewFolderMoves gives a disk, as a folder renamed there, a folder's rename through the view that no walk finds
+// (specs.md §15.12, §21.2; conformance/models/README.md, observation 5, the maintainer's choice, 2026-11-24): done, no
+// pass has taken it in, the last operation of the view at its names, on the disk its journal names, which this pass
+// walked and found holding the folder the journal names by its inode at the new name, where that disk's entry already
+// holds it, as no walk of that disk found it at the old name in between. A rename back made on that disk alone does
+// that: the catalog still holds the files below the old name, from the first rename, and the other disks hold them
+// there. The rename then goes on to the disks it missed, as any folder renamed: the files follow, the copies of that
+// disk already there, and each other disk gets a job. Only while the catalog holds a file below the old name, or
+// another disk a copy or an entry below it with no such job; never while that disk's entries hold a folder at the old
+// name too, or a folder this pass found renamed on that disk, or at neither name, is at, below or above either name.
+// It reads the rows as the walks left them, before any decision of this pass: one that a decision of this pass makes
+// true waits for the next pass, and meanwhile no copy goes against it (viewKeeps). It also gives those operations whose
+// disk holds the folder they name at the new name, which viewKeeps reads.
+func (p *pass) viewFolderMoves(ctx context.Context) error {
+	for i := range p.viewOps {
+		v := &p.viewOps[i]
+		if v.Kind != catalog.ViewRename || !v.Folder || v.State != catalog.OpDone || v.FileKey == "" || !p.walked[v.Disk] ||
+			p.touchedLater(v) {
+			continue
+		}
+		st, there, looked, err := p.statLooked(ctx, v.Disk, v.Path2)
+		if err != nil {
+			return err
+		}
+		if !looked || !there || st.Kind != fsx.KindDir || strconv.FormatUint(st.Ino, 10) != v.FileKey {
+			continue
+		}
+		p.kept = append(p.kept, watch.FolderMove{From: v.Path, To: v.Path2})
+		touches := func(path string) bool { return touchesEither(v, path) }
+		if slices.ContainsFunc(p.moves[v.Disk], func(m watch.FolderMove) bool { return touches(m.From) || touches(m.To) }) ||
+			slices.ContainsFunc(p.unfound[v.Disk], touches) {
+			continue
+		}
+		known, err := catalog.EntryKeyAt(ctx, p.db, v.Disk, v.Path2)
+		if err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+		again, err := catalog.EntryKeyAt(ctx, p.db, v.Disk, v.Path)
+		if err != nil {
+			return fmt.Errorf("catalog: %w", err)
+		}
+		if known != v.FileKey || again != "" {
+			continue
+		}
+		missed, err := p.missedBy(ctx, v)
+		if err != nil {
+			return err
+		}
+		if missed {
+			p.viewMoves[folderKey{v.Disk, v.Path}] = v.Path2
+			p.moves[v.Disk] = append(p.moves[v.Disk], watch.FolderMove{From: v.Path, To: v.Path2})
+		}
+	}
+	return nil
+}
+
+// touchesEither says whether a path is at, below or above either name of an operation of the view.
+func touchesEither(v *catalog.ViewOp, path string) bool {
+	return slices.ContainsFunc([]string{v.Path, v.Path2}, func(name string) bool {
+		return name != "" && (isAtOrBelow(path, name) || isAtOrBelow(name, path))
+	})
+}
+
+// touchedLater says whether an operation of the view no pass has taken in, later than one, is at, below or above either
+// of its names: that one is not the last there.
+func (p *pass) touchedLater(v *catalog.ViewOp) bool {
+	return slices.ContainsFunc(p.viewOps, func(w catalog.ViewOp) bool {
+		return w.ID > v.ID && (touchesEither(v, w.Path) || w.Path2 != "" && touchesEither(v, w.Path2))
+	})
+}
+
+// missedBy says whether a folder's rename through the view has something left to take: a file the catalog holds below
+// the old name, or a copy or an entry another disk holds below it with no job of that rename.
+func (p *pass) missedBy(ctx context.Context, v *catalog.ViewOp) (bool, error) {
+	page, err := catalog.FilesBelow(ctx, catalog.NewFileReader(p.db), v.Path)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if len(page) > 0 {
+		return true, nil
+	}
+	others, err := catalog.DisksBelow(ctx, p.db, v.Path, v.Disk)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	for _, other := range others {
+		jobs, err := catalog.FolderJobs(ctx, p.db, other)
+		if err != nil {
+			return false, fmt.Errorf("catalog: %w", err)
+		}
+		if !slices.ContainsFunc(jobs, func(j catalog.FolderJob) bool { return j.From == v.Path && j.To == v.Path2 }) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// viewKeeps says that a copy's rename would take it from at or below the new name of a folder's rename through the
+// view to at or below its old name, while that rename, done and not taken in, is the last operation of the view at its
+// names and its disk holds there the folder it names: the rename stands on that disk, and the catalog comes to it,
+// the copy waiting where it is meanwhile (specs.md §15.12; conformance/models/README.md, observation 5, the
+// maintainer's choice, 2026-11-24).
+func (p *pass) viewKeeps(place, target string) bool {
+	return slices.ContainsFunc(p.kept, func(m watch.FolderMove) bool {
+		return isAtOrBelow(place, m.To) && isAtOrBelow(target, m.From)
+	})
+}
+
+// missedViewOps gives the folders' renames through the view no pass may take in yet, though the catalog may present
+// what the view does (specs.md §21.2; conformance/models/README.md, observation 5, the maintainer's choice,
+// 2026-11-24): one a disk that holds the folder, by the catalog's entries at either name, was not looked at by this
+// pass, as it may have missed it; and the last operation of the view at its names, done on the disk its journal names,
+// which another disk missed: that disk holds at the old name the folder its entry records at either name, and nothing
+// at the new. A disk failed is never read again, and holds nothing back.
+func (p *pass) missedViewOps(ctx context.Context, open []catalog.ViewOp) (map[int64]bool, error) {
+	held := map[int64]bool{}
+	failed := map[string]bool{}
+	for i := range p.config.Disks {
+		if p.config.Disks[i].State == config.DiskFailed {
+			failed[p.config.Disks[i].ID] = true
+		}
+	}
+	for i := range open {
+		v := &open[i]
+		if v.Kind != catalog.ViewRename || !v.Folder || v.State != catalog.OpDone {
+			continue
+		}
+		holders := []string{v.Disk}
+		for _, path := range []string{v.Path, v.Path2} {
+			disks, err := catalog.FolderDisks(ctx, p.db, path)
+			if err != nil {
+				return nil, fmt.Errorf("catalog: %w", err)
+			}
+			holders = append(holders, disks...)
+		}
+		if slices.ContainsFunc(holders, func(d string) bool { return d != "" && !failed[d] && p.configured(d) && !p.looked(d) }) {
+			held[v.ID] = true
+			continue
+		}
+		missed, err := p.missedOn(ctx, v, holders)
+		if err != nil {
+			return nil, err
+		}
+		if missed {
+			held[v.ID] = true
+		}
+	}
+	return held, nil
+}
+
+// configured says whether a disk is one of the pool's.
+func (p *pass) configured(disk string) bool {
+	return slices.ContainsFunc(p.config.Disks, func(d config.Disk) bool { return d.ID == disk })
+}
+
+// missedOn says that a folder's rename through the view, the last operation of the view at its names and done on the
+// disk its journal names, was missed by another disk that holds it: see missedViewOps.
+func (p *pass) missedOn(ctx context.Context, v *catalog.ViewOp, holders []string) (bool, error) {
+	if v.FileKey == "" || p.touchedLater(v) {
+		return false, nil
+	}
+	st, there, looked, err := p.statLooked(ctx, v.Disk, v.Path2)
+	if err != nil || !looked || !there || st.Kind != fsx.KindDir || strconv.FormatUint(st.Ino, 10) != v.FileKey {
+		return false, err
+	}
+	for _, disk := range slices.Compact(slices.Sorted(slices.Values(holders))) {
+		if disk == v.Disk {
+			continue
+		}
+		old, found, looked, err := p.statLooked(ctx, disk, v.Path)
+		if err != nil {
+			return false, err
+		}
+		if !looked || !found || old.Kind != fsx.KindDir {
+			continue
+		}
+		_, taken, _, err := p.statLooked(ctx, disk, v.Path2)
+		if err != nil {
+			return false, err
+		}
+		if taken {
+			continue
+		}
+		key := strconv.FormatUint(old.Ino, 10)
+		for _, path := range []string{v.Path, v.Path2} {
+			known, err := catalog.EntryKeyAt(ctx, p.db, disk, path)
+			if err != nil {
+				return false, fmt.Errorf("catalog: %w", err)
+			}
+			if known == key {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // sentToTrash gives the inode of the copy an operation of the view sent to the trash: a deletion's, and the one a
@@ -138,8 +337,13 @@ func (p *pass) takeInViewOps(ctx context.Context) error {
 		return err
 	}
 	open := slices.DeleteFunc(slices.Clone(p.viewOps), func(v catalog.ViewOp) bool { return v.Kind == catalog.ViewPart })
+	// A folder's rename a disk may have missed waits, as one under way does, whatever the catalog presents.
+	missed, err := p.missedViewOps(ctx, open)
+	if err != nil {
+		return err
+	}
 	for i := range open {
-		if waiting[open[i].ID] {
+		if waiting[open[i].ID] || missed[open[i].ID] {
 			open[i].State = catalog.OpPlanned
 		}
 	}
