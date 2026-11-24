@@ -23,7 +23,7 @@ TODO.md's item of the gates, `jobs`' part, the next step of the hardening: tests
 - **The gate** (`test/ci/gates.txt`): 83 and 89 (were 82 and 88), the efficacy one under the measure rounded down, as 84 would leave one mutant of margin; 26 and 5 mutants of margin.
 - **What lives still**: 334 beside the named, `pass.go` 96, `viewops.go` 62, `work.go` 41, `replicate.go` 31, `scrub.go` 25: mostly a pass's scoped looks, the guards' counts and reads, the view's folder renames, and a part resumed across commits.
 - **Verified**: each new test alone, `go test -race ./internal/jobs/...`, gofmt, `go vet` and the three lints, shellcheck on `mutation.sh`, `hidden.py`. **Not verified**: a run on GitHub of the new tests and gate, the measure being local; `make conformance`, as no test changed what a scenario covers.
-- **Decided without the maintainer, to confirm**:
+- **Decided without the maintainer, confirmed by him on 2026-11-24** (the gate 83 and 89, the option put first; the rest together, "Tout confirmer"):
   - the gate at 83 and 89, from a local measure, its efficacy one under the rounded measure;
   - the 5 mutants named equivalent;
   - a part of the weekly matrix only measured under the package's gate, the parts together gated by `jobs-score`.
