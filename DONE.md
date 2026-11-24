@@ -27,6 +27,7 @@ TODO.md's item of the gates, `jobs`' part, the next step of the hardening: tests
   - the gate at 83 and 89, from a local measure, its efficacy one under the rounded measure;
   - the 5 mutants named equivalent;
   - a part of the weekly matrix only measured under the package's gate, the parts together gated by `jobs-score`.
+- **Confirmed on GitHub** (2026-11-24): the weekly matrix dispatched on `beta`'s `86a4af5`, run 45488520286, every job passing. `jobs`' parts merged give efficacy 84.15 % and mutator coverage 89.21 %, over its gate of 83 and 89, 5 named equivalents left out. `watch` 95.31 % and 81.70 %, `ops` 96.17 % and 76.81 %, `trash` 93.95 % and 91.54 %, each over its gate.
 
 ## The maintainer's answers of 2026-11-24 on flaw 23's fix
 
