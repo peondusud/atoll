@@ -12,6 +12,7 @@ Two questions; each time the maintainer took the option put first.
 
 - **Flaw 28: `surplus-looked`.** A purge for room takes a `surplus` entry only once a look finds its version on another disk, as the transfer does since flaw 8. The trash stays bounded by its `max_size`. The look wakes the other disks, but only for a purge for room. `surplus-retained` is set aside.
 - **The model's choices made alone** (the entry below): confirmed together. `rebalance`, which likely has the same race, is to be checked with the fix.
+- **Then, `atoll balance`** (2026-11-26, the option put first): the old copy it retires reaches the trash as `rebalance` by the same race, which a test shows (`2222d43`). `surplus-looked` covers it too: a purge for room takes a `surplus` or `rebalance` entry only once a look finds its version on another disk.
 
 ## The trash in TLA+: flaw 28 found, open, 2026-11-25 (specs.md §17, §17.1 to §17.4, §19, §21.2)
 
