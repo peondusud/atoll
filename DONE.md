@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-26 on flaw 28 (specs.md §17.3)
+
+Two questions; each time the maintainer took the option put first.
+
+- **Flaw 28: `surplus-looked`.** A purge for room takes a `surplus` entry only once a look finds its version on another disk, as the transfer does since flaw 8. The trash stays bounded by its `max_size`. The look wakes the other disks, but only for a purge for room. `surplus-retained` is set aside.
+- **The model's choices made alone** (the entry below): confirmed together. `rebalance`, which likely has the same race, is to be checked with the fix.
+
 ## The trash in TLA+: flaw 28 found, open, 2026-11-25 (specs.md §17, §17.1 to §17.4, §19, §21.2)
 
 The second of the maintainer's models by risk (TODO.md), where Atoll destroys data for good. On the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `2b79f17`: a module of its own, `conformance/models/Trash.tla` with `MCTrash.tla`, and twelve instances. TLC found one flaw, recorded open, with two instances, a test of the code behind the build tag `flaws` seen failing, and remedies proposed in `Fixes`, checked against every invariant; the remedy is the maintainer's to choose (`conformance/models/README.md`, The trash).
@@ -11,7 +18,7 @@ The second of the maintainer's models by risk (TODO.md), where Atoll destroys da
 - **Observations, no flaw**: a restore takes its entry by its inode, so an entry a user edited in the trash goes back as they left it (§17.2: nothing but Atoll writes in its trash); the looks before a purge at once and before a removal at its path, and the restore's inode check, change nothing when taken out here, what they guard against being `Replication.tla`'s (flaw 8) or no act of this model.
 - **specs.md**: a sentence naming the model at the end of §17.3 and of §17.4; `fingerprints.json` lists `Trash.tla`, pins §17.3, and §17 and §17.4 again, which `Replication.tla` and `Rename.tla` cite too, unchanged. **Makefile**: `make model-flaws` runs the `flaws` tests of `internal/trash` too.
 - **Checked**: `test/tla/run.sh`, every one of the 114 instances as it expects, flaw 28's two the invariant each breaks, every earlier one the very same states, in 34 min 36 s of TLC, under 45 minutes, so the CI's `tla` job stays one; `go test ./conformance/models`; `make model-flaws` failing on the flaw test alone; `go vet -tags flaws` of `internal/trash`, `internal/jobs` and `internal/view/writer`; gofmt; golangci-lint on `internal/trash` with the tag `flaws`, 0 issues; each remedy against every invariant in every instance, and each mechanism taken out, in copies not kept (README.md, How sensitive it is). States: TrashPurge 1,002,630, TrashRestore 84,148, TrashGuard 817,450, TrashGuardRestore 4,360,072, TrashDisks 2,424,934, TrashInodes 463,266, TrashPrune 104,880, TrashAtOnce 2,429,772, TrashInPlace 286,352, TrashLive 205,897, FlawTrashSurplusPruned 5,765, FlawTrashSurplusAtOnce 46,928.
-- **Choices made alone, to confirm**:
+- **Choices made alone, confirmed by the maintainer on 2026-11-26** ("Tout confirmer", the answers above):
   - a module of its own rather than more of `Replication.tla`, which has the trash's moves, the transfer's purge and the link guard: the purges by expiry and for room, prune, restore and the trash edited by hand are new here, on a pass simplified to keep the states few, its copy one step and its guards out;
   - what Atoll must keep, as `NoKeptLost` states it: expired entries and what goes for room, `surplus` and `overwritten`, are the trash's to purge, `--older-than` the user's choice, and a mix of versions a user wrote on the two disks leaves no claim on the file, `Replication.tla` checking what the passes make of it;
   - flaw 28 recorded as a flaw though it needs the guard off, a narrow window and a trash past `trash.max_size`: the trash then gives back, unasked and with no alert, what a deletion keeps for the retention;
