@@ -14,8 +14,9 @@
    and events, a guard event written when it trips with none standing, a guard-clear when it no longer trips with one
    standing; jobs.readModifyGuards: the mass-modification guard stands while a modify-guard event stands since its last
    answer), then its decisions file by file (a gone copy decided but where the guard holds it, a deletion when E's copy
-   is unchanged since in sync, a kept file otherwise; a changed copy on D asked of its guard, jobs.guardModification: an
-   answer that covers its change time and has not lapsed decides it, a reject as a conflict; otherwise the count, over
+   is unchanged since in sync, a kept file otherwise; a changed copy on D asked of its guard, jobs.guardModification: a
+   change made by the up_to of any reject is a conflict, catalog.ModifyGuardRead.Rejected; an answer that covers its
+   change time and has not lapsed decides it, a reject as a conflict; otherwise the count, over
    the window then over the day, the decision that would trip either held, with its event), then its trash jobs one at
    a time (jobs.runTrashJob: held while the mass-deletion guard of its src_disk is tripped; a deletion dropped when the
    walk found D's copy back; the move checked against the copy's row, trash.Session.Send). atoll guard confirm and
@@ -27,9 +28,9 @@
    moved hides from the guard, the guards of E, the link guard, the view, the SSD cache, copies at once, the slices of
    reads, and the copies a plan makes again (Replication.tla's, Copies.tla's): see README.md.
 
-   Flaw 27, open (README.md): a reject of the mass-modification guard decides what it covered only while it is the
-   last answer and has not lapsed; a change it covered and no pass decided by then is decided as any other, and
-   overwrites the other copies. *)
+   Flaw 27, fixed (README.md): a reject of the mass-modification guard decided what it covered only while it was the
+   last answer and had not lapsed; a change it covered and no pass decided by then was decided as any other, and
+   overwrote the other copies. The maintainer's remedy, reject-kept (2026-11-25), is what every instance does. *)
 EXTENDS Integers, FiniteSets, TLC
 
 CONSTANTS
@@ -48,8 +49,8 @@ CONSTANTS
 
 Files == 1..NFiles
 Times == 0..MaxTime
-\* flaw 27 is open, its remedies proposed here, the maintainer's to choose (README.md)
-FixNames == {"reject-stands", "lapse-asks", "reject-kept"}
+\* flaw 27 is fixed, with reject-kept, what every instance does (README.md): no remedy is proposed
+FixNames == {}
 
 ASSUME /\ NFiles \in 1..3 /\ DelFiles \in Nat /\ ModFiles \in Nat /\ DayFiles \in Nat
        /\ DelWin \in Nat /\ ModWin \in Nat /\ DayWin \in Nat /\ MaxTime \in Nat /\ MaxUser \in Nat
@@ -153,13 +154,11 @@ DelCount == Cardinality(GoneHeld) + Cardinality({e \in cg : e[1] > now - DelWin 
 (* The mass-modification guard: its last answer decides a change made by its up_to, but once lapsed (catalog.
    ModifyGuardRead.Answers); its counts, of the modified events since that answer, over its window and over its day. *)
 Lapsed == mAns.k # "" /\ now - mAns.t > ModWin
-(* With reject-stands, proposed, a reject never lapses: what it covered stays a conflict, which overwrites nothing. *)
-AnswersCt(ct) == mAns.k # "" /\ (~Lapsed \/ ("reject-stands" \in Fixes /\ mAns.k = "reject")) /\ ct <= mAns.up
-(* With lapse-asks, proposed, a change a lapsed answer covered is held and asked about again, whatever the count. *)
-AskedAgain(ct) == "lapse-asks" \in Fixes /\ Lapsed /\ ct <= mAns.up
-(* With reject-kept, proposed, a change made by the up_to of any reject is a conflict, whatever answer came after it,
-   however long ago: what a reject covered is never decided otherwise. *)
-RejectedCt(ct) == "reject-kept" \in Fixes /\ ct <= mAns.rej
+AnswersCt(ct) == mAns.k # "" /\ ~Lapsed /\ ct <= mAns.up
+(* reject-kept, the maintainer's remedy of flaw 27 (2026-11-25): a change made by the up_to of any reject is a
+   conflict, whatever answer came after it, however long ago (catalog.ModifyGuardRead.Rejected): what a reject covered
+   is never decided otherwise. *)
+RejectedCt(ct) == ct <= mAns.rej
 ModCount == Cardinality({e \in mEv : e[1] > now - ModWin /\ e[1] > mAns.t /\ ~e[3]})
 DayCount == Cardinality({e \in mEv : e[1] > now - DayWin /\ e[1] > mDayT /\ ~e[3]})
 
@@ -238,10 +237,6 @@ DecideMod(f) ==
       [] AnswersCt(ct) ->
            /\ apply(TRUE)
            /\ UNCHANGED <<mgEv, conflict, mSt, mc, md>>
-      [] AskedAgain(ct) ->
-           /\ mgEv' = [t |-> now, w |-> mAns.w]
-           /\ mSt' = [mSt EXCEPT ![<<f, ct>>] = "asked"]
-           /\ UNCHANGED <<rD, rE, fv, jobs, mEv, conflict, mc, md>>
       [] mc + 1 > ModFiles \/ md + 1 > DayFiles ->
            \* the decision that would trip it is not applied, and its event written: the window's first
            /\ mgEv' = [t |-> now, w |-> IF mc + 1 > ModFiles THEN "w" ELSE "day"]
@@ -374,7 +369,7 @@ DReject ==
                    mc, md, now, users, nver, mSt, trash, flags>>
 MAnswer(kind) ==
     /\ pc = Idle /\ mgEv.t # 0
-    \* rej: the latest up_to a reject gave, which reject-kept, proposed, reads
+    \* rej: the latest up_to a reject gave, which RejectedCt reads
     /\ mAns' = [k |-> kind, up |-> mgEv.t, t |-> now, w |-> mgEv.w,
                 rej |-> IF kind = "reject" /\ mgEv.t > mAns.rej THEN mgEv.t ELSE mAns.rej]
     /\ mDayT' = IF mgEv.w = "day" THEN now ELSE mDayT

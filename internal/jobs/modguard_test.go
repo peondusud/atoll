@@ -220,12 +220,13 @@ func (b *bench) answered() string {
 	return b.text("SELECT group_concat(COALESCE(json_extract(data, '$.answered'), 0), ',') FROM (SELECT data FROM events WHERE kind = 'modified' ORDER BY id)")
 }
 
-// An answer holds for the guard's window after it is given, and a pass that starts past it finds none (specs.md
-// §15.6): what the answer covered is then a change like any other, which counts, and the guard asks again. An answer
-// stood for good: a disk put back from an older image, whose every file reads as changed long ago, went under a
-// confirm given a year before, and overwrote the newer copies of the other disks.
+// A confirm holds for the guard's window after it is given, and a pass that starts past it finds none (specs.md
+// §15.6): what it covered is then a change like any other, which counts, and the guard asks again. A confirm stood for
+// good: a disk put back from an older image, whose every file reads as changed long ago, went under a confirm given a
+// year before, and overwrote the newer copies of the other disks. A reject lapsed likewise until flaw 27 was fixed
+// (reject-kept, 2026-11-25): it no longer does, below.
 func TestAnAnswerToTheModifyGuardLapses(t *testing.T) {
-	for _, answer := range []string{catalog.EventModifyGuardConfirm, catalog.EventModifyGuardReject} {
+	for _, answer := range []string{catalog.EventModifyGuardConfirm} {
 		b := guarded(t, "files = 1\npercent = \"100%\"\nwindow = \"10m\"\n", "a", "b", "c", "d")
 		b.rewrite("a", "b", "c", "d")
 		if out := b.pass(); !out.Held {
@@ -261,6 +262,36 @@ func TestAnAnswerToTheModifyGuardLapses(t *testing.T) {
 		if want := []Decision{{Path: "c", Kind: "modified"}, {Path: "d", Kind: "modified"}}; !slices.Equal(decisionsOf(out), want) || out.Held {
 			t.Errorf("%s: then %+v", answer, out)
 		}
+	}
+}
+
+// A reject's window lapses as a confirm's does, but what the reject covered stays its own (specs.md §15.6; flaw 27, the
+// maintainer's remedy reject-kept): a pass past the window decides every change made by its up_to as a conflict, with
+// no hold and no count, every version kept; a change made since counts, as any other.
+func TestARejectOfTheModifyGuardDoesNotLapse(t *testing.T) {
+	b := guarded(t, "files = 1\npercent = \"100%\"\nwindow = \"10m\"\n", "a", "b", "c", "d", "e")
+	b.rewrite("a", "b", "c", "d")
+	if out := b.pass(); !out.Held {
+		t.Fatalf("%+v", out)
+	}
+	given := b.now
+	if _, err := catalog.AnswerModifyGuard(t.Context(), b.db, "t1", catalog.EventModifyGuardReject, given); err != nil {
+		t.Fatal(err)
+	}
+	b.rewrite("e")
+	b.now += int64(10*time.Minute) + 1
+	out := b.pass()
+	want := []Decision{{Path: "b", Kind: "conflict"}, {Path: "c", Kind: "conflict"}, {Path: "d", Kind: "conflict"}, {Path: "e", Kind: "modified"}}
+	if !slices.Equal(decisionsOf(out), want) || out.Held || len(out.Guards) != 0 {
+		t.Fatalf("%+v", out)
+	}
+	for _, n := range []string{"b", "c", "d"} {
+		if b.read("t2", n) != "x" {
+			t.Errorf("t2's copy of %s, which the reject kept, was overwritten", n)
+		}
+	}
+	if got := b.answered(); got != "0,0" {
+		t.Errorf("answered %s", got)
 	}
 }
 

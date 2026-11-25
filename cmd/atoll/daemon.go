@@ -736,7 +736,7 @@ func guardAct(configPath, what string, args []string, stdout, stderr io.Writer) 
 		return failure(stderr, err)
 	}
 	if answer.Done {
-		tellOfAnswer(configPath, c, kind, stderr)
+		tellOfAnswer(configPath, c, kind, what, stderr)
 	}
 	if asJSON {
 		err = writeJSON(stdout, answer)
@@ -780,16 +780,17 @@ func guardText(req *guardRequest, answer *guardAnswer) string {
 }
 
 // tellOfAnswer tells the daemon that runs for good of an answer to a guard, as systemctl reload atoll would, so that
-// its pass takes the answer at once: an answer to the mass-modification guard holds for the guard's window only
+// its pass takes the answer at once: a confirm of the mass-modification guard holds for the guard's window only
 // (specs.md §15.6). The answer is recorded either way: a daemon that could not be told, or none running, is a line of
-// standard error, which says how long a pass has to start.
-func tellOfAnswer(configPath string, c *config.Config, kind string, stderr io.Writer) {
+// standard error, which for such a confirm says how long a pass has to start. A reject keeps what it covered for good
+// (flaw 27 of conformance/models/README.md, the maintainer's remedy reject-kept), so it has no window to say.
+func tellOfAnswer(configPath string, c *config.Config, kind, what string, stderr io.Writer) {
 	told, err := tellDaemon(configPath, c)
 	if err == nil && told > 0 {
 		return
 	}
 	window := ""
-	if kind == jobs.GuardModifications {
+	if kind == jobs.GuardModifications && what == "confirm" {
 		window, _ = c.Effective()["modifies.mass_guard.window"].(string)
 	}
 	switch {

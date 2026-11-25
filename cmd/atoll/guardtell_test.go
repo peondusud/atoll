@@ -11,9 +11,9 @@ import (
 	"github.com/peondusud/atoll/internal/catalog"
 )
 
-// An answer to the mass-modification guard holds for the guard's window (specs.md §15.6): with no daemon to tell of
+// A confirm of the mass-modification guard holds for the guard's window (specs.md §15.6): with no daemon to tell of
 // it, the command says how long a pass has to start. The answer is recorded all the same, and with nothing to answer
-// there is nothing to say.
+// there is nothing to say. A reject keeps what it covered for good (flaw 27, reject-kept): it has no window to say.
 func TestAGuardAnswerSaysHowLongItHolds(t *testing.T) {
 	configPath, c := apiPool(t, "[modifies.mass_guard]\nwindow = \"7m\"\n")
 	file, _ := c.Effective()["catalog"].(string)
@@ -39,6 +39,22 @@ func TestAGuardAnswerSaysHowLongItHolds(t *testing.T) {
 	stderr.Reset()
 	if code := run(confirm, &stdout, &stderr); code != exitOK || !strings.Contains(stdout.String(), "nothing to confirm") || stderr.Len() != 0 {
 		t.Errorf("then exit %d, stdout %q, stderr %q", code, stdout.String(), stderr.String())
+	}
+	db, err = catalog.OpenPool(t.Context(), file, "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.WriteModifyGuardEvent(t.Context(), db, "t1", "", 2_000); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	reject := []string{"--config", configPath, "guard", "reject", "--disk", "t1", "--kind", "modifications"}
+	if code := run(reject, &stdout, &stderr); code != exitOK || !strings.Contains(stdout.String(), "t1: reject up to ") || stderr.Len() != 0 {
+		t.Errorf("a reject: exit %d, stdout %q, stderr %q", code, stdout.String(), stderr.String())
 	}
 }
 

@@ -17,7 +17,7 @@ func TestGuardReadsUseAnIndex(t *testing.T) {
 	for name, query := range map[string]string{
 		"guard answer": guardAnswerQuery, "guard end": guardEndQuery, "guard since": guardSinceQuery, "copies gone": copiesGoneQuery,
 		"modify answer": modifyAnswerQuery, "modify guard since": modifyGuardSinceQuery, "modified count": modifiedCountQuery,
-		"modify day answer": modifyDayAnswerQuery,
+		"modify day answer": modifyDayAnswerQuery, "modify reject": modifyRejectQuery,
 	} {
 		plan := planOf(t, b.sql(), name, query)
 		searched := false
