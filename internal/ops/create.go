@@ -224,6 +224,9 @@ func (d *Disk) PlacePart(op *Op, logical string, record func(placed *fsx.Stat) e
 	if err != nil {
 		return nil, classify(err)
 	}
+	if err := d.refuseColliding(target.Dir, newName, ""); err != nil {
+		return nil, err
+	}
 	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, byKey(op.FileKey)); err != nil {
 		return nil, err
 	}
@@ -292,6 +295,7 @@ const (
 	TargetTaken    = "taken"    // something is at the path itself: a conflict once copied
 	TargetNoFolder = "nofolder" // a parent of the path is not a folder
 	TargetRefused  = "refused"  // a name on the way is the short name of another entry, which no driver creates
+	TargetCollides = "collides" // on NTFS, a name on the way has the key of another of its folder, whoever made it
 )
 
 // LookAtTarget says what stands at a logical path where a copy will land, and which of its parent folders
@@ -304,12 +308,16 @@ func (d *Disk) LookAtTarget(logical string) (string, []string, error) {
 	}
 	defer dir.close()
 	for i, name := range parts {
-		// On NTFS, what answers for a name is no proof that it is there, nor what does not that it may be made: the
-		// short name of another entry is refused before anything is copied (specs.md §15.8).
-		if alias, err := d.isAlias(dir.Dir, name); err != nil {
-			return TargetFree, nil, err
-		} else if alias {
+		// On NTFS, what answers for a name is no proof that it is there, nor what does not that it may be made: a name
+		// with the key of another of its folder, or the short name of another entry, is refused before anything is
+		// copied (specs.md §15.7, §15.8).
+		switch err := d.lookThrough(dir.Dir, name, ""); {
+		case errors.Is(err, ErrNameCollides):
+			return TargetCollides, nil, nil
+		case errors.Is(err, ErrNameRefused):
 			return TargetRefused, nil, nil
+		case err != nil:
+			return TargetFree, nil, err
 		}
 		st, err := dir.Stat(name)
 		switch {

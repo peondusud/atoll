@@ -766,7 +766,7 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 // it left its place, purged or not. One the purge leaves stays in the trash, which its retention or trash.max_size
 // empties.
 func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow) (string, error) {
-	outcome, op, err := s.sendFor(ctx, f, c, reasonSurplus, true)
+	outcome, op, err := s.sendFor(ctx, f, c, reasonSurplus, true, false)
 	if err != nil || outcome != OutcomeTrashed || op == nil {
 		return outcome, err
 	}
@@ -834,12 +834,13 @@ const OutcomeViewHolds = "view-holds"
 
 // send is Send, which also gives the operation that moved the copy, when one did.
 func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, *ops.Op, error) {
-	return s.sendFor(ctx, f, c, reason, false)
+	return s.sendFor(ctx, f, c, reason, false, false)
 }
 
-// sendFor is send, which with viewFree waits while an operation of the view touches the copy's path, read in the
+// sendFor is send, which with viewFree waits while an operation of the view no pass has taken in touches the copy's
+// path, and with heldFree while the view holds a write open or runs an operation unfinished there, each read in the
 // transaction that journals the move: OutcomeViewHolds, nothing journaled.
-func (s *Session) sendFor(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string, viewFree bool) (string, *ops.Op, error) {
+func (s *Session) sendFor(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string, viewFree, heldFree bool) (string, *ops.Op, error) {
 	place := c.Place(f)
 	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
 	if !s.writable(c.Disk) {
@@ -864,7 +865,7 @@ func (s *Session) sendFor(ctx context.Context, f *catalog.FileRow, c *catalog.Co
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
 		Disk: c.Disk, Path: place, FileKey: c.FileKey.String, Size: c.Size, Hash: hash, Reason: reason,
-		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention), ViewFree: viewFree,
+		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention), ViewFree: viewFree, HeldFree: heldFree,
 	})
 	if errors.Is(err, catalog.ErrViewHolds) {
 		return OutcomeViewHolds, nil, nil
@@ -937,9 +938,12 @@ func (s *Session) afterFailedMove(ctx context.Context, handle *ops.Disk, op *ops
 }
 
 // failedOutcome says what became of an operation that did not happen. A path taken is a restore's
-// outcome: the place of a copy in the trash holds nothing of the user's that they could act on.
+// outcome: the place of a copy in the trash holds nothing of the user's that they could act on. A name that collides on
+// an NTFS disk, found right before the move, is a restore's name-collision, as one the catalog knows (specs.md §15.7).
 func failedOutcome(op *ops.Op, moveErr error) string {
 	switch {
+	case errors.Is(moveErr, ops.ErrNameCollides) && op.Kind == catalog.OpRestore:
+		return OutcomeNameCollision
 	case errors.Is(moveErr, ops.ErrNameRefused):
 		return OutcomeNameRefused
 	case errors.Is(moveErr, ops.ErrPathTaken) && (op.Kind == catalog.OpRestore || op.Kind == catalog.OpRename):
@@ -1033,10 +1037,13 @@ func (s *Session) restoreEntry(ctx context.Context, e *catalog.TrashEntry) (stri
 	if handle == nil || !s.writable(e.Disk) {
 		return outcomeUnavailable, nil
 	}
-	taken, missing, err := handle.LookAt(e.Path)
+	taken, missing, err := handle.LookAt(e.Path, "")
 	switch {
 	case errors.Is(err, ops.ErrDiskLost):
 		return outcomeUnavailable, s.lose(ctx, e.Disk, err)
+	case errors.Is(err, ops.ErrNameCollides):
+		// A name of the same key on the way, which no walk recorded yet: as for one the catalog knows, below.
+		return OutcomeNameCollision, nil
 	case err != nil:
 		slog.Warn("a path cannot be looked at", "disk", e.Disk, "error", err)
 		return OutcomeIOError, nil

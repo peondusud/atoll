@@ -70,12 +70,12 @@
     {
       "section": "15.7",
       "title": "### 15.7 Conflicts and name collisions",
-      "sha256": "12af7b2c366e0040ba98c5e9950714f1e55497e1e2b5b2ac7a67a78e8b6c92eb"
+      "sha256": "c63ba478184772b1d5091550a984c13926e0df8a644517e8614b94bfc8fa69ab"
     },
     {
       "section": "15.8",
       "title": "### 15.8 Extended names",
-      "sha256": "c87b321627c5c2db032c336711b794aba631fdcbc68abfb4aa1fbac691aba4b8"
+      "sha256": "d524a7a3af08fae340b3f124a12ac719298136d599953a64fb384f2a493269af"
     },
     {
       "section": "15.10",
@@ -95,7 +95,7 @@
     {
       "section": "17",
       "title": "## 17. Trash",
-      "sha256": "f5da85cc02e9f1f1c3893b046c36852b9a6daf60097ee683a44571d15bae68a0"
+      "sha256": "0e0334af23f60ea5b54121c4b4ba34db6fa5e7d429d66049d358db05b8a88101"
     },
     {
       "section": "17.1",
@@ -110,7 +110,7 @@
     {
       "section": "17.4",
       "title": "### 17.4 `atoll trash`",
-      "sha256": "d474437ab93f1f8d3971f6c44a141cef09180f847aec11f5ff732eaa11f7a466"
+      "sha256": "ae7aa7e580447bc84d7cb552364c612380c7f912f1878644fbea15a61c89da8c"
     },
     {
       "section": "17.5",

@@ -54,6 +54,12 @@ type TrashStart struct {
 	// ViewFree says that it waits while an operation of the view no pass has taken in touches Path: ErrViewHolds, read
 	// in the transaction that journals it, as the SSD cache's transfer reads it (specs.md §19, flaw 10).
 	ViewFree bool
+	// HeldFree says that it waits while the view holds a write open on the copy at Path on Disk, or runs an operation it
+	// has not finished at, below or above Path: ErrViewHolds, read in the transaction that journals it, as atoll
+	// conflicts resolve reads it (specs.md §15.7, §21.2; conformance/models/README.md, flaw 26). An operation done waits
+	// for nothing more: the resolve looked at the copy as it is, and no pass takes in a write to a file in conflict,
+	// which would hold the resolve for good.
+	HeldFree bool
 }
 
 // eventData is the data of an event (specs.md §9).
@@ -117,6 +123,11 @@ func BeginTrash(ctx context.Context, db *sql.DB, s *TrashStart) (*Op, error) {
 func beginTrashTx(ctx context.Context, tx *sql.Tx, s *TrashStart) (*Op, error) {
 	if s.ViewFree {
 		if touched, err := viewTouches(ctx, tx, s.Path); err != nil || touched {
+			return nil, cmpErr(err, ErrViewHolds)
+		}
+	}
+	if s.HeldFree {
+		if held, err := viewHolds(ctx, tx, s.Disk, s.Path); err != nil || held {
 			return nil, cmpErr(err, ErrViewHolds)
 		}
 	}

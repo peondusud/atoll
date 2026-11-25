@@ -36,8 +36,8 @@ CONSTANTS
 
 NDisks == 2
 Disks == 1..NDisks
-\* flaw 26 is open, its remedy proposed here, the maintainer's to choose (README.md)
-FixNames == {"resolve-view-free"}
+\* flaw 26 is fixed, with resolve-view-free, what every instance does (README.md): no remedy is proposed
+FixNames == {}
 
 ASSUME /\ StartVer \in [Disks -> 1..2] /\ StartVer[1] # StartVer[2] /\ StartOrig \in Disks /\ Corrupt \in BOOLEAN
        /\ UserActs \subseteq {"write", "save", "delete"} /\ MaxUser \in Nat /\ MaxView \in Nat /\ MaxDrop \in Nat
@@ -157,8 +157,9 @@ RStart(k) ==
 
 (* Each other copy in turn: on a disk that could not be reached it stays; gone, its row goes; otherwise its row is
    brought to what was seen, then the move to the trash, checked against that row right before it: a copy that is no
-   longer the object and version the row says is changed, and stays. With resolve-view-free, proposed, the move also
-   waits while the view holds that copy open to write, as the SSD cache's transfer does (TrashStart.ViewFree). *)
+   longer the object and version the row says is changed, and stays; and so is one the view holds open to write, read
+   in the transaction that journals the move (resolve-view-free, the maintainer's remedy of flaw 26, 2026-11-25:
+   TrashStart.HeldFree). *)
 ROther ==
     /\ rs.ph = "other" /\ rs.i <= NDisks
     /\ LET d == rs.i
@@ -168,7 +169,7 @@ ROther ==
           ELSE IF s = -1 \/ ~up[d] THEN /\ rs' = [next EXCEPT !.stayed = TRUE] /\ UNCHANGED <<objs, row, rver, ghost>>
           ELSE IF s = 0 THEN /\ rs' = next /\ row' = [row EXCEPT ![d] = 0] /\ rver' = [rver EXCEPT ![d] = 0]
                              /\ UNCHANGED <<objs, ghost>>
-          ELSE IF AtPath(d) # s \/ objs[s].ver # rs.sv[d] \/ ("resolve-view-free" \in Fixes /\ vh.o = s)
+          ELSE IF AtPath(d) # s \/ objs[s].ver # rs.sv[d] \/ vh.o = s
                THEN /\ rs' = [next EXCEPT !.stayed = TRUE]
                     /\ row' = [row EXCEPT ![d] = s] /\ rver' = [rver EXCEPT ![d] = rs.sv[d]]
                     /\ UNCHANGED <<objs, ghost>>

@@ -55,10 +55,12 @@ func (s *Session) restoreTo(ctx context.Context, e *catalog.TrashEntry, to strin
 	if dst == nil || src == nil || !s.writable(to) || !s.readableSource(e.Disk) {
 		return outcomeUnavailable, nil
 	}
-	taken, missing, err := dst.LookAt(e.Path)
+	taken, missing, err := dst.LookAt(e.Path, "")
 	switch {
 	case errors.Is(err, ops.ErrDiskLost):
 		return outcomeUnavailable, s.lose(ctx, to, err)
+	case errors.Is(err, ops.ErrNameCollides):
+		return OutcomeNameCollision, nil
 	case err != nil:
 		slog.Warn("a path cannot be looked at", "disk", to, "error", err)
 		return OutcomeIOError, nil
@@ -308,13 +310,18 @@ func (s *Session) copyFailed(ctx context.Context, dst *ops.Disk, op *catalog.Op,
 		return OutcomeIOError, s.lose(ctx, op.Disk, cause)
 	}
 	slog.Warn("a copy from the trash did not happen", "disk", op.Disk, "op", op.ID, "error", cause)
+	outcome := OutcomeIOError
+	if errors.Is(cause, ops.ErrNameCollides) {
+		// A name of the same key, found on the NTFS disk right before a folder or the copy took its name (§15.7).
+		outcome = OutcomeNameCollision
+	}
 	if !made {
 		if err := catalog.Undo(ctx, s.db, op, false, s.now); err != nil {
 			return "", fmt.Errorf("catalog: %w", err)
 		}
-		return OutcomeIOError, nil
+		return outcome, nil
 	}
-	return s.copyEnded(ctx, dst, op, OutcomeIOError, false)
+	return s.copyEnded(ctx, dst, op, outcome, false)
 }
 
 // dropAndLose ends a copy whose source's disk cannot be relied on: the part goes, and that disk is lost.

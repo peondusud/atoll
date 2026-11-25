@@ -231,7 +231,18 @@ func MovePlannedAt(ctx context.Context, db *sql.DB, disk, path string) (bool, er
 
 // viewTouches says whether an operation of the view no pass has taken in touches a path: at it, above it or below it.
 func viewTouches(ctx context.Context, tx *sql.Tx, path string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT lpath, COALESCE(lpath2, x'') FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone'")
+	return viewAt(ctx, tx, path, "SELECT lpath, COALESCE(lpath2, x'') FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone'")
+}
+
+// viewHolds says whether the view holds a write open on the copy at path on a disk, or runs an operation it has not
+// finished at, below or above path on any: what atoll conflicts resolve's move waits for (TrashStart.HeldFree).
+func viewHolds(ctx context.Context, tx *sql.Tx, disk, path string) (bool, error) {
+	return viewAt(ctx, tx, path, "SELECT lpath, COALESCE(lpath2, x'') FROM view_ops WHERE taken_ns IS NULL AND (state = 'planned' OR state = 'open' AND disk_id = ?)", disk)
+}
+
+// viewAt says whether an operation of the view a query gives, its paths, is at, below or above path.
+func viewAt(ctx context.Context, tx *sql.Tx, path, query string, args ...any) (bool, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return false, fmt.Errorf("view journal: %w", err)
 	}
