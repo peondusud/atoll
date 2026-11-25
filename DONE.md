@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-25 on flaw 27 (specs.md §15.6)
+
+Two questions, the option put first each time.
+
+- **Flaw 27: `reject-kept`.** A change made at or before the `up_to` of any reject of the mass-modification guard is a conflict at every later pass, whatever came after, until `atoll conflicts resolve` settles it, and it is not asked about again. §15.6's lapse of a reject no longer lets a rejected change through. `reject-stands` and `lapse-asks` are set aside: they close only the first route.
+- **The model's choices made alone** (the entry below): confirmed together.
+
 ## The safety guards in TLA+: flaw 27 found, open, 2026-11-25 (specs.md §15.6)
 
 The first of the maintainer's models by risk (TODO.md). On the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `678f715`: a module of its own, `conformance/models/Guards.tla` with `MCGuards.tla`, and six instances. TLC found one flaw, recorded open, with two instances, a test of the code behind the build tag `flaws` seen failing, and remedies proposed in `Fixes`, checked against every invariant; the remedy is the maintainer's to choose (`conformance/models/README.md`, The safety guards).
@@ -10,7 +17,7 @@ The first of the maintainer's models by risk (TODO.md). On the branch `worktree-
 - **Flaw 27, open** (`NoOverwriteRefused`): a reject of the mass-modification guard is read only as the guard's last answer, within its window (`catalog.ModifyGuardRead.Answers`): a change it covered that no pass decided by then is decided as any other, and under the threshold overwrites the other copies, the version the user kept by rejecting going to the trash. Two ways: the reject lapses, the daemon down or stopped until past the window (`FlawGuardRejectLapsed`); or a later hold is confirmed first, its `up_to` covering the rejected change (`FlawGuardRejectSuperseded`). `TestFlawARejectedChangeOverwritesTheOtherCopies` runs both in the code. Remedies: (a) `reject-kept`, a change made by the `up_to` of any reject is a conflict at any later pass, whatever came after; it holds in every instance, liveness included. (b) `reject-stands`, a reject that never lapses, and (c) `lapse-asks`, a change a lapsed answer covered asked again, each close the first way only. The mass-deletion guard has no such flaw: its reject removes what it covers in its own transaction.
 - **specs.md**: a sentence naming the model at the end of §15.6; `fingerprints.json` lists `Guards.tla` and pins §15.6, which `Replication.tla` cites too, unchanged.
 - **Checked**: `test/tla/run.sh`, every one of the 102 instances as it expects, flaw 27's two the invariant each breaks, every earlier one the very same states, in 31 min 54 s of TLC, under 45 minutes, so the CI's `tla` job stays one; `go test ./conformance/models`; `make model-flaws` failing on the flaw test alone; `go vet -tags flaws ./internal/...`; gofmt; golangci-lint on `internal/jobs` with the tag `flaws`; each remedy against every invariant in every instance, and each mechanism of the guards taken out, in copies not kept (README.md, How sensitive it is). States: GuardsDel 287,304, GuardsMod 3,690,255, GuardsBoth 162,988, GuardsLive 54,177, FlawGuardRejectLapsed 7,570, FlawGuardRejectSuperseded 24,048.
-- **To confirm** (choices made alone):
+- **Confirmed by the maintainer on 2026-11-25** ("Tout confirmer", the answers above) (choices made alone):
   - a module of its own, two disks, D's guards alone, E's edits decided without its own guards;
   - each guard's `files` alone, its percent left out;
   - the interactions with refused renames, what a copy moved hides, the link guard, the view, the SSD cache and the copies at once left out, as each reaches the guards only through the rows and events modelled (README.md, What it leaves out);
