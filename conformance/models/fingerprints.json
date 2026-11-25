@@ -6,7 +6,9 @@
     "Folders.tla",
     "ViewMove.tla",
     "ViewNames.tla",
-    "Nested.tla"
+    "Nested.tla",
+    "Collisions.tla",
+    "Conflicts.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -24,6 +26,11 @@
       "section": "10",
       "title": "## 10. Disk identity and mounts",
       "sha256": "aa2fe3e7ea75a09cc65f4f3305cd6cf85930cbfe87cfc51a37ca1155b89a1ce9"
+    },
+    {
+      "section": "12.4",
+      "title": "### 12.4 Placement",
+      "sha256": "2ed568cff08975c7948b35e3682772296f2c44d9dbe801f0b0c804be9e18fcd7"
     },
     {
       "section": "13.4",
@@ -61,6 +68,16 @@
       "sha256": "70937a3fd3075e7b18d7f7e04f2b9a10cecce0da92a1e75884ba9f6534090919"
     },
     {
+      "section": "15.7",
+      "title": "### 15.7 Conflicts and name collisions",
+      "sha256": "12af7b2c366e0040ba98c5e9950714f1e55497e1e2b5b2ac7a67a78e8b6c92eb"
+    },
+    {
+      "section": "15.8",
+      "title": "### 15.8 Extended names",
+      "sha256": "c87b321627c5c2db032c336711b794aba631fdcbc68abfb4aa1fbac691aba4b8"
+    },
+    {
       "section": "15.10",
       "title": "### 15.10 `atoll scan`",
       "sha256": "03a1b9a3e007272e33de38b686379c8f3e3e1f468f3643de97fd18faac3a4c4d"
@@ -69,6 +86,11 @@
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
       "sha256": "f4675deff207fe9eae0ae9c8ef4c7691e511e927c28b789e82f7259c5eb1c0fe"
+    },
+    {
+      "section": "16.1",
+      "title": "### 16.1 Repair",
+      "sha256": "16a5a2e7c7fed684c93277b984d91e472f19279297ad5aa618aae02a645a3417"
     },
     {
       "section": "17",
