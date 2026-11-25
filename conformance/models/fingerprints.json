@@ -8,7 +8,8 @@
     "ViewNames.tla",
     "Nested.tla",
     "Collisions.tla",
-    "Conflicts.tla"
+    "Conflicts.tla",
+    "Guards.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -66,6 +67,11 @@
       "section": "15.5",
       "title": "### 15.5 Deletions directly on one disk",
       "sha256": "70937a3fd3075e7b18d7f7e04f2b9a10cecce0da92a1e75884ba9f6534090919"
+    },
+    {
+      "section": "15.6",
+      "title": "### 15.6 Safety guards",
+      "sha256": "db6714bcb12f78602a4ccef6ee3ade580105e619e324f7c344778b2cec8ba6cb"
     },
     {
       "section": "15.7",
