@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/peondusud/atoll/internal/catalog"
 )
 
 // Flaw 28 of conformance/models/README.md (Trash.tla, NoKeptLost: FlawTrashSurplusPruned and FlawTrashSurplusAtOnce),
@@ -45,6 +47,50 @@ func TestFlawASurplusCopySentAsTheOthersGoIsPurgedForRoom(t *testing.T) {
 	}
 	if got := b.count("SELECT count(*) FROM trash"); got != 1 {
 		t.Errorf("the last data of a, which a user deleted while prune sent its surplus copy to the trash, went for room "+
+			"before the retention its deletion gives it: %v", outcomes)
+	}
+}
+
+// Flaw 28 through atoll balance (specs.md §13.3): its old copy goes by the same path as prune's, trash.Session.Retire,
+// one look at the copies that stay (decidePrune), then the move, and reaches the trash as rebalance, which a purge for
+// room takes with surplus, first. A user who deletes the copies that stay between the two leaves it the deleted file's
+// last data, as above.
+func TestFlawARebalancedCopySentAsTheOthersGoIsPurgedForRoom(t *testing.T) {
+	b := newBench(t)
+	b.at["journaled"] = func() {
+		for _, id := range []string{"t1", "t2"} {
+			if err := os.Remove(filepath.Join(b.dirs[id], "media", "a")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	s := b.opened()
+	f, err := catalog.FileAt(t.Context(), b.db, "a")
+	if err != nil || f == nil {
+		t.Fatalf("%+v, %v", f, err)
+	}
+	if outcome, err := s.Retire(t.Context(), f, "t3", catalog.ReasonRebalance); err != nil || outcome != OutcomeTrashed {
+		t.Fatalf("%s, %v", outcome, err)
+	}
+	if err := s.Finish(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if got := b.text("SELECT reason FROM trash"); got != catalog.ReasonRebalance {
+		t.Fatalf("t3's copy reached the trash as %s", got)
+	}
+	b.capacity = 2
+	b.opened().Close()
+	p := b.opened()
+	var outcomes []string
+	if _, err := p.Purge(t.Context(), nil, func(i *EntryItem) error {
+		outcomes = append(outcomes, i.Why+" "+i.Outcome)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.count("SELECT count(*) FROM trash"); got != 1 {
+		t.Errorf("the last data of a, which a user deleted while balance sent its old copy to the trash, went for room "+
 			"before the retention its deletion gives it: %v", outcomes)
 	}
 }

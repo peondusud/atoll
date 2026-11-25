@@ -2,6 +2,10 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Flaw 28 through `atoll balance`, shown in the code, 2026-11-26 (specs.md §13.3, §17)
+
+Checked before the fix, as the maintainer asked (the entry below), on the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `98857ec`. `atoll balance` sends its old copy to the trash by prune's own path, `trash.Session.Retire` (`jobs.balancer.retire`): one look at the copies that stay (`decidePrune`), then the move. A user who deletes the copies that stay, directly on their disks, between the two leaves that copy the deleted file's last data, in the trash as `rebalance`, which a purge for room takes with `surplus`, first: `TestFlawARebalancedCopySentAsTheOthersGoIsPurgedForRoom` (build tag `flaws`, `internal/trash/flaws_test.go`), seen failing, purged `max-size`. The chosen remedy, `surplus-looked`, speaks of `surplus` entries: whether its look comes before a `rebalance` entry too is the maintainer's to say. Nothing else is changed; the fix waits for that answer.
+
 ## The maintainer's answers of 2026-11-26 on flaw 28 (specs.md §17.3)
 
 Two questions; each time the maintainer took the option put first.
