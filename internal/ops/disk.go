@@ -476,42 +476,17 @@ func (d *Disk) stat(path []string) (fsx.Stat, bool, error) {
 	return st, true, nil
 }
 
-// isAlias says, on NTFS, whether a name is the short name of another entry of a folder: one the folder does not list,
-// for which a look finds an entry, at that name or in capitals. No driver lists a short name; each finds the entry it
-// names in capitals, ntfs3 in any case, and ntfs3 refuses to create it, while ntfs-3g makes a name in small letters
-// beside it, one Windows would read as the same (docs/research/ntfs-driver.md). So no existence there is decided by a
-// look alone, and the looks before a copy or a rename refuse such a name, before anything is written. Only a name of
-// the short form is looked for, as reading the folder costs (specs.md §15.8).
-func (d *Disk) isAlias(dir fsx.Dir, name string) (bool, error) {
-	if d.config.FS != names.NTFS || !names.ShortForm(name) {
-		return false, nil
-	}
-	listed, err := dir.Names()
-	if err != nil {
-		return false, classify(err)
-	}
-	if slices.Contains(listed, name) {
-		return false, nil
-	}
-	for _, n := range []string{name, strings.ToUpper(name)} {
-		switch _, err := dir.Stat(n); {
-		case err == nil:
-			return true, nil
-		case !fsx.IsAbsent(err):
-			return false, classify(err)
-		}
-	}
-	return false, nil
-}
-
 // StatRoot looks at a logical path on this disk.
 func (d *Disk) StatRoot(logical string) (fsx.Stat, bool, error) {
 	return d.stat(d.rootPlace(logical))
 }
 
 // LookAt says what stands in the way of a logical path: whether something is there or a parent of
-// it is not a folder, and which of its parent folders are missing, from the top (specs.md §17.4).
-func (d *Disk) LookAt(logical string) (taken bool, missing []string, err error) {
+// it is not a folder, and which of its parent folders are missing, from the top (specs.md §17.4). On an NTFS disk, a
+// name on the way that collides with another of its folder, or that is the short name of another entry, is refused
+// before anything is written: ErrNameCollides, or ErrNameRefused (specs.md §15.7, §15.8). from is the path a rename to
+// it leaves, "" for none: a case-only rename does not collide with its own old name.
+func (d *Disk) LookAt(logical, from string) (taken bool, missing []string, err error) {
 	parts := strings.Split(logical, "/")
 	dir, err := d.open(components(d.config.Root))
 	if err != nil {
@@ -519,10 +494,12 @@ func (d *Disk) LookAt(logical string) (taken bool, missing []string, err error) 
 	}
 	defer dir.close()
 	for i, name := range parts {
-		if alias, err := d.isAlias(dir.Dir, name); err != nil {
+		but := ""
+		if i == len(parts)-1 {
+			but = leftBy(from, logical, lastName(from))
+		}
+		if err := d.lookThrough(dir.Dir, name, but); err != nil {
 			return false, nil, err
-		} else if alias {
-			return false, nil, fmt.Errorf("%w: %q is the short name of another entry", ErrNameRefused, name)
 		}
 		st, err := dir.Stat(name)
 		switch {
@@ -574,6 +551,9 @@ func (d *Disk) MakeRootFolder(logical string, like *fsx.Stat, keyed func(key str
 		return fsx.Stat{}, classify(err)
 	}
 	name := path[len(path)-1]
+	if err := d.refuseColliding(parent.Dir, name, ""); err != nil {
+		return fsx.Stat{}, err
+	}
 	err = parent.Mkdir(name, modeLike(like))
 	switch {
 	case fsx.IsExisting(err):
@@ -856,6 +836,9 @@ func (d *Disk) FromTrash(op *Op) (*Moved, error) {
 		return nil, classify(err)
 	}
 	newName := dst[len(dst)-1]
+	if err := d.refuseColliding(target.Dir, newName, ""); err != nil {
+		return nil, err
+	}
 	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, byKey(op.FileKey)); err != nil {
 		return nil, err
 	}
@@ -967,6 +950,9 @@ func (d *Disk) RenameFile(op *Op, row *catalog.KnownCopy) (*Moved, *fsx.Stat, er
 	targetTime, err := target.Info()
 	if err != nil {
 		return nil, nil, classify(err)
+	}
+	if err := d.refuseColliding(target.Dir, newName, leftBy(op.Path, op.Path2, name)); err != nil {
+		return nil, nil, err
 	}
 	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, sameFileAs(row)); err != nil {
 		return nil, nil, err
@@ -1185,6 +1171,9 @@ func (d *Disk) RenameFolder(op *Op) error {
 	targetTime, err := target.Info()
 	if err != nil {
 		return classify(err)
+	}
+	if err := d.refuseColliding(target.Dir, newName, leftBy(op.Path, op.Path2, name)); err != nil {
+		return err
 	}
 	if err := d.moveFolderNoReplace(source.Dir, name, target.Dir, newName); err != nil {
 		return err

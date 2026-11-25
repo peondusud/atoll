@@ -317,7 +317,7 @@ func (p *pass) folderReady(ctx context.Context, d *config.Disk, handle *ops.Disk
 	if there {
 		return false, from, nil
 	}
-	taken, _, err := handle.LookAt(job.To)
+	taken, _, err := handle.LookAt(job.To, job.From)
 	switch {
 	case errors.Is(err, ops.ErrNameRefused):
 		// A short name of another entry on the way: the copies follow one by one, and each is refused.
@@ -391,7 +391,7 @@ func (p *pass) runFolderJob(ctx context.Context, d *config.Disk, handle *ops.Dis
 	case !ready:
 		return drop()
 	}
-	if err := p.makeParents(ctx, d, handle, job.To, 0); err != nil {
+	if err := p.makeParents(ctx, d, handle, job.To, job.From, 0); err != nil {
 		switch {
 		case errors.Is(err, ops.ErrNameRefused):
 			return drop()
@@ -483,10 +483,11 @@ func (p *pass) fitsBelow(ctx context.Context, d *config.Disk, job *catalog.Folde
 }
 
 // makeParents makes each missing parent of a path, as an operation of its own, like the same folder on
-// the first disk whose copy of that file is at the path, or for a folder that any disk has (specs.md §15.12).
+// the first disk whose copy of that file is at the path, or for a folder that any disk has (specs.md §15.12). from is
+// the path the rename leaves, which a case-only rename does not collide with on an NTFS disk (§15.7).
 // What the disk says is marked errLook, and what the catalog says is not.
-func (p *pass) makeParents(ctx context.Context, d *config.Disk, handle *ops.Disk, path string, fileID int64) error {
-	_, missing, err := handle.LookAt(path)
+func (p *pass) makeParents(ctx context.Context, d *config.Disk, handle *ops.Disk, path, from string, fileID int64) error {
+	_, missing, err := handle.LookAt(path, from)
 	if err != nil {
 		return fmt.Errorf("%w: %w", errLook, err)
 	}
@@ -852,7 +853,7 @@ func (p *pass) lookBefore(ctx context.Context, d *config.Disk, handle *ops.Disk,
 		return trash.OutcomeChanged, false, nil
 	}
 	// Something at the target, or a parent of it that is no folder, or the short name of another entry on the way.
-	taken, _, err := handle.LookAt(r.Target)
+	taken, _, err := handle.LookAt(r.Target, r.Place)
 	switch {
 	case errors.Is(err, ops.ErrNameRefused):
 		return trash.OutcomeNameRefused, false, nil
@@ -893,7 +894,7 @@ func (p *pass) renameOne(ctx context.Context, d *config.Disk, handle *ops.Disk, 
 	if held, err := catalog.ViewHoldsRename(ctx, p.db, r.Place, r.Target, hold); err != nil || held {
 		return "", err //nolint:wrapcheck // the catalog says what failed
 	}
-	if err := p.makeParents(ctx, d, handle, r.Target, r.FileID); err != nil {
+	if err := p.makeParents(ctx, d, handle, r.Target, r.Place, r.FileID); err != nil {
 		switch {
 		case errors.Is(err, ops.ErrNameRefused):
 			return trash.OutcomeNameRefused, nil

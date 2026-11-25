@@ -262,33 +262,47 @@ func (w *Writer) Create(ctx context.Context, path string, mode uint32, who Calle
 	if err := w.free(ctx, path); err != nil {
 		return nil, nil, err
 	}
-	disk, err := w.landing(ctx, path)
-	if err != nil {
-		return nil, nil, err
-	}
-	cached := disk != ""
-	if !cached {
-		if disk, err = w.place(ctx, path); err != nil {
-			return nil, nil, err
-		}
-	}
-	if err := w.mayCreate(ctx, asking(who), disk, path); err != nil {
-		return nil, nil, err
-	}
-	v := &catalog.ViewOp{Kind: catalog.ViewCreate, Disk: disk, Path: path}
-	if err := w.journal(ctx, v, who); err != nil {
-		return nil, nil, err
-	}
 	var f fsx.WritableFile
 	var st fsx.Stat
-	err = w.handles.Use(disk, func(d *ops.Disk) error {
+	var v *catalog.ViewOp
+	var disk string
+	var cached bool
+	avoid := map[string]bool{}
+	for {
 		var err error
-		f, st, err = d.CreateUserFile(path, mode, who.UID, who.GID, w.like(ctx))
-		return err //nolint:wrapcheck // ops says what failed
-	})
-	// Made, the row is held open, as the file is through the handle it gives, until the last one closes (flaw 10).
-	if err := w.finishHeld(ctx, v, err); err != nil {
-		return nil, nil, err
+		disk, err = w.landing(ctx, path, avoid)
+		if err != nil {
+			return nil, nil, err
+		}
+		cached = disk != ""
+		if !cached {
+			if disk, err = w.placeFor(ctx, path, avoid, 0); err != nil {
+				return nil, nil, err
+			}
+		}
+		if err := w.mayCreate(ctx, asking(who), disk, path); err != nil {
+			return nil, nil, err
+		}
+		v = &catalog.ViewOp{Kind: catalog.ViewCreate, Disk: disk, Path: path}
+		if err := w.journal(ctx, v, who); err != nil {
+			return nil, nil, err
+		}
+		err = w.handles.Use(disk, func(d *ops.Disk) error {
+			var err error
+			f, st, err = d.CreateUserFile(path, mode, who.UID, who.GID, w.like(ctx))
+			return err //nolint:wrapcheck // ops says what failed
+		})
+		switch again, ferr := w.elsewhere(ctx, v, err, avoid); {
+		case ferr != nil:
+			return nil, nil, ferr
+		case again:
+			continue
+		}
+		// Made, the row is held open, as the file is through the handle it gives, until the last one closes (flaw 10).
+		if err := w.finishHeld(ctx, v, err); err != nil {
+			return nil, nil, err
+		}
+		break
 	}
 	file := &File{WritableFile: f, Disk: disk, Path: path}
 	w.openHandle(ctx, file, v.ID)
@@ -310,27 +324,36 @@ func (w *Writer) Mkdir(ctx context.Context, path string, mode uint32, who Caller
 	if err := w.free(ctx, path); err != nil {
 		return nil, err
 	}
-	disk, err := w.place(ctx, path)
-	if err != nil {
-		return nil, err
+	avoid := map[string]bool{}
+	for {
+		disk, err := w.placeFor(ctx, path, avoid, 0)
+		if err != nil {
+			return nil, err
+		}
+		if err := w.mayCreate(ctx, asking(who), disk, path); err != nil {
+			return nil, err
+		}
+		v := &catalog.ViewOp{Kind: catalog.ViewMkdir, Disk: disk, Path: path, Folder: true}
+		if err := w.journal(ctx, v, who); err != nil {
+			return nil, err
+		}
+		var st fsx.Stat
+		err = w.handles.Use(disk, func(d *ops.Disk) error {
+			var err error
+			st, err = d.MakeUserFolder(path, mode, who.UID, who.GID, w.like(ctx))
+			return err //nolint:wrapcheck // ops says what failed
+		})
+		switch again, ferr := w.elsewhere(ctx, v, err, avoid); {
+		case ferr != nil:
+			return nil, ferr
+		case again:
+			continue
+		}
+		if err := w.finish(ctx, v, err); err != nil {
+			return nil, err
+		}
+		return view.NodeOfStat(disk, &st, ""), nil
 	}
-	if err := w.mayCreate(ctx, asking(who), disk, path); err != nil {
-		return nil, err
-	}
-	v := &catalog.ViewOp{Kind: catalog.ViewMkdir, Disk: disk, Path: path, Folder: true}
-	if err := w.journal(ctx, v, who); err != nil {
-		return nil, err
-	}
-	var st fsx.Stat
-	err = w.handles.Use(disk, func(d *ops.Disk) error {
-		var err error
-		st, err = d.MakeUserFolder(path, mode, who.UID, who.GID, w.like(ctx))
-		return err //nolint:wrapcheck // ops says what failed
-	})
-	if err := w.finish(ctx, v, err); err != nil {
-		return nil, err
-	}
-	return view.NodeOfStat(disk, &st, ""), nil
 }
 
 // Symlink makes a new symbolic link, where a new file would go.
@@ -340,27 +363,53 @@ func (w *Writer) Symlink(ctx context.Context, path, target string, who Caller) (
 	if err := w.free(ctx, path); err != nil {
 		return nil, err
 	}
-	disk, err := w.place(ctx, path)
-	if err != nil {
-		return nil, err
+	avoid := map[string]bool{}
+	for {
+		disk, err := w.placeFor(ctx, path, avoid, 0)
+		if err != nil {
+			return nil, err
+		}
+		if err := w.mayCreate(ctx, asking(who), disk, path); err != nil {
+			return nil, err
+		}
+		v := &catalog.ViewOp{Kind: catalog.ViewSymlink, Disk: disk, Path: path}
+		if err := w.journal(ctx, v, who); err != nil {
+			return nil, err
+		}
+		var st fsx.Stat
+		err = w.handles.Use(disk, func(d *ops.Disk) error {
+			var err error
+			st, err = d.MakeUserSymlink(path, target, who.UID, who.GID, w.like(ctx))
+			return err //nolint:wrapcheck // ops says what failed
+		})
+		switch again, ferr := w.elsewhere(ctx, v, err, avoid); {
+		case ferr != nil:
+			return nil, ferr
+		case again:
+			continue
+		}
+		if err := w.finish(ctx, v, err); err != nil {
+			return nil, err
+		}
+		return view.NodeOfStat(disk, &st, target), nil
 	}
-	if err := w.mayCreate(ctx, asking(who), disk, path); err != nil {
-		return nil, err
+}
+
+// elsewhere says whether something new the view was making goes to another disk: on an NTFS disk, the folder it was to
+// go in, or one on the way, held a name of its key that the catalog has no row of yet (ops.ErrNameCollides), a name a
+// user made there directly or one the view made that no pass took in. The operation is undone, nothing having been
+// made, and placement then leaves that disk out, as the plan leaves out one whose catalog knows such a name (specs.md
+// §15.7, §21.2; conformance/models/README.md, flaw 24, the maintainer's remedy disk-key-look, 2026-11-25).
+func (w *Writer) elsewhere(ctx context.Context, v *catalog.ViewOp, err error, avoid map[string]bool) (bool, error) {
+	if !errors.Is(err, ops.ErrNameCollides) || avoid[v.Disk] {
+		return false, nil
 	}
-	v := &catalog.ViewOp{Kind: catalog.ViewSymlink, Disk: disk, Path: path}
-	if err := w.journal(ctx, v, who); err != nil {
-		return nil, err
+	w.log.Info("something new through the view goes to another disk: a name of the same key is on this one", "disk", v.Disk, "path", v.Path, "error", err)
+	if ferr := w.finish(ctx, v, err); ferr != err { //nolint:errorlint // the very error given back says the journal took it
+		return false, ferr
 	}
-	var st fsx.Stat
-	err = w.handles.Use(disk, func(d *ops.Disk) error {
-		var err error
-		st, err = d.MakeUserSymlink(path, target, who.UID, who.GID, w.like(ctx))
-		return err //nolint:wrapcheck // ops says what failed
-	})
-	if err := w.finish(ctx, v, err); err != nil {
-		return nil, err
-	}
-	return view.NodeOfStat(disk, &st, target), nil
+	avoid[v.Disk] = true
+	return true, nil
 }
 
 // free says that a path's folder presents a folder, and that nothing presents at the path.
@@ -385,8 +434,9 @@ func (w *Writer) free(ctx context.Context, path string) error {
 // cache, read before its size is known, a cache disk the view may write to now, online or standby and neither readonly,
 // draining nor failed, with room past min_free, whose filesystem takes the name with no collision and whose branch
 // reaches it; the most room, then by position. "" when there is none: the cache is full, or not for this file, and it
-// goes to a data disk. Only a file lands there: a folder or a symbolic link has no residency.
-func (w *Writer) landing(ctx context.Context, path string) (string, error) {
+// goes to a data disk. Only a file lands there: a folder or a symbolic link has no residency. A disk in avoid is left
+// out.
+func (w *Writer) landing(ctx context.Context, path string, avoid map[string]bool) (string, error) {
 	settings, err := w.config.Cache()
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
@@ -406,7 +456,7 @@ func (w *Writer) landing(ctx context.Context, path string) (string, error) {
 	for i := range w.config.Disks {
 		d := &w.config.Disks[i]
 		r, known := state[d.ID]
-		if !known || !r.Cache || d.State != "" || !w.handles.Has(d.ID) {
+		if !known || !r.Cache || d.State != "" || avoid[d.ID] || !w.handles.Has(d.ID) {
 			continue
 		}
 		if r.State != string(solver.DiskOnline) && r.State != string(solver.DiskStandby) {
@@ -445,17 +495,13 @@ type candidate struct {
 	standby  bool
 }
 
-// place picks the disk of something new, as for a replica's target (specs.md §12.4): a data disk the view may write to
-// now, online or standby and neither readonly, draining nor failed, with room past min_free, whose filesystem takes the
-// name with no collision and whose branch reaches it; the one that holds the most files of its group with colocate,
-// then as placement.new_files says, online before standby, then by position.
-func (w *Writer) place(ctx context.Context, path string) (string, error) {
-	return w.placeFor(ctx, path, "", 0)
-}
-
-// placeFor is place, but for the disk except, and among disks whose room past min_free exceeds need: where a new file
-// whose write ran out of space on except moves to (specs.md §21.2).
-func (w *Writer) placeFor(ctx context.Context, path, except string, need int64) (string, error) {
+// placeFor picks the disk of something new, as for a replica's target (specs.md §12.4): a data disk the view may write
+// to now, online or standby and neither readonly, draining nor failed, with room past min_free beyond need, whose
+// filesystem takes the name with no collision the catalog knows of and whose branch reaches it, and not in avoid; the
+// one that holds the most files of its group with colocate, then as placement.new_files says, online before standby,
+// then by position. A disk is left out by avoid where a new file whose write ran out of space there moves from
+// (§21.2), or where a name of its key no row says turned up right before (elsewhere).
+func (w *Writer) placeFor(ctx context.Context, path string, avoid map[string]bool, need int64) (string, error) {
 	rows, err := catalog.ViewDisks(ctx, w.db)
 	if err != nil {
 		return "", fmt.Errorf("%w", err)
@@ -481,7 +527,7 @@ func (w *Writer) placeFor(ctx context.Context, path, except string, need int64) 
 	for i := range w.config.Disks {
 		d := &w.config.Disks[i]
 		r, known := state[d.ID]
-		if !known || r.Cache || d.State != "" || d.ID == except || !w.handles.Has(d.ID) {
+		if !known || r.Cache || d.State != "" || avoid[d.ID] || !w.handles.Has(d.ID) {
 			continue
 		}
 		if r.State != string(solver.DiskOnline) && r.State != string(solver.DiskStandby) {
@@ -1224,8 +1270,33 @@ func (w *Writer) refusedBy(ctx context.Context, holders []string, from, to strin
 		if refused {
 			return ErrRefused
 		}
+		if err := w.collidesOn(id, d, from, to); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// collidesOn refuses a rename on an NTFS disk that holds what moves when that disk holds, at the new name or on the way
+// to it, a name of its key no row says yet, a user's made there directly or one the view made that no pass took in: the
+// catalog's keys cannot answer for it, and the disk can, before any disk is asked to rename, so that the rename goes on
+// every disk or on none (specs.md §15.7; conformance/models/README.md, flaw 24, the maintainer's remedy disk-key-look,
+// 2026-11-25). Each rename checks it again right before it runs. A disk not open now has nothing to rename.
+func (w *Writer) collidesOn(id string, d *config.Disk, from, to string) error {
+	if d.FS != names.NTFS {
+		return nil
+	}
+	err := w.handles.Use(id, func(h *ops.Disk) error {
+		_, _, err := h.LookAt(to, from)
+		return err //nolint:wrapcheck // ops says what failed
+	})
+	switch {
+	case errors.Is(err, ops.ErrNameRefused):
+		return ErrRefused
+	case errors.Is(err, ErrNoHandle):
+		return nil
+	}
+	return err
 }
 
 func (w *Writer) renameFile(ctx context.Context, disk, from, to string, replace bool, who Caller) error {

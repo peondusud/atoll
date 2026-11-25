@@ -326,8 +326,8 @@ func (m *shortNamesMachine) OpenTop(mount string) (fsx.Dir, error) {
 
 // On NTFS, a name of the short form that the folder does not list, and that a look finds, at that name or in capitals,
 // is the short name of another entry, which a copy is never made at; a name of that form the folder lists is an entry
-// of its own. Only a name of that form is looked for, as reading a folder costs: no other name, and no name on another
-// type, has the folder read (specs.md §15.8).
+// of its own (specs.md §15.8). Every folder on the way is read on NTFS, for the names of its key too (§15.7), so a
+// listing that fails there says the disk unknown (invariant 4); no name on another type has its folder read.
 func TestTheShortNameOfAnotherEntryIsRefused(t *testing.T) {
 	mount := newMount(t)
 	put(t, mount, "media/Films/Long name.mkv", "film")
@@ -354,13 +354,15 @@ func TestTheShortNameOfAnotherEntryIsRefused(t *testing.T) {
 			t.Errorf("%s: %q, %v", tc.path, got, err)
 		}
 	}
-	unread := &refusing{call: "names"}
 	for _, tc := range []struct {
-		name string
-		fs   names.Filesystem
-		path string
-	}{{"a long name on NTFS", names.NTFS, "Films/Long name.mkv"}, {"a short one on ext4", names.Ext4, "Films/LONGNA~1.MKV"}} {
-		if _, _, err := open(t, tc.fs, unread.fail).LookAtTarget(tc.path); err != nil || unread.calls != 0 {
+		name  string
+		fs    names.Filesystem
+		path  string
+		reads bool
+	}{{"a long name on NTFS", names.NTFS, "Films/Long name.mkv", true}, {"a short one on ext4", names.Ext4, "Films/LONGNA~1.MKV", false}} {
+		unread := &refusing{call: "names"}
+		_, _, err := open(t, tc.fs, unread.fail).LookAtTarget(tc.path)
+		if (unread.calls > 0) != tc.reads || (err != nil) != tc.reads || tc.reads && !errors.Is(err, ErrDiskLost) {
 			t.Errorf("%s: the folder read %d times: %v", tc.name, unread.calls, err)
 		}
 	}

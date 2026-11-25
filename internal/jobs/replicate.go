@@ -1071,12 +1071,14 @@ func (c *copier) recordPlaced(ctx context.Context, placed *fsx.Stat) error {
 }
 
 // obstacleOutcome says what a copy ends with when its target is not free: something at the path itself is
-// a conflict, which the next walk reports, and a parent that is not a folder takes the path.
+// a conflict, which the next walk reports, and a parent that is not a folder takes the path. On an NTFS disk, a name on
+// the way that is another's short name, or has the key of another of its folder, which the next walk records for the
+// plan to report as name-collision, is a name refused (specs.md §15.7, §15.8).
 func obstacleOutcome(target string) string {
 	switch target {
 	case ops.TargetTaken:
 		return OutcomeConflict
-	case ops.TargetRefused:
+	case ops.TargetRefused, ops.TargetCollides:
 		return trash.OutcomeNameRefused
 	}
 	return trash.OutcomePathTaken

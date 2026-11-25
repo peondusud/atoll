@@ -361,10 +361,10 @@ func TestLooksSayNothingOfWhatTheyCannotRead(t *testing.T) {
 		return swept{
 			op: func(d *Disk) error {
 				var err error
-				if taken, missing, err = d.LookAt("Films/New/Deeper/b"); err != nil {
+				if taken, missing, err = d.LookAt("Films/New/Deeper/b", ""); err != nil {
 					return err
 				}
-				if takenFile, _, err = d.LookAt("Films/a"); err != nil {
+				if takenFile, _, err = d.LookAt("Films/a", ""); err != nil {
 					return err
 				}
 				if target, missingTarget, err = d.LookAtTarget("Films/New/b"); err != nil {

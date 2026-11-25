@@ -107,6 +107,14 @@ func ResolveConflict(ctx context.Context, db *sql.DB, fileID int64, keep string,
 		if _, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE file_id = ? AND state = 'queued'", fileID); err != nil {
 			return fmt.Errorf("jobs: %w", err)
 		}
+		// A write Atoll's own view made, done, into a copy on another disk went with that copy, as the resolve said, once
+		// it looked at the copy with it: it is taken in, so that the view presents the copy kept, as the catalog does. No
+		// pass takes in a write to a file in conflict, and one left would have the view present the copy gone, that is,
+		// nothing (specs.md §15.7, §21.2). A write held open moved nothing: the resolve left its copy, and the conflict.
+		if _, err := tx.ExecContext(ctx, `UPDATE view_ops SET taken_ns = ? WHERE taken_ns IS NULL AND kind = 'write' AND state = 'done'
+			AND disk_id <> ? AND lpath = (SELECT lpath FROM files WHERE id = ?)`, nowNS, keep, fileID); err != nil {
+			return fmt.Errorf("view journal: %w", err)
+		}
 		return nil
 	})
 }

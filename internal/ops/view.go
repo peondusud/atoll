@@ -29,7 +29,9 @@ type UserAttrs struct {
 }
 
 // userParent reaches the folder a logical path lands in, making each folder missing on the way below the root with the
-// mode and owner like gives of it. It gives that folder, with the path's last name.
+// mode and owner like gives of it. It gives that folder, with the path's last name. On an NTFS disk, a folder on the way
+// that has the key of another of its folder, whoever made it, or is the short name of another entry, is refused before
+// anything is made, and so is a folder to make that collides there (specs.md §15.7, §15.8).
 func (d *Disk) userParent(logical string, like Like) (*folder, string, error) {
 	parts := strings.Split(logical, "/")
 	f, err := d.open(components(d.config.Root))
@@ -37,6 +39,10 @@ func (d *Disk) userParent(logical string, like Like) (*folder, string, error) {
 		return nil, "", classify(err)
 	}
 	for i, name := range parts[:len(parts)-1] {
+		if err := d.lookThrough(f.Dir, name, ""); err != nil {
+			f.close()
+			return nil, "", err
+		}
 		next, err := f.OpenDir(name)
 		if fsx.IsAbsent(err) {
 			st, likeErr := like(strings.Join(parts[:i+1], "/"))
@@ -70,6 +76,9 @@ func (d *Disk) userParent(logical string, like Like) (*folder, string, error) {
 
 // makeUserFolder makes a folder with a mode and owner, then makes its name durable.
 func (d *Disk) makeUserFolder(parent fsx.Dir, name string, like *fsx.Stat) error {
+	if err := d.refuseColliding(parent, name, ""); err != nil {
+		return err
+	}
 	err := parent.Mkdir(name, like.Mode)
 	switch {
 	case fsx.IsExisting(err):
@@ -123,6 +132,9 @@ func (d *Disk) CreateUserFile(logical string, mode, uid, gid uint32, like Like) 
 		return nil, fsx.Stat{}, err
 	}
 	defer parent.close()
+	if err := d.refuseColliding(parent.Dir, name, ""); err != nil {
+		return nil, fsx.Stat{}, err
+	}
 	w, err := parent.CreateFile(name, 0o600)
 	switch {
 	case fsx.IsExisting(err):
@@ -195,6 +207,9 @@ func (d *Disk) MakeUserSymlink(logical, target string, uid, gid uint32, like Lik
 		return fsx.Stat{}, err
 	}
 	defer parent.close()
+	if err := d.refuseColliding(parent.Dir, name, ""); err != nil {
+		return fsx.Stat{}, err
+	}
 	err = parent.Symlink(target, name)
 	switch {
 	case fsx.IsExisting(err):
@@ -270,6 +285,9 @@ func (d *Disk) RenameUser(from, to string, isFolder bool, fileKey string, like L
 	}
 	defer target.close()
 	name := src[len(src)-1]
+	if err := d.refuseColliding(target.Dir, newName, leftBy(from, to, name)); err != nil {
+		return err
+	}
 	if isFolder {
 		if _, err := holdsFolder(source.Dir, name, fileKey); err != nil {
 			return err
@@ -320,6 +338,9 @@ func (d *Disk) PlaceUserPart(op *Op, logical string, like Like) (fsx.Stat, error
 		return fsx.Stat{}, err
 	}
 	defer target.close()
+	if err := d.refuseColliding(target.Dir, newName, ""); err != nil {
+		return fsx.Stat{}, err
+	}
 	if err := d.moveNoReplace(source.Dir, name, target.Dir, newName, byKey(op.FileKey)); err != nil {
 		return fsx.Stat{}, err
 	}
@@ -435,6 +456,9 @@ func (d *Disk) LinkUser(from, to string, fileKey string, like Like) (fsx.Stat, e
 		return fsx.Stat{}, err
 	}
 	defer target.close()
+	if err := d.refuseColliding(target.Dir, newName, ""); err != nil {
+		return fsx.Stat{}, err
+	}
 	err = source.Link(name, target.Dir, newName)
 	switch {
 	case fsx.IsExisting(err):

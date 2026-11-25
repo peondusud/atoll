@@ -152,6 +152,64 @@ func CollisionKey(path string) (key string, ok bool) {
 	return NFC(b.String()), true
 }
 
+// Colliding gives the names of one folder of an NTFS target that collide with name, a name of that folder (specs.md
+// §15.7): each with its lpath_key and other bytes, but but, the name a case-only rename leaves, in byte order. A name
+// without a key, which is not valid UTF-8, collides with none. Two ASCII names are compared without their keys, as an
+// ASCII name's key is that name with its letters a to z in capitals: a folder of thousands of names costs its listing,
+// not their keys.
+func Colliding(name string, listed []string, but string) []string {
+	key, ok := CollisionKey(name)
+	if !ok {
+		return nil
+	}
+	ascii := isASCII(name)
+	var with []string
+	for _, n := range listed {
+		if n == name || n == but {
+			continue
+		}
+		if ascii && isASCII(n) {
+			if asciiKeysEqual(name, n) {
+				with = append(with, n)
+			}
+			continue
+		}
+		if k, ok := CollisionKey(n); ok && k == key {
+			with = append(with, n)
+		}
+	}
+	slices.Sort(with)
+	return with
+}
+
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiKeysEqual says whether two ASCII names have one lpath_key: the same bytes once a to z are in capitals.
+func asciiKeysEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	upper := func(c byte) byte {
+		if c >= 'a' && c <= 'z' {
+			return c - 'a' + 'A'
+		}
+		return c
+	}
+	for i := range len(a) {
+		if upper(a[i]) != upper(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // collisionUpcase maps one character for CollisionKey.
 func collisionUpcase(r rune) rune {
 	switch {

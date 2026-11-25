@@ -191,7 +191,18 @@ func (s *Session) resolveOther(ctx context.Context, f *catalog.FileRow, c *catal
 	if err := catalog.RefreshCopy(ctx, s.db, f.ID, c.Disk, seen); err != nil {
 		return "", fmt.Errorf("catalog: %w", err)
 	}
-	return s.Send(ctx, f, c, catalog.ReasonOverwritten)
+	// The move waits, as the SSD cache's transfer does, while an operation of Atoll's own view no pass has taken in
+	// touches the copy's path, a write the view holds open on it among them, read in the transaction that journals the
+	// move: a write through the view is never in a copy the resolve sends away. That copy stays, reported changed, as
+	// one that changed between the look and the move, and so does the conflict, until a run once the program closed it
+	// and a pass took its write in (specs.md §15.7, §21.2; conformance/models/README.md, flaw 26, the maintainer's
+	// remedy resolve-view-free, 2026-11-25).
+	outcome, _, err := s.sendFor(ctx, f, c, catalog.ReasonOverwritten, false, true)
+	if outcome == OutcomeViewHolds {
+		slog.Warn("a copy of a file in conflict stays: Atoll's own view holds it, as a program writes it through the view", "disk", c.Disk, "path", f.Path)
+		return OutcomeChanged, err
+	}
+	return outcome, err
 }
 
 // lookNow says what a copy's disk holds at its place now: nil when nothing is there, or not a file, and reached
