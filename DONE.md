@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-25 on flaws 24 to 26 (specs.md §12.4, §15.7, §17)
+
+Three questions, the option put first every time:
+
+- **Flaws 24 and 25: `disk-key-look`.** Right before Atoll makes a name on an NTFS disk, it lists the folder where the name goes and refuses another name with the same key, whoever wrote it (`name-collision`). This covers both flaws, and the declared limit of §15.7 no longer applies to Atoll's own writes. The catalog's remedy is set aside: a name made directly on the disk since the last walk would stay a limit there.
+- **Flaw 26: `resolve-view-free`.** `conflicts resolve` moves no copy the view holds open; it reports that copy `changed`, a value its `--json` schema has already, and the conflict stays until a run that can move it. The new outcome `view-holds` is set aside, as it would be format version 2.
+- **The model's choices made alone**, in the entry below, confirmed together. The tests the flaws' fixes leave out so far are added with them: flaw 24's trace through the view, and a loop-device test where one fits.
+
 ## Name collisions and conflicts in TLA+: flaws 24 to 26 found, open, 2026-11-25 (specs.md §12.4, §15.7, §15.8, §16.1)
 
 The maintainer chose §15.7 as the next hardening step (2026-11-25), the naming case the models left out. On the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `71d7de2`: two modules of their own, `conformance/models/Collisions.tla` and `Conflicts.tla`, with nine instances. TLC found three flaws, recorded open, each with a test of the code behind the build tag `flaws` seen failing and its remedies proposed in `Fixes`, checked against every invariant; the remedies are the maintainer's to choose (`conformance/models/README.md`, Name collisions on NTFS, and Conflicts and their resolution).
@@ -13,7 +21,7 @@ The maintainer chose §15.7 as the next hardening step (2026-11-25), the naming 
 - **Flaw 26, open** (`NoVersionLost`, `FlawConflictViewWrite`): a program writes through the view the copy it presents of a file in conflict; `atoll conflicts resolve --keep` the other disk sends that copy to the trash, its move asking nothing of the view's journal (`trash.Session.Send`, `ViewFree` false, as flaw 10's remedy made it for the transfer); what the program writes then goes to the trash. `TestFlawAWriteOpenedThroughTheViewDuringAResolveIsLost`. Remedy: `resolve-view-free`, the resolve's move waiting while the view holds the copy open, the copy staying, reported `changed`; it holds in every instance and in the pools with a program writing through the view.
 - **specs.md**: a sentence naming each model, at the end of §15.7 and of §16.1; `fingerprints.json` lists both modules and pins §12.4, §15.7, §15.8 and §16.1.
 - **Checked**: `test/tla/run.sh`, every one of the 96 instances as it expects, flaws 24 to 26's the invariant each breaks, every earlier one the very same states, in 31 min 43 s of TLC; `go test ./conformance/models`; `make model-flaws` failing on the three flaw tests alone, as open flaws' do; `go vet -tags flaws ./internal/...`; gofmt; golangci-lint on `internal/jobs` with the tag `flaws` and on `conformance/models`; each remedy against every invariant in every instance of its module, and each part of the catalog's remedy taken out, in copies not kept.
-- **To confirm** (choices made alone):
+- **Confirmed by the maintainer on 2026-11-25** ("Tout confirmer", the answers above) (choices made alone):
   - two modules of their own, rather than `Nested.tla` or `ViewNames.tla` grown;
   - the two pools of `Collisions.tla` checking, until flaws 24 and 25 are fixed, only the invariant each leaves whole (`CopiesAtTheirNames` with a driver by bytes, `NoAtollPair` with one by key), and `Conflicts.tla`'s two without a program writing through the view, the flaws' instances checking the rest;
   - flaw 25 recorded as a flaw, though it starts from §15.7's stated limit, as the copy at another name than its file's is not what that limit says;
