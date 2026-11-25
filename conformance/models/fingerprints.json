@@ -9,7 +9,8 @@
     "Nested.tla",
     "Collisions.tla",
     "Conflicts.tla",
-    "Guards.tla"
+    "Guards.tla",
+    "Trash.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -101,7 +102,7 @@
     {
       "section": "17",
       "title": "## 17. Trash",
-      "sha256": "0e0334af23f60ea5b54121c4b4ba34db6fa5e7d429d66049d358db05b8a88101"
+      "sha256": "15a4690d13f16e2c7bbce7745fe311b05c8727fc86a11aa25493c44f8c1cfc04"
     },
     {
       "section": "17.1",
@@ -114,9 +115,14 @@
       "sha256": "7ca7a44fbd7117abd3c200bd3895df48b6dafd98910714e1dc5b505024726ecb"
     },
     {
+      "section": "17.3",
+      "title": "### 17.3 `atoll prune`",
+      "sha256": "ea4a4771effa76ae3d90dd23d2ac372088e3c498116d9f7d8c056d6682ac42fc"
+    },
+    {
       "section": "17.4",
       "title": "### 17.4 `atoll trash`",
-      "sha256": "ae7aa7e580447bc84d7cb552364c612380c7f912f1878644fbea15a61c89da8c"
+      "sha256": "4355f0e9df6a6b8b93389e927863f277f1e50a2913086d892ec20b1dc2f11979"
     },
     {
       "section": "17.5",

@@ -41,7 +41,7 @@ else
 	$(GO) build -tags conformance -o $(BIN)-conformance ./cmd/atoll
 	$(GO) run ./conformance/runner --bin $(BIN)-conformance --scenarios conformance/models/flaws
 endif
-	$(GO) test -tags flaws -count=1 -run '^TestFlaw' ./internal/view/writer/ ./internal/jobs/
+	$(GO) test -tags flaws -count=1 -run '^TestFlaw' ./internal/view/writer/ ./internal/jobs/ ./internal/trash/
 
 # The next two depend on the machine, not only on the code, so they never reuse
 # a cached result (-count=1).
