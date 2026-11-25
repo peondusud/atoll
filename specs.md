@@ -768,6 +768,8 @@ Then, the first that applies:
 - Every propagated deletion goes to the trash; nothing is deleted immediately.
 - In phase 1, the guard can only stop propagation: deletions made through mergerfs have already reached every copy.
 
+`conformance/models/Guards.tla` formalizes the mass-deletion guard and the mass-modification guard of a disk, with its day: what each counts and holds, their events and clears, `atoll guard confirm` and `reject` by the CLI or the local API, and an answer's window, with a user deleting, putting back or rewriting files, a disk unmounted and the daemon stopped between any two steps (§29.4).
+
 ### 15.7 Conflicts and name collisions
 
 - Same logical path with different content on two disks, at adoption, after concurrent changes or after `catalog rebuild` (§9): `conflict` state, every version kept. A copy found `corrupt` that changed since, and does not hold its file's content, makes one too (§16.1).
