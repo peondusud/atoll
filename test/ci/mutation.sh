@@ -159,6 +159,10 @@ for pkg in "$@"; do
 	# killed lived not-covered timed-out named efficacy coverage gate
 	if figures=$(bash test/ci/mutation-gate.sh "$pkg" "$log"); then
 		verdict=passes
+	elif [ -n "${MUTATION_FILES:-}${MUTATION_LINES:-}" ]; then
+		# A part of a package is only measured: the gate is that of its parts together (test/ci/mutation-merge.sh), as
+		# a part's own figures leave out the rest of the package, and count the mutants of other lines not viable.
+		verdict="a part, measured"
 	else
 		verdict=FAILS
 		worst=1

@@ -4,7 +4,9 @@
     "Rename.tla",
     "Copies.tla",
     "Folders.tla",
-    "ViewMove.tla"
+    "ViewMove.tla",
+    "ViewNames.tla",
+    "Nested.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -16,7 +18,7 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "bcfd5c7ad6d3c24f0af0d6f32dadf1d26c9187b4d5522eb0e313fd84a798ffd8"
+      "sha256": "74709f6b17e5992c64a348ec3d739b05b469869569f5c5c169ccbad9dbae2e86"
     },
     {
       "section": "10",
@@ -66,7 +68,7 @@
     {
       "section": "15.12",
       "title": "### 15.12 The propagation pass",
-      "sha256": "102ffd6fc085cd3899a1dc9413cdd1185e4eeaf8e6bca4d607427ea683987280"
+      "sha256": "f4675deff207fe9eae0ae9c8ef4c7691e511e927c28b789e82f7259c5eb1c0fe"
     },
     {
       "section": "17",
@@ -106,7 +108,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "e5af384aaa1e4fbdd1bb6b11645ccad242016b4da040c176537eb70d00e0832b"
+      "sha256": "64259f910d49df8e0c1a212fdfedbf09a67ee0f2f4b69b935cb993384ce15bba"
     }
   ]
 }

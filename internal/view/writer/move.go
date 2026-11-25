@@ -429,7 +429,7 @@ func (w *Writer) leave(ctx context.Context, v *catalog.ViewOp, trashed *catalog.
 // checks the trash makes, against what the move copied, once the target is found to hold the moved copy as placed says
 // (targetHolds). It says whether it ended the move: false leaves it to the table of §17.2, as something moved after all.
 func (w *Writer) removeHere(ctx context.Context, d *ops.Disk, v *catalog.ViewOp, trashed *catalog.Op, row *catalog.KnownCopy, placed *fsx.Stat, why error) (bool, error) {
-	left, err := holdsAt(d, v.Path, trashed.FileKey, false)
+	left, err := holdsAt(d, v.Path, trashed.FileKey)
 	if err != nil {
 		return false, err
 	}

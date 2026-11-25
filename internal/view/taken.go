@@ -40,8 +40,11 @@ type Look func(ctx context.Context, disk, path string) (*Node, bool, error)
 // order of their ids, once the catalog alone presents at each path it touched what the view presents with all of them,
 // and for a folder once every disk the pass could read was walked, so that nothing presented changes then. One that is
 // not taken in holds back each later one at, below or above one of its paths. cacheInView says that the view presents
-// the cache disks, as with view.engine = "atoll" (specs.md §19): what it made there, the catalog presents too.
-func TakenIn(ctx context.Context, db *sql.DB, open []catalog.ViewOp, walkedAll, cacheInView bool, look Look) ([]int64, error) {
+// the cache disks, as with view.engine = "atoll" (specs.md §19): what it made there, the catalog presents too. moot
+// names those a user undid directly on a disk, which the pass takes in as they are, whatever the catalog presents, the
+// catalog then presenting what the disks hold (conformance/models/README.md, flaws 20 and 21, the maintainer's remedy,
+// 2026-11-24).
+func TakenIn(ctx context.Context, db *sql.DB, open []catalog.ViewOp, walkedAll, cacheInView bool, look Look, moot map[int64]bool) ([]int64, error) {
 	t := &Tree{db: db, cacheInView: cacheInView}
 	disks, err := t.disks(ctx)
 	if err != nil {
@@ -63,7 +66,7 @@ func TakenIn(ctx context.Context, db *sql.DB, open []catalog.ViewOp, walkedAll, 
 			return slices.ContainsFunc(held, func(h string) bool { return at(p, h) || at(h, p) })
 		})
 		ok := !blocked && v.State == catalog.OpDone && (!v.Folder || walkedAll)
-		for j := 0; ok && j < len(paths); j++ {
+		for j := 0; ok && !moot[v.ID] && j < len(paths); j++ {
 			if ok, err = t.agrees(ctx, disks, ops, paths[j], look); err != nil {
 				return nil, err
 			}

@@ -4,7 +4,7 @@
 
 Atoll adds file-level redundancy to heterogeneous disks (SATA, USB DAS) that hold a media library (Plex, Emby, Jellyfin), without moving existing files.
 
-**Under development and not ready for real data.** The alpha, the beta and Atoll's own view (phases 1a, 1b and 2a) are close to done. The first release, `v0.1.0`, waits for the core to be proven: a soak of 24 hours, then tries on real disks. See [ROADMAP.md](ROADMAP.md).
+**Under development and not ready for real data.** The alpha, the beta and Atoll's own view (phases 1a, 1b and 2a) are done, and released as `v0.1.0` on 2026-11-23, after a soak of 24 hours; the tries on real disks are still to come. See [ROADMAP.md](ROADMAP.md).
 
 **The core first.** The first release is the core, used through mergerfs, made very reliable and very secure before any feature is added. What came after it is **experimental**, off by default, and not part of what that release promises (specs.md §28):
 

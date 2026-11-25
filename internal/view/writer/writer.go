@@ -1302,7 +1302,18 @@ func (w *Writer) renameFolder(ctx context.Context, holders []string, from, to st
 			case !found || st.Kind != fsx.KindDir:
 				return ops.ErrGone
 			}
-			return d.RenameUser(from, to, true, fmt.Sprintf("%d", st.Ino), w.like(ctx)) //nolint:wrapcheck // ops says what failed
+			key := fmt.Sprintf("%d", st.Ino)
+			// Until a rename went through, the journal names the disk and the folder, by its inode, of the one about to
+			// run, before it runs: what the reprise looks for at the new name (specs.md §21.2; conformance/models/
+			// README.md, flaw 19, the maintainer's remedy, 2026-11-24).
+			if moved == 0 && (v.Disk != id || v.FileKey != key) {
+				if err := catalog.NameViewFolder(ctx, w.db, v.ID, id, key); err != nil {
+					return fmt.Errorf("%w", err)
+				}
+				v.Disk, v.FileKey = id, key
+				w.machine.Checkpoint("folder-named")
+			}
+			return d.RenameUser(from, to, true, key, w.like(ctx)) //nolint:wrapcheck // ops says what failed
 		})
 		switch {
 		case err == nil:

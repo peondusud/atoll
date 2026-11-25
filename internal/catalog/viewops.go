@@ -58,10 +58,11 @@ type ViewOp struct {
 	OpID  int64
 	State string
 	AtNS  int64
-	// Disk2 is, for a move, the full disk the file leaves; OpKind the kind of the operation of ops OpID names, as
-	// OpenViewOps reads it.
-	Disk2  string
-	OpKind string
+	// Disk2 is, for a move, the full disk the file leaves; OpKind the kind of the operation of ops OpID names, and
+	// OpFileKey its file_key, as OpenViewOps reads them: of a replacement, the inode of the copy it sent to the trash.
+	Disk2     string
+	OpKind    string
+	OpFileKey string
 	// Asker is who asked it, as the kernel named the caller of its FUSE request: nil for a row written outside one,
 	// and for one from before migration 0025 (specs.md §9, §21.2).
 	Asker *ViewAsker
@@ -253,6 +254,86 @@ func viewTouches(ctx context.Context, tx *sql.Tx, path string) (bool, error) {
 	return false, nil
 }
 
+// viewHoldsRename says whether an operation of the view no pass has taken in, of an id at since or past it, is at, below
+// or above path or target, other than the rename of path to target itself (ViewHold), and other than one before such a
+// rename not taken in: what Atoll's rename carries out then is that rename of the view, which undoes the earlier ones at
+// its names (conformance/models/README.md, observation 5, the maintainer's choice, 2026-11-24).
+func viewHoldsRename(ctx context.Context, tx *sql.Tx, path, target string, since int64) (bool, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT id, kind, lpath, COALESCE(lpath2, x'') FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone' ORDER BY id")
+	if err != nil {
+		return false, fmt.Errorf("view journal: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	type open struct {
+		id            int64
+		kind          string
+		lpath, lpath2 string
+	}
+	var list []open
+	var same int64
+	for rows.Next() {
+		var o open
+		var lpath, lpath2 []byte
+		if err := rows.Scan(&o.id, &o.kind, &lpath, &lpath2); err != nil {
+			return false, fmt.Errorf("view journal: %w", err)
+		}
+		o.lpath, o.lpath2 = string(lpath), string(lpath2)
+		if o.kind == ViewRename && o.lpath == path && o.lpath2 == target {
+			same = o.id
+			continue
+		}
+		list = append(list, o)
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("view journal: %w", err)
+	}
+	below := func(p, at string) bool { return p == at || strings.HasPrefix(p, at+"/") }
+	for _, o := range list {
+		if o.id < since || o.id < same {
+			continue
+		}
+		for _, at := range []string{o.lpath, o.lpath2} {
+			for _, p := range []string{path, target} {
+				if at != "" && (below(p, at) || below(at, p)) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+// ViewHoldsRename says what BeginHeldRename would read of the view's journal for that rename, before anything is made
+// for it, such as the folders missing on the way to its target.
+func ViewHoldsRename(ctx context.Context, db *sql.DB, path, target string, hold *ViewHold) (bool, error) {
+	var held bool
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		var err error
+		held, err = viewHoldsRename(ctx, tx, path, target, hold.Since)
+		return err
+	})
+	return held, err
+}
+
+// NextViewOp gives the id the view's next operation will have, at least: one past the last journaled (specs.md §21.2).
+func NextViewOp(ctx context.Context, db *sql.DB) (int64, error) {
+	var next int64
+	if err := db.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM view_ops").Scan(&next); err != nil {
+		return 0, fmt.Errorf("view journal: %w", err)
+	}
+	return next, nil
+}
+
+// NameViewFolder says, of a folder's rename through the view still planned, the disk its next rename runs on and that
+// folder's inode there, committed before that rename, so that its reprise knows the folder by its inode (specs.md
+// §9, §21.2; conformance/models/README.md, flaw 19, the maintainer's remedy, 2026-11-24).
+func NameViewFolder(ctx context.Context, db *sql.DB, id int64, disk, fileKey string) error {
+	if _, err := db.ExecContext(ctx, "UPDATE view_ops SET disk_id = ?, file_key = ? WHERE id = ? AND state = 'planned'", disk, fileKey, id); err != nil {
+		return fmt.Errorf("view journal: %w", err)
+	}
+	return nil
+}
+
 // HoldViewOp says that the view holds open again a write or a new file it journaled, done and not taken in yet. It
 // waits, as a new held write does, while a move of Atoll's own of that copy is planned: ErrMovePlanned. No such move
 // is journaled while the row is not taken in (TrashStart.ViewFree), and this keeps it so whatever journaled one.
@@ -303,7 +384,8 @@ func (v *ViewOp) Path2OrPath() string {
 
 const openViewOpsSQL = `
 	SELECT id, kind, disk_id, lpath, COALESCE(lpath2, x''), folder, COALESCE(file_key, ''), COALESCE(op_id, 0), state, at_ns,
-		COALESCE(disk2_id, ''), COALESCE((SELECT o.kind FROM ops o WHERE o.id = view_ops.op_id), ''), uid, pid
+		COALESCE(disk2_id, ''), COALESCE((SELECT o.kind FROM ops o WHERE o.id = view_ops.op_id), ''),
+		COALESCE((SELECT o.file_key FROM ops o WHERE o.id = view_ops.op_id), ''), uid, pid
 	FROM view_ops WHERE taken_ns IS NULL AND state <> 'undone' ORDER BY id`
 
 // OpenViewOps gives the operations of the view that no pass has taken in, planned or done, by id: what the view
@@ -319,7 +401,7 @@ func OpenViewOps(ctx context.Context, db *sql.DB) ([]ViewOp, error) {
 		var v ViewOp
 		var path, path2 []byte
 		var uid, pid sql.NullInt64
-		if err := rows.Scan(&v.ID, &v.Kind, &v.Disk, &path, &path2, &v.Folder, &v.FileKey, &v.OpID, &v.State, &v.AtNS, &v.Disk2, &v.OpKind, &uid, &pid); err != nil {
+		if err := rows.Scan(&v.ID, &v.Kind, &v.Disk, &path, &path2, &v.Folder, &v.FileKey, &v.OpID, &v.State, &v.AtNS, &v.Disk2, &v.OpKind, &v.OpFileKey, &uid, &pid); err != nil {
 			return nil, fmt.Errorf("view journal: %w", err)
 		}
 		v.Path, v.Path2 = string(path), string(path2)
