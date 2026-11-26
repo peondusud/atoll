@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-26 on flaws 31 and 32 (specs.md §16, §16.1)
+
+The maintainer answered three questions, and took the option put first each time.
+
+- **Flaw 31: `coarse-conflict`.** On a disk whose change time holds whole seconds, a mismatch the scrub finds is always a conflict, never repaired on its own: the user settles it with `conflicts resolve`. Real rot on such disks is no longer repaired by itself; those disks are rare, ext4 with 128-byte inodes among them. `racy-conflict`, which would need to know when each row was recorded, is a schema change: it is noted for format version 2.
+- **Flaw 32: `repair-recheck`.** A repair by chunk keeps the times of its own last change. It looks at them before each write, before it puts the modification time back and before its commit, and it reads again the chunk it is about to write. If either moved, it stops `changed` and leaves the row as it is.
+- **The model's choices made alone** (the entry below): confirmed together.
+
 ## Scrub and repair against modifications in TLA+: flaws 31 and 32 found, open, 2026-11-26 (specs.md §14, §15.4, §16, §16.1, §17.2)
 
 The fourth of the maintainer's models by risk (TODO.md), on the branch `worktree-agent-aaf1b008b9d88cd66` after `bc9240a`: `conformance/models/Scrub.tla` with `MCScrub.tla` and fifteen instances. Two flaws found, open, their remedies the maintainer's to choose.
@@ -13,7 +21,7 @@ The fourth of the maintainer's models by risk (TODO.md), on the branch `worktree
 - **Observations** (README.md): with `repair-recheck`, the look right before the first write is one of its looks; the healthy copy's times compared with its row add nothing to its chunks checked against the file's hashes in the model, whose edit is one step; a copy never verified taken as another version matters for a copy that came with another content.
 - **specs.md**: a sentence naming `Scrub.tla` at the end of §16.1; nothing else. `fingerprints.json` lists `Scrub.tla`, pins §16, and §16.1 again, which `Conflicts.tla` cites too, its fingerprint changed by that sentence alone. The test machine of `cmd/atoll` (`poolMachine.precision`) gives a disk a time precision, for flaw 31's test. TODO.md: the model plan, and flaws 31 and 32 open.
 - **Checked**: `test/tla/run.sh`, every one of the 144 instances as it expects, flaws 31 and 32's the invariant each breaks, every instance of the other modules the very same states, in 40 min 7 s of TLC (40 min 11 s with the container's start), under 45 minutes, so the CI's `tla` job stays one; `go test ./conformance/models`; `make model-flaws` failing on the two flaws' tests alone; `go vet` and golangci-lint of `cmd/atoll` with and without the tag `flaws`, 0 issues; gofmt; `go test ./cmd/atoll`; each remedy against every invariant in every instance, each mechanism taken out, and what each instance reaches, in copies not kept (README.md, How sensitive it is). States: ScrubRot 8,826, ScrubEdit 2,680, ScrubSector 27,708, ScrubQuarantine 1,738, ScrubFile 34,120, ScrubNoHealthy 2,747, ScrubUnverified 978, ScrubMixed 4,779,190, ScrubCoarseFixed 4,678, ScrubRacyFixed 10,408, ScrubMixedCoarse 2,514,856, ScrubMixedRacy 4,176,055, ScrubLive 6,858, FlawScrubCoarse 40, FlawScrubRepairEdited 137.
-- **Choices made alone, to confirm**:
+- **Choices made alone, confirmed by the maintainer on 2026-11-26** ("Tout confirmer", the answers above):
   - one file of two chunks, its size fixed, a copy's pipeline and a pass's taking in of a change each one step, the guards a pass that does not run, a corrupt copy that changed left to `Conflicts.tla`, renames and inodes out, so an atomic save, which every look sees, out too;
   - `NoWrongVerify` judging a repair's commit, and its reprise's, not a scrub's verification, which records no time; and `LastKept` read as the file keeping a copy at its path, the healthy copy found being possibly a user's newer version by then;
   - the instances where a user writes taking `repair-recheck`, and `coarse-conflict` or `racy-conflict` where a disk is coarse, so as to look past the flaws;
