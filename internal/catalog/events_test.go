@@ -58,6 +58,26 @@ func TestTheTrashIsReadThroughItsIndexes(t *testing.T) {
 	}
 }
 
+// Whether another disk holds a surplus or rebalance entry's version is asked through the unique index of the files'
+// paths, then the copies of that one file, never over the whole catalog: a purge for room asks it of each entry it
+// would take (specs.md §17; flaw 28 of conformance/models/README.md).
+func TestBackedIsAskedOfOneFile(t *testing.T) {
+	b := openForOps(t)
+	plan := planOf(t, b.sql(), "backed", backedSQL)
+	var file, copies bool
+	for _, step := range plan {
+		// The one row EXISTS answers with is no table.
+		if strings.HasPrefix(step, "SCAN") && step != "SCAN CONSTANT ROW" {
+			t.Errorf("a table is read whole: %q", plan)
+		}
+		file = file || strings.HasPrefix(step, "SEARCH f USING INDEX sqlite_autoindex_files_1 (lpath=?)")
+		copies = copies || strings.HasPrefix(step, "SEARCH k USING PRIMARY KEY (file_id=?")
+	}
+	if !file || !copies {
+		t.Errorf("%q", plan)
+	}
+}
+
 // Where the journal put the file of an inode is read through the index of the operations by disk and inode, never
 // over the whole journal, which holds an operation for each copy ever made (specs.md §9).
 func TestTheJournalIsAskedByInode(t *testing.T) {

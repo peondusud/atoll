@@ -35,6 +35,11 @@
       "sha256": "2ed568cff08975c7948b35e3682772296f2c44d9dbe801f0b0c804be9e18fcd7"
     },
     {
+      "section": "13.3",
+      "title": "### 13.3 Solver",
+      "sha256": "1350b648b0d1d5228a9bb82a725ca22c569fd1054bad4581dcec2b9ea0444ee0"
+    },
+    {
       "section": "13.4",
       "title": "### 13.4 The placement plan",
       "sha256": "791657cbf3dcd9ef6c64f2fed6217d064d6b163010aea77f4d08c0ab8493d299"
@@ -102,7 +107,7 @@
     {
       "section": "17",
       "title": "## 17. Trash",
-      "sha256": "15a4690d13f16e2c7bbce7745fe311b05c8727fc86a11aa25493c44f8c1cfc04"
+      "sha256": "ccf69e95a83387c871928565f23d03fcd11e31efa9637aa564490ce309f789e1"
     },
     {
       "section": "17.1",
@@ -117,7 +122,7 @@
     {
       "section": "17.3",
       "title": "### 17.3 `atoll prune`",
-      "sha256": "ea4a4771effa76ae3d90dd23d2ac372088e3c498116d9f7d8c056d6682ac42fc"
+      "sha256": "464cd684e957c26f823603ffabf1c1a3da6f3c57a580f823d52bcd55454f8258"
     },
     {
       "section": "17.4",
@@ -132,7 +137,7 @@
     {
       "section": "19",
       "title": "## 19. SSD cache (phase 2b)",
-      "sha256": "e807602f8220535ffed37d906e464f3fe470615eb2c1980a2b922918eb90e3aa"
+      "sha256": "dd9f56e77f04360f9b1f24e5e673996f45683125f8b143fd09034ac76c3857ed"
     },
     {
       "section": "20",
