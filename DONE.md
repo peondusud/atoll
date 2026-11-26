@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-26 on flaws 33 and 34 (specs.md §16, §16.1)
+
+Three questions, the option put first each time.
+
+- **Flaw 33: `torn-foreign`.** A chunk the reprise of a repair finds neither as found nor as written is never taken for the repair's own torn write. Nothing is written, the row stays as it is, and the copy is a conflict, which the user settles. A true tear, a stop within a repair's write, ends in a conflict too. `torn-index` is set aside, as TLC shows it does not hold.
+- **Flaw 34: `unread-found`.** At the reprise, a bad chunk that cannot be read, with nothing saved yet, keeps what the repair found, since no write starts before everything is saved. Any other chunk that cannot be read, on a disk that confirms, holds neither its hash nor the save. So the reprise concludes, and a corrupt copy is never left with a repair planned for good.
+- **The kernel's change time**, measured in qemu (`docs/research/ctime-granularity.md`): 4 ms steps on Linux 6.12 for ext4, XFS, btrfs and ntfs3; fine on 7.3 for ext4, XFS and btrfs, 1 ms steps for ntfs3 and `ntfs`; always fine on ntfs-3g and lowntfs-3g. This is recorded as a limit of flaw 31's remedy in §16, which `racy-conflict` (format version 2) would close.
+- **The model's choices made alone** (the entry below): confirmed together.
+
 ## The torn chunk at a repair's reprise in TLA+, flaws 33 and 34 found, open, and the kernel's change time measured, 2026-11-26 (specs.md §16, §16.1)
 
 The maintainer's answers on the two observations of flaws 31 and 32's fix (the entries below), on the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `314b232`. Two flaws found, open, their remedies the maintainer's to choose. No change to the code.
@@ -12,7 +21,7 @@ The maintainer's answers on the two observations of flaws 31 and 32's fix (the e
 - **The kernel's change time**, measured in qemu on Linux 6.12.118 and 7.3.5, one after the other, by a kept loop-device test, `TestTheChangeTimeGranularityOfEachDriver` (`test/loopdev/ctimegrain_test.go`), which logs and fails only when it cannot measure (`docs/research/ctime-granularity.md`): on 6.12, ext4 (256-byte inodes), XFS, btrfs and ntfs3 date a change to the kernel's tick, 4 ms, two changes after a look carrying one change time up to 5.6, 10.9, 4.2 and 5.1 ms apart; on 7.3, ext4, XFS and btrfs never do, with multigrain timestamps, while ntfs3 and the kernel's `ntfs` date a change to a 1 ms tick, up to 1.6 and 1.9 ms apart; ntfs-3g and lowntfs-3g never do, on either kernel. The window exists: recorded as a limit of flaw 31's remedy in §16 and TODO.md, which `racy-conflict`, format version 2, would close.
 - **specs.md**: the sentence naming `Scrub.tla` in §16.1 (a chunk's write torn by a stop), and the limit's sentence in §16; `fingerprints.json`: §16 and §16.1 again; `Conflicts.tla`, which cites §16.1, confirmed unchanged. README.md: flaws 33 and 34 open, `make model-flaws` with their two tests. TODO.md: the observations done, flaws 33 and 34 open.
 - **Checked**: `test/tla/run.sh`, every one of the 159 instances as it expects, flaws 33 and 34's the invariant or the property each breaks, every instance of the other modules the very same states, in 39 min 8 s of TLC (39 min 15 s with the container's start), under 45 minutes, so the CI's `tla` job stays one; `go test ./conformance/models`; `make model-flaws` failing on the two flaws' tests alone, `go vet -tags flaws` and golangci-lint with the tag `flaws` of `internal/trash`, 0 issues; `go vet -tags loopdev` and golangci-lint with the tag `loopdev` of `test/loopdev`, 0 issues; gofmt; each remedy against every invariant in every instance, in copies not kept. States: ScrubRot 12,924, ScrubEdit 2,740, ScrubSector 28,862, ScrubQuarantine 1,738, ScrubFile 34,120, ScrubNoHealthy 2,747, ScrubUnverified 978, ScrubMixed 4,886,984, ScrubCoarse 2,652, ScrubMixedCoarse 1,722,052, ScrubTorn 7,388, ScrubTornCoarse 5,394, ScrubLive 10,424, FlawScrubCoarse 116, FlawScrubRepairEdited 187, FlawScrubTorn 475, FlawScrubUnreadStuck 139.
-- **Choices made alone, to confirm**:
+- **Choices made alone, confirmed by the maintainer on 2026-11-26** ("Tout confirmer", the answers above):
   - a torn chunk modelled as one value, neither its old bytes nor the new, and the reprise's look at it as the code's, by hash;
   - `NoUserTakenForTorn` flagging the reprise's keep of a user's write, whatever follows, as the time is set back over it on a coarse disk too;
   - the instances where a user writes and Atoll is killed taking `torn-foreign`, and `ScrubLive` `unread-found`, so as to look past the flaws;
