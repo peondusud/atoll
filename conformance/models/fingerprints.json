@@ -10,7 +10,8 @@
     "Collisions.tla",
     "Conflicts.tla",
     "Guards.tla",
-    "Trash.tla"
+    "Trash.tla",
+    "Disks.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -27,7 +28,7 @@
     {
       "section": "10",
       "title": "## 10. Disk identity and mounts",
-      "sha256": "aa2fe3e7ea75a09cc65f4f3305cd6cf85930cbfe87cfc51a37ca1155b89a1ce9"
+      "sha256": "3d87d19c6a5d20935a5c5ad31b4123a659f77d00c820ae1605de19b8a61d179d"
     },
     {
       "section": "12.4",
@@ -100,6 +101,11 @@
       "sha256": "f4675deff207fe9eae0ae9c8ef4c7691e511e927c28b789e82f7259c5eb1c0fe"
     },
     {
+      "section": "15.13",
+      "title": "### 15.13 The daemon that runs for good",
+      "sha256": "fef553d4fe862c38d877adfe92a00cefd37099682122f4e0470d88bceadfcdf1"
+    },
+    {
       "section": "16.1",
       "title": "### 16.1 Repair",
       "sha256": "16a5a2e7c7fed684c93277b984d91e472f19279297ad5aa618aae02a645a3417"
@@ -135,6 +141,11 @@
       "sha256": "4eaed6719c827181f722af98344fbeff62c8c27a38b2634d972207097a6a2a1a"
     },
     {
+      "section": "18",
+      "title": "## 18. Disk lifecycle",
+      "sha256": "08795d5d63741cbba33bbf3b8366f27e9894379b69184159204f5f666333ec5c"
+    },
+    {
       "section": "19",
       "title": "## 19. SSD cache (phase 2b)",
       "sha256": "dd9f56e77f04360f9b1f24e5e673996f45683125f8b143fd09034ac76c3857ed"
@@ -148,6 +159,11 @@
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
       "sha256": "64259f910d49df8e0c1a212fdfedbf09a67ee0f2f4b69b935cb993384ce15bba"
+    },
+    {
+      "section": "22",
+      "title": "## 22. Filesystems",
+      "sha256": "00d29ad175a75dff4690ee50afb77f00d558a7733e01ec568a173fbae6ca5ab2"
     }
   ]
 }
