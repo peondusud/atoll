@@ -44,6 +44,15 @@
    remedies of 2026-11-26, are what every instance does; racy-conflict, the other remedy proposed for flaw 31, is noted
    for format version 2, and gone from the model.
 
+   Flaws 33 and 34, open (README.md): a crash may tear a chunk's write, part old bytes and part new, and the reprise, as
+   the code does it (integrity.RepairReprise), takes a bad chunk that holds neither the file's content nor what was saved
+   of it for that torn write: a user's write into it before the reprise is taken so, the time set back over it and the
+   row given the change time it left, and the next scrub repairs it away, saved to the trash first. And a chunk that
+   cannot be read at the reprise, but a bad one saved as an empty file, leaves the operation planned for as long as it
+   cannot be read: the copy stays corrupt in the root, taken again by no scrub. The remedies proposed, in Fixes, are the
+   maintainer's to choose; the instances where a user writes and Atoll is killed take torn-foreign, and ScrubLive
+   unread-found, so as to look past them.
+
    What it leaves out: a corrupt copy that changed, settled into a conflict (Conflicts.tla's: here it waits), the
    pipeline of a copy (Replication.tla's: one step here), the trash's purge (Trash.tla's), renames and inodes (an
    atomic save is a new inode, which every look sees), the scrub's time windows, scrub_every and the order of disks,
@@ -67,8 +76,9 @@ CONSTANTS
 
 Disks == 1..NDisks
 Chunks == {1, 2}
-\* flaws 31 and 32 are fixed, with coarse-conflict and repair-recheck, what every instance does (README.md): no remedy
-FixNames == {}
+\* flaws 31 and 32 are fixed, with coarse-conflict and repair-recheck, what every instance does (README.md); the remedies
+\* proposed for flaw 33, the torn chunk at a repair's reprise, and for flaw 34, an unreadable chunk at it, still open
+FixNames == {"torn-foreign", "torn-index", "unread-found"}
 
 ASSUME /\ NDisks \in 2..3 /\ Coarse \subseteq Disks /\ Unverified \subseteq Disks /\ Mode \in {"chunk", "file", "off"}
        /\ UserActs \subseteq {"edit", "keep"} /\ UserDisks \subseteq Disks /\ MaxUser \in Nat
@@ -91,7 +101,7 @@ VARIABLES
 vars == <<w, cat, pc, ghost>>
 
 Idle == [ph |-> "idle", d |-> 0, e |-> 0, i |-> 0, st |-> <<0, 0>>, bad |-> {}, seen |-> <<0, 0>>, sec |-> {}]
-NoOp == [on |-> FALSE, bad |-> {}, saved |-> {}, wrote |-> FALSE]
+NoOp == [on |-> FALSE, bad |-> {}, saved |-> {}, wrote |-> FALSE, sv |-> FALSE, wi |-> 0]
 NoCursor == [d |-> 0, i |-> 0, t |-> <<0, 0>>]
 
 Init ==
@@ -245,7 +255,7 @@ RBad ==
 (* Step 2: the operation and its trash row, in one transaction. *)
 RJournal ==
     /\ pc.ph = "journal"
-    /\ cat' = [cat EXCEPT !.op[pc.d] = [on |-> TRUE, bad |-> pc.bad, saved |-> {}, wrote |-> FALSE]]
+    /\ cat' = [cat EXCEPT !.op[pc.d] = [on |-> TRUE, bad |-> pc.bad, saved |-> {}, wrote |-> FALSE, sv |-> FALSE, wi |-> 0]]
     /\ pc' = [pc EXCEPT !.ph = "save"]
     /\ UNCHANGED <<w, ghost>>
 
@@ -256,7 +266,7 @@ RSave ==
        IF ~w.up[d]
        THEN /\ pc' = Idle /\ UNCHANGED <<w, cat, ghost>>   \* lost: the operation stays planned, for the reprise
        ELSE /\ w' = [w EXCEPT !.tr[d] = @ \cup {<<i, w.ch[d][i]>> : i \in S}]
-            /\ cat' = [cat EXCEPT !.op[d].saved = S]
+            /\ cat' = [cat EXCEPT !.op[d].saved = S, !.op[d].sv = TRUE]
             /\ pc' = [pc EXCEPT !.ph = "look"]
             /\ UNCHANGED ghost
 
@@ -307,12 +317,24 @@ RWrite ==
        ELSE IF ~w.up[d]
        THEN /\ pc' = Idle /\ UNCHANGED <<w, cat, ghost>>   \* lost: planned, for the reprise
        ELSE /\ w' = Written(d, i, w.ch[e][i])
-            /\ cat' = [cat EXCEPT !.op[d].wrote = TRUE]
+            /\ cat' = [cat EXCEPT !.op[d].wrote = TRUE, !.op[d].wi = i]
             /\ Flag((IF v > 0 /\ v # cat.want[i] THEN {"edit-repaired"} ELSE {})
                     \cup (IF <<i, v>> \notin w.tr[d] /\ i \notin w.bad[d] THEN {"unsaved"} ELSE {})
                     \cup (IF w.ch[e][i] # cat.want[i] THEN {"bad-source"} ELSE {}))
             /\ pc' = IF \E j \in pc.bad : j > i THEN [pc EXCEPT !.i = First({j \in pc.bad : j > i}), !.st = <<w.mt[d] + 1, Bump(d)>>]
                      ELSE [pc EXCEPT !.ph = "times", !.st = <<w.mt[d] + 1, Bump(d)>>]
+
+(* A crash in the middle of a chunk's write, once its looks passed: the chunk torn, part its old bytes and part the new
+   (-3), what the write moved of the copy's times moved; the operation planned, a write begun, its index journaled. *)
+RTear ==
+    /\ "kill" \in AtollActs /\ w.kills < MaxKill /\ pc.ph = "write"
+    /\ LET d == pc.d  e == pc.e  i == pc.i IN
+       /\ w.up[d] /\ ~Moved(d) /\ ~Reread(d, i)
+       /\ w.up[e] /\ w.ch[e][i] = cat.want[i] /\ i \notin w.bad[e]
+       /\ w' = [Written(d, i, -3) EXCEPT !.kills = @ + 1]
+       /\ cat' = [cat EXCEPT !.op[d].wrote = TRUE, !.op[d].wi = i]
+       /\ pc' = Idle
+    /\ UNCHANGED ghost
 
 (* Steps 6 and 7: the modification time set back to the row's, then the commit, the copy ok and verified, the row taking
    the change time the copy has then. *)
@@ -338,26 +360,62 @@ RCommit ==
        /\ pc' = Idle
        /\ UNCHANGED w
 
-(* §16.1, Reprise: a repair left planned, read whole. It explains what it finds when every chunk it did not find bad
-   is the file's, and each bad one holds the file's or what was saved of it, or cannot be read and had nothing saved. *)
+(* §16.1, Reprise (integrity.RepairReprise, ops.Disk.resolveRepair): a repair left planned, the copy read whole. Each
+   chunk holds the file's content (good), what the repair saved of it (saved: its bytes in the trash, or, for a chunk it
+   could not read, a read that still fails), or neither (other); any other chunk that cannot be read leaves the
+   operation planned. A chunk the repair did not find bad that is not good is someone else's change; so is a bad chunk
+   good while saving was not over. The bad chunks, by index, must hold what is good, then at most one chunk that holds
+   neither, a write the crash tore, then what was saved: every one good, the writes were all done, steps 6 and 7; every
+   one saved, no write began, nothing written, or someone else's change once the change time moved; otherwise a write
+   began, the modification time set back and the row taking the change time, the copy still corrupt. *)
+(* a bad chunk the repair could not read that still cannot be read: what the repair found, once it saved an empty file
+   for it; unread-found, proposed for flaw 34: also while saving was not over, as no write begins before every bad chunk
+   is saved *)
+UnreadFound(d, i) == /\ i \in cat.op[d].bad \ cat.op[d].saved /\ i \in w.bad[d]
+                     /\ cat.op[d].sv \/ "unread-found" \in Fixes
+HoldsR(d, i) == IF w.ch[d][i] = cat.want[i] /\ i \notin w.bad[d] THEN "good"
+                ELSE IF cat.op[d].sv /\ i \in cat.op[d].saved /\ i \notin w.bad[d] /\ <<i, w.ch[d][i]>> \in w.tr[d] THEN "saved"
+                ELSE IF UnreadFound(d, i) THEN "saved"
+                ELSE "other"
+(* the bad chunks' holds in the order of their indexes, Chunks being {1, 2} *)
+BadSeq(d) == IF cat.op[d].bad = {1, 2} THEN <<HoldsR(d, 1), HoldsR(d, 2)>> ELSE <<HoldsR(d, First(cat.op[d].bad))>>
+(* what is good, then at most one chunk that holds neither, then what was saved *)
+InOrder(s) == DOMAIN s = {1} \/ <<s[1], s[2]>> \in {<<"good", "good">>, <<"good", "other">>, <<"good", "saved">>,
+                                                     <<"other", "saved">>, <<"saved", "saved">>}
+(* torn-foreign, proposed for flaw 33: a chunk that holds neither is never the repair's own; torn-index: it is only at the
+   chunk the journal says the crash was writing *)
+TornTaken(d, i) == /\ "torn-foreign" \notin Fixes
+                   /\ "torn-index" \in Fixes => i = cat.op[d].wi
 Reprise(d) ==
     /\ pc.ph = "idle" /\ cat.op[d].on /\ w.up[d] /\ w.at[d]
+    \* any other chunk that cannot be read leaves the operation planned; with unread-found, it holds neither its hash nor
+    \* what was saved of it, on a disk that confirms, and the reprise decides from what it holds
+    /\ \A i \in w.bad[d] : UnreadFound(d, i) \/ "unread-found" \in Fixes
     /\ LET op == cat.op[d]
-           done(i) == w.ch[d][i] = cat.want[i] /\ i \notin w.bad[d]
-           kept(i) == <<i, w.ch[d][i]>> \in w.tr[d] \/ (i \in w.bad[d] /\ i \notin op.saved)
-           explains == /\ \A i \in Chunks \ op.bad : done(i)
-                       /\ \A i \in op.bad : done(i) \/ kept(i)
-       IN IF explains /\ \A i \in op.bad : done(i)
+           s == BadSeq(d)
+           n == Cardinality(op.bad)
+           ctimeSame == w.ct[d] = cat.rct[d]
+           others == {i \in op.bad : HoldsR(d, i) = "other"}
+           foreign == \/ \E i \in Chunks \ op.bad : HoldsR(d, i) # "good"
+                      \/ ~op.sv /\ \E i \in op.bad : HoldsR(d, i) = "good"
+                      \/ ~op.sv /\ ~ctimeSame
+                      \/ op.sv /\ ~InOrder(s)
+                      \/ op.sv /\ \E i \in others : ~TornTaken(d, i)
+                      \/ op.sv /\ \A j \in DOMAIN s : s[j] = "saved" /\ ~ctimeSame
+           finish == op.sv /\ \A j \in DOMAIN s : s[j] = "good"
+           untouched == \A j \in DOMAIN s : s[j] = "saved" \/ ~op.sv
+       IN IF ~foreign /\ finish
           THEN \* every write done: steps 6 and 7
                /\ w' = [w EXCEPT !.mt[d] = cat.rmt[d], !.ct[d] = Bump(d), !.fresh[d] = FALSE]
                /\ cat' = [cat EXCEPT !.cs[d] = "ok", !.ver[d] = TRUE, !.rct[d] = Bump(d), !.op[d] = NoOp,
                                      !.fst = Settle([cat.cs EXCEPT ![d] = "ok"])]
                /\ Flag(IF Hidden(d) THEN {"verified-wrong"} ELSE {})
-          ELSE IF explains /\ \E i \in op.bad : done(i)
-          THEN \* a write began: the modification time set back, the row takes the change time, the repair stops
+          ELSE IF ~foreign /\ ~untouched
+          THEN \* a write began: the modification time set back, the row takes the change time, the repair stops; a chunk
+               \* that holds neither taken for the repair's own torn write
                /\ w' = [w EXCEPT !.mt[d] = cat.rmt[d], !.ct[d] = Bump(d), !.fresh[d] = FALSE]
                /\ cat' = [cat EXCEPT !.rct[d] = Bump(d), !.op[d] = NoOp]
-               /\ UNCHANGED ghost
+               /\ Flag(IF \E i \in others : w.ch[d][i] > 0 /\ w.ch[d][i] # cat.want[i] THEN {"taken-torn"} ELSE {})
           ELSE \* no write began, or someone else's change: nothing written, the repair stops
                /\ cat' = [cat EXCEPT !.op[d] = NoOp]
                /\ UNCHANGED <<w, ghost>>
@@ -439,7 +497,7 @@ Steps == ScrubRead \/ ScrubBudget \/ ScrubEnd \/ Heal \/ Move \/ RBad \/ RJourna
          \/ RTimes \/ RCommit
 Atoll == \/ Steps
          \/ \E d \in Disks : ScrubStart(d) \/ TakeAgain(d) \/ Reprise(d) \/ PassModify(d) \/ PassMake(d)
-World == \/ Kill \/ Tick
+World == \/ Kill \/ RTear \/ Tick
          \/ \E d \in Disks, i \in Chunks, keep \in BOOLEAN : Edit(d, i, keep)
          \/ \E d \in Disks, i \in Chunks : Rot(d, i) \/ Sector(d, i) \/ Flip(d, i)
          \/ \E d \in Disks : Lose(d) \/ Back(d)
@@ -459,7 +517,7 @@ TypeOK ==
     /\ cat.fst \in {"ok", "corrupt", "conflict"}
     /\ pc.ph \in {"idle", "read", "end", "heal", "move", "bad", "journal", "save", "look", "write", "times", "commit"}
     /\ ghost.flags \subseteq {"edit-called-corrupt", "edit-repaired", "unsaved", "bad-source", "verified-wrong", "last-moved",
-                              "sound-corrupt"}
+                              "sound-corrupt", "taken-torn"}
 
 (* Invariant 9, §16: no user's edit is called corrupt, nor repaired away, by a write over it or a move of its copy to
    the trash. *)
@@ -475,6 +533,9 @@ SourceVerified == "bad-source" \notin ghost.flags
    user's edit: the row would hide that edit, and the next scrub call it corrupt. A scrub that verifies records none of
    the copy's times, so an edit stays what it was to a look. *)
 NoWrongVerify == "verified-wrong" \notin ghost.flags
+(* §16.1, Reprise: the reprise of a repair stopped by a crash never takes a user's write for its own torn chunk: it would
+   set the time back over it and give the row the change time it left, and the next scrub repair it away. *)
+NoUserTakenForTorn == "taken-torn" \notin ghost.flags
 (* Invariant 1, §16: a corrupt copy never leaves its path as the file's last copy at its path ("nothing is lost to a
    scrub"); the healthy copy found may be a user's newer version by then, which the next pass takes in. *)
 LastKept == "last-moved" \notin ghost.flags
