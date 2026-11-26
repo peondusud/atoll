@@ -2,6 +2,13 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## Dependabot's libc left to sqlite, and the modules at their newest before the next pull request, 2026-11-26 (specs.md §26, §27)
+
+The maintainer's answers of 2026-11-26.
+
+- **Dependabot's pull request #25** (`modernc.org/libc` v1.80.1 to v1.82.2) is closed, without merging. `modernc.org/sqlite` requires an exact libc: its newest release, v1.63.0, still requires v1.80.1, and modernc advises against raising libc on its own. That is the rule confirmed on 2026-11-22: libc at the version sqlite requires. `.github/dependabot.yml` now ignores `modernc.org/libc` and `modernc.org/memory`, which follow sqlite: an update of sqlite brings the versions it needs.
+- **Before the next pull request**, once the risk-ordered plan of TLA+ models is done, every module, tool, image and action goes to its newest stable release. This time the rule of 14 days is waived, as the maintainer chose, as on 2026-11-21. On 2026-11-26 the only direct module behind was `modernc.org/sqlite` v1.62.0, with v1.63.0 out since 2026-11-22; every other direct module was at its newest.
+
 ## Flaw 28 through `atoll balance`, shown in the code, 2026-11-26 (specs.md §13.3, §17)
 
 Checked before the fix, as the maintainer asked (the entry below), on the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `98857ec`. `atoll balance` sends its old copy to the trash by prune's own path, `trash.Session.Retire` (`jobs.balancer.retire`): one look at the copies that stay (`decidePrune`), then the move. A user who deletes the copies that stay, directly on their disks, between the two leaves that copy the deleted file's last data, in the trash as `rebalance`, which a purge for room takes with `surplus`, first: `TestFlawARebalancedCopySentAsTheOthersGoIsPurgedForRoom` (build tag `flaws`, `internal/trash/flaws_test.go`), seen failing, purged `max-size`. The chosen remedy, `surplus-looked`, speaks of `surplus` entries: whether its look comes before a `rebalance` entry too is the maintainer's to say. Nothing else is changed; the fix waits for that answer.
