@@ -1139,6 +1139,8 @@ A corrupt copy is repaired from a healthy one, which is only ever read: by the s
 
 `conformance/models/Conflicts.tla` formalizes a corrupt copy that changed: the repair by chunk settling it before anything is written, a conflict when it holds another version, and the look at it right before the first write, with a user writing or saving on either disk and a disk lost between any two steps (§29.4).
 
+`conformance/models/Scrub.tla` formalizes the scrub of a copy, its second read past the cache and a chunk that cannot be read, the repair by chunk step by step, by file and the quarantine, a corrupt copy taken again, and the reprise of a repair, against a user's edits in place, rot, a read wrong once, a disk lost, a filesystem whose change time holds whole seconds, a pass and a stop at each step (§29.4).
+
 ## 17. Trash
 
 - Location: `Atoll/trash/<YYYY-MM-DD>/<op-id>/<logical path>` on each disk (UTC date; operation id from `ops`). Sending a copy to the trash is a rename within the same filesystem. Paths never collide and names are never changed.
