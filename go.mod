@@ -20,7 +20,7 @@ require (
 	golang.org/x/text v0.44.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/libc v1.80.1
-	modernc.org/sqlite v1.62.0
+	modernc.org/sqlite v1.63.0
 	pgregory.net/rapid v1.3.0
 )
 
