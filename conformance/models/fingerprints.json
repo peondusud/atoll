@@ -11,7 +11,8 @@
     "Conflicts.tla",
     "Guards.tla",
     "Trash.tla",
-    "Disks.tla"
+    "Disks.tla",
+    "Scrub.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -106,9 +107,14 @@
       "sha256": "fef553d4fe862c38d877adfe92a00cefd37099682122f4e0470d88bceadfcdf1"
     },
     {
+      "section": "16",
+      "title": "## 16. Integrity",
+      "sha256": "1e96ec4f3a9ac13f75ae4472d32e749c552af8559ab35ada962bb3444b6d6644"
+    },
+    {
       "section": "16.1",
       "title": "### 16.1 Repair",
-      "sha256": "16a5a2e7c7fed684c93277b984d91e472f19279297ad5aa618aae02a645a3417"
+      "sha256": "b4f8e8a64b9d8610c91d0a15c5ce97816f5008b10eaab4554d3dd75f1fbd31be"
     },
     {
       "section": "17",
