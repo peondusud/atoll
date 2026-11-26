@@ -2,6 +2,14 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-26 on flaws 29 and 30 (specs.md §10, §17.2, §18, §25)
+
+The maintainer answered three questions, taking the option put first each time.
+
+- **Flaw 29: `remove-looks`.** Under the lock, `atoll disk remove` checks each disk's mount and records it. It counts a `surplus` copy as an `ok` one, then looks at the disk it takes out, unless that disk is failed. It refuses when that disk holds what the catalog does not know, or cannot be looked at; a `missing` disk asks for `disk fail` first. The cost is one walk of the disk taken out, once per removal.
+- **Flaw 30: `failed-remove-drops`.** `atoll disk remove` of a failed disk drops the operations still planned on it. The user's explicit removal is what lets them go (invariant 17). `failed-ops-undone`, the reprise undoing them on its own, is set aside.
+- **The model's choices made alone** (the entry below) are confirmed together. `conformance/models/states.json` is to show the transitions to `retired` that the code allows already: a disk in service, `online`, `readonly` or `missing`, that nothing depends on. This is made with flaw 29's fix, which touches `disk remove`.
+
 ## A disk's life in TLA+: flaws 29 and 30 found, open, 2026-11-26 (specs.md §4, §10, §15.13, §17.2, §18, §22, §25)
 
 The third of the maintainer's models by risk (TODO.md), on the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `1475bd1`: `conformance/models/Disks.tla` with `MCDisks.tla` and fifteen instances. Two flaws found, open, their remedies the maintainer's to choose.
@@ -13,7 +21,7 @@ The third of the maintainer's models by risk (TODO.md), on the branch `worktree-
 - **Observations** (README.md): `states.json` draws no transition to `retired` from `online`, `readonly` or `missing`, which `disk remove` of a disk in service nothing depends on gives; the device's re-check before each job changes nothing where every write goes through a handle held to the mount confirmed; a device failing every read past the cache is `missing` and back at each check of the daemon, nothing decided of it.
 - **specs.md**: a sentence naming `Disks.tla` in §10, §15.13, §18 and §22; nothing else. `fingerprints.json` lists `Disks.tla` and pins §15.13, §18 and §22, and §10 again, which `Replication.tla` cites too, unchanged. TODO.md: the model plan, and flaws 29 and 30 open. `make model-flaws` runs `./cmd/atoll/` too.
 - **Checked**: `test/tla/run.sh`, every one of the 130 instances as it expects, flaws 29 and 30's the invariant or the property each breaks, every earlier one the very same states, in 40 min 45 s of TLC (40 min 48 s with the container's start), under 45 minutes, so the CI's `tla` job stays one; `go test ./conformance/models`; `make model-flaws` failing on the three flaws' tests alone; `go vet -tags flaws` and golangci-lint with the tag `flaws` of `cmd/atoll`, 0 issues; gofmt; each remedy against every invariant in every instance, each mechanism taken out, and what each instance reaches, in copies not kept (README.md, How sensitive it is). States: DisksWorld 173,250, DisksRemove 12,922, DisksRemoveGone 1,383, DisksReplace 2,819, DisksClone 9, DisksShared 9, DisksFail 107,364, DisksMixed 852,997, DisksFailLive 3,258, DisksFailDropLive 3,555, DisksDrainLive 151, DisksBackLive 1,348, FlawDiskRemoveEdited 30, FlawDiskRemoveGone 34, FlawDiskFailedPlanned 251.
-- **Choices made alone, to confirm**:
+- **Choices made alone, confirmed by the maintainer on 2026-11-26** (the answers above):
   - one file, its walk and its confirmation one step, and a copy's steps one step with its commit: `Replication.tla`'s, which this model takes as they are;
   - the dead superblock read `missing`, `io-error`, at each check, as its `ENOTCONN` on `<root>` outlasts FUSE's cache, and a device failing every read passing the check from the cache and failing the confirmation;
   - `NoLastCopyLost`'s exemptions: what a user gives up with `disk fail`, what a disk dead for good took while the pool held it nowhere else, and a user's edit or a death between a removal's look and its edit, the user's own race with it;
