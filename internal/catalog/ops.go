@@ -790,6 +790,25 @@ func TrashEntryByRow(ctx context.Context, db *sql.DB, row int64) (TrashEntry, bo
 	return list[0], true, nil
 }
 
+// backedSQL asks whether another disk holds a copy of the file at a path, with a hash, that the catalog calls ok, at
+// that path and not found gone: through the unique index of the files' paths, then the copies of that file.
+const backedSQL = `SELECT EXISTS(SELECT 1 FROM files f JOIN copies k ON k.file_id = f.id
+	WHERE f.lpath = ?1 AND f.blake3 = ?2 AND k.disk_id <> ?3 AND k.state = 'ok' AND k.gone_ns IS NULL AND k.old_lpath IS NULL)`
+
+// Backed says whether the catalog has a copy of an entry's file that holds its version on another disk: what a surplus
+// or rebalance entry needs to go for room, a look then finding it so (specs.md §17; conformance/models/README.md, flaw
+// 28, the maintainer's remedy surplus-looked). An entry with no hash holds a version nothing can be compared with.
+func Backed(ctx context.Context, db *sql.DB, e *TrashEntry) (bool, error) {
+	if len(e.Hash) == 0 {
+		return false, nil
+	}
+	var backed bool
+	if err := db.QueryRowContext(ctx, backedSQL, []byte(e.Path), e.Hash, e.Disk).Scan(&backed); err != nil {
+		return false, fmt.Errorf("%q: %w", e.Path, err)
+	}
+	return backed, nil
+}
+
 // TrashEntryOfOp gives the entry an operation sent to the trash from a path, and false when it is gone, or the
 // operation is not done: through trash_by_path.
 func TrashEntryOfOp(ctx context.Context, db *sql.DB, path string, opID int64) (TrashEntry, bool, error) {

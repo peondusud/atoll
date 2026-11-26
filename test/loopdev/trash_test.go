@@ -284,6 +284,53 @@ func TestPruneOnEachDriver(t *testing.T) {
 	}
 }
 
+// TestAPurgeForRoomLooksFirst: on each driver, the surplus copies prune sent there go for room only once a look at the
+// copy that stays, on ext4, finds it as its row says: one a user deleted directly since is the deleted file's last
+// data, and stays, changed, for its retention (specs.md §17; flaw 28 of conformance/models/README.md). The trash holds
+// more than trash.max_size, a few bytes of the volume, at once.
+func TestAPurgeForRoomLooksFirst(t *testing.T) {
+	needRoot(t)
+	for _, tc := range trashDrivers {
+		t.Run(tc.name, func(t *testing.T) {
+			options := driverOptions(t, tc.driver)
+			v := newVolume(t, tc.fs)
+			at := mountPoint(t)
+			mountVolume(t, v, tc.driver, at, options...)
+			b := newTrashBenchWith(t, v, at, "[trash]\nmax_size = \"0.000001%\"\n")
+			writeBoth(t, b, "kept", strings.Repeat("k", 4096))
+			writeBoth(t, b, "gone", strings.Repeat("g", 4096))
+			b.scanFull()
+			if outcomes := b.prune(); outcomes["kept"] != trash.OutcomeTrashed || outcomes["gone"] != trash.OutcomeTrashed {
+				t.Fatalf("%v", outcomes)
+			}
+			if err := os.Remove(filepath.Join(b.keep, "media", "gone")); err != nil {
+				t.Fatal(err)
+			}
+			dropCaches(t)
+			s := b.session(true)
+			got := map[string]string{}
+			if _, err := s.Purge(t.Context(), nil, func(i *trash.EntryItem) error {
+				got[i.Path] = i.Why + " " + i.Outcome
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			s.Close()
+			if got["kept"] != "max-size purged" || got["gone"] != "max-size changed" {
+				t.Errorf("%v", got)
+			}
+			dropCaches(t)
+			if left := b.text("SELECT group_concat(CAST(lpath AS TEXT), ' ') FROM trash"); left != "gone" {
+				t.Errorf("the trash holds %q", left)
+			}
+			data, err := os.ReadFile(filepath.Join(at, "Atoll", "trash", filepath.FromSlash(b.text("SELECT CAST(trash_path AS TEXT) FROM trash"))))
+			if err != nil || len(data) != 4096 {
+				t.Errorf("the entry that stays: %d bytes, %v", len(data), err)
+			}
+		})
+	}
+}
+
 // TestPruneByHandlesPastEveryLimit: 5,025 bytes of path, as §15.8 says the trash needs no check.
 // Past the 4095 bytes of a mergerfs branch, a walk goes only with walk.long_paths = "walk" (§15.8, 2026-11-19).
 func TestPruneByHandlesPastEveryLimit(t *testing.T) {

@@ -39,7 +39,9 @@ func roomRank(reason string) (rank int, room, ok bool) {
 
 // TrashEntry is one entry of the trash, as the choice of what a purge reaches sees it. HasSize is false for an entry
 // of unknown size. Held says that it reached the trash in this run's reprise: it counts in its disk's trash, and does
-// not go (specs.md §17.2).
+// not go (specs.md §17.2). Unbacked says, of a surplus or rebalance entry, that the catalog has no copy of its file
+// that holds its version on another disk: it goes only at the end of its retention, never for room (specs.md §17;
+// conformance/models/README.md, flaw 28, the maintainer's remedy surplus-looked).
 type TrashEntry struct {
 	Disk      string
 	OpID      int64
@@ -49,6 +51,15 @@ type TrashEntry struct {
 	DeletedNS int64
 	ExpiresNS int64
 	Held      bool
+	Unbacked  bool
+}
+
+// LooksFirst says whether an entry of that reason goes for room only once a look finds its version on another disk:
+// surplus and rebalance, the copies prune, balance and the SSD cache's transfer send there while others hold the file
+// (specs.md §17; flaw 28). What they hold may be a deleted file's last data, as a user who deletes the copies that stay
+// while one is sent leaves it.
+func LooksFirst(reason string) bool {
+	return reason == "surplus" || reason == "rebalance"
 }
 
 // TrashDisk is one disk, with its capacity as the catalog last recorded it; HasCapacity is false when none was.
@@ -133,6 +144,9 @@ func roomCandidates(entries []TrashEntry, chosen map[int64]PurgeWhy) []*TrashEnt
 	var out []*TrashEntry
 	for i := range entries {
 		e := &entries[i]
+		if e.Unbacked && LooksFirst(e.Reason) {
+			continue // the deleted file's last data, as far as the caller knows: kept to its retention (flaw 28)
+		}
 		if _, room, _ := roomRank(e.Reason); room && e.HasSize && !e.Held && chosen[e.OpID] == "" {
 			out = append(out, e)
 		}

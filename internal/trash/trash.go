@@ -1,6 +1,7 @@
 package trash
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -1176,9 +1177,13 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 	for i := range in.Entries {
 		in.Entries[i].Held = s.repriseTrashed[in.Entries[i].OpID]
 	}
-	choice, err := solver.ChoosePurge(in)
+	byOp := make(map[int64]*catalog.TrashEntry, len(entries))
+	for i := range entries {
+		byOp[entries[i].OpID] = &entries[i]
+	}
+	choice, err := chooseForRoom(ctx, s.db, in, func(op int64) (*catalog.TrashEntry, error) { return byOp[op], nil })
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 	why := make(map[int64]solver.PurgeWhy, len(choice.Purge))
 	for _, c := range choice.Purge {
@@ -1191,7 +1196,7 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 		if why[e.OpID] == "" {
 			continue
 		}
-		outcome, err := s.purgeEntry(ctx, e)
+		outcome, err := s.purgeFor(ctx, e, why[e.OpID])
 		if err != nil {
 			return nil, err
 		}
@@ -1213,6 +1218,102 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 	summary.Full = solver.FullTrashes(in.MaxSize, in.Disks, used)
 	summary.DiskLost = s.lost
 	return summary, nil
+}
+
+// chooseForRoom makes the choice of what a purge reaches, then asks the catalog, of each surplus or rebalance entry it
+// would take for room, whether another disk holds its version: one that is no copy's waits for its retention, and the
+// choice is made again without it, so that another may go in its place. Each entry is asked once, and only an entry
+// about to go for room is asked: the purge by age asks nothing (specs.md §17; conformance/models/README.md, flaw 28,
+// the maintainer's remedy surplus-looked). entryOf gives an entry by its operation.
+func chooseForRoom(ctx context.Context, db *sql.DB, in *solver.PurgeInput, entryOf func(op int64) (*catalog.TrashEntry, error)) (*solver.PurgeResult, error) {
+	at := make(map[int64]int, len(in.Entries))
+	for i := range in.Entries {
+		at[in.Entries[i].OpID] = i
+	}
+	asked := map[int64]bool{}
+	for {
+		choice, err := solver.ChoosePurge(in)
+		if err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+		again := false
+		for _, c := range choice.Purge {
+			i, ok := at[c.OpID]
+			if c.Why != solver.PurgeMaxSize || asked[c.OpID] || !ok || !solver.LooksFirst(in.Entries[i].Reason) {
+				continue
+			}
+			asked[c.OpID] = true
+			e, err := entryOf(c.OpID)
+			if err != nil {
+				return nil, err
+			}
+			backed := false
+			if e != nil {
+				if backed, err = catalog.Backed(ctx, db, e); err != nil {
+					return nil, fmt.Errorf("catalog: %w", err)
+				}
+			}
+			if !backed {
+				in.Entries[i].Unbacked = true
+				again = true
+			}
+		}
+		if !again {
+			return choice, nil
+		}
+	}
+}
+
+// purgeFor purges an entry a purge reached, for that reason. A surplus or rebalance entry that goes for room goes only
+// once a look at the copies of its file on other disks finds one that holds its version, as its row says, right
+// before: the catalog's word may be a whole pass old, as a user who deleted those copies directly since leaves it, and
+// the entry is then the deleted file's last data, which keeps it to its retention. It stays, changed, as the purge of
+// the SSD cache's transfer leaves its copy (specs.md §17, §19; conformance/models/README.md, flaw 28). The look wakes
+// those disks; the purge by age, and --older-than, look at nothing.
+func (s *Session) purgeFor(ctx context.Context, e *catalog.TrashEntry, why solver.PurgeWhy) (string, error) {
+	if why == solver.PurgeMaxSize && solver.LooksFirst(e.Reason) && s.apply && s.writable(e.Disk) {
+		held, err := s.heldElsewhere(ctx, e)
+		if err != nil {
+			return "", err
+		}
+		if !held {
+			slog.Warn("an entry stays in the trash: no copy on another disk holds its version any more, as the catalog said",
+				"disk", e.Disk, "path", e.Path, "reason", e.Reason)
+			return OutcomeChanged, nil
+		}
+		s.machine.Checkpoint("looked")
+	}
+	return s.purgeEntry(ctx, e)
+}
+
+// heldElsewhere looks at the copies of an entry's file that the catalog calls ok on disks that can be read, other
+// than the entry's, as §15.10 compares a known copy, and says whether one holds the entry's version: the file's hash is
+// the entry's, and the copy is what its row says. A disk that fails the look is lost (invariant 4).
+func (s *Session) heldElsewhere(ctx context.Context, e *catalog.TrashEntry) (bool, error) {
+	if len(e.Hash) == 0 {
+		return false, nil
+	}
+	f, err := catalog.FileAt(ctx, s.db, e.Path)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if f == nil || !bytes.Equal(f.Hash, e.Hash) {
+		return false, nil
+	}
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		if c.Disk == e.Disk || c.State != string(solver.CopyOK) || !s.Readable(c.Disk) {
+			continue
+		}
+		same, err := s.unchanged(ctx, f.Path, c)
+		if err != nil {
+			return false, err
+		}
+		if same {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // PurgeInput reads what the choice of what a purge reaches needs, besides the age and the entries a reprise held:
@@ -1322,9 +1423,15 @@ func forRoom(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, hel
 			rowOf[weights[j].OpID] = weights[j].RowID
 			in.Entries[j].Held = held[weights[j].OpID]
 		}
-		choice, err := solver.ChoosePurge(in)
+		choice, err := chooseForRoom(ctx, db, in, func(op int64) (*catalog.TrashEntry, error) {
+			e, found, err := catalog.TrashEntryByRow(ctx, db, rowOf[op])
+			if err != nil || !found {
+				return nil, err //nolint:wrapcheck // the caller wraps it
+			}
+			return &e, nil
+		})
 		if err != nil {
-			return nil, fmt.Errorf("%w", err)
+			return nil, err
 		}
 		room := diskRoom{id: d.ID, stays: slices.Contains(choice.Full, d.ID)}
 		for _, p := range choice.Purge {
@@ -1362,7 +1469,7 @@ func FullOncePurged(ctx context.Context, db *sql.DB, c *config.Config, nowNS int
 func (s *Session) PurgeUntil(ctx context.Context, until int64, each func(*EntryItem) error) (*Summary, bool, error) {
 	summary := &Summary{Applied: s.apply}
 	settle := func(e *catalog.TrashEntry, why solver.PurgeWhy) error {
-		outcome, err := s.purgeEntry(ctx, e)
+		outcome, err := s.purgeFor(ctx, e, why)
 		if err != nil {
 			return err
 		}

@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "spec": "specs.md \u00a717, \u00a717.4",
-  "description": "What a purge of the trash reaches, and why. Without older_than_ns: what has reached expires_ns, then, on each disk whose trash holds more than max_size of its capacity, counted as the sizes of its entries, surplus and rebalance, then overwritten, repaired and quarantined, each by deleted_ns, the oldest first, then by operation, until it holds no more. Deleted and renamed entries go only at their time. With older_than_ns: what was trashed at least that long ago, and nothing for room. full lists the disks whose trash still holds more than max_size once those are gone.",
+  "description": "What a purge of the trash reaches, and why. Without older_than_ns: what has reached expires_ns, then, on each disk whose trash holds more than max_size of its capacity, counted as the sizes of its entries, surplus and rebalance, then overwritten, repaired and quarantined, each by deleted_ns, the oldest first, then by operation, until it holds no more. Deleted and renamed entries go only at their time. A surplus or rebalance entry marked unbacked, as the catalog has no copy of its file that holds its version on another disk, goes only at its time too, never for room, and the next one goes in its place; unbacked, optional and false when left out, says nothing of the other reasons (flaw 28 of conformance/models/README.md, the maintainer's remedy surplus-looked). With older_than_ns: what was trashed at least that long ago, and nothing for room. full lists the disks whose trash still holds more than max_size once those are gone.",
   "cases": [
     {
       "now_ns": 1000,
@@ -1218,6 +1218,207 @@
       ],
       "full": [],
       "note": "an entry of 0 bytes, an empty file, goes when it expires"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 3000,
+          "deleted_ns": 10,
+          "expires_ns": 9000000000000000000,
+          "held": false,
+          "unbacked": true
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "surplus",
+          "size": 3000,
+          "deleted_ns": 20,
+          "expires_ns": 9000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "an unbacked surplus entry never goes for room: the next one goes in its place, however newer"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "rebalance",
+          "size": 3000,
+          "deleted_ns": 10,
+          "expires_ns": 9000000000000000000,
+          "held": false,
+          "unbacked": true
+        },
+        {
+          "disk": "t1",
+          "op": 2,
+          "reason": "overwritten",
+          "size": 3000,
+          "deleted_ns": 20,
+          "expires_ns": 9000000000000000000,
+          "held": false
+        }
+      ],
+      "purge": [
+        {
+          "op": 2,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "an unbacked rebalance entry neither: an overwritten one goes in its place"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 6000,
+          "deleted_ns": 10,
+          "expires_ns": 9000000000000000000,
+          "held": false,
+          "unbacked": true
+        }
+      ],
+      "purge": [],
+      "full": [
+        "t1"
+      ],
+      "note": "an unbacked surplus entry alone over the limit stays: the disk's trash is full"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 6000,
+          "deleted_ns": 10,
+          "expires_ns": 1000,
+          "held": false,
+          "unbacked": true
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "expired"
+        }
+      ],
+      "full": [],
+      "note": "an unbacked surplus entry goes at its time"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": null,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "overwritten",
+          "size": 6000,
+          "deleted_ns": 10,
+          "expires_ns": 9000000000000000000,
+          "held": false,
+          "unbacked": true
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "max-size"
+        }
+      ],
+      "full": [],
+      "note": "unbacked says nothing of an overwritten entry, which goes for room"
+    },
+    {
+      "now_ns": 1000,
+      "older_than_ns": 500,
+      "max_size": "5%",
+      "disks": [
+        {
+          "id": "t1",
+          "capacity": 100000
+        }
+      ],
+      "entries": [
+        {
+          "disk": "t1",
+          "op": 1,
+          "reason": "surplus",
+          "size": 6000,
+          "deleted_ns": 10,
+          "expires_ns": 9000000000000000000,
+          "held": false,
+          "unbacked": true
+        }
+      ],
+      "purge": [
+        {
+          "op": 1,
+          "why": "older-than"
+        }
+      ],
+      "full": [],
+      "note": "with older_than_ns, an unbacked surplus entry goes: the user chose what goes"
     }
   ]
 }

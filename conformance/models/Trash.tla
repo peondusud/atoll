@@ -21,11 +21,13 @@
    - atoll prune (§17.3): the copies looked at, then the surplus copy to the trash (trash.Session.Prune); with
      "atonce", purged from there at once once the other disk's copy is looked at again, as the SSD cache's transfer
      (§19) and the view's move (§21.2) purge theirs; with "inplace", removed at its path after that look, as the
-     view's move does when the trash has no room for it;
+     view's move does when the trash has no room for it; atoll balance (§13.3), the same as rebalance, by prune's own
+     path (trash.Session.Retire);
    - atoll trash restore (§17.4): the newest entry of a path, its path looked at, then the entry moved back without
      replacing anything (catalog.BeginFromTrash, ops.FromTrash, catalog.FinishRestore);
    - a purge (§17, §17.4; trash.Session.Purge, PurgeUntil): what reached its expiry; with "room", what goes for room
-     too, surplus and overwritten, as the trash may hold more than trash.max_size at any time; with "older",
+     too, surplus, rebalance and overwritten, as the trash may hold more than trash.max_size at any time, a surplus or
+     rebalance entry only once a look finds its version on the other disk (trash.Session.purgeFor); with "older",
      anything, as --older-than does, the user's choice; but never an entry the reprise of the same run sent there.
      For each: the links of the guard that lead to it removed first (dropLinksOf, ops.OwnLinksOf), then the operation
      unlink journaled, the name removed if it holds the entry's inode (ops.PurgeEntry), and the commit
@@ -41,10 +43,11 @@
    and the order of a purge for room (conformance/vectors/trash_purge.json), restore --to, the chunks of a repair:
    see README.md.
 
-   Flaw 28, open (README.md): with the link guard off, a surplus copy that prune, or the SSD cache's transfer, sends
-   to the trash while a user deletes, directly on their disks, the copies that stay, after the look at them and before
-   the move, reaches the trash as surplus, the deleted file's last data, and a purge for room takes it before the
-   retention a deletion gives it. *)
+   Flaw 28, fixed (README.md): with the link guard off, a surplus copy that prune, or the SSD cache's transfer, sent
+   to the trash while a user deleted, directly on their disks, the copies that stay, after the look at them and before
+   the move, reached the trash as surplus, the deleted file's last data, and a purge for room took it before the
+   retention a deletion gives it; balance's, as rebalance, the same. The maintainer's remedy, surplus-looked
+   (2026-11-26), with rebalance, is what every instance does. *)
 EXTENDS Integers, Sequences, FiniteSets, TLC
 
 CONSTANTS
@@ -53,7 +56,7 @@ CONSTANTS
     Guard,      \* trash.link_guard: TRUE, each copy with its link at the start
     UserActs,   \* some of "del", "rep", "edit", "new", "tedit", "trm", "tout", "lose", "ro", "stop"
     MaxUser,    \* how many times a user acts
-    AtollActs,  \* some of "pass", "prune", "atonce", "inplace", "restore", "purge", "room", "older"
+    AtollActs,  \* some of "pass", "prune", "balance", "atonce", "inplace", "restore", "purge", "room", "older"
     MaxTime,    \* how many ticks
     Retention,  \* [trash].retention, in ticks
     NIno,       \* the inode numbers of a disk
@@ -67,18 +70,21 @@ Inos == 1..NIno
 OpIds == 1..MaxOps
 NObj == 2 * NFiles + 2 * MaxUser
 Objs == 1..NObj
-\* flaw 28 is open, its remedies proposed here, the maintainer's to choose (README.md)
-FixNames == {"surplus-looked", "surplus-retained", "prune-relook"}
+\* flaw 28 is fixed, with surplus-looked, what every instance does (README.md): no remedy is proposed
+FixNames == {}
 
 ASSUME /\ NFiles \in 1..2 /\ Level \in 1..2 /\ Guard \in BOOLEAN /\ MaxUser \in Nat /\ MaxTime \in Nat
        /\ Retention \in Nat /\ NIno >= NFiles /\ MaxOps \in Nat
        /\ UserActs \subseteq {"del", "rep", "edit", "new", "tedit", "trm", "tout", "lose", "ro", "stop"}
-       /\ AtollActs \subseteq {"pass", "prune", "atonce", "inplace", "restore", "purge", "room", "older"}
+       /\ AtollActs \subseteq {"pass", "prune", "balance", "atonce", "inplace", "restore", "purge", "room", "older"}
        /\ Fixes \subseteq FixNames
 
-(* The reasons a purge for room takes before their retention ends (§17); the other one here, deleted, never. With
-   surplus-retained, proposed, a surplus entry goes only once its retention ends. *)
-RoomRsn == IF "surplus-retained" \in Fixes THEN {"overwritten"} ELSE {"surplus", "overwritten"}
+(* The reasons a purge for room takes before their retention ends (§17), surplus and rebalance ranked first; the
+   other one here, deleted, never. *)
+RoomRsn == {"surplus", "rebalance", "overwritten"}
+(* surplus-looked, the maintainer's remedy of flaw 28 (2026-11-26), with rebalance: these go for room only once a
+   look finds their version on another disk (solver.LooksFirst). *)
+LooksFirst(rsn) == rsn \in {"surplus", "rebalance"}
 
 VARIABLES
     fs,     \* the disks: [obj |-> [Objs -> [d, ino, v]], root, lk |-> [Disks -> [Files -> object or 0]],
@@ -354,7 +360,8 @@ RepStep ==
 RepEnd ==
     /\ pc.ph = "rep" /\ RepTodo = {}
     /\ pc' = CASE pc.cmd = "pass" -> [ph |-> "dec", todo |-> Files]
-               [] pc.cmd = "prune" -> [ph |-> "pr", todo |-> Files]
+               [] pc.cmd = "prune" -> [ph |-> "pr", todo |-> Files, rsn |-> "surplus"]
+               [] pc.cmd = "balance" -> [ph |-> "pr", todo |-> Files, rsn |-> "rebalance"]
                [] pc.cmd = "restore" -> [ph |-> "rs", e |-> pc.arg]
                [] OTHER -> [ph |-> "pg", mode |-> pc.cmd, seen |-> {}, held |-> pc.held]
     /\ UNCHANGED <<fs, cat, w, ghost>>
@@ -425,8 +432,7 @@ TJournal(d, f, src, rsn, ret) ==
                                             rsn |-> rsn, exp |-> w.now + Retention, v |-> v, e |-> p, o |-> 0],
                                 !.ent[p] = TRUE,
                                 !.jobs = IF ret.ph = "job" THEN Tail(@) ELSE @]
-          \* with prune-relook, proposed, prune looks again at the copy that stays, right before the move
-          /\ pc' = [ph |-> IF "prune-relook" \in Fixes /\ rsn = "surplus" THEN "rl" ELSE "tm", p |-> p, ret |-> ret]
+          /\ pc' = [ph |-> "tm", p |-> p, ret |-> ret]
 TMove ==
     /\ pc.ph = "tm"
     /\ LET p == pc.p
@@ -544,7 +550,8 @@ LCommit ==
 -----------------------------------------------------------------------------
 (* §17.3 atoll prune: the copies of a file with a surplus one looked at, compared with their rows; the surplus copy
    to the trash when the one that stays, ok and unchanged on a disk that can be read, reaches the level; with
-   "inplace", removed at its path instead, as the view's move does when the trash has no room. *)
+   "inplace", removed at its path instead, as the view's move does when the trash has no room. §13.3 atoll balance
+   sends its old copy the same way, as rebalance (pc.rsn). *)
 PrLook ==
     /\ pc.ph = "pr" /\ pc.todo # {}
     /\ LET f == Min(pc.todo)
@@ -553,12 +560,12 @@ PrLook ==
        IN IF S # {} /\ ~cat.cf[f].cfl
              /\ \A d \in S : SameAsRow(d, f) /\ cat.cr[Other(d)][f].st = "ok" /\ Readable(Other(d)) /\ SameAsRow(Other(d), f)
           THEN LET d == Min(S) IN
-               IF "inplace" \in AtollActs
+               IF "inplace" \in AtollActs /\ pc.rsn = "surplus"
                THEN /\ FreeOps # {}
                     /\ NewOp(Min(FreeOps), [NoOp EXCEPT !.k = "rmroot", !.st = "planned", !.d = d, !.f = f,
                                                         !.key = cat.cr[d][f].key, !.v = cat.cr[d][f].v])
                     /\ pc' = [ph |-> "ip", p |-> Min(FreeOps), ret |-> ret]
-               ELSE TJournal(d, f, "root", "surplus", ret)
+               ELSE TJournal(d, f, "root", pc.rsn, ret)
           ELSE pc' = ret /\ UNCHANGED cat
     /\ UNCHANGED <<fs, w, ghost>>
 PrEnd ==
@@ -582,15 +589,6 @@ AtOnceLook ==
     /\ pc' = IF Writable(cat.ops[pc.p].d) /\ OtherHolds(cat.ops[pc.p])
              THEN [ph |-> "pl", e |-> pc.p, links |-> OwnLinks(pc.p), ret |-> pc.ret] ELSE pc.ret
     /\ UNCHANGED <<fs, cat, w, ghost>>
-
-(* prune-relook, proposed: the copy that stays looked at again once the move is journaled, the move undone when it no
-   longer holds the version *)
-PrRelook ==
-    /\ pc.ph = "rl"
-    /\ IF Writable(cat.ops[pc.p].d) /\ OtherHolds(cat.ops[pc.p])
-       THEN pc' = [pc EXCEPT !.ph = "tm"] /\ UNCHANGED cat
-       ELSE cat' = [cat EXCEPT !.ops[pc.p] = Undone(pc.p), !.ent[pc.p] = FALSE] /\ pc' = pc.ret
-    /\ UNCHANGED <<fs, w, ghost>>
 
 (* §21.2 The view's move when the trash has no room: the copy removed at its path, journaled, after the same look. *)
 InPlaceLook ==
@@ -663,9 +661,9 @@ PgPick ==
           ELSE LET p == Min(C)
                    op == cat.ops[p]
                    L == OwnLinks(p)
-                   \* with surplus-looked, proposed, a surplus entry goes for room before its retention only once a look
-                   \* finds its version at the file's path on another disk, as that copy's row says
-                   looks == "surplus-looked" \in Fixes /\ op.rsn = "surplus" /\ op.exp > w.now
+                   \* surplus-looked: a surplus or rebalance entry goes for room before its retention only once a look
+                   \* finds its version at the file's path on another disk, as that copy's row says; never by age
+                   looks == pc.mode = "room" /\ LooksFirst(op.rsn) /\ op.exp > w.now
                IN pc' = [ph |-> IF looks THEN "pk" ELSE "pl", e |-> p, links |-> L, ret |-> [pc EXCEPT !.seen = @ \cup {p}]]
     /\ UNCHANGED <<fs, cat, w, ghost>>
 PgLook ==
@@ -732,11 +730,12 @@ OutOfOps ==
 Atoll ==
     \/ "pass" \in AtollActs /\ Start("pass", 0)
     \/ "prune" \in AtollActs /\ Start("prune", 0)
+    \/ "balance" \in AtollActs /\ Start("balance", 0)
     \/ "restore" \in AtollActs /\ \E p \in OpIds : InTrash(p) /\ Newest(p) /\ Start("restore", p)
     \/ \E m \in {"purge", "room", "older"} : m \in AtollActs /\ Start(m, 0)
     \/ RepStep \/ RepEnd \/ Decide \/ DecEnd \/ JobRun \/ JobEnd \/ TMove \/ TCommit
     \/ LGStart \/ LGStep \/ LAct \/ LCommit
-    \/ PrLook \/ PrEnd \/ PrRelook \/ AtOnceLook \/ InPlaceLook \/ InPlaceUnlink
+    \/ PrLook \/ PrEnd \/ AtOnceLook \/ InPlaceLook \/ InPlaceUnlink
     \/ RsLook \/ RsMove \/ RsCommit
     \/ PgPick \/ PgLook \/ PgLinks \/ PgJournal \/ PgUnlink \/ PgCommit \/ Abandon \/ OutOfOps
 

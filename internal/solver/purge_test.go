@@ -26,6 +26,8 @@ type purgeVector struct {
 		DeletedNS *int64  `json:"deleted_ns"`
 		ExpiresNS *int64  `json:"expires_ns"`
 		Held      *bool   `json:"held"`
+		// Unbacked is optional, false when left out.
+		Unbacked *bool `json:"unbacked"`
 	} `json:"entries"`
 	Purge *[]struct {
 		Op  int64    `json:"op"`
@@ -61,11 +63,11 @@ func TestPurgeVectors(t *testing.T) {
 		for j := range v.Entries {
 			e := &v.Entries[j]
 			if e.Disk == nil || e.Op == nil || e.Reason == nil || e.DeletedNS == nil || e.ExpiresNS == nil || e.Held == nil {
-				t.Fatalf("vector %d: entry %d: every field but size is required", i, j)
+				t.Fatalf("vector %d: entry %d: every field but size and unbacked is required", i, j)
 			}
 			in.Entries = append(in.Entries, TrashEntry{
 				Disk: *e.Disk, OpID: *e.Op, Reason: *e.Reason, Size: deref(e.Size), HasSize: e.Size != nil,
-				DeletedNS: *e.DeletedNS, ExpiresNS: *e.ExpiresNS, Held: *e.Held,
+				DeletedNS: *e.DeletedNS, ExpiresNS: *e.ExpiresNS, Held: *e.Held, Unbacked: e.Unbacked != nil && *e.Unbacked,
 			})
 		}
 		got, err := ChoosePurge(&in)
