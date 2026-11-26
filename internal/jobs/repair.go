@@ -260,7 +260,11 @@ func (r *repairRun) changedCopy(ctx context.Context, f *catalog.FileRow, c *cata
 	if err != nil {
 		return trash.OutcomeChanged, true, nil //nolint:nilerr // a time no row can hold is a look that says nothing yet
 	}
-	if watch.Unchanged(&found, &catalog.KnownCopy{Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey}) {
+	// On a disk whose times cannot tell an edit made in the second of the copy's last change from none, a copy as its
+	// row says may hold one: it is read as it is too, and is a conflict unless it holds its file's content, never
+	// repaired (specs.md §16), as a copy found corrupt before Atoll knew so may be.
+	if watch.Unchanged(&found, &catalog.KnownCopy{Size: c.Size, MtimeNS: c.MtimeNS, CtimeNS: c.CtimeNS, FileKey: c.FileKey}) &&
+		integrity.TimesVouch(r.session.TimePrecision(c.Disk)) {
 		return "", false, nil
 	}
 	holds := false

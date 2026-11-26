@@ -186,7 +186,7 @@ func TestWritesLoseNothingWhereverTheyFail(t *testing.T) {
 					return err
 				}
 				defer func() { _ = f.Close() }()
-				if err := d.WriteChunk(f, 0, []byte("film"), good[:]); err != nil {
+				if _, err := d.WriteChunk(f, 0, []byte("film"), good[:]); err != nil {
 					return err
 				}
 				_, err = d.SetTimeBack(f, before.Mtime)

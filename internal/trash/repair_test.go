@@ -236,7 +236,8 @@ func TestARepairWhoseHealthyCopyFails(t *testing.T) {
 }
 
 // failReadsFrom makes every read of t3's copy through a writable handle fail from the nth on: the first is the save
-// of the chunk, the second the read back of what was written, and the others the repair's look at the copy whole.
+// of the chunk, the second its read again right before it is written, the third the read back of what was written,
+// and the others the repair's look at the copy whole.
 func (r *rot) failReadsFrom(n int) {
 	reads := 0
 	r.b.fail[r.b.dirs["t3"]] = func(call, _ string) error {
@@ -253,7 +254,7 @@ func (r *rot) failReadsFrom(n int) {
 // step 5): the disk is lost then, and the next run that can read the copy finishes the repair.
 func TestARepairWhoseChunkCannotBeReadBackOnADiskThatFails(t *testing.T) {
 	r := rotted(t)
-	r.failReadsFrom(2)
+	r.failReadsFrom(3)
 	r.b.at["chunk-written"] = func() { r.b.unread[r.b.dirs["t3"]] = true }
 	if got := r.repaired(true); got != OutcomeIOError {
 		t.Errorf("%s", got)
@@ -269,7 +270,7 @@ func TestARepairWhoseChunkCannotBeReadBackOnADiskThatFails(t *testing.T) {
 	}
 	// A read back that fails once, then a whole read that finds every chunk written, is a repair done.
 	r = rotted(t)
-	r.b.failNth("t3", "readback", 2, syscall.EIO)
+	r.b.failNth("t3", "readback", 3, syscall.EIO)
 	if got := r.repaired(true); got != OutcomeRepaired || r.repairState() != "done" {
 		t.Errorf("a read back that failed once: %s, %s", got, r.repairState())
 	}
@@ -282,7 +283,7 @@ func TestARepairWhoseChunkCannotBeReadBackOnADiskThatFails(t *testing.T) {
 // sector could not be read: the copy could never reach the trash, nor anything else be written there.
 func TestARepairWhoseChunkCannotBeReadBackLosesNoDiskThatConfirms(t *testing.T) {
 	r := rotted(t)
-	r.failReadsFrom(2)
+	r.failReadsFrom(3)
 	s := r.b.opened()
 	outcome, err := s.RepairChunks(t.Context(), r.file, r.copy, []int64{0}, nil, r.healthy, r.chunks)
 	if err != nil || outcome != OutcomeIOError || !s.Lost() {
@@ -310,7 +311,7 @@ func TestARepairWhoseChunkCannotBeReadBackLosesNoDiskThatConfirms(t *testing.T) 
 // the operation waits for a run that can read it (invariant 4).
 func TestARepriseOfARepairOnADiskThatNoLongerConfirms(t *testing.T) {
 	r := rotted(t)
-	r.failReadsFrom(2)
+	r.failReadsFrom(3)
 	if got := r.repaired(true); got != OutcomeIOError || r.repairState() != "planned" {
 		t.Fatalf("%s, the operation %s", got, r.repairState())
 	}
@@ -328,6 +329,8 @@ func TestARepriseOfARepairOnADiskThatNoLongerConfirms(t *testing.T) {
 // disk give the sector another place (specs.md §16.1).
 func TestARepairOfAChunkThatCannotBeRead(t *testing.T) {
 	r := rotted(t)
+	// It still cannot be read right before it is written; read back once written, it can.
+	r.b.failNth("t3", "readback", 1, syscall.EIO)
 	s := r.b.opened()
 	outcome, err := s.RepairChunks(t.Context(), r.file, r.copy, []int64{0}, []int64{0}, r.healthy, r.chunks)
 	if err != nil || outcome != OutcomeRepaired || r.b.read("t3", "a") != "x" {

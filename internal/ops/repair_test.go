@@ -56,7 +56,7 @@ func TestAChunkIsWrittenAtItsOffset(t *testing.T) {
 	}
 	defer func() { _ = f.Close() }()
 	good := integrity.ChunkSum([]byte("abc"))
-	if err := d.WriteChunk(f, 1, []byte("abc"), good[:]); err != nil {
+	if _, err := d.WriteChunk(f, 1, []byte("abc"), good[:]); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(full)
@@ -95,7 +95,7 @@ func TestAChunkThatReadsBackShortIsNotRepaired(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := d.WriteChunk(&shortBack{WritableFile: f, err: tc.err}, 0, []byte("film"), good[:]); !errors.Is(err, tc.want) {
+		if _, err := d.WriteChunk(&shortBack{WritableFile: f, err: tc.err}, 0, []byte("film"), good[:]); !errors.Is(err, tc.want) {
 			t.Errorf("read back short with %v: %v", tc.err, err)
 		}
 		_ = f.Close()

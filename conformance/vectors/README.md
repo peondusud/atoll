@@ -337,6 +337,14 @@ What standard error, the human text of `atoll rules check` and the message of a 
 | `action` | string | `finish`, `keep`, `untouched` or `foreign` |
 | `error` | boolean | `true` for a chunk saved that was not found bad, what was saved of a chunk never saved, or a word it does not know |
 
+### `scrub_mismatch.json` — what a scrub makes of a chunk that does not match (§10, §16)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `verified` | boolean | whether the copy was ever verified |
+| `precision_ns` | integer | its disk's `time_precision_ns`, as the disk's check read it; 0 when unknown |
+| `verdict` | string | `corrupt`, the copy repaired or moved to the trash; or `conflict`, its file a conflict, nothing written: for a copy never verified, and on a disk whose precision is a second or coarser, or unknown |
+
 ### `smart.json` — what a reading of SMART says of a device (§23)
 
 | Field | Type | Meaning |

@@ -14,15 +14,18 @@
    - a scrub of a copy due (§16, jobs.scrubCopy): opened after a look that its name holds what its row says; each chunk
      read and its hash compared; a chunk that does not match, or cannot be read on a disk that then confirms, the
      copy's times looked at, then the chunk read again past the page cache; a mismatch then makes the copy corrupt, or
-     its file a conflict for a copy never verified; a disk that does not confirm is lost, and nothing is concluded; the
+     its file a conflict for a copy never verified, and on a disk of Coarse, whose times cannot tell an edit from rot
+     (coarse-conflict); a disk that does not confirm is lost, and nothing is concluded; the
      copy verified once every chunk matched and its times are still those it was opened with; the budget may stop it
      between two chunks, and the next scrub begins at the cursor while the row has not changed;
    - a corrupt copy healed (§16, §16.1): a healthy copy, ok on a disk that can be read, read whole, its chunks the
      file's and its times its row's; by chunk (trash.Session.RepairChunks): the copy read whole, its bad chunks those
-     that are not the file's or cannot be read; the operation and its trash row journaled; the bad chunks saved to the
-     trash; the copy compared with its row right before the first write; each bad chunk read from the healthy copy,
-     checked, written, read back; the modification time set back to the row's; the commit, the row taking the change
-     time the copy has then; a repair that stops resolved as §16.1 says, the run knowing whether it wrote; by file: the
+     that are not the file's or cannot be read, a conflict on a disk of Coarse; the operation and its trash row
+     journaled; the bad chunks saved to the trash; each bad chunk read from the healthy copy and checked, the copy looked
+     at against what the repair's own last change left and the chunk read again (repair-recheck), written, read back;
+     looked at again, the modification time set back to the row's; looked at again, the commit, the row taking the change
+     time the copy has then; a look that finds someone else's write stops the repair, the copy left as it is; a repair
+     that stops otherwise resolved as §16.1 says, the run knowing whether it wrote; by file: the
      copy sent to the trash, its copy made again by the next pass; without auto_repair (Mode "off"), quarantined: sent
      to the trash; with no healthy copy, left as it is; a corrupt copy left in the root taken again by the next scrub;
    - the reprise of a repair left planned (§16.1, Reprise);
@@ -33,13 +36,13 @@
    not; the world rots a chunk, makes a sector unreadable, makes a read through the cache come back wrong once, loses a
    disk and brings it back, and the clock ticks; Atoll's process may be killed between any two steps.
 
-   Flaws 31 and 32, open (README.md): on a disk whose change time holds whole seconds, an edit in place that keeps the
-   size and the modification time, in the second of the copy's last change, moves none of the times a look compares,
-   so that the scrub calls it corrupt and repairs it away; and a user's write that lands after the repair's look right
-   before its first write, while it reads the healthy chunk, is written over unsaved, or kept in the copy while the
-   commit records the change time it left, so that the next scrub calls it corrupt. The remedies proposed, in Fixes,
-   are the maintainer's to choose; every instance where a user writes takes repair-recheck, but the flaws' own, and
-   coarse-conflict or racy-conflict where a disk is coarse, so as to look past them.
+   Flaws 31 and 32, fixed (README.md): on a disk whose change time holds whole seconds, an edit in place that keeps
+   the size and the modification time, in the second of the copy's last change, moved none of the times a look
+   compares, so that the scrub called it corrupt and repaired it away; and a user's write that landed after the
+   repair's look right before its first write, while it read the healthy chunk, was written over unsaved, or kept in
+   the copy while the commit recorded the change time it left. coarse-conflict and repair-recheck, the maintainer's
+   remedies of 2026-11-26, are what every instance does; racy-conflict, the other remedy proposed for flaw 31, is noted
+   for format version 2, and gone from the model.
 
    What it leaves out: a corrupt copy that changed, settled into a conflict (Conflicts.tla's: here it waits), the
    pipeline of a copy (Replication.tla's: one step here), the trash's purge (Trash.tla's), renames and inodes (an
@@ -64,8 +67,8 @@ CONSTANTS
 
 Disks == 1..NDisks
 Chunks == {1, 2}
-\* the remedies proposed for flaw 31, coarse-conflict and racy-conflict, and for flaw 32, repair-recheck (README.md)
-FixNames == {"coarse-conflict", "racy-conflict", "repair-recheck"}
+\* flaws 31 and 32 are fixed, with coarse-conflict and repair-recheck, what every instance does (README.md): no remedy
+FixNames == {}
 
 ASSUME /\ NDisks \in 2..3 /\ Coarse \subseteq Disks /\ Unverified \subseteq Disks /\ Mode \in {"chunk", "file", "off"}
        /\ UserActs \subseteq {"edit", "keep"} /\ UserDisks \subseteq Disks /\ MaxUser \in Nat
@@ -79,18 +82,17 @@ VARIABLES
             \*   ticked since its last change, tr |-> what each trash holds: <<chunk, value>>, and <<0, value>> of each
             \*   chunk of a whole copy, users, acts, kills]
     cat,    \* the catalog: [want |-> the file's chunks, fst, cs |-> each copy's state, rmt, rct |-> each row's times,
-            \*   ver |-> verified once, racy |-> its change time recorded in the tick of the copy's last change, op |->
-            \*   the repair left planned on each disk, cursor]
+            \*   ver |-> verified once, op |-> the repair left planned on each disk, cursor]
     pc,     \* Atoll's process: [ph, d |-> the copy, e |-> the healthy copy, i |-> the chunk, st |-> the times it
-            \*   opened with, bad |-> its bad chunks, fr |-> the tick of its last change passed when it was opened, seen,
-            \*   sec |-> each chunk, and the sectors that could not be read, as the repair found them bad]
+            \*   opened with, or its own last change left, bad |-> its bad chunks, seen, sec |-> each chunk, and the
+            \*   sectors that could not be read, as the repair found them bad]
     ghost   \* [flags]
 
 vars == <<w, cat, pc, ghost>>
 
-Idle == [ph |-> "idle", d |-> 0, e |-> 0, i |-> 0, st |-> <<0, 0>>, bad |-> {}, fr |-> FALSE, seen |-> <<0, 0>>, sec |-> {}]
+Idle == [ph |-> "idle", d |-> 0, e |-> 0, i |-> 0, st |-> <<0, 0>>, bad |-> {}, seen |-> <<0, 0>>, sec |-> {}]
 NoOp == [on |-> FALSE, bad |-> {}, saved |-> {}, wrote |-> FALSE]
-NoCursor == [d |-> 0, i |-> 0, t |-> <<0, 0>>, fr |-> FALSE]
+NoCursor == [d |-> 0, i |-> 0, t |-> <<0, 0>>]
 
 Init ==
     /\ w = [up |-> [d \in Disks |-> TRUE], at |-> [d \in Disks |-> TRUE], ch |-> [d \in Disks |-> [i \in Chunks |-> 0]],
@@ -99,7 +101,6 @@ Init ==
             tr |-> [d \in Disks |-> {}], users |-> 0, acts |-> 0, kills |-> 0]
     /\ cat = [want |-> [i \in Chunks |-> 0], fst |-> "ok", cs |-> [d \in Disks |-> "ok"],
               rmt |-> [d \in Disks |-> 1], rct |-> [d \in Disks |-> 1], ver |-> [d \in Disks |-> d \notin Unverified],
-              racy |-> [d \in Disks |-> d \in Coarse],
               op |-> [d \in Disks |-> NoOp], cursor |-> NoCursor]
     /\ pc = Idle
     /\ ghost = [flags |-> {}]
@@ -123,20 +124,16 @@ Flag(f) == ghost' = [ghost EXCEPT !.flags = @ \cup f]
 (* the file's state once a copy's state is cs: corrupt while a copy is, then ok, but a conflict *)
 Settle(cs) == IF \E x \in Disks : cs[x] = "corrupt" THEN "corrupt" ELSE IF cat.fst = "corrupt" THEN "ok" ELSE cat.fst
 
+(* coarse-conflict, the maintainer's remedy of flaw 31: on a disk whose change time is coarse, an edit in the tick of
+   the copy's last change moves no time a look compares, so a mismatch there is never rot: a conflict, every version
+   kept, nothing written (specs.md §16). *)
+Unvouched(d) == d \in Coarse
+
+(* a user's edit a repair would hide, recording its copy verified with the change time it has: one a later scrub may
+   still call corrupt, on a disk whose times vouch for a copy *)
+Hidden(d) == Edited(d) /\ ~Unvouched(d)
+
 (* the copy written in place, its chunk i given value v: a change of its times *)
-(* coarse-conflict, proposed for flaw 31: on a disk whose change time is coarse, a mismatch is never rot; racy-conflict:
-   only where the row's change time was recorded in the tick of the copy's last change, as git takes a racy entry. *)
-Unvouched(d) == \/ "coarse-conflict" \in Fixes /\ d \in Coarse
-                \/ "racy-conflict" \in Fixes /\ cat.racy[d]
-(* a row's change time recorded now: racy while the tick of the copy's last change has not passed *)
-Racy(d) == d \in Coarse /\ ~w.fresh[d]
-
-(* a user's edit a repair would hide, recording its copy verified with the change time it has, the row racy or not: one
-   a later scrub may still call corrupt *)
-Hidden(d, racy) == /\ Edited(d)
-                   /\ ~("coarse-conflict" \in Fixes /\ d \in Coarse)
-                   /\ ~("racy-conflict" \in Fixes /\ racy)
-
 Written(d, i, v) == [w EXCEPT !.ch[d][i] = v, !.bad[d] = @ \ {i}, !.mt[d] = @ + 1, !.ct[d] = Bump(d), !.fresh[d] = FALSE]
 
 -----------------------------------------------------------------------------
@@ -147,10 +144,8 @@ ScrubStart(d) ==
     /\ "scrub" \in AtollActs /\ pc.ph = "idle"
     /\ cat.cs[d] = "ok" /\ cat.fst = "ok" /\ ~cat.op[d].on
     /\ w.up[d] /\ w.at[d] /\ Times(d) = Row(d)
-    /\ LET resumed == cat.cursor.d = d /\ cat.cursor.t = Row(d) IN
-       \* racy-conflict: a scrub resumed at the cursor is opened once the tick had passed only if its first part was
-       pc' = [Idle EXCEPT !.ph = "read", !.d = d, !.st = Times(d), !.fr = w.fresh[d] /\ (resumed => cat.cursor.fr),
-                          !.i = IF resumed THEN cat.cursor.i ELSE 1]
+    /\ pc' = [Idle EXCEPT !.ph = "read", !.d = d, !.st = Times(d),
+                          !.i = IF cat.cursor.d = d /\ cat.cursor.t = Row(d) THEN cat.cursor.i ELSE 1]
     /\ cat' = [cat EXCEPT !.cursor = NoCursor]
     /\ UNCHANGED <<w, ghost>>
 
@@ -172,8 +167,8 @@ ScrubRead ==
             /\ IF i \notin w.bad[d] /\ w.ch[d][i] = cat.want[i]
                THEN /\ pc' = NextChunk /\ UNCHANGED <<cat, ghost>>   \* a bad read: the read goes on
                ELSE IF ~cat.ver[d] \/ Unvouched(d)
-               THEN \* never verified: another version of the file, a conflict, nothing moved (§16); with coarse-conflict
-                    \* or racy-conflict, the same of a copy whose times cannot tell an edit from rot
+               THEN \* never verified: another version of the file, a conflict, nothing moved (§16); and the same on a
+                    \* disk whose times cannot tell an edit from rot (coarse-conflict)
                     /\ cat' = [cat EXCEPT !.fst = "conflict"]
                     /\ pc' = Idle
                     /\ UNCHANGED ghost
@@ -181,11 +176,10 @@ ScrubRead ==
                     /\ Flag((IF Edited(d) THEN {"edit-called-corrupt"} ELSE {}) \cup (IF Holds(d) THEN {"sound-corrupt"} ELSE {}))
                     /\ pc' = [Idle EXCEPT !.ph = "heal", !.d = d]
 
-(* the budget runs out between two chunks: the cursor records the copy, the next chunk and its row's times, and, for
-   racy-conflict, whether the copy's read began once the tick of its last change had passed *)
+(* the budget runs out between two chunks: the cursor records the copy, the next chunk and its row's times *)
 ScrubBudget ==
     /\ "budget" \in AtollActs /\ pc.ph = "read" /\ pc.i = 2
-    /\ cat' = [cat EXCEPT !.cursor = [d |-> pc.d, i |-> 2, t |-> Row(pc.d), fr |-> pc.fr]]
+    /\ cat' = [cat EXCEPT !.cursor = [d |-> pc.d, i |-> 2, t |-> Row(pc.d)]]
     /\ pc' = Idle
     /\ UNCHANGED <<w, ghost>>
 
@@ -193,9 +187,7 @@ ScrubEnd ==
     /\ pc.ph = "end"
     /\ LET d == pc.d IN
        IF w.up[d] /\ Times(d) = pc.st
-       THEN \* racy-conflict: a copy whose every chunk was read once the tick of its last change had passed holds what
-            \* its times say
-            cat' = [cat EXCEPT !.ver[d] = TRUE, !.racy[d] = @ /\ ~pc.fr]
+       THEN cat' = [cat EXCEPT !.ver[d] = TRUE]
        ELSE UNCHANGED cat
     /\ pc' = Idle
     /\ UNCHANGED <<w, ghost>>
@@ -242,8 +234,9 @@ RBad ==
        THEN /\ cat' = [cat EXCEPT !.cs[d] = "ok", !.ver[d] = TRUE, !.fst = Settle([cat.cs EXCEPT ![d] = "ok"])]
             /\ pc' = Idle /\ UNCHANGED <<w, ghost>>
        ELSE IF Unvouched(d)
-       THEN \* racy-conflict: a corrupt copy taken again while its row is racy, as a repair that stopped after a write
-            \* leaves it on a coarse disk, cannot tell its bad chunks from an edit: a conflict, nothing written
+       THEN \* coarse-conflict: a corrupt copy on a disk whose times cannot tell an edit, as one found before Atoll
+            \* knew the disk so, is read as it is (jobs.changedCopy): its bad chunks may be an edit, a conflict, nothing
+            \* written
             /\ cat' = [cat EXCEPT !.fst = "conflict"]
             /\ pc' = Idle /\ UNCHANGED <<w, ghost>>
        ELSE /\ pc' = [pc EXCEPT !.ph = "journal", !.bad = B, !.st = Times(d), !.seen = w.ch[d], !.sec = w.bad[d]]
@@ -272,7 +265,7 @@ RSave ==
 Stop(d, wrote) ==
     /\ IF wrote
        THEN /\ w' = [w EXCEPT !.mt[d] = cat.rmt[d], !.ct[d] = Bump(d), !.fresh[d] = FALSE]
-            /\ cat' = [cat EXCEPT !.op[d] = NoOp, !.rct[d] = Bump(d), !.racy[d] = d \in Coarse]
+            /\ cat' = [cat EXCEPT !.op[d] = NoOp, !.rct[d] = Bump(d)]
        ELSE /\ UNCHANGED w
             /\ cat' = [cat EXCEPT !.op[d] = NoOp]
     /\ pc' = Idle
@@ -289,14 +282,14 @@ RLook ==
             /\ UNCHANGED <<w, cat>>
     /\ UNCHANGED ghost
 
-(* repair-recheck, proposed for flaw 32: the repair keeps the times its own last change gave the copy, and right before
-   each later step, the copy's times are looked at; right before each write, the chunk it writes is read again too, and
-   must be as the repair found it bad, as a write in the tick of the repair's own last change moves no time on a coarse
-   disk: moved, someone else wrote, and the repair stops with changed, the modification time not set back, the row left
-   as it was, so that the change stays a change. *)
-Recheck == "repair-recheck" \in Fixes
-Moved(d) == Recheck /\ Times(d) # pc.st
-Reread(d, i) == Recheck /\ (w.ch[d][i] # pc.seen[i] \/ (i \in w.bad[d]) # (i \in pc.sec))
+(* repair-recheck, the maintainer's remedy of flaw 32 (trash.Session.RepairChunks): the repair keeps the times its own
+   last change gave the copy, and right before each later step, the copy's times are looked at; right before each
+   write, the chunk it writes is read again too (ops.Disk.ChunkStill), and must be as the repair found it bad, as a
+   write in the tick of the repair's own last change moves no time on a coarse disk: moved, someone else wrote, and the
+   repair stops with changed (ops.Disk.LeaveRepair), the modification time not set back, the row left as it was, so
+   that the change stays a change. *)
+Moved(d) == Times(d) # pc.st
+Reread(d, i) == w.ch[d][i] # pc.seen[i] \/ (i \in w.bad[d]) # (i \in pc.sec)
 Left(d) == /\ cat' = [cat EXCEPT !.op[d] = NoOp]
            /\ pc' = Idle
            /\ UNCHANGED w
@@ -340,10 +333,8 @@ RCommit ==
        IF Moved(d)
        THEN /\ Left(d) /\ UNCHANGED ghost
        ELSE
-       \* the content the repair knows is its own last change's, in the tick of the change time it records: racy
-       /\ cat' = [cat EXCEPT !.cs[d] = "ok", !.ver[d] = TRUE, !.rct[d] = w.ct[d], !.op[d] = NoOp, !.fst = Settle(cs),
-                             !.racy[d] = d \in Coarse]
-       /\ Flag(IF Hidden(d, d \in Coarse) THEN {"verified-wrong"} ELSE {})
+       /\ cat' = [cat EXCEPT !.cs[d] = "ok", !.ver[d] = TRUE, !.rct[d] = w.ct[d], !.op[d] = NoOp, !.fst = Settle(cs)]
+       /\ Flag(IF Hidden(d) THEN {"verified-wrong"} ELSE {})
        /\ pc' = Idle
        /\ UNCHANGED w
 
@@ -360,12 +351,12 @@ Reprise(d) ==
           THEN \* every write done: steps 6 and 7
                /\ w' = [w EXCEPT !.mt[d] = cat.rmt[d], !.ct[d] = Bump(d), !.fresh[d] = FALSE]
                /\ cat' = [cat EXCEPT !.cs[d] = "ok", !.ver[d] = TRUE, !.rct[d] = Bump(d), !.op[d] = NoOp,
-                                     !.fst = Settle([cat.cs EXCEPT ![d] = "ok"]), !.racy[d] = d \in Coarse]
-               /\ Flag(IF Hidden(d, d \in Coarse) THEN {"verified-wrong"} ELSE {})
+                                     !.fst = Settle([cat.cs EXCEPT ![d] = "ok"])]
+               /\ Flag(IF Hidden(d) THEN {"verified-wrong"} ELSE {})
           ELSE IF explains /\ \E i \in op.bad : done(i)
           THEN \* a write began: the modification time set back, the row takes the change time, the repair stops
                /\ w' = [w EXCEPT !.mt[d] = cat.rmt[d], !.ct[d] = Bump(d), !.fresh[d] = FALSE]
-               /\ cat' = [cat EXCEPT !.rct[d] = Bump(d), !.op[d] = NoOp, !.racy[d] = d \in Coarse]
+               /\ cat' = [cat EXCEPT !.rct[d] = Bump(d), !.op[d] = NoOp]
                /\ UNCHANGED ghost
           ELSE \* no write began, or someone else's change: nothing written, the repair stops
                /\ cat' = [cat EXCEPT !.op[d] = NoOp]
@@ -392,15 +383,13 @@ PassModify(d) ==
                          !.fresh = [x \in Disks |-> IF x = d THEN w.fresh[d] ELSE FALSE]]
        /\ cat' = [cat EXCEPT !.want = v, !.cs = [x \in Disks |-> "ok"], !.ver = [x \in Disks |-> TRUE],
                              !.rmt = [x \in Disks |-> IF x = d THEN w.mt[d] ELSE w.mt[x] + 1],
-                             !.rct = [x \in Disks |-> IF x = d THEN w.ct[d] ELSE w.ct[x] + 1],
-                             !.racy = [x \in Disks |-> IF x = d THEN Racy(d) ELSE x \in Coarse]]
+                             !.rct = [x \in Disks |-> IF x = d THEN w.ct[d] ELSE w.ct[x] + 1]]
     /\ UNCHANGED <<pc, ghost>>
 PassMake(d) ==
     /\ "pass" \in AtollActs /\ pc.ph = "idle"
     /\ cat.cs[d] = "none" /\ w.up[d] /\ ~w.at[d] /\ HealthyOf(d) # {}
     /\ w' = [w EXCEPT !.at[d] = TRUE, !.ch[d] = cat.want, !.bad[d] = {}, !.mt[d] = @ + 1, !.ct[d] = @ + 1, !.fresh[d] = FALSE]
-    /\ cat' = [cat EXCEPT !.cs[d] = "ok", !.ver[d] = TRUE, !.rmt[d] = w.mt[d] + 1, !.rct[d] = w.ct[d] + 1,
-                          !.racy[d] = d \in Coarse]
+    /\ cat' = [cat EXCEPT !.cs[d] = "ok", !.ver[d] = TRUE, !.rmt[d] = w.mt[d] + 1, !.rct[d] = w.ct[d] + 1]
     /\ UNCHANGED <<pc, ghost>>
 
 Kill ==

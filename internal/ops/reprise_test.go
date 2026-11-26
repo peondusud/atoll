@@ -983,7 +983,7 @@ func TestTheRepriseOfARepairAndOfTheGuard(t *testing.T) {
 					}
 					for i, c := range chunked(good) {
 						sum := integrity.ChunkSum(c)
-						if err := d.WriteChunk(f, int64(i), c, sum[:]); err != nil {
+						if _, err := d.WriteChunk(f, int64(i), c, sum[:]); err != nil {
 							return err
 						}
 					}

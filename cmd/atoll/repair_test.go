@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -25,14 +26,23 @@ func newCopiedPool(t *testing.T, view, more string) *poolBench {
 	return b
 }
 
-// unreadable makes every read of Films/a.mkv on t2 fail with EIO, on a disk its check confirms: the chunk's fault, a
-// corruption (invariant 4); a read back after a repair still reads.
+// unreadable makes every read of Films/a.mkv on t2 fail with EIO, through any handle, on a disk its check confirms:
+// the chunk's fault, a corruption (invariant 4); once written over, as a repair writes it, the sector reads again.
 func (b *poolBench) unreadable() {
 	b.machine.mu.Lock()
 	defer b.machine.mu.Unlock()
+	var written atomic.Bool
 	b.machine.fail = func(mount, call, name string) error {
-		if mount == b.mounts[1] && call == "read" && strings.HasSuffix(name, "a.mkv") {
-			return syscall.EIO
+		if mount != b.mounts[1] || !strings.HasSuffix(name, "a.mkv") {
+			return nil
+		}
+		switch call {
+		case "write":
+			written.Store(true)
+		case "read", "readback":
+			if !written.Load() {
+				return syscall.EIO
+			}
 		}
 		return nil
 	}

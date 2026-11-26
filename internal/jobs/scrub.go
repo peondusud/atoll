@@ -70,8 +70,9 @@ type ScrubDisk struct {
 	Kept []string
 	// Changed are the copies that changed since their row, or while read: for the next pass to look at.
 	Changed []string
-	// Conflict are the copies never verified whose content is not their file's, read again past the cache, size and
-	// times unchanged: another version of the file, which becomes a conflict. Nothing is written to them.
+	// Conflict are the copies whose content is not their file's, read again past the cache, size and times unchanged,
+	// that were never verified, or sit on a disk whose times cannot tell an edit from rot: another version of the file,
+	// which becomes a conflict. Nothing is written to them.
 	Conflict []string
 	// Refused are the copies that could not be opened, for a reason that says nothing of their disk: neither
 	// verified nor corrupt, they stay due (specs.md §16).
@@ -116,7 +117,8 @@ var errDiskFailed = errors.New("the disk failed while read")
 
 // Scrub reads the copies due, one disk at a time, and checks each chunk against its hash (specs.md §16): a copy
 // that matches is verified; one that does not, read again past the cache, its size and times unchanged, is
-// corrupt, and goes to the trash when another copy is healthy. A scrub stopped by its budget resumes at the chunk it
+// corrupt, and goes to the trash when another copy is healthy, or its file a conflict when the copy was never verified
+// or its disk's times cannot tell an edit from rot. A scrub stopped by its budget resumes at the chunk it
 // reached. On each disk, the corrupt copies an earlier scrub left in the root come first, taken again as one found now
 // is: mergerfs may present them (invariant 14).
 func Scrub(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, opts ScrubOptions) (*ScrubOutcome, error) {
@@ -359,7 +361,9 @@ func (s *scrubber) scrubCopy(ctx context.Context, d *config.Disk, handle *ops.Di
 				match = false
 			}
 			if !match {
-				if !cp.VerifiedNS.Valid {
+				// A copy never verified, or on a disk whose times cannot tell an edit made in the second of the copy's last
+				// change from none, holds another version for all anyone knows: a conflict, nothing written (specs.md §16).
+				if integrity.ScrubMismatch(cp.VerifiedNS.Valid, s.session.TimePrecision(d.ID)) == integrity.MismatchConflict {
 					return false, s.conflict(ctx, d, cp, sd)
 				}
 				return false, s.corrupt(ctx, d, cp, sd)
@@ -403,12 +407,15 @@ func (s *scrubber) readChunk(f fsx.File, size, i int64, want []byte) (bool, erro
 // corrupt records a corrupt copy, and when another copy is healthy repairs it from that one, with auto_repair, or
 // sends it to the trash (specs.md §16, §16.1): the file is then degraded, and replication makes the copy again. With
 // none, it stays, and alerts say so.
-// conflict records that a copy never verified does not hold its file's content: nothing says it ever did, so it is
-// another version of the file, and no rot. The file becomes a conflict, with every version kept (specs.md §15.7, §16):
-// the copy is neither repaired nor moved, as a corrupt one would be, which would lose the version it holds.
+// conflict records that a copy does not hold its file's content where nothing tells rot from another version: a copy
+// never verified, as nothing says it ever held it, or one on a disk that holds a time to a second or coarser, where an
+// edit in place made in the second of the copy's last change leaves the times its row has (specs.md §10, §16). The
+// file becomes a conflict, with every version kept (specs.md §15.7, §16): the copy is neither repaired nor moved, as a
+// corrupt one would be, which would lose the version it holds.
 func (s *scrubber) conflict(ctx context.Context, d *config.Disk, cp *catalog.ScrubCopy, sd *ScrubDisk) error {
 	sd.Conflict = append(sd.Conflict, cp.Path)
-	slog.Warn("a copy never verified holds another version of its file: a conflict", "disk", d.ID, "path", cp.Path)
+	slog.Warn("a copy holds another content than its file's, which nothing tells from rot: a conflict", "disk", d.ID, "path", cp.Path,
+		"verified", cp.VerifiedNS.Valid, "time_precision_ns", s.session.TimePrecision(d.ID))
 	s.changed = true
 	if s.opts.Apply {
 		if err := catalog.WriteHashes(ctx, s.db, s.now, &catalog.HashWrite{FileID: cp.FileID, Conflict: true}); err != nil {
