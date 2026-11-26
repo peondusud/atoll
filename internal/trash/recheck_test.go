@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/integrity"
@@ -91,6 +92,9 @@ func (r *bigRot) repair() string {
 // edit writes text at an offset of t3's copy, in place, as a program that edits a file does.
 func (r *bigRot) edit(at int64, text string) {
 	r.b.t.Helper()
+	// Past the kernel's tick of the repair's own last change: a kernel without multigrain timestamps gives two changes
+	// within it one change time, the limit of docs/research/ctime-granularity.md, which no look of times can tell.
+	time.Sleep(10 * time.Millisecond)
 	f, err := os.OpenFile(r.path, os.O_WRONLY, 0)
 	if err != nil {
 		r.b.t.Fatal(err)
@@ -251,7 +255,9 @@ func TestARepairWhoseLookFails(t *testing.T) {
 			if got := r.repair(); got != OutcomeIOError {
 				t.Errorf("%s", got)
 			}
-			if lost := r.b.diskState("t3") == "missing"; lost != tc.lost || r.repairState() != "planned" {
+			// A chunk that cannot be read again, on a disk that confirms, ends the repair at once, as someone else's change
+			// (flaw 34); a look that fails loses the disk, the repair planned for the reprise.
+			if lost := r.b.diskState("t3") == "missing"; lost != tc.lost || (r.repairState() == "planned") != tc.lost {
 				t.Errorf("t3 is %s, the operation %s", r.b.diskState("t3"), r.repairState())
 			}
 			delete(r.b.fail, r.b.dirs["t3"])

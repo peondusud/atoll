@@ -340,16 +340,21 @@ func (s *Session) recoverAll(ctx context.Context) error {
 			return fmt.Errorf("%w", err)
 		case err != nil:
 			s.lost = true
-			// The reprise of a repair that could not read a chunk of its copy: the copy's fault while the disk confirms,
-			// which is written to as before; the disk's otherwise (invariant 4, specs.md §16.1).
-			if errors.Is(err, ops.ErrChunkUnreadable) {
-				confirmed, cerr := s.Confirms(ctx, id, err)
-				if cerr != nil {
-					return cerr
-				}
-				if !confirmed {
-					continue
-				}
+		}
+		// The reprise of a repair that could not read a chunk of its copy: the copy's fault while the disk confirms, which
+		// is written to as before, and the repair resolved from what the other chunks hold; the disk's otherwise
+		// (invariant 4, specs.md §16.1). A sector that cannot be read kept the repair planned for good (flaw 34).
+		if len(recovered.Unreadable) > 0 {
+			confirmed, cerr := s.Confirms(ctx, id, recovered.Unreadable[0].Err)
+			if cerr != nil {
+				return cerr
+			}
+			if !confirmed {
+				s.lost = true
+				continue
+			}
+			if err := s.resolveUnreadable(ctx, handle, recovered.Unreadable); err != nil {
+				return err
 			}
 		}
 		// What the reprise resolved keeps its parts no more: tmp/ is cleaned after it, as it was when the disk was
@@ -358,6 +363,24 @@ func (s *Session) recoverAll(ctx context.Context) error {
 			if err := s.cleanTmp(ctx, id, handle); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// resolveUnreadable resolves the repairs a reprise left planned for a chunk that cannot be read, once their disk confirmed:
+// one that cannot be resolved still stays planned, which the session says.
+func (s *Session) resolveUnreadable(ctx context.Context, handle *ops.Disk, list []ops.UnreadableRepair) error {
+	for i := range list {
+		finished, err := handle.ResolveRepairConfirmed(ctx, s.db, &list[i].Op, s.now, "", false)
+		switch {
+		case errors.Is(err, ops.ErrDiskLost):
+			return s.lose(ctx, handle.ID, err)
+		case err != nil:
+			slog.Warn("an operation stays planned", "disk", handle.ID, "op", list[i].Op.ID, "error", err)
+			s.lost = true
+		default:
+			s.changed = s.changed || finished
 		}
 	}
 	return nil

@@ -430,11 +430,22 @@ func (d *Disk) recoverRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 // reprise never knows: a change time that moved is then its own doing, and no change of anyone else's. It says whether
 // the repair finished after all.
 func (d *Disk) ResolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
-	finished, err := d.resolveRepair(ctx, db, op, nowNS, why, wrote)
+	finished, err := d.resolveRepair(ctx, db, op, nowNS, why, wrote, false)
 	return finished, err
 }
 
-func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
+// ResolveRepairConfirmed is ResolveRepair once a chunk of the copy could not be read and the disk then confirmed, so that
+// the fault is the chunk's (invariant 4, specs.md §16.1): a bad chunk the repair could not read, with nothing saved of it
+// yet, holds what the repair found, as no write begins before every bad chunk is saved; any other that cannot be read
+// holds neither its hash nor what was saved of it, and the reprise decides from what it holds. Without it, a sector that
+// cannot be read kept the repair planned for good, the copy corrupt in the root, taken again by no scrub (flaw 34 of
+// the TLA+ models).
+func (d *Disk) ResolveRepairConfirmed(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
+	finished, err := d.resolveRepair(ctx, db, op, nowNS, why, wrote, true)
+	return finished, err
+}
+
+func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote, confirmed bool) (bool, error) {
 	saved, err := d.SavedChunks(op)
 	if err != nil {
 		return false, err
@@ -475,7 +486,7 @@ func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if st.Size != row.Size || int64(len(row.Chunks)) != chunks*integrity.HashSize {
 		return stop(sql.NullInt64{}, stoppedByChange)
 	}
-	seen, err := chunksNow(f, &row, bad, saved)
+	seen, err := chunksNow(f, &row, bad, saved, confirmed)
 	if err != nil {
 		return false, err
 	}
@@ -520,8 +531,8 @@ func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 }
 
 // chunksNow reads a copy whole, and says of each chunk whether the repair found it bad, whether it saved it, and
-// what it holds now.
-func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved map[int64]SavedChunk) ([]integrity.RepairChunk, error) {
+// what it holds now. confirmed says that a chunk that cannot be read is the chunk's fault, its disk confirmed since.
+func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved map[int64]SavedChunk, confirmed bool) ([]integrity.RepairChunk, error) {
 	n := (row.Size + integrity.ChunkSize - 1) / integrity.ChunkSize
 	found := make(map[int64]bool, len(bad))
 	for _, i := range bad {
@@ -541,8 +552,15 @@ func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved m
 			if err == nil || errors.Is(err, io.EOF) {
 				return nil, io.ErrUnexpectedEOF
 			}
+			// On a disk that confirmed since, the chunk's fault: as the repair found it, a bad chunk with nothing saved
+			// yet, and otherwise neither its hash nor what was saved, which RepairReprise weighs as any such chunk.
+			if confirmed {
+				_, isSaved := saved[i]
+				out[i] = integrity.RepairChunk{Bad: found[i], Saved: isSaved, Holds: integrity.HoldsOther}
+				continue
+			}
 			// Not the disk lost on the strength of this read alone: a sector that cannot be read, on a disk that confirms,
-			// would lose it at every reprise, for as long as the sector cannot be read.
+			// would lose it at every reprise, for as long as the sector cannot be read. The caller confirms the disk.
 			return nil, fmt.Errorf("%w: chunk %d: %w", ErrChunkUnreadable, i, err)
 		}
 		sum := integrity.ChunkSum(buf[:length])

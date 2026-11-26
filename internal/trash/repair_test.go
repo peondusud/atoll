@@ -160,24 +160,20 @@ func TestARepairOnAFullDisk(t *testing.T) {
 }
 
 // A copy that cannot be read to save its chunk, or that changes before the first write, is left as it was. One that
-// cannot be read either when the repair looks at it after keeps its operation planned, for the reprise: the session
-// says so, and the next run undoes it, as nothing was saved.
+// cannot be read either when the repair looks at it after, on a disk that confirms, is resolved at once, as the chunk's
+// fault: nothing saved, nothing written, the operation undone (flaw 34). It stayed planned for as long as the chunk could
+// not be read.
 func TestARepairThatStopsBeforeItWrites(t *testing.T) {
 	r := rotted(t)
 	r.b.failOn("t3", "readback", syscall.EIO)
 	s := r.b.opened()
 	outcome, err := s.RepairChunks(t.Context(), r.file, r.copy, []int64{0}, nil, r.healthy, r.chunks)
-	if err != nil || outcome != OutcomeIOError || !s.Lost() {
+	if err != nil || outcome != OutcomeIOError || s.Lost() {
 		t.Errorf("unreadable: %s, %v, lost %v", outcome, err, s.Lost())
 	}
 	s.Close()
-	if r.repairState() != "planned" || r.b.read("t3", "a") != "y" {
-		t.Errorf("the operation is %s", r.repairState())
-	}
-	delete(r.b.fail, r.b.dirs["t3"])
-	r.b.opened().Close()
 	if r.repairState() != "undone" || r.b.read("t3", "a") != "y" || r.b.count("SELECT count(*) FROM trash") != 0 {
-		t.Errorf("after the reprise: %s", r.repairState())
+		t.Errorf("the operation is %s", r.repairState())
 	}
 	r = rotted(t)
 	r.b.at["chunks-saved"] = func() {
@@ -281,39 +277,38 @@ func TestARepairWhoseChunkCannotBeReadBackOnADiskThatFails(t *testing.T) {
 // disk stays one that is written to, in that run and the next, while the chunk still cannot be read. The disk was lost
 // instead, by the repair's own look at the copy right after, then by the reprise of every later run, for as long as the
 // sector could not be read: the copy could never reach the trash, nor anything else be written there.
+//
+// Since flaw 34's fix, the repair is resolved at once from what the chunk holds then: a chunk that cannot be read holds
+// neither its hash nor what was saved of it, someone else's change for all the reprise can tell, so nothing more is done,
+// the time not set back, and the operation ends done, its chunk in the trash; the next look finds the copy changed.
 func TestARepairWhoseChunkCannotBeReadBackLosesNoDiskThatConfirms(t *testing.T) {
 	r := rotted(t)
 	r.failReadsFrom(3)
 	s := r.b.opened()
 	outcome, err := s.RepairChunks(t.Context(), r.file, r.copy, []int64{0}, nil, r.healthy, r.chunks)
-	if err != nil || outcome != OutcomeIOError || !s.Lost() {
+	if err != nil || outcome != OutcomeIOError || s.Lost() {
 		t.Errorf("%s, %v, lost %v", outcome, err, s.Lost())
 	}
-	if !s.Writable("t3") || r.b.diskState("t3") != "online" || r.repairState() != "planned" {
+	if !s.Writable("t3") || r.b.diskState("t3") != "online" || r.repairState() != "done" {
 		t.Errorf("writable %v, t3 is %s, the operation %s", s.Writable("t3"), r.b.diskState("t3"), r.repairState())
 	}
 	s.Close()
-	// The next run, the chunk still unreadable: its reprise leaves the operation planned, and the disk to be written to.
+	// The next run, the chunk still unreadable: nothing planned is left, and the disk is written to as before.
 	s = r.b.opened()
-	if !s.Writable("t3") || !s.Lost() || r.b.diskState("t3") != "online" || r.repairState() != "planned" {
+	if !s.Writable("t3") || s.Lost() || r.b.diskState("t3") != "online" || r.repairState() != "done" {
 		t.Errorf("the next run: writable %v, lost %v, t3 is %s, the operation %s", s.Writable("t3"), s.Lost(), r.b.diskState("t3"), r.repairState())
 	}
 	s.Close()
-	// Once it can be read, the reprise finds every chunk written, and finishes it.
-	delete(r.b.fail, r.b.dirs["t3"])
-	r.b.opened().Close()
-	if r.repairState() != "done" || r.b.read("t3", "a") != "x" {
-		t.Errorf("once readable, the operation is %s", r.repairState())
-	}
 }
 
 // The reprise of a repair whose chunk still cannot be read, on a disk that no longer confirms, loses the disk, and
 // the operation waits for a run that can read it (invariant 4).
 func TestARepriseOfARepairOnADiskThatNoLongerConfirms(t *testing.T) {
 	r := rotted(t)
-	r.failReadsFrom(3)
-	if got := r.repaired(true); got != OutcomeIOError || r.repairState() != "planned" {
-		t.Fatalf("%s, the operation %s", got, r.repairState())
+	r.stoppedAt("chunk-looked", nil)
+	r.failReadsFrom(1)
+	if r.repairState() != "planned" {
+		t.Fatalf("the operation %s", r.repairState())
 	}
 	// The next run confirms the disk to open it, then once more after the read that fails: that one fails.
 	mount := r.b.dirs["t3"]
