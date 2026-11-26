@@ -113,7 +113,7 @@
     {
       "section": "17",
       "title": "## 17. Trash",
-      "sha256": "ccf69e95a83387c871928565f23d03fcd11e31efa9637aa564490ce309f789e1"
+      "sha256": "f3871a252a22aac60234d66d41b54d01cc6e40f5a30050578edc91daee6b381a"
     },
     {
       "section": "17.1",
@@ -123,7 +123,7 @@
     {
       "section": "17.2",
       "title": "### 17.2 Reprise after a crash",
-      "sha256": "7ca7a44fbd7117abd3c200bd3895df48b6dafd98910714e1dc5b505024726ecb"
+      "sha256": "4479fd61a25ef4f21881929c95d8c9a6b474a5c55c9034c47b87a51bef2c9767"
     },
     {
       "section": "17.3",
@@ -143,7 +143,7 @@
     {
       "section": "18",
       "title": "## 18. Disk lifecycle",
-      "sha256": "08795d5d63741cbba33bbf3b8366f27e9894379b69184159204f5f666333ec5c"
+      "sha256": "c363b20ed64c3209270411726b21b61cdfcd860f075c176fa90ca08551d13369"
     },
     {
       "section": "19",

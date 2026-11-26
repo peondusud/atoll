@@ -15,6 +15,7 @@ import (
 	"github.com/peondusud/atoll/internal/fsx"
 	"github.com/peondusud/atoll/internal/layout"
 	"github.com/peondusud/atoll/internal/ops"
+	"github.com/peondusud/atoll/internal/watch"
 )
 
 // The changes atoll disk remove and atoll disk fail make (api/schemas/disk-change.schema.json).
@@ -156,7 +157,17 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 		out.Warnings = append(out.Warnings, kind)
 		report(stderr, "warning: "+message)
 	}
-	if err := readHolds(ctx, c, d.ID, &out); err != nil {
+	var held []string
+	if change == changeRemove {
+		var refusal error
+		if held, refusal, err = lookBeforeRemoval(ctx, c, m, d, !dryRun && parsed.flags["--yes"]); err != nil {
+			return failure(stderr, fmt.Errorf("disk remove: %w", err))
+		}
+		if refusal != nil {
+			return failure(stderr, fmt.Errorf("disk remove: %w", refusal))
+		}
+	}
+	if err := readHolds(ctx, c, d.ID, held, &out); err != nil {
 		return failure(stderr, err)
 	}
 	newText, refusal := changedText(text, d, change, &out)
@@ -174,6 +185,15 @@ func diskStateChange(configPath string, parsed diskIDArgs, change string, stdout
 		edited, err := config.Parse(newText)
 		if err != nil {
 			return failure(stderr, fmt.Errorf(T("disk %s: the configuration would not load: %w"), verbOf(change), err))
+		}
+		if change == changeRemove && d.State == config.DiskFailed && out.PlannedOperations > 0 {
+			// failed-remove-drops, the maintainer's remedy of flaw 30 (2026-11-26): what is planned on a failed disk,
+			// which nothing ends, is dropped by its explicit removal, before the configuration is edited, so that a stop
+			// in between leaves a failed disk with nothing planned, which the next removal takes out.
+			if err := dropPlanned(ctx, c, d.ID, m.Now()); err != nil {
+				return failure(stderr, fmt.Errorf("disk remove: %w", err))
+			}
+			m.Checkpoint("remove-dropped")
 		}
 		partial, err := configInPlace(fsx.ReplaceFile(configPath, text, newText), warn)
 		if err != nil {
@@ -202,14 +222,89 @@ func verbOf(change string) string {
 	return "remove"
 }
 
-// readHolds reads what the catalog knows the disk holds.
-func readHolds(ctx context.Context, c *config.Config, id string, out *diskChangeOutput) (err error) {
+// lookBeforeRemoval is the look of atoll disk remove, remove-looks, the maintainer's remedy of flaw 29 (2026-11-26;
+// specs.md §18, §25; conformance/models/README.md): every disk's mount checked first, and recorded with record, so
+// that what depends on the disk is counted from what the disks hold now, which it gives as held, the other disks that
+// hold a copy; then the disk taken out, but a failed one, which nothing reads again, looked at as a scan would,
+// confirmed past the cache, writing nothing. A disk missing, one that cannot be looked at, and one that holds what the
+// catalog does not hold, stay: refusal says why.
+func lookBeforeRemoval(ctx context.Context, c *config.Config, m disks.Machine, d *config.Disk, record bool) (held []string, refusal, err error) {
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	var verdicts []disks.Verdict
+	if record {
+		verdicts, err = watch.CheckDisks(ctx, db, c, m, m.Now())
+	} else {
+		verdicts, err = watch.CheckOnly(ctx, db, c, m)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w", err)
+	}
+	m.Checkpoint("remove-checked")
+	held = []string{}
+	var mine disks.Verdict
+	for i := range c.Disks {
+		e, v := &c.Disks[i], verdicts[i]
+		switch {
+		case e.ID == d.ID:
+			mine = v
+		case e.State == config.DiskFailed:
+		case v.State == disks.Readonly, v.State == disks.Online && e.State != config.DiskDraining:
+			// As the catalog records them: a draining disk online counts for nothing, one mounted read-only counts.
+			held = append(held, e.ID)
+		}
+	}
+	if d.State == config.DiskFailed {
+		return held, nil, nil
+	}
+	if mine.State == disks.Missing {
+		return nil, fmt.Errorf(T("it is missing (%s): atoll disk fail %s first, which gives up what only it holds, then remove it"), mine.Reason, d.ID), nil
+	}
+	report, err := watch.CompareDisk(ctx, db, c, m, d, mine)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w", err)
+	}
+	if !report.Walked {
+		// An I/O error says the disk is unknown, never what it holds (invariant 4).
+		return nil, fmt.Errorf(T("it could not be looked at (%s, %s): what it holds cannot be told, so it stays"), report.Verdict.Reason, report.Verdict.Message), nil
+	}
+	if other := len(report.Changed) + len(report.Moved) + len(report.Absent) + len(report.PathTaken) + len(report.Unreadable) +
+		len(report.TooLong); report.New > 0 || other > 0 {
+		return nil, fmt.Errorf(T("it holds what the catalog does not hold, %d files new to it and %d copies changed, moved, absent or unread: a pass takes it in first, atoll daemon --until-idle or atoll scan, then remove it"),
+			report.New, other), nil
+	}
+	m.Checkpoint("remove-looked")
+	return held, nil, nil
+}
+
+// dropPlanned undoes in the catalog what is planned on a failed disk that disk remove takes out (specs.md §25).
+func dropPlanned(ctx context.Context, c *config.Config, id string, nowNS int64) (err error) {
 	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}
 	defer func() { err = errors.Join(err, db.Close()) }()
-	holds, err := catalog.ReadDiskHolds(ctx, db, id, firstDepending)
+	_, err = catalog.DropPlannedOn(ctx, db, id, nowNS)
+	return err //nolint:wrapcheck // the catalog names the disk
+}
+
+// readHolds reads what the catalog knows the disk holds: what depends on it counted on the disks of held, or on those
+// the catalog last recorded holding a copy when held is nil.
+func readHolds(ctx context.Context, c *config.Config, id string, held []string, out *diskChangeOutput) (err error) {
+	db, err := catalog.OpenPool(ctx, catalogPath(c), c.PoolID)
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+	defer func() { err = errors.Join(err, db.Close()) }()
+	var holds *catalog.DiskHolds
+	if held == nil {
+		holds, err = catalog.ReadDiskHolds(ctx, db, id, firstDepending)
+	} else {
+		holds, err = catalog.ReadDiskHoldsAmong(ctx, db, id, firstDepending, held)
+	}
 	if err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
@@ -239,7 +334,7 @@ func changedText(text []byte, d *config.Disk, change string, out *diskChangeOutp
 		return config.SetDiskState(text, d.ID, config.DiskFailed) //nolint:wrapcheck // likewise
 	default:
 		switch {
-		case out.PlannedOperations > 0:
+		case out.PlannedOperations > 0 && d.State != config.DiskFailed:
 			return nil, fmt.Errorf(T("%d operations wait on it: mount it, and let the daemon or atoll daemon --until-idle end them"), out.PlannedOperations)
 		case d.State == config.DiskDraining && out.Depending > 0:
 			return nil, fmt.Errorf(T("it is draining, and %d files still depend on it, among them %s: remove it once none does (atoll disk show %s)"),

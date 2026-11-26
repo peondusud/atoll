@@ -35,11 +35,11 @@
    mergerfs, whose branch of a draining disk takes a write to a file it holds, or while the disk is away from its
    path. And Atoll's process may be killed between any two steps.
 
-   Flaws 29 and 30, open (README.md): disk remove counts what depends on a disk from the catalog alone, so that a
+   Flaws 29 and 30, fixed (README.md): disk remove counted what depends on a disk from the catalog alone, so that a
    user's edit made there and not yet taken in by a pass, a disk gone since the last pass, or a surplus copy whose kept
-   one is on such a disk, goes out with it; and a disk declared failed with an operation planned on it can never be
-   taken out, as nothing reads or writes a failed disk again and disk remove refuses it for that operation. The
-   remedies proposed, in Fixes, are the maintainer's to choose.
+   one is on such a disk, went out with it; and a disk declared failed with an operation planned on it could never be
+   taken out, as nothing reads or writes a failed disk again and disk remove refused it for that operation. The
+   maintainer's remedies of 2026-11-26, remove-looks and failed-remove-drops, are what every instance does.
 
    What it leaves out: the steps of a copy and of a move, a power cut, the view and the SSD cache (Replication.tla's,
    whose mount check, confirmation and handles held to a mount this model takes as they are), renames and folders,
@@ -77,8 +77,9 @@ SpareD == NDisks + 1
 All == 1..(IF Spare THEN NDisks + 1 ELSE NDisks)
 MaxV == 1 + MaxUser
 Vers == 1..MaxV
-\* the remedies proposed for flaw 29, remove-looks, and for flaw 30, failed-ops-undone or failed-remove-drops (README.md)
-FixNames == {"remove-looks", "failed-ops-undone", "failed-remove-drops"}
+\* flaws 29 and 30 are fixed, with remove-looks and failed-remove-drops, what every instance does (README.md): no remedy
+\* is proposed
+FixNames == {}
 
 ASSUME /\ NDisks \in 1..3 /\ Spare \in BOOLEAN /\ SpareClone \in BOOLEAN /\ SpareShares \in BOOLEAN /\ Level \in 0..2
        /\ Holders \subseteq 1..NDisks /\ Holders # {} /\ Fuse \in BOOLEAN /\ Remount \in BOOLEAN
@@ -198,16 +199,11 @@ Next1(ph) == IF pc.i < Cardinality(All) THEN [pc EXCEPT !.i = pc.i + 1] ELSE [pc
 
 (* §17.2: what is planned on a disk the session can write to is resolved, once its confirmation passed: undone here,
    as each job runs in one step with its commit. A failed disk is never written again (§18): what is planned there
-   stays. *)
+   stays, until disk remove drops it (below). *)
 RepStep ==
     /\ pc.ph = "reprise"
     /\ LET d == pc.i IN
-       IF cat.op[d].k # "" /\ cat.cfg[d] = "failed" /\ "failed-ops-undone" \in Fixes
-       THEN \* failed-ops-undone, proposed for flaw 30 (README.md): what is planned on a failed disk is undone in the
-            \* catalog alone, as nothing reads or writes that disk again (§18)
-            /\ cat' = [cat EXCEPT !.cp[d] = cat.op[d].was, !.cv[d] = cat.op[d].wv, !.op[d] = NoOp]
-            /\ UNCHANGED ses
-       ELSE IF cat.op[d].k # "" /\ Writable(d)
+       IF cat.op[d].k # "" /\ Writable(d)
        THEN IF (ses.bound[d] \/ Confirm(d)) /\ Answers(d) /\ w.mt[d] = "live"
             THEN /\ cat' = [cat EXCEPT !.cp[d] = cat.op[d].was, !.cv[d] = cat.op[d].wv, !.op[d] = NoOp]
                  /\ ses' = [ses EXCEPT !.bound[d] = TRUE]
@@ -407,30 +403,19 @@ Fail(d) ==
     /\ Counted
     /\ UNCHANGED <<pc, ses>>
 
-(* §18, §25: disk remove, from what the catalog holds: refused for a disk with an operation planned on it, and for
-   one not failed that the file depends on. *)
-Dropped(d) == "failed-remove-drops" \in Fixes /\ cat.cfg[d] = "failed"
-Remove(d) ==
-    /\ "remove-looks" \notin Fixes
-    /\ Cmd("remove") /\ d \in CmdDisks /\ cat.cfg[d] \in {"in", "draining", "failed"}
-    /\ cat.op[d].k = "" \/ Dropped(d)
-    /\ cat.cfg[d] = "failed" \/ ~Depending(d)
-    /\ cat' = [cat EXCEPT !.cfg[d] = "out", !.op[d] = NoOp,
-                          !.cp[d] = IF @ = "pending" THEN cat.op[d].was ELSE @]
-    /\ Counted
-    /\ UNCHANGED <<pc, ses, ghost>>
-
-(* remove-looks, proposed for flaw 29 (README.md): under the pool's lock, disk remove checks every disk's mount and
-   records what it found, as it records the disks' states after its change, before it counts what depends on the
-   disk, a surplus copy counted as an ok one, there and elsewhere, as the plan that marked it may have counted a disk
-   gone since; and it looks at the disk it takes out, not failed, once its confirmation passes, as a walk would, refusing
-   it when the copy at the path is not what its row says, or when it cannot be looked at. Then it edits the
-   configuration, a step of its own. *)
+(* §18, §25: disk remove, with remove-looks, the maintainer's remedy of flaw 29 (2026-11-26, README.md): under the
+   pool's lock it checks every disk's mount and records what it found (remove-checked) before it counts what depends on
+   the disk, a surplus copy counted as an ok one, there and elsewhere, as the plan that marked it may have counted a
+   disk gone since; and it looks at the disk it takes out, not failed, once its confirmation passes, as a walk would,
+   refusing it when the copy at the path is not what its row says, or when it cannot be looked at, a disk missing
+   included (remove-looked); one step here, as its checks change nothing a stop right after them would leave wrong. It
+   refuses a disk not failed with an operation planned on it. Of a failed disk, with failed-remove-drops, the
+   maintainer's remedy of flaw 30, it drops what is planned there, in the catalog alone (remove-dropped), a step of its
+   own; then it edits the configuration, a step of its own. *)
 NothingNew(d) == IF cat.cp[d] \in Kept \cup {"stale"} THEN Seen(d) = cat.cv[d] ELSE Seen(d) = 0
 RmLook(d) ==
-    /\ "remove-looks" \in Fixes
     /\ Cmd("remove") /\ d \in CmdDisks /\ cat.cfg[d] \in {"in", "draining", "failed"}
-    /\ cat.op[d].k = "" \/ Dropped(d)
+    /\ cat.op[d].k = "" \/ cat.cfg[d] = "failed"
     /\ LET v == [e \in All |-> IF InUse(e) THEN Verdict(e) ELSE "none"]
            c2 == [cat EXCEPT !.cst = [e \in All |-> IF v[e] = "none" THEN cat.cst[e] ELSE v[e]]]
            dep == c2.cp[d] \in Kept /\ (c2.cfl \/ Cardinality({e \in All \ {d} :
@@ -441,10 +426,13 @@ RmLook(d) ==
           /\ cat' = c2
     /\ pc' = [pc EXCEPT !.ph = "rm", !.i = d]
     /\ UNCHANGED <<w, ses, ghost>>
+RmDrop ==
+    /\ pc.ph = "rm" /\ cat.cfg[pc.i] = "failed" /\ cat.op[pc.i].k # ""
+    /\ cat' = [cat EXCEPT !.op[pc.i] = NoOp, !.cp[pc.i] = cat.op[pc.i].was, !.cv[pc.i] = cat.op[pc.i].wv]
+    /\ UNCHANGED <<w, pc, ses, ghost>>
 RmEdit ==
-    /\ pc.ph = "rm"
-    /\ cat' = [cat EXCEPT !.cfg[pc.i] = "out", !.op[pc.i] = NoOp,
-                          !.cp[pc.i] = IF @ = "pending" THEN cat.op[pc.i].was ELSE @]
+    /\ pc.ph = "rm" /\ cat.op[pc.i].k = ""
+    /\ cat' = [cat EXCEPT !.cfg[pc.i] = "out"]
     /\ pc' = [pc EXCEPT !.ph = "idle", !.i = 0]
     /\ Counted
     /\ UNCHANGED <<ses, ghost>>
@@ -553,8 +541,8 @@ AdminBack(d) ==
 Atoll == PassStart \/ RepStep \/ WalkStep \/ PlanStep \/ JobJournal \/ JobDo \/ PassEnd
          \/ \E d \in All : Grace(d) \/ RemountD(d)
 
-Commands == \/ \E d \in All : Drain(d) \/ Fail(d) \/ Remove(d) \/ RmLook(d) \/ Replace(d)
-            \/ Add \/ RmEdit
+Commands == \/ \E d \in All : Drain(d) \/ Fail(d) \/ RmLook(d) \/ Replace(d)
+            \/ Add \/ RmDrop \/ RmEdit
 World == \/ Kill
          \/ \E d \in All : \/ Edit(d)
                            \/ Unplug(d) \/ Fails(d) \/ Die(d) \/ IdleOut(d) \/ Umount(d) \/ MountOther(d)
@@ -569,7 +557,9 @@ Spec == Init /\ [][Next]_vars
    passes, strongly fair; a device comes back, what holds a mount lets go, and the administrator puts back what he
    took. *)
 Pass == PassStart \/ RepStep \/ WalkStep \/ PlanStep \/ JobJournal \/ JobDo \/ PassEnd
-LiveSpec == /\ Spec /\ WF_vars(Pass) /\ WF_vars(RmEdit)
+LiveSpec == /\ Spec /\ WF_vars(Pass) /\ WF_vars(RmDrop) /\ WF_vars(RmEdit)
+            \* a user who declared a disk failed takes it out, once the pool's lock lets the command run
+            /\ \A d \in All : SF_vars(RmLook(d) /\ cat.cfg[d] = "failed")
             /\ \A d \in All : /\ SF_vars(Grace(d)) /\ SF_vars(RemountD(d))
                               /\ WF_vars(Plug(d)) /\ WF_vars(Release(d)) /\ WF_vars(AdminBack(d))
 
@@ -618,13 +608,11 @@ Up(d) == w.dv[d] = "up" /\ w.mt[d] = "live" /\ ~w.ro[d] /\ ~w.mk[d]
 InService == {e \in All : cat.cfg[e] = "in" /\ Up(e)}
 AtLevel == Cardinality({e \in InService : cat.cp[e] \in Kept /\ cat.cv[e] = cat.cur})
                >= IF Level + 1 < Cardinality(InService) THEN Level + 1 ELSE Cardinality(InService)
-(* §18, §25: a failed disk can be taken out: nothing is planned on it that disk remove refuses it for. *)
-FailedCanGo == \A d \in All : cat.cfg[d] = "failed" => (cat.op[d].k = "" \/ "failed-remove-drops" \in Fixes)
 Settled ==
     /\ \A d \in All : InUse(d) /\ Up(d) => cat.cst[d] = "online" /\ cat.op[d].k = ""
     /\ (cat.cur # 0 /\ ~cat.cfl /\ \E e \in All : InUse(e) /\ Up(e) /\ cat.cp[e] \in Kept /\ cat.cv[e] = cat.cur) => AtLevel
     /\ \A d \in All : (cat.cfg[d] = "draining" /\ Up(d) /\ ~cat.cfl /\ Cardinality(InService) >= Level + 1) => ~Depending(d)
-    /\ FailedCanGo
 EventuallySettled == <>[]Settled
-FailedLeaves == <>[]FailedCanGo
+(* §18, §25: a failed disk the user takes out leaves the pool, whatever is planned on it (flaw 30). *)
+FailedLeaves == <>[](\A d \in All : cat.cfg[d] # "failed")
 =============================================================================

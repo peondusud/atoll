@@ -110,6 +110,8 @@ After each `atoll` step, on each disk (`specs.md` §6):
 | `decided` | once a pass has committed what it decided about a page of files, before anything runs on a disk (`specs.md` §15.12) |
 | `modified` | once a pass has committed a modification of one file, before anything runs on a disk (`specs.md` §15.4) |
 | `looked` | once the look before a purge for room of a `surplus` or `rebalance` entry has found its version at its file's path on another disk, before the purge is committed `planned` (`specs.md` §17; `../models/README.md`, flaw 28) |
+| `remove-checked`, `remove-looked` | in `atoll disk remove` (`specs.md` §18, §25): once every disk's mount is checked, and recorded with `--yes`, before what depends on the disk is counted; and once the look at the disk it takes out, but a failed one, found it as the catalog holds it, before the configuration is edited (`../models/README.md`, flaw 29) |
+| `remove-dropped` | in `atoll disk remove` of a failed disk with operations left planned on it, once they are undone in the catalog alone, before the configuration is edited (`specs.md` §25; `../models/README.md`, flaw 30) |
 | `journaled` | once a `trash`, `restore`, `rename`, `create`, `chown`, `chmod`, `utimens`, `xattr` or chunk `repair` operation, a purge, or a `link` or `unlink` of the link guard's links, is committed `planned`, before anything is written to a disk |
 | `copied` | once a `create` has copied the whole source into its `.part` and recorded every chunk hash, before the source is looked at again and the times are restored |
 | `verified` | once a `create` has re-read its `.part` against the chunk hashes and recorded the whole-file hash, before the target is resolved |
