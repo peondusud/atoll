@@ -12,7 +12,8 @@
     "Guards.tla",
     "Trash.tla",
     "Disks.tla",
-    "Scrub.tla"
+    "Scrub.tla",
+    "Balance.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -39,7 +40,7 @@
     {
       "section": "13.3",
       "title": "### 13.3 Solver",
-      "sha256": "1350b648b0d1d5228a9bb82a725ca22c569fd1054bad4581dcec2b9ea0444ee0"
+      "sha256": "2bae5862f22f0ef574a45d0c61e36eb1019f44ce8a865922d7eee1ec7fb49c5c"
     },
     {
       "section": "13.4",
