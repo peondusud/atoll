@@ -13,7 +13,8 @@
     "Trash.tla",
     "Disks.tla",
     "Scrub.tla",
-    "Balance.tla"
+    "Balance.tla",
+    "Rebuild.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -25,7 +26,7 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "74709f6b17e5992c64a348ec3d739b05b469869569f5c5c169ccbad9dbae2e86"
+      "sha256": "89e87eaabe62e579410aaf5cf00533c32db733a7b6b4b2571966e8fa1de68e8e"
     },
     {
       "section": "10",
