@@ -2,6 +2,16 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-27 on flaw 35 and the rebuild's observations (specs.md §9, §21.2, §25)
+
+The maintainer answered three questions, taking the option put first each time.
+
+- **Flaw 35: `rebuild-view`.** `catalog rebuild` and Atoll's own view exclude each other. A rebuild is refused while `atoll mount` runs, and the view does not start while a rebuild runs, so `atoll mount` is stopped for the time of a rebuild, an administrator's rare command. `view-follows` is set aside.
+- **§9 is corrected to say what the code does**, with no change to the code:
+  - a disk missing when a rebuild starts and back before its end does not count for where the new ids start, so a new operation may meet an old part in its `tmp/`, which the cleaning of `tmp/` then removes. A part is never a last copy, and no user data is at stake;
+  - the trash on the disks is listed again by a rebuild, which an older sentence of §9 still denied.
+- **The model's choices made alone** (the entry below) are confirmed together. The modes of §12.3 come after flaw 35's fix.
+
 ## atoll catalog rebuild in TLA+, flaw 35 found, open, 2026-11-27 (specs.md §9, §10, §14.2, §15.5, §15.6, §15.7, §17.2, §19, §21.2, §25)
 
 The sixth of the maintainer's models by risk (TODO.md), on the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `4403c79`: `conformance/models/Rebuild.tla` with `MCRebuild.tla` and eight instances. One flaw found, open, its remedy the maintainer's to choose; the modes of §12.3, the next model, not started, as a flaw stops the plan. No change to the code.
@@ -12,7 +22,7 @@ The sixth of the maintainer's models by risk (TODO.md), on the branch `worktree-
 - **Observations** (README.md): a disk missing at the rebuild's start and back for its listing and scan has its names left out of where the new ids start, as the code's warning says, and an operation that meets an old part there is undone, after which the cleaning of `tmp/` removes that part (`PartsKept` asked of every disk: `RebuildWorld` 478,887 states): no user's data, a part never being a file's last copy, but §9's "a new one never meets an old one's folder or part" is untrue for such a disk; §9's last sentence on the rebuild, "What the disks' trash holds is left on them, and the new catalog does not list it", reads as left from before the trash was listed again, nothing changed; a missing disk's trash stays unlisted until a rebuild runs again, as §9 says; a reject lost with the events is kept by the copies by hash (`RebuildGuard`).
 - **specs.md**: one sentence naming `Rebuild.tla` at the end of §9; nothing else. `fingerprints.json` lists `Rebuild.tla`, and §9 again, which `Replication.tla` and `Conflicts.tla` cite too, both confirmed unchanged against it, a sentence naming a model being all that changed. README.md: the module, its instances, flaw 35 open, `make model-flaws` with its test. TODO.md: the plan, and flaw 35.
 - **Checked**: `test/tla/run.sh`, every one of the 167 instances as it expects, flaw 35's the invariant it breaks, every instance of the other modules the very same states, in 40 min 55 s of TLC (40 min 56 s with the container's start), under 45 minutes, so the CI's `tla` job stays one; `go test ./conformance/models`; `make model-flaws` failing on flaw 35's test alone; `go vet -tags flaws`; gofmt; golangci-lint on `cmd/atoll` with the tag `flaws` and without, 0 issues; each mechanism taken out, and what each instance reaches, in copies not kept (README.md, How sensitive it is). States: RebuildWorld 1,814,442, RebuildGuard 93, RebuildThree 619,372, RebuildCache 140,645, RebuildViewData 78,189, RebuildLive 8,337, RebuildCacheLive 16,873, FlawRebuildViewHeld 1,904.
-- **Choices made alone, to confirm**:
+- **Choices made alone, confirmed by the maintainer on 2026-11-27** ("Tout confirmer", the answers above):
   - the flaw recorded as one of §9 and §21.2, the rebuild and the view not excluding each other, rather than an operator's error: neither section asks the view to stop, and §21.2 says the transfer never moves a copy the view holds open;
   - the transfer as the one step the view's holds keep, the case §21.2 names; the view's other operations, renames, deletions, parts and moves, whose rows a rebuild loses too, left out of this model;
   - a disk whose marker or identity is not its own folded into a missing one, as every check treats them alike;
