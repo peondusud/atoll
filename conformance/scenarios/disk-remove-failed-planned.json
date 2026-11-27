@@ -1,0 +1,124 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717.2, \u00a718, \u00a725",
+  "description": "Flaw 30, fixed with failed-remove-drops (conformance/models/README.md): a copy to t2 stopped once journaled, as kill -9 would, then t2 declared failed: nothing reads or writes it again, so no reprise ends that copy. disk remove of the failed disk drops it, undone in the catalog alone with an op-undone event, and takes t2 out.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nsettle = \"0s\"\nreplicas = 1\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ],
+      "exit": 137,
+      "crash_at": "journaled"
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          "t2",
+          "create",
+          "planned"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "fail",
+        "t2",
+        "--yes"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t2",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "disk": "t2",
+        "change": "remove",
+        "state_was": "failed",
+        "depending": 0,
+        "depending_first": [],
+        "only_there": 0,
+        "planned_operations": 1,
+        "done": true,
+        "warnings": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT disk_id, kind, state FROM ops ORDER BY id",
+      "rows": [
+        [
+          "t2",
+          "create",
+          "undone"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT count(*) FROM events WHERE kind = 'op-undone'",
+      "rows": [
+        [
+          1
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "online"
+        ],
+        [
+          "t2",
+          "retired"
+        ]
+      ]
+    }
+  ]
+}

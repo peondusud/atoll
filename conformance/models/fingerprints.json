@@ -6,7 +6,15 @@
     "Folders.tla",
     "ViewMove.tla",
     "ViewNames.tla",
-    "Nested.tla"
+    "Nested.tla",
+    "Collisions.tla",
+    "Conflicts.tla",
+    "Guards.tla",
+    "Trash.tla",
+    "Disks.tla",
+    "Scrub.tla",
+    "Balance.tla",
+    "Rebuild.tla"
   ],
   "normalisation": "specs.md read as UTF-8, CRLF as LF; each line without its trailing spaces and tabs; a section from its heading, one to six '#', a space and its number, to the line before the next heading of as many '#' or fewer, so that it holds its subsections, a heading inside a fenced code block (between lines that begin with ```) not counting; without its blank lines at the end; each line ended by LF; the SHA-256 of those bytes, in lowercase hexadecimal. conformance/models/fingerprints_test.go computes it.",
   "sections": [
@@ -18,12 +26,22 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "74709f6b17e5992c64a348ec3d739b05b469869569f5c5c169ccbad9dbae2e86"
+      "sha256": "cf7230d900aeb242b9510748a4cfdb8e8a6be8b12261531e9395e68cf58b36bb"
     },
     {
       "section": "10",
       "title": "## 10. Disk identity and mounts",
-      "sha256": "aa2fe3e7ea75a09cc65f4f3305cd6cf85930cbfe87cfc51a37ca1155b89a1ce9"
+      "sha256": "3d87d19c6a5d20935a5c5ad31b4123a659f77d00c820ae1605de19b8a61d179d"
+    },
+    {
+      "section": "12.4",
+      "title": "### 12.4 Placement",
+      "sha256": "2ed568cff08975c7948b35e3682772296f2c44d9dbe801f0b0c804be9e18fcd7"
+    },
+    {
+      "section": "13.3",
+      "title": "### 13.3 Solver",
+      "sha256": "2bae5862f22f0ef574a45d0c61e36eb1019f44ce8a865922d7eee1ec7fb49c5c"
     },
     {
       "section": "13.4",
@@ -61,6 +79,21 @@
       "sha256": "70937a3fd3075e7b18d7f7e04f2b9a10cecce0da92a1e75884ba9f6534090919"
     },
     {
+      "section": "15.6",
+      "title": "### 15.6 Safety guards",
+      "sha256": "33413368cca4d36c9ffaf534cf82bef8e703344a52eee82b2c2bfdd9ffce905a"
+    },
+    {
+      "section": "15.7",
+      "title": "### 15.7 Conflicts and name collisions",
+      "sha256": "c63ba478184772b1d5091550a984c13926e0df8a644517e8614b94bfc8fa69ab"
+    },
+    {
+      "section": "15.8",
+      "title": "### 15.8 Extended names",
+      "sha256": "d524a7a3af08fae340b3f124a12ac719298136d599953a64fb384f2a493269af"
+    },
+    {
       "section": "15.10",
       "title": "### 15.10 `atoll scan`",
       "sha256": "03a1b9a3e007272e33de38b686379c8f3e3e1f468f3643de97fd18faac3a4c4d"
@@ -71,9 +104,24 @@
       "sha256": "f4675deff207fe9eae0ae9c8ef4c7691e511e927c28b789e82f7259c5eb1c0fe"
     },
     {
+      "section": "15.13",
+      "title": "### 15.13 The daemon that runs for good",
+      "sha256": "60799756efb66e2f3b191c00f3fb875e3e31a752f55c2f1baa3b0a84ec6ab8c0"
+    },
+    {
+      "section": "16",
+      "title": "## 16. Integrity",
+      "sha256": "44577a6e355a896a6ea96c9f2af684bd067e0b7a22fc912d44e36df7a5885055"
+    },
+    {
+      "section": "16.1",
+      "title": "### 16.1 Repair",
+      "sha256": "e03936e8d0874f37cd8adc83a2ec9fc74fa5d57a208b4ca3be4d80daef41d8ca"
+    },
+    {
       "section": "17",
       "title": "## 17. Trash",
-      "sha256": "f5da85cc02e9f1f1c3893b046c36852b9a6daf60097ee683a44571d15bae68a0"
+      "sha256": "f3871a252a22aac60234d66d41b54d01cc6e40f5a30050578edc91daee6b381a"
     },
     {
       "section": "17.1",
@@ -83,12 +131,17 @@
     {
       "section": "17.2",
       "title": "### 17.2 Reprise after a crash",
-      "sha256": "7ca7a44fbd7117abd3c200bd3895df48b6dafd98910714e1dc5b505024726ecb"
+      "sha256": "4479fd61a25ef4f21881929c95d8c9a6b474a5c55c9034c47b87a51bef2c9767"
+    },
+    {
+      "section": "17.3",
+      "title": "### 17.3 `atoll prune`",
+      "sha256": "464cd684e957c26f823603ffabf1c1a3da6f3c57a580f823d52bcd55454f8258"
     },
     {
       "section": "17.4",
       "title": "### 17.4 `atoll trash`",
-      "sha256": "d474437ab93f1f8d3971f6c44a141cef09180f847aec11f5ff732eaa11f7a466"
+      "sha256": "4355f0e9df6a6b8b93389e927863f277f1e50a2913086d892ec20b1dc2f11979"
     },
     {
       "section": "17.5",
@@ -96,9 +149,14 @@
       "sha256": "4eaed6719c827181f722af98344fbeff62c8c27a38b2634d972207097a6a2a1a"
     },
     {
+      "section": "18",
+      "title": "## 18. Disk lifecycle",
+      "sha256": "c363b20ed64c3209270411726b21b61cdfcd860f075c176fa90ca08551d13369"
+    },
+    {
       "section": "19",
       "title": "## 19. SSD cache (phase 2b)",
-      "sha256": "e807602f8220535ffed37d906e464f3fe470615eb2c1980a2b922918eb90e3aa"
+      "sha256": "dd9f56e77f04360f9b1f24e5e673996f45683125f8b143fd09034ac76c3857ed"
     },
     {
       "section": "20",
@@ -108,7 +166,12 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "64259f910d49df8e0c1a212fdfedbf09a67ee0f2f4b69b935cb993384ce15bba"
+      "sha256": "7a89efefd113a484ba38980967942668a7ab388824b6d0380fdb43194378bd3f"
+    },
+    {
+      "section": "22",
+      "title": "## 22. Filesystems",
+      "sha256": "00d29ad175a75dff4690ee50afb77f00d558a7733e01ec568a173fbae6ca5ab2"
     }
   ]
 }

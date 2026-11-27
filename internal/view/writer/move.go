@@ -127,7 +127,7 @@ func (w *Writer) startMove(ctx context.Context, f *File, st *fsx.Stat, need int6
 	if err := w.mayMove(ctx, f, st); err != nil {
 		return nil, err
 	}
-	target, err := w.placeFor(ctx, f.Path, f.Disk, need)
+	target, err := w.placeFor(ctx, f.Path, map[string]bool{f.Disk: true}, need)
 	if err != nil {
 		return nil, err
 	}

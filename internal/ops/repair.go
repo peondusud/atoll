@@ -191,47 +191,93 @@ func (d *Disk) SyncChunks(op *Op) error {
 }
 
 // WriteChunk writes a chunk in place, at its offset, syncs the file, then reads it back past the page cache and
-// checks it against its hash (specs.md §16.1, step 5). ErrNotRepaired means that it read back otherwise.
-func (d *Disk) WriteChunk(f fsx.WritableFile, index int64, data, want []byte) error {
+// checks it against its hash (specs.md §16.1, step 5). ErrNotRepaired means that it read back otherwise. It gives what
+// the file is right after the write, before the sync, whose wait is long enough for anyone else's write to land: the
+// repair's next look tells that write by it.
+func (d *Disk) WriteChunk(f fsx.WritableFile, index int64, data, want []byte) (fsx.Stat, error) {
 	if _, err := f.WriteAt(data, index*integrity.ChunkSize); err != nil {
-		return classify(err)
+		return fsx.Stat{}, classify(err)
+	}
+	after, err := f.Info()
+	if err != nil {
+		return fsx.Stat{}, classify(err)
 	}
 	if err := f.Sync(); err != nil {
-		return lost(err)
+		return fsx.Stat{}, lost(err)
 	}
 	d.machine.Checkpoint("chunk-written")
 	if err := f.DropCache(); err != nil {
-		return classify(err)
+		return fsx.Stat{}, classify(err)
 	}
 	back := make([]byte, len(data))
 	if n, err := f.ReadAt(back, index*integrity.ChunkSize); n < len(back) {
 		if err == nil || errors.Is(err, io.EOF) {
-			return ErrNotRepaired
+			return fsx.Stat{}, ErrNotRepaired
 		}
-		return fmt.Errorf("%w: %w", ErrReadBack, err)
+		return fsx.Stat{}, fmt.Errorf("%w: %w", ErrReadBack, err)
 	}
 	sum := integrity.ChunkSum(back)
 	if !bytes.Equal(sum[:], want) {
-		return ErrNotRepaired
+		return fsx.Stat{}, ErrNotRepaired
 	}
-	return nil
+	return after, nil
 }
 
 // SetTimeBack sets a repaired copy's modification time back to its row's, leaving its access time as it is, and
-// syncs the file (specs.md §16.1, step 6). It gives what the file is after.
+// syncs the file (specs.md §16.1, step 6). It gives what the file is right after the time is set, before the sync, as
+// WriteChunk does.
 func (d *Disk) SetTimeBack(f fsx.WritableFile, mtime fsx.Time) (fsx.Stat, error) {
 	if err := f.SetTimes(fsx.OmitTime, mtime); err != nil {
+		return fsx.Stat{}, classify(err)
+	}
+	st, err := f.Info()
+	if err != nil {
 		return fsx.Stat{}, classify(err)
 	}
 	if err := f.Sync(); err != nil {
 		return fsx.Stat{}, lost(err)
 	}
 	d.machine.Checkpoint("times-set")
-	st, err := f.Info()
-	if err != nil {
-		return fsx.Stat{}, classify(err)
-	}
 	return st, nil
+}
+
+// ChunkStill reads a bad chunk of a copy open for a repair again, through buf, as long as the chunk, right before
+// the repair writes it, and says whether it still holds what the repair found there (specs.md §16.1): the bytes whose
+// hash is found, or, for a chunk the repair could not read (found nil), a read that still fails. On a disk that holds a
+// time to the second, a write in the second of the repair's own last change moves no time: this read tells it.
+func (d *Disk) ChunkStill(f fsx.WritableFile, index int64, buf []byte, found *[integrity.HashSize]byte) (bool, error) {
+	n, err := f.ReadAt(buf, index*integrity.ChunkSize)
+	short := n < len(buf)
+	if found == nil {
+		// Still unreadable is what was found; anything read is someone's write.
+		return short && err != nil && !errors.Is(err, io.EOF), nil
+	}
+	if short {
+		if err == nil || errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read chunk %d again: %w", index, err)
+	}
+	return integrity.ChunkSum(buf) == *found, nil
+}
+
+// LeaveRepair ends a repair whose look found someone else's write in the copy (specs.md §16.1): nothing more is
+// written to it, its time is not set back, and its row stays as it was, so that the write stays a change, which the
+// copy's settling makes a conflict, every version kept; the operation ends done when a chunk reached the trash, which
+// keeps it, and undone when none did, with the event repair-stopped, changed.
+func (d *Disk) LeaveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64) error {
+	saved, err := d.SavedChunks(op)
+	if err != nil {
+		return err
+	}
+	var savedBytes int64
+	for _, chunk := range saved {
+		savedBytes += chunk.Size
+	}
+	if err := catalog.StopRepair(ctx, db, op, savedBytes, len(saved) > 0, sql.NullInt64{}, stoppedByChange, nowNS); err != nil {
+		return fmt.Errorf("catalog: %w", err)
+	}
+	return nil
 }
 
 // SavedChunk is what a repair saved of a chunk: how many bytes, and their hash. The bytes themselves are never held:
@@ -384,11 +430,22 @@ func (d *Disk) recoverRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 // reprise never knows: a change time that moved is then its own doing, and no change of anyone else's. It says whether
 // the repair finished after all.
 func (d *Disk) ResolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
-	finished, err := d.resolveRepair(ctx, db, op, nowNS, why, wrote)
+	finished, err := d.resolveRepair(ctx, db, op, nowNS, why, wrote, false)
 	return finished, err
 }
 
-func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
+// ResolveRepairConfirmed is ResolveRepair once a chunk of the copy could not be read and the disk then confirmed, so that
+// the fault is the chunk's (invariant 4, specs.md §16.1): a bad chunk the repair could not read, with nothing saved of it
+// yet, holds what the repair found, as no write begins before every bad chunk is saved; any other that cannot be read
+// holds neither its hash nor what was saved of it, and the reprise decides from what it holds. Without it, a sector that
+// cannot be read kept the repair planned for good, the copy corrupt in the root, taken again by no scrub (flaw 34 of
+// the TLA+ models).
+func (d *Disk) ResolveRepairConfirmed(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote bool) (bool, error) {
+	finished, err := d.resolveRepair(ctx, db, op, nowNS, why, wrote, true)
+	return finished, err
+}
+
+func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int64, why string, wrote, confirmed bool) (bool, error) {
 	saved, err := d.SavedChunks(op)
 	if err != nil {
 		return false, err
@@ -429,7 +486,7 @@ func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 	if st.Size != row.Size || int64(len(row.Chunks)) != chunks*integrity.HashSize {
 		return stop(sql.NullInt64{}, stoppedByChange)
 	}
-	seen, err := chunksNow(f, &row, bad, saved)
+	seen, err := chunksNow(f, &row, bad, saved, confirmed)
 	if err != nil {
 		return false, err
 	}
@@ -474,8 +531,8 @@ func (d *Disk) resolveRepair(ctx context.Context, db *sql.DB, op *Op, nowNS int6
 }
 
 // chunksNow reads a copy whole, and says of each chunk whether the repair found it bad, whether it saved it, and
-// what it holds now.
-func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved map[int64]SavedChunk) ([]integrity.RepairChunk, error) {
+// what it holds now. confirmed says that a chunk that cannot be read is the chunk's fault, its disk confirmed since.
+func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved map[int64]SavedChunk, confirmed bool) ([]integrity.RepairChunk, error) {
 	n := (row.Size + integrity.ChunkSize - 1) / integrity.ChunkSize
 	found := make(map[int64]bool, len(bad))
 	for _, i := range bad {
@@ -495,8 +552,15 @@ func chunksNow(f fsx.WritableFile, row *catalog.RepairCopy, bad []int64, saved m
 			if err == nil || errors.Is(err, io.EOF) {
 				return nil, io.ErrUnexpectedEOF
 			}
+			// On a disk that confirmed since, the chunk's fault: as the repair found it, a bad chunk with nothing saved
+			// yet, and otherwise neither its hash nor what was saved, which RepairReprise weighs as any such chunk.
+			if confirmed {
+				_, isSaved := saved[i]
+				out[i] = integrity.RepairChunk{Bad: found[i], Saved: isSaved, Holds: integrity.HoldsOther}
+				continue
+			}
 			// Not the disk lost on the strength of this read alone: a sector that cannot be read, on a disk that confirms,
-			// would lose it at every reprise, for as long as the sector cannot be read.
+			// would lose it at every reprise, for as long as the sector cannot be read. The caller confirms the disk.
 			return nil, fmt.Errorf("%w: chunk %d: %w", ErrChunkUnreadable, i, err)
 		}
 		sum := integrity.ChunkSum(buf[:length])

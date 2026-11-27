@@ -31,6 +31,15 @@ type Recovered struct {
 	Trashed []int64
 	// Disagree counts the operations it left planned as a name and its file's record disagree.
 	Disagree int
+	// Unreadable holds the repairs it left planned as a chunk of the copy cannot be read, each with its error: once the
+	// disk confirms, the chunk's fault, and ResolveRepairConfirmed resolves them (specs.md §16.1, invariant 4).
+	Unreadable []UnreadableRepair
+}
+
+// UnreadableRepair is a repair whose reprise could not read a chunk of its copy.
+type UnreadableRepair struct {
+	Op  Op
+	Err error
 }
 
 // RestoredPath is a restore a reprise finished.
@@ -55,6 +64,10 @@ func (d *Disk) Recover(ctx context.Context, db *sql.DB, list []Op, nowNS int64, 
 		if err := d.recoverOne(ctx, db, &list[i], nowNS, retention, out); err != nil {
 			if errors.Is(err, ErrDiskLost) {
 				return out, err
+			}
+			if errors.Is(err, ErrChunkUnreadable) {
+				// In out.Unreadable, for the caller to confirm the disk and resolve it.
+				continue
 			}
 			slog.Warn("an operation stays planned", "disk", d.ID, "op", list[i].ID, "error", err)
 			stayed = errors.Join(stayed, err)
@@ -123,7 +136,11 @@ func (d *Disk) recoverOne(ctx context.Context, db *sql.DB, op *Op, nowNS int64, 
 	case catalog.OpChown:
 		return d.recoverChown(ctx, db, op, nowNS)
 	case catalog.OpRepair:
-		return d.recoverRepair(ctx, db, op, nowNS)
+		err := d.recoverRepair(ctx, db, op, nowNS)
+		if errors.Is(err, ErrChunkUnreadable) {
+			out.Unreadable = append(out.Unreadable, UnreadableRepair{Op: *op, Err: err})
+		}
+		return err
 	default:
 		return fmt.Errorf("reprise: operation %d: no reprise for %q", op.ID, op.Kind)
 	}

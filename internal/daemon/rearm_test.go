@@ -30,7 +30,8 @@ func (m *folderDisks) Mount(mount string) disks.MountSeen {
 func (m *folderDisks) Device(_ names.Filesystem, entry *disks.MountEntry) disks.DeviceSeen {
 	for i := range m.list {
 		if m.list[i].Mount == entry.MountPoint {
-			return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: m.list[i].UUID}}
+			// The precision a check of an ext4 with the inodes mkfs gives reads from its head (specs.md §10).
+			return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: m.list[i].UUID, TimePrecisionNS: 1}}
 		}
 	}
 	return disks.DeviceSeen{Device: disks.DeviceGoneAway}

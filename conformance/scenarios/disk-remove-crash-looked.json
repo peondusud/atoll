@@ -1,0 +1,115 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a718, \u00a725, \u00a729.4",
+  "description": "disk remove stopped, as kill -9 would, at remove-looked: the configuration and the disk as they were; run again, t3 goes.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nsettle = \"0s\"\nreplicas = 1\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t3",
+        "--yes"
+      ],
+      "exit": 137,
+      "crash_at": "remove-looked"
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "online"
+        ],
+        [
+          "t2",
+          "online"
+        ],
+        [
+          "t3",
+          "online"
+        ]
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t3",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "online"
+        ],
+        [
+          "t2",
+          "online"
+        ],
+        [
+          "t3",
+          "retired"
+        ]
+      ]
+    }
+  ]
+}

@@ -80,10 +80,10 @@ func firstChanged(in *solver.ModInput) *solver.ModCopy {
 }
 
 // heldBefore says whether the mass-modification guard of a disk holds a file whose copy there changed at that
-// change time, before anything of it is read: one stands, and no answer covers that change.
+// change time, before anything of it is read: one stands, and no answer covers that change, nor any reject.
 func (p *pass) heldBefore(disk string, ctimeNS int64) bool {
 	g := p.modGuards[disk]
-	return g != nil && g.tripped && !p.answers(g, ctimeNS)
+	return g != nil && g.tripped && !p.answers(g, ctimeNS) && !g.read.Rejected(ctimeNS)
 }
 
 // answers says whether an answer to a guard decides a change at that change time: its last answer, given within its
@@ -105,9 +105,11 @@ func (p *pass) answerOver(disk string, ctimeNS int64) int64 {
 }
 
 // guardModification asks the mass-modification guard about a decision that would make copies stale (specs.md §15.6):
-// an answer decides it, a reject making it a conflict; otherwise it counts, over the window and over the day, and the
-// one that would trip either waits, as heldBefore holds every one after it. The window is asked first: a burst that
-// trips both is the window's. It says whether the decision goes, and whether a confirm answered it.
+// an answer decides it, a reject making it a conflict, and any reject that covers it, whatever answer came after it and
+// however long ago (flaw 27 of conformance/models/README.md, the maintainer's remedy reject-kept); otherwise it counts,
+// over the window and over the day, and the one that would trip either waits, as heldBefore holds every one after it.
+// The window is asked first: a burst that trips both is the window's. It says whether the decision goes, and whether a
+// confirm answered it.
 func (p *pass) guardModification(ctx context.Context, d *solver.ModDecision, ctimeNS int64) (goes, answered bool, err error) {
 	if d.Kind != solver.ModModified || len(d.Stale) == 0 {
 		return true, false, nil
@@ -115,7 +117,7 @@ func (p *pass) guardModification(ctx context.Context, d *solver.ModDecision, cti
 	disk := d.Changed[0]
 	g := p.modGuards[disk]
 	switch {
-	case p.answers(g, ctimeNS) && g.read.Answer == catalog.EventModifyGuardReject:
+	case g.read.Rejected(ctimeNS), p.answers(g, ctimeNS) && g.read.Answer == catalog.EventModifyGuardReject:
 		d.Kind, d.Stale, d.Hash = solver.ModConflict, nil, nil
 		return true, false, nil
 	case p.answers(g, ctimeNS):

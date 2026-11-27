@@ -1,6 +1,7 @@
 package trash
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -339,16 +340,21 @@ func (s *Session) recoverAll(ctx context.Context) error {
 			return fmt.Errorf("%w", err)
 		case err != nil:
 			s.lost = true
-			// The reprise of a repair that could not read a chunk of its copy: the copy's fault while the disk confirms,
-			// which is written to as before; the disk's otherwise (invariant 4, specs.md §16.1).
-			if errors.Is(err, ops.ErrChunkUnreadable) {
-				confirmed, cerr := s.Confirms(ctx, id, err)
-				if cerr != nil {
-					return cerr
-				}
-				if !confirmed {
-					continue
-				}
+		}
+		// The reprise of a repair that could not read a chunk of its copy: the copy's fault while the disk confirms, which
+		// is written to as before, and the repair resolved from what the other chunks hold; the disk's otherwise
+		// (invariant 4, specs.md §16.1). A sector that cannot be read kept the repair planned for good (flaw 34).
+		if len(recovered.Unreadable) > 0 {
+			confirmed, cerr := s.Confirms(ctx, id, recovered.Unreadable[0].Err)
+			if cerr != nil {
+				return cerr
+			}
+			if !confirmed {
+				s.lost = true
+				continue
+			}
+			if err := s.resolveUnreadable(ctx, handle, recovered.Unreadable); err != nil {
+				return err
 			}
 		}
 		// What the reprise resolved keeps its parts no more: tmp/ is cleaned after it, as it was when the disk was
@@ -357,6 +363,24 @@ func (s *Session) recoverAll(ctx context.Context) error {
 			if err := s.cleanTmp(ctx, id, handle); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// resolveUnreadable resolves the repairs a reprise left planned for a chunk that cannot be read, once their disk confirmed:
+// one that cannot be resolved still stays planned, which the session says.
+func (s *Session) resolveUnreadable(ctx context.Context, handle *ops.Disk, list []ops.UnreadableRepair) error {
+	for i := range list {
+		finished, err := handle.ResolveRepairConfirmed(ctx, s.db, &list[i].Op, s.now, "", false)
+		switch {
+		case errors.Is(err, ops.ErrDiskLost):
+			return s.lose(ctx, handle.ID, err)
+		case err != nil:
+			slog.Warn("an operation stays planned", "disk", handle.ID, "op", list[i].Op.ID, "error", err)
+			s.lost = true
+		default:
+			s.changed = s.changed || finished
 		}
 	}
 	return nil
@@ -766,7 +790,7 @@ func (s *Session) Send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyR
 // it left its place, purged or not. One the purge leaves stays in the trash, which its retention or trash.max_size
 // empties.
 func (s *Session) Transfer(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow) (string, error) {
-	outcome, op, err := s.sendFor(ctx, f, c, reasonSurplus, true)
+	outcome, op, err := s.sendFor(ctx, f, c, reasonSurplus, true, false)
 	if err != nil || outcome != OutcomeTrashed || op == nil {
 		return outcome, err
 	}
@@ -834,12 +858,13 @@ const OutcomeViewHolds = "view-holds"
 
 // send is Send, which also gives the operation that moved the copy, when one did.
 func (s *Session) send(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string) (string, *ops.Op, error) {
-	return s.sendFor(ctx, f, c, reason, false)
+	return s.sendFor(ctx, f, c, reason, false, false)
 }
 
-// sendFor is send, which with viewFree waits while an operation of the view touches the copy's path, read in the
+// sendFor is send, which with viewFree waits while an operation of the view no pass has taken in touches the copy's
+// path, and with heldFree while the view holds a write open or runs an operation unfinished there, each read in the
 // transaction that journals the move: OutcomeViewHolds, nothing journaled.
-func (s *Session) sendFor(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string, viewFree bool) (string, *ops.Op, error) {
+func (s *Session) sendFor(ctx context.Context, f *catalog.FileRow, c *catalog.CopyRow, reason string, viewFree, heldFree bool) (string, *ops.Op, error) {
 	place := c.Place(f)
 	// A disk that may only be read is never written to, whoever asks (specs.md §10): its trash is on it.
 	if !s.writable(c.Disk) {
@@ -864,7 +889,7 @@ func (s *Session) sendFor(ctx context.Context, f *catalog.FileRow, c *catalog.Co
 	}
 	op, err := catalog.BeginTrash(ctx, s.db, &catalog.TrashStart{
 		Disk: c.Disk, Path: place, FileKey: c.FileKey.String, Size: c.Size, Hash: hash, Reason: reason,
-		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention), ViewFree: viewFree,
+		NowNS: s.now, ExpiresNS: ops.AddRetention(s.now, s.retention), ViewFree: viewFree, HeldFree: heldFree,
 	})
 	if errors.Is(err, catalog.ErrViewHolds) {
 		return OutcomeViewHolds, nil, nil
@@ -937,9 +962,12 @@ func (s *Session) afterFailedMove(ctx context.Context, handle *ops.Disk, op *ops
 }
 
 // failedOutcome says what became of an operation that did not happen. A path taken is a restore's
-// outcome: the place of a copy in the trash holds nothing of the user's that they could act on.
+// outcome: the place of a copy in the trash holds nothing of the user's that they could act on. A name that collides on
+// an NTFS disk, found right before the move, is a restore's name-collision, as one the catalog knows (specs.md §15.7).
 func failedOutcome(op *ops.Op, moveErr error) string {
 	switch {
+	case errors.Is(moveErr, ops.ErrNameCollides) && op.Kind == catalog.OpRestore:
+		return OutcomeNameCollision
 	case errors.Is(moveErr, ops.ErrNameRefused):
 		return OutcomeNameRefused
 	case errors.Is(moveErr, ops.ErrPathTaken) && (op.Kind == catalog.OpRestore || op.Kind == catalog.OpRename):
@@ -1033,10 +1061,13 @@ func (s *Session) restoreEntry(ctx context.Context, e *catalog.TrashEntry) (stri
 	if handle == nil || !s.writable(e.Disk) {
 		return outcomeUnavailable, nil
 	}
-	taken, missing, err := handle.LookAt(e.Path)
+	taken, missing, err := handle.LookAt(e.Path, "")
 	switch {
 	case errors.Is(err, ops.ErrDiskLost):
 		return outcomeUnavailable, s.lose(ctx, e.Disk, err)
+	case errors.Is(err, ops.ErrNameCollides):
+		// A name of the same key on the way, which no walk recorded yet: as for one the catalog knows, below.
+		return OutcomeNameCollision, nil
 	case err != nil:
 		slog.Warn("a path cannot be looked at", "disk", e.Disk, "error", err)
 		return OutcomeIOError, nil
@@ -1169,9 +1200,13 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 	for i := range in.Entries {
 		in.Entries[i].Held = s.repriseTrashed[in.Entries[i].OpID]
 	}
-	choice, err := solver.ChoosePurge(in)
+	byOp := make(map[int64]*catalog.TrashEntry, len(entries))
+	for i := range entries {
+		byOp[entries[i].OpID] = &entries[i]
+	}
+	choice, err := chooseForRoom(ctx, s.db, in, func(op int64) (*catalog.TrashEntry, error) { return byOp[op], nil })
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 	why := make(map[int64]solver.PurgeWhy, len(choice.Purge))
 	for _, c := range choice.Purge {
@@ -1184,7 +1219,7 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 		if why[e.OpID] == "" {
 			continue
 		}
-		outcome, err := s.purgeEntry(ctx, e)
+		outcome, err := s.purgeFor(ctx, e, why[e.OpID])
 		if err != nil {
 			return nil, err
 		}
@@ -1206,6 +1241,102 @@ func (s *Session) Purge(ctx context.Context, olderThan *time.Duration, each func
 	summary.Full = solver.FullTrashes(in.MaxSize, in.Disks, used)
 	summary.DiskLost = s.lost
 	return summary, nil
+}
+
+// chooseForRoom makes the choice of what a purge reaches, then asks the catalog, of each surplus or rebalance entry it
+// would take for room, whether another disk holds its version: one that is no copy's waits for its retention, and the
+// choice is made again without it, so that another may go in its place. Each entry is asked once, and only an entry
+// about to go for room is asked: the purge by age asks nothing (specs.md §17; conformance/models/README.md, flaw 28,
+// the maintainer's remedy surplus-looked). entryOf gives an entry by its operation.
+func chooseForRoom(ctx context.Context, db *sql.DB, in *solver.PurgeInput, entryOf func(op int64) (*catalog.TrashEntry, error)) (*solver.PurgeResult, error) {
+	at := make(map[int64]int, len(in.Entries))
+	for i := range in.Entries {
+		at[in.Entries[i].OpID] = i
+	}
+	asked := map[int64]bool{}
+	for {
+		choice, err := solver.ChoosePurge(in)
+		if err != nil {
+			return nil, fmt.Errorf("%w", err)
+		}
+		again := false
+		for _, c := range choice.Purge {
+			i, ok := at[c.OpID]
+			if c.Why != solver.PurgeMaxSize || asked[c.OpID] || !ok || !solver.LooksFirst(in.Entries[i].Reason) {
+				continue
+			}
+			asked[c.OpID] = true
+			e, err := entryOf(c.OpID)
+			if err != nil {
+				return nil, err
+			}
+			backed := false
+			if e != nil {
+				if backed, err = catalog.Backed(ctx, db, e); err != nil {
+					return nil, fmt.Errorf("catalog: %w", err)
+				}
+			}
+			if !backed {
+				in.Entries[i].Unbacked = true
+				again = true
+			}
+		}
+		if !again {
+			return choice, nil
+		}
+	}
+}
+
+// purgeFor purges an entry a purge reached, for that reason. A surplus or rebalance entry that goes for room goes only
+// once a look at the copies of its file on other disks finds one that holds its version, as its row says, right
+// before: the catalog's word may be a whole pass old, as a user who deleted those copies directly since leaves it, and
+// the entry is then the deleted file's last data, which keeps it to its retention. It stays, changed, as the purge of
+// the SSD cache's transfer leaves its copy (specs.md §17, §19; conformance/models/README.md, flaw 28). The look wakes
+// those disks; the purge by age, and --older-than, look at nothing.
+func (s *Session) purgeFor(ctx context.Context, e *catalog.TrashEntry, why solver.PurgeWhy) (string, error) {
+	if why == solver.PurgeMaxSize && solver.LooksFirst(e.Reason) && s.apply && s.writable(e.Disk) {
+		held, err := s.heldElsewhere(ctx, e)
+		if err != nil {
+			return "", err
+		}
+		if !held {
+			slog.Warn("an entry stays in the trash: no copy on another disk holds its version any more, as the catalog said",
+				"disk", e.Disk, "path", e.Path, "reason", e.Reason)
+			return OutcomeChanged, nil
+		}
+		s.machine.Checkpoint("looked")
+	}
+	return s.purgeEntry(ctx, e)
+}
+
+// heldElsewhere looks at the copies of an entry's file that the catalog calls ok on disks that can be read, other
+// than the entry's, as §15.10 compares a known copy, and says whether one holds the entry's version: the file's hash is
+// the entry's, and the copy is what its row says. A disk that fails the look is lost (invariant 4).
+func (s *Session) heldElsewhere(ctx context.Context, e *catalog.TrashEntry) (bool, error) {
+	if len(e.Hash) == 0 {
+		return false, nil
+	}
+	f, err := catalog.FileAt(ctx, s.db, e.Path)
+	if err != nil {
+		return false, fmt.Errorf("catalog: %w", err)
+	}
+	if f == nil || !bytes.Equal(f.Hash, e.Hash) {
+		return false, nil
+	}
+	for i := range f.Copies {
+		c := &f.Copies[i]
+		if c.Disk == e.Disk || c.State != string(solver.CopyOK) || !s.Readable(c.Disk) {
+			continue
+		}
+		same, err := s.unchanged(ctx, f.Path, c)
+		if err != nil {
+			return false, err
+		}
+		if same {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // PurgeInput reads what the choice of what a purge reaches needs, besides the age and the entries a reprise held:
@@ -1315,9 +1446,15 @@ func forRoom(ctx context.Context, db *sql.DB, c *config.Config, nowNS int64, hel
 			rowOf[weights[j].OpID] = weights[j].RowID
 			in.Entries[j].Held = held[weights[j].OpID]
 		}
-		choice, err := solver.ChoosePurge(in)
+		choice, err := chooseForRoom(ctx, db, in, func(op int64) (*catalog.TrashEntry, error) {
+			e, found, err := catalog.TrashEntryByRow(ctx, db, rowOf[op])
+			if err != nil || !found {
+				return nil, err //nolint:wrapcheck // the caller wraps it
+			}
+			return &e, nil
+		})
 		if err != nil {
-			return nil, fmt.Errorf("%w", err)
+			return nil, err
 		}
 		room := diskRoom{id: d.ID, stays: slices.Contains(choice.Full, d.ID)}
 		for _, p := range choice.Purge {
@@ -1355,7 +1492,7 @@ func FullOncePurged(ctx context.Context, db *sql.DB, c *config.Config, nowNS int
 func (s *Session) PurgeUntil(ctx context.Context, until int64, each func(*EntryItem) error) (*Summary, bool, error) {
 	summary := &Summary{Applied: s.apply}
 	settle := func(e *catalog.TrashEntry, why solver.PurgeWhy) error {
-		outcome, err := s.purgeEntry(ctx, e)
+		outcome, err := s.purgeFor(ctx, e, why)
 		if err != nil {
 			return err
 		}

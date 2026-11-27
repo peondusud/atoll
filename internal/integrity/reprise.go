@@ -43,9 +43,11 @@ const (
 // RepairReprise says what the reprise of a repair does with a copy at its name, of its inode and its row's size,
 // from what each chunk holds, by index, and whether its change time is still its row's (specs.md §16.1). Every bad
 // chunk is saved before any is written, and they are written in order: the repair explains what it finds when every
-// chunk it did not find bad holds what its hash says, and its bad chunks hold what their hashes say, then at most
-// one chunk that holds neither that nor what was saved of it, then what was saved of them. A chunk saved that was
-// not found bad, or a word it does not know, is an error.
+// chunk it did not find bad holds what its hash says, and its bad chunks hold what their hashes say, then what was
+// saved of them. A bad chunk that holds neither, once saving was over, is someone else's change: a write a crash tore
+// and a user's write into that chunk before the reprise are never told apart, and taken for the repair's own, a user's
+// write was set back and repaired away (flaw 33 of the TLA+ models); a true tear then ends in a conflict. A chunk saved
+// that was not found bad, or a word it does not know, is an error.
 func RepairReprise(chunks []RepairChunk, ctimeSame bool) (RepairAction, error) {
 	allSaved := true
 	for i := range chunks {
@@ -79,14 +81,8 @@ func RepairReprise(chunks []RepairChunk, ctimeSame bool) (RepairAction, error) {
 		}
 		return RepairForeign, nil
 	}
-	// Written in order: what holds its hash, then at most one chunk torn by the crash, then what was saved.
-	const (
-		written = iota
-		torn
-		left
-	)
-	stage, good, saved := written, 0, 0
-	bad := 0
+	// Written in order: what holds its hash, then what was saved; anything else is someone else's.
+	writing, good, saved, bad := true, 0, 0, 0
 	for i := range chunks {
 		c := &chunks[i]
 		if !c.Bad {
@@ -94,12 +90,10 @@ func RepairReprise(chunks []RepairChunk, ctimeSame bool) (RepairAction, error) {
 		}
 		bad++
 		switch {
-		case c.Holds == HoldsGood && stage == written:
+		case c.Holds == HoldsGood && writing:
 			good++
-		case c.Holds == HoldsOther && stage == written:
-			stage = torn
 		case c.Holds == HoldsSaved:
-			stage = left
+			writing = false
 			saved++
 		default:
 			return RepairForeign, nil

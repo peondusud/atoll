@@ -1,0 +1,15 @@
+{
+  "format_version": 1,
+  "spec": "specs.md §10, §16",
+  "description": "What a scrub makes of a copy whose chunk does not hold what its hash says, or cannot be read on a disk that confirms, read again past the cache, its size and times unchanged: corrupt, repaired or moved to the trash; or its file a conflict, every version kept, nothing written. A copy never verified may never have held its file's content; a disk whose times do not tell two changes in one second apart gives an edit made in the second of the copy's last change the times its row has.",
+  "cases": [
+    {"note": "verified, on a disk that holds a time to the nanosecond", "verified": true, "precision_ns": 1, "verdict": "corrupt"},
+    {"note": "verified, on NTFS, which holds a time to 100 ns", "verified": true, "precision_ns": 100, "verdict": "corrupt"},
+    {"note": "just under a second", "verified": true, "precision_ns": 999999999, "verdict": "corrupt"},
+    {"note": "an ext4 made with 128-byte inodes holds whole seconds: an edit in place in the second of the copy's last change moves no time", "verified": true, "precision_ns": 1000000000, "verdict": "conflict"},
+    {"note": "coarser still", "verified": true, "precision_ns": 2000000000, "verdict": "conflict"},
+    {"note": "a precision no check read vouches for nothing", "verified": true, "precision_ns": 0, "verdict": "conflict"},
+    {"note": "never verified: nothing says it ever held its file's content", "verified": false, "precision_ns": 1, "verdict": "conflict"},
+    {"note": "never verified, on a disk that holds whole seconds", "verified": false, "precision_ns": 1000000000, "verdict": "conflict"}
+  ]
+}

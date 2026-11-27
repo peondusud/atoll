@@ -1,0 +1,209 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a717, \u00a717.3",
+  "description": "A surplus entry goes for room only once a look finds its version at its file's path on another disk, as that copy's row says (flaw 28 of conformance/models/README.md, the maintainer's remedy surplus-looked, 2026-11-26). Prune sends t3's surplus copies of s1 and s2 to the trash, which then holds more than trash.max_size, 5,000 bytes; a user deletes s1's other copies directly on t1 and t2. The purge for room reaches s1 first: the catalog still says t1 and t2 hold it, the look finds them gone, and the entry stays, changed, the deleted file's last data, the disk full. Once a scan knows them gone, s1 is not reached for room any more, and s2, whose copies hold it, goes in its place. At the end of its retention s1 goes, as any entry.",
+  "clock": "2030-01-01T00:00:00Z",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/s1",
+          "size": 3000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/s2",
+          "size": 3000,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/s1",
+          "size": 3000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/s2",
+          "size": 3000,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/s1",
+          "size": 3000,
+          "mtime_ns": 1600000000000000000
+        },
+        {
+          "path": "media/s2",
+          "size": 3000,
+          "mtime_ns": 1600000000000000000
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"4f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n[trash]\nmax_size = \"0.5%\"\n[deletes.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n[modifies.mass_guard]\npercent = \"100%\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan",
+        "--full"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "prune",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, reason, size FROM trash ORDER BY op_id",
+      "rows": [
+        [
+          "s1",
+          "t3",
+          "surplus",
+          3000
+        ],
+        [
+          "s2",
+          "t3",
+          "surplus",
+          3000
+        ]
+      ]
+    },
+    {
+      "do": "delete",
+      "disk": "t1",
+      "path": "media/s1"
+    },
+    {
+      "do": "delete",
+      "disk": "t2",
+      "path": "media/s1"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes",
+        "--json"
+      ],
+      "exit": 4,
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "s1",
+            "disk": "t3",
+            "op": 1,
+            "size": 3000,
+            "why": "max-size",
+            "outcome": "changed"
+          }
+        ],
+        "applied": true,
+        "bytes": 0,
+        "full": [
+          "t3"
+        ]
+      }
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "scan"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "s2",
+            "disk": "t3",
+            "op": 2,
+            "size": 3000,
+            "why": "max-size",
+            "outcome": "purged"
+          }
+        ],
+        "applied": true,
+        "bytes": 3000,
+        "full": []
+      }
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT CAST(lpath AS TEXT), disk_id, reason FROM trash ORDER BY op_id",
+      "rows": [
+        [
+          "s1",
+          "t3",
+          "surplus"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "2592000s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "trash",
+        "purge",
+        "--yes",
+        "--json"
+      ],
+      "stdout_json": {
+        "entries": [
+          {
+            "path": "s1",
+            "disk": "t3",
+            "op": 1,
+            "size": 3000,
+            "why": "expired",
+            "outcome": "purged"
+          }
+        ],
+        "applied": true,
+        "bytes": 3000,
+        "full": []
+      }
+    }
+  ]
+}

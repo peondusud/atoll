@@ -151,6 +151,20 @@ func Scan(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, op
 	return out, nil
 }
 
+// CheckOnly runs a mount check on every disk of the configuration, its marker's question included, and records
+// nothing: what a command that writes nothing finds (specs.md §10).
+func CheckOnly(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine) ([]disks.Verdict, error) {
+	seen, err := markersSeen(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	verdicts, err := disks.CheckAllKnown(ctx, m, c.Disks, c.PoolID, seen)
+	if err != nil {
+		return nil, fmt.Errorf("%w", err)
+	}
+	return verdicts, nil
+}
+
 // CheckDisks runs a mount check on every disk of the configuration, and records what it found.
 func CheckDisks(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, now int64) ([]disks.Verdict, error) {
 	seen, err := markersSeen(ctx, db)
@@ -246,15 +260,34 @@ func Compare(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine)
 		if d.State == config.DiskFailed {
 			continue
 		}
-		report, err := LookAtDisk(ctx, db, c, m, d, verdicts[i], now, &Look{Confirm: confirmPastCache(m, c.PoolID, seen), ConfirmEach: true})
+		report, err := compareOne(ctx, db, c, m, d, verdicts[i], now, seen)
 		if err != nil {
 			return nil, err
 		}
-		report.Seen = nil
-		sortPaths(report)
 		out.Disks = append(out.Disks, *report)
 	}
 	return out, nil
+}
+
+// CompareDisk walks one disk, given its mount check's verdict, and compares it with the catalog as Compare does,
+// confirmed past the cache, writing nothing: the look of atoll disk remove at the disk it takes out (specs.md §18,
+// §25).
+func CompareDisk(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, d *config.Disk, verdict disks.Verdict) (*Report, error) {
+	seen, err := markersSeen(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return compareOne(ctx, db, c, m, d, verdict, m.Now(), seen)
+}
+
+func compareOne(ctx context.Context, db *sql.DB, c *config.Config, m disks.Machine, d *config.Disk, verdict disks.Verdict, now int64, seen disks.Seen) (*Report, error) {
+	report, err := LookAtDisk(ctx, db, c, m, d, verdict, now, &Look{Confirm: confirmPastCache(m, c.PoolID, seen), ConfirmEach: true})
+	if err != nil {
+		return nil, err
+	}
+	report.Seen = nil
+	sortPaths(report)
+	return report, nil
 }
 
 // confirmPastCache confirms a disk as a session does before it writes: a mount check, then a read of its head past

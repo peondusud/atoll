@@ -44,7 +44,8 @@ type bench struct {
 	ro     map[string]bool
 	gone   map[string]bool
 	at     map[string]func()
-	// precision is how finely a disk holds a time, by id, as its head would say; 0 says nothing.
+	// precision is how finely a disk holds a time, by id, as its head would say: 1 ns for a disk it leaves out, and 0
+	// set says nothing.
 	precision map[string]int64
 	// tops dresses the top of a disk, by mount, as a driver answers for it: shortNames, for one.
 	tops map[string]func(fsx.Dir) fsx.Dir
@@ -82,7 +83,12 @@ func (b *bench) identity(entry *disks.MountEntry) disks.DeviceSeen {
 	for i := range b.config.Disks {
 		if b.config.Disks[i].Mount == entry.MountPoint {
 			d := &b.config.Disks[i]
-			return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: d.UUID, TimePrecisionNS: b.precision[d.ID]}}
+			// A check of a real disk always reads a precision from its head (specs.md §10): 1 ns unless a test says.
+			precision, ok := b.precision[d.ID]
+			if !ok {
+				precision = 1
+			}
+			return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: d.UUID, TimePrecisionNS: precision}}
 		}
 	}
 	return disks.DeviceSeen{Device: disks.DeviceGoneAway}

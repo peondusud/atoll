@@ -37,6 +37,8 @@ type ModifyGuardRead struct {
 	// that an answer to a hold the window tripped, which spoke of the window's files, leaves the day's count as it was.
 	DayAnswerID int64
 	DayCount    int64 // modified events of the disk within the day, later than DayAnswerID, not answered
+	// RejectUpTo is the greatest up_to of the rejects of the guard, whatever answer came after them, invalid with none.
+	RejectUpTo sql.NullInt64
 }
 
 // Answers says whether the last answer covers a copy changed at that change time, and so decides it: one given
@@ -44,6 +46,15 @@ type ModifyGuardRead struct {
 // found long after (specs.md §15.6).
 func (g *ModifyGuardRead) Answers(ctimeNS int64) bool {
 	return g.UpTo.Valid && !g.Lapsed && ctimeNS <= g.UpTo.Int64
+}
+
+// Rejected says whether a reject covers a copy changed at that change time: one made at or before the greatest up_to of
+// the rejects, which each later reject holds but for a clock set back. A reject never lapses, whatever answer came
+// after it, however long ago it was given: what it covered is a conflict at every pass, which overwrites nothing, until
+// atoll conflicts resolve settles it (specs.md §15.6; conformance/models/README.md, flaw 27, the maintainer's remedy
+// reject-kept, 2026-11-25).
+func (g *ModifyGuardRead) Rejected(ctimeNS int64) bool {
+	return g.RejectUpTo.Valid && ctimeNS <= g.RejectUpTo.Int64
 }
 
 // The reads of the mass-modification guard, made at every pass for each disk (specs.md §15.6), as those of the
@@ -59,6 +70,8 @@ const (
 		WHERE kind = ? AND id > ? AND json_extract(data, '$.disk') = ? ORDER BY id LIMIT 1`
 	modifiedCountQuery = `SELECT count(*) FROM events
 		WHERE kind = ?1 AND ts_ns > ?2 AND id > ?3 AND json_extract(data, '$.disk') = ?4 AND json_extract(data, '$.answered') IS NULL`
+	modifyRejectQuery = `SELECT max(json_extract(data, '$.up_to')) FROM events
+		WHERE kind = ?1 AND json_extract(data, '$.disk') = ?2`
 )
 
 // ReadModifyGuard reads what the mass-modification guard of a disk looks at: over its window, windowNS, and over its
@@ -90,6 +103,9 @@ func ReadModifyGuard(ctx context.Context, db *sql.DB, disk string, nowNS, window
 	}
 	err = db.QueryRowContext(ctx, modifiedCountQuery, EventModified, nowNS-dayNS, g.DayAnswerID, disk).Scan(&g.DayCount)
 	if err != nil {
+		return nil, fmt.Errorf("guard of %q: %w", disk, err)
+	}
+	if err := db.QueryRowContext(ctx, modifyRejectQuery, EventModifyGuardReject, disk).Scan(&g.RejectUpTo); err != nil {
 		return nil, fmt.Errorf("guard of %q: %w", disk, err)
 	}
 	return g, nil

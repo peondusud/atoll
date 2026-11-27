@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/peondusud/atoll/internal/catalog"
 	"github.com/peondusud/atoll/internal/config"
 	"github.com/peondusud/atoll/internal/daemon"
 	"github.com/peondusud/atoll/internal/telemetry"
@@ -62,10 +61,13 @@ func runMount(configPath string, args []string, stderr io.Writer) (code int) {
 	if err != nil {
 		return failure(stderr, err)
 	}
-	db, err := catalog.OpenPool(context.Background(), catalogPath(c), c.PoolID)
+	// Under the view's side of the lock, for as long as the view runs: no rebuild sets its catalog aside meanwhile, and
+	// none runs as it opens it (specs.md §21.2).
+	db, release, err := openView(context.Background(), c)
 	if err != nil {
 		return failure(stderr, err)
 	}
+	defer release()
 	defer func() {
 		if err := db.Close(); err != nil && code == exitOK {
 			code = failure(stderr, err)

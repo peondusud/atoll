@@ -27,6 +27,11 @@ type poolMachine struct {
 	// fail makes calls through a handle on a disk fail, as fsx.Fault does, when set: given the disk's mount, the call
 	// and the name it is about.
 	fail func(mount, call, name string) error
+	// at runs at each checkpoint a command reaches, when set: a test stops there, as kill -9 would, or acts there.
+	at func(point string)
+	// precision gives a disk's time precision by its mount, 1 ns when it has none: a filesystem whose change time holds
+	// whole seconds, as an ext4 with 128-byte inodes, has 1e9 (specs.md §10).
+	precision map[string]int64
 }
 
 // faulty wraps a handle on a disk in the machine's fail, when it has one.
@@ -66,7 +71,11 @@ func (m *poolMachine) Mount(mount string) disks.MountSeen {
 func (m *poolMachine) Device(_ names.Filesystem, e *disks.MountEntry) disks.DeviceSeen {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: m.uuid[e.MountPoint], TimePrecisionNS: 1}}
+	precision := int64(1)
+	if p, ok := m.precision[e.MountPoint]; ok {
+		precision = p
+	}
+	return disks.DeviceSeen{Device: disks.DeviceOK, Identity: &disks.Identity{ID: m.uuid[e.MountPoint], TimePrecisionNS: precision}}
 }
 func (m *poolMachine) Root(string, string) disks.RootSeen {
 	return disks.RootSeen{Folder: disks.FolderOK}
@@ -98,7 +107,14 @@ func (m *poolMachine) OpenTop(mount string) (fsx.Dir, error) {
 func (m *poolMachine) ReadPastCache(fs names.Filesystem, e *disks.MountEntry) disks.DeviceSeen {
 	return m.Device(fs, e)
 }
-func (m *poolMachine) Checkpoint(string) {}
+func (m *poolMachine) Checkpoint(point string) {
+	m.mu.Lock()
+	at := m.at
+	m.mu.Unlock()
+	if at != nil {
+		at(point)
+	}
+}
 
 // poolBench is a pool of disks t1, t2… as folders, its configuration and its catalog's path, with each command run in
 // the test's process on the bench's machine.

@@ -107,7 +107,7 @@ func slicesAny(chunks []RepairChunk, f func(RepairChunk) bool) bool {
 // FuzzRepairStopped: a repair saves every bad chunk, then writes them in order, and a crash can stop it at any step,
 // a chunk torn halfway (specs.md §16.1). Whatever the step, the reprise says what that step left: untouched before the
 // first write, unless the change time moved, which is then someone else's; finish once every chunk is written; keep
-// in between.
+// in between; and a chunk torn halfway someone else's, as a user's write there is never told from it (flaw 33).
 func FuzzRepairStopped(f *testing.F) {
 	f.Add([]byte{1, 0, 1, 1}, uint8(3), uint8(1), true, true)
 	f.Add([]byte{1}, uint8(0), uint8(0), false, false)
@@ -148,9 +148,11 @@ func FuzzRepairStopped(f *testing.F) {
 			switch {
 			case w == len(bad):
 				want = RepairFinish
-			case w == 0 && !torn && ctimeSame:
+			case torn:
+				want = RepairForeign
+			case w == 0 && ctimeSame:
 				want = RepairUntouched
-			case w == 0 && !torn:
+			case w == 0:
 				want = RepairForeign
 			default:
 				want = RepairKeep

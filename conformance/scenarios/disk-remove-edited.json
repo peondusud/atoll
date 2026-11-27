@@ -1,0 +1,171 @@
+{
+  "format_version": 1,
+  "spec": "specs.md \u00a718, \u00a725",
+  "description": "Flaw 29, fixed with remove-looks (conformance/models/README.md): t1 drained, its copies made on t2 and t3, then edited directly, as through mergerfs, whose branch of a draining disk takes a write to a file it holds. disk remove looks at t1 first, finds a copy the catalog does not hold as it is, and refuses: exit 1, t1 still listed. Once a pass took the edit in and made it on t2 and t3, t1 goes.",
+  "disks": [
+    {
+      "id": "t1",
+      "uuid": "3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media/a.mkv",
+          "text": "a film"
+        }
+      ]
+    },
+    {
+      "id": "t2",
+      "uuid": "7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "uuid": "9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b",
+      "fs": "ext4",
+      "capacity": 1000000,
+      "tree": [
+        {
+          "path": "media",
+          "kind": "dir"
+        }
+      ]
+    }
+  ],
+  "config": "pool_id = \"p\"\ncatalog = \"${SANDBOX}/catalog.db\"\n[view]\nmount = \"${SANDBOX}/pool\"\n[defaults]\nsettle = \"0s\"\nreplicas = 1\n[modifies.mass_guard]\npercent = \"100%\"\n[modifies.day_guard]\npercent = \"100%\"\n[[disk]]\nid = \"t1\"\nuuid = \"3f1c9a2e-5b7d-4c1e-9a0b-2d4f6e8a1c3b\"\nmount = \"${SANDBOX}/disks/t1\"\nfs = \"ext4\"\n[[disk]]\nid = \"t2\"\nuuid = \"7a2b4c6d-8e0f-4a1b-9c2d-3e4f5a6b7c8d\"\nmount = \"${SANDBOX}/disks/t2\"\nfs = \"ext4\"\n[[disk]]\nid = \"t3\"\nuuid = \"9b2e4d6f-1a3c-4e5f-8a7b-6c5d4e3f2a1b\"\nmount = \"${SANDBOX}/disks/t3\"\nfs = \"ext4\"\n",
+  "steps": [
+    {
+      "do": "atoll",
+      "args": [
+        "init"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--evacuate"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "write",
+      "disk": "t1",
+      "path": "media/a.mkv",
+      "text": "the user's edit",
+      "mtime_ns": 1700000000000000000
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--yes"
+      ],
+      "exit": 1
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t1",
+          "draining"
+        ],
+        [
+          "t2",
+          "online"
+        ],
+        [
+          "t3",
+          "online"
+        ]
+      ]
+    },
+    {
+      "do": "advance",
+      "by": "31536000s"
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "daemon",
+        "--until-idle"
+      ]
+    },
+    {
+      "do": "atoll",
+      "args": [
+        "disk",
+        "remove",
+        "t1",
+        "--yes"
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT id, state FROM disks ORDER BY position",
+      "rows": [
+        [
+          "t2",
+          "online"
+        ],
+        [
+          "t3",
+          "online"
+        ],
+        [
+          "t1",
+          "retired"
+        ]
+      ]
+    },
+    {
+      "do": "expect_catalog",
+      "query": "SELECT c.disk_id, c.state, c.size FROM copies c WHERE c.disk_id <> 't1' ORDER BY c.disk_id",
+      "rows": [
+        [
+          "t2",
+          "ok",
+          15
+        ],
+        [
+          "t3",
+          "ok",
+          15
+        ]
+      ]
+    }
+  ]
+}

@@ -294,6 +294,26 @@ type loop struct {
 	lastPower ups.Reading
 	// mountWhys holds why a remount mounted a disk itself rather than through systemd, each said once (specs.md §15.13).
 	mountWhys map[string]bool
+	// mergerfs reads and writes mergerfs's runtime branches: nil for the view's own control file, or for tests one of
+	// their own (specs.md §21.1).
+	mergerfs branchIO
+}
+
+// branchIO reads and writes the runtime branches of the mergerfs mounted at a mount point (specs.md §21.1).
+type branchIO interface {
+	ReadBranches(mount string) (string, error)
+	WriteBranches(mount, branches string) error
+}
+
+// viewBranches is mergerfs's own control file, through the view.
+type viewBranches struct{}
+
+func (viewBranches) ReadBranches(mount string) (string, error) {
+	return view.ReadBranches(mount) //nolint:wrapcheck // the view's own error, which the caller logs
+}
+
+func (viewBranches) WriteBranches(mount, branches string) error {
+	return view.WriteBranches(mount, branches) //nolint:wrapcheck // the view's own error, which the caller logs
 }
 
 // Run runs the daemon until ctx is done (specs.md §15.13). It returns ErrStartup, wrapped, when it cannot start,
@@ -1511,7 +1531,11 @@ func (l *loop) branches(ctx context.Context, db *sql.DB) {
 	if !l.opt.Apply || l.set.viewMount == "" || l.set.ownView {
 		return
 	}
-	current, err := view.ReadBranches(l.set.viewMount)
+	var control branchIO = viewBranches{}
+	if l.mergerfs != nil {
+		control = l.mergerfs
+	}
+	current, err := control.ReadBranches(l.set.viewMount)
 	if err != nil {
 		if !errors.Is(err, view.ErrNoMergerfs) {
 			l.log.Warn("cannot read mergerfs's branches", "error", err)
@@ -1534,19 +1558,54 @@ func (l *loop) branches(ctx context.Context, db *sql.DB) {
 		l.log.Warn("no mergerfs configuration", "error", err)
 		return
 	}
-	want := m.Runtime(func(disk string) bool {
-		st, d := l.disks[disk], l.set.disksByID[disk]
-		// A failed disk is read-only and never walked: present is enough.
-		return st != nil && st.state != disks.Missing && (st.walked || d != nil && d.State == config.DiskFailed)
-	})
+	present, ok := l.present(ctx)
+	if !ok {
+		return
+	}
+	want := m.Runtime(func(disk string) bool { return present[disk] })
 	if want == "" || want == current {
 		return
 	}
-	if err := view.WriteBranches(l.set.viewMount, want); err != nil {
+	if err := control.WriteBranches(l.set.viewMount, want); err != nil {
 		l.log.Warn("cannot write mergerfs's branches", "error", err)
 		return
 	}
 	l.log.Info("mergerfs's branches changed", "from", current, "to", want)
+}
+
+// present gives the disks whose branch the runtime branches hold after a pass: those not missing that a pass walked
+// since they were found (specs.md §15.13). A disk the last check found missing that this pass walked came back after
+// that check, as when the check's remount brought it back after a USB reset: right before its branch would go, its
+// mount is checked again, and it keeps its branch when it passes, so that its files stay in the merged view until the
+// next check finds it back (the maintainer, 2026-11-27). One that does not pass is lost again, and no longer taken for
+// walked. ok is false when the daemon stops meanwhile: nothing is decided then, and the branches stay as they are.
+func (l *loop) present(ctx context.Context) (present map[string]bool, ok bool) {
+	present = map[string]bool{}
+	for id, st := range l.disks {
+		d := l.set.disksByID[id]
+		switch {
+		case st == nil:
+		case st.state != disks.Missing:
+			// A failed disk is read-only and never walked: present is enough.
+			present[id] = st.walked || d != nil && d.State == config.DiskFailed
+		case st.walked && d != nil && d.State != config.DiskFailed:
+			if ctx.Err() != nil {
+				return nil, false
+			}
+			v := disks.CheckKnown(l.opt.Machine, d, l.opt.Config.PoolID, l.seen.Of(d))
+			if ctx.Err() != nil {
+				return nil, false
+			}
+			if v.State == disks.Missing {
+				st.walked = false
+				continue
+			}
+			present[id] = true
+			l.log.Info("a disk the last check found missing is mounted again and the pass walked it: it keeps its branch",
+				"disk", id, "state", v.State)
+		}
+	}
+	return present, true
 }
 
 // ClosedPaths gives the paths of the ripe groups that say a file was closed after a write by someone other than

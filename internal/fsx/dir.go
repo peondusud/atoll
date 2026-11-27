@@ -913,6 +913,24 @@ func LockFile(path string) (release func(), err error) {
 	return func() { _ = file.Close() }, nil
 }
 
+// LockShared takes a shared lock on a file or a folder that exists, without waiting, and creates nothing: others may
+// hold it shared too, none exclusive meanwhile, which LockFile takes. ErrBusy says that one holds it exclusive. The
+// kernel lets go of it when the process ends, however it ends.
+func LockShared(path string) (release func(), err error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("lock %q: %w", path, err)
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, fmt.Errorf("lock %q: %w", path, ErrBusy)
+		}
+		return nil, fmt.Errorf("lock %q: %w", path, err)
+	}
+	return func() { _ = file.Close() }, nil
+}
+
 // lockRetry is how often WaitLockFile tries again: often enough that a command starts as soon as a pass ends,
 // rarely enough to cost nothing while it waits.
 const lockRetry = 200 * time.Millisecond

@@ -19,9 +19,9 @@ export MSYS_NO_PATHCONV=1
 # Its GOTOOLCHAIN is auto: its go fetches go.mod's version of Go, when newer than its own, into the module cache.
 image=golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
 # test/tla/run.sh's image, with Java, for the TLA+ model.
-tla_image=eclipse-temurin@sha256:b4f9d2a0bc273417cf5219b7b832bbf0493ed500b7b57d5001d9f83374659060 # 21.0.13_9-jre-noble
+tla_image=eclipse-temurin@sha256:2ec98aa522c472deadfd2b7c5b39bca680e33ef522a53a72f10789bdf89a6bb5 # 25.0.5.1_2-jre-noble
 # The Makefile's image for test/qemu/run.sh.
-qemu_image=debian@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 # 13
+qemu_image=debian@sha256:3cda3ca472ce45507a5109c6a3907093e24d9ae67d55954c9a07a45665dafba2 # 13
 all_jobs="race integration conformance lint qemu tla"
 jobs=$all_jobs report=0 rev=HEAD
 while [ $# -gt 0 ]; do

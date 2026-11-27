@@ -311,13 +311,39 @@ func (f *badWritten) WriteAt(p []byte, off int64) (int, error) {
 	return f.WritableFile.WriteAt(wrong, off) //nolint:wrapcheck // a test double
 }
 
+// refusedWrites is a disk that refuses a write in place, as a file made immutable since refuses it: the chunk holds what
+// the repair found, and the copy's times stay as they were.
+type refusedWrites struct{ fsx.Dir }
+
+func (s *refusedWrites) Unwrap() fsx.Dir { return s.Dir }
+
+func (s *refusedWrites) OpenDir(name string) (fsx.Dir, error) {
+	d, err := s.Dir.OpenDir(name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return &refusedWrites{Dir: d}, nil
+}
+
+func (s *refusedWrites) OpenWritable(name string) (fsx.WritableFile, error) {
+	f, err := s.Dir.OpenWritable(name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // a test double
+	}
+	return &refusedWritten{WritableFile: f}, nil
+}
+
+type refusedWritten struct{ fsx.WritableFile }
+
+func (f *refusedWritten) WriteAt([]byte, int64) (int, error) { return 0, syscall.EPERM }
+
 // A repair that fails otherwise than for want of room leaves the copy corrupt, and the scrub that found it sends it to
 // the trash, as it does without auto_repair: the view never serves it, and the next pass makes it again from the
 // healthy copy (specs.md §16, §16.1, invariant 14). It stayed in media/, listed as kept, and no scrub read it again.
 func TestARepairThatFailsQuarantines(t *testing.T) {
 	b, data := repairBench(t, "")
 	b.rotChunks("t2", "a.mkv", data, 1)
-	b.tops[b.dirs["t2"]] = func(top fsx.Dir) fsx.Dir { return &badWrites{Dir: top} }
+	b.tops[b.dirs["t2"]] = func(top fsx.Dir) fsx.Dir { return &refusedWrites{Dir: top} }
 	out := b.scrub(ScrubOptions{Apply: true, Quarantine: true})
 	if t2 := diskOf(out, "t2"); len(t2.Repaired) != 0 || !slices.Equal(t2.Quarantined, []string{"a.mkv"}) || len(t2.Kept) != 0 {
 		t.Fatalf("%+v", t2)
@@ -345,6 +371,48 @@ func TestARepairThatFailsQuarantines(t *testing.T) {
 	}
 	if got := b.text("SELECT state FROM files"); got != "ok" {
 		t.Errorf("the file is %s", got)
+	}
+}
+
+// A write in place that does not take, its chunk read back neither as it was written nor as the repair found it,
+// holds what a user's write landing between the write and its read back would hold: nothing tells the two apart, so
+// it is never the repair's own (torn-foreign, flaw 33 of the TLA+ models). Nothing more is written, the time is not set
+// back, the row stays as it was, and the copy, which the write changed, stays where it is; the next scrub settles it as
+// a corrupt copy that changed, a conflict, every version kept (specs.md §16.1). It was taken for the repair's own, the
+// time set back over it and the copy quarantined, as a user's write there would have been.
+func TestARepairWhoseWriteDoesNotTakeEndsInAConflict(t *testing.T) {
+	b, data := repairBench(t, "")
+	b.rotChunks("t2", "a.mkv", data, 1)
+	b.tops[b.dirs["t2"]] = func(top fsx.Dir) fsx.Dir { return &badWrites{Dir: top} }
+	out := b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+	if t2 := diskOf(out, "t2"); len(t2.Repaired) != 0 || len(t2.Quarantined) != 0 || !slices.Equal(t2.Kept, []string{"a.mkv"}) {
+		t.Fatalf("%+v", t2)
+	}
+	if got := b.text("SELECT json_extract(data, '$.reason') FROM events WHERE kind = 'repair-stopped'"); got != "io-error" {
+		t.Errorf("stopped for %q", got)
+	}
+	if got := b.text("SELECT group_concat(kind || ':' || state) FROM ops ORDER BY id"); got != "repair:done,trash:undone" {
+		t.Errorf("ops %s", got)
+	}
+	if got := b.text("SELECT group_concat(reason) FROM trash ORDER BY id"); got != "repaired" {
+		t.Errorf("the trash holds %q", got)
+	}
+	written := b.read("t2", "a.mkv")
+	if written == string(data) {
+		t.Fatal("the write took")
+	}
+	// The next scrub, past the copy's settle: a corrupt copy that changed, holding another content.
+	delete(b.tops, b.dirs["t2"])
+	b.now = b.ctimeOf("t2", "a.mkv") + settleNS
+	out = b.scrub(ScrubOptions{Apply: true, Quarantine: true})
+	if t2 := diskOf(out, "t2"); !slices.Equal(t2.Conflict, []string{"a.mkv"}) || len(t2.Repaired)+len(t2.Quarantined) != 0 {
+		t.Fatalf("the next scrub: %+v", t2)
+	}
+	if got := b.text("SELECT state FROM files"); got != "conflict" {
+		t.Errorf("the file is %s", got)
+	}
+	if b.read("t2", "a.mkv") != written || b.read("t1", "a.mkv") != string(data) {
+		t.Error("a version is lost")
 	}
 }
 

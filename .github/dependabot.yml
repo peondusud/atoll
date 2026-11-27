@@ -12,3 +12,8 @@ updates:
     target-branch: beta
     schedule:
       interval: weekly
+    # modernc.org/sqlite requires an exact libc and memory, and modernc advises against raising them on their own: they
+    # follow sqlite, whose update brings the versions it needs (the maintainer, 2026-11-22 and 2026-11-26).
+    ignore:
+      - dependency-name: modernc.org/libc
+      - dependency-name: modernc.org/memory

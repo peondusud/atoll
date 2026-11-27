@@ -19,6 +19,8 @@ stateDiagram-v2
     draining --> missing: check fails
     missing --> draining: check passes
     draining --> retired: disk remove --yes
+    online --> retired: disk remove --yes
+    readonly --> retired: disk remove --yes
     online --> failed: disk fail
     missing --> failed: disk fail
     failed --> retired: disk remove --yes
@@ -39,10 +41,12 @@ stateDiagram-v2
 | `online` | `draining` | `disk remove --evacuate` or `disk replace` set its state to draining | §18 |
 | `draining` | `missing` | a mount check fails; draining again once it passes | §9, §18 |
 | `missing` | `draining` | a mount check passes, its state still draining | §9, §18 |
-| `draining` | `retired` | out of the configuration once nothing depends on it | §9, §18 |
+| `draining` | `retired` | out of the configuration once nothing depends on it, every disk's mount checked and the disk looked at first (flaw 29) | §9, §18, §25 |
+| `online` | `retired` | a disk in service nothing depends on, out of the configuration once every disk's mount is checked and the disk looked at, holding nothing the catalog does not (flaw 29) | §9, §18, §25 |
+| `readonly` | `retired` | the same of a disk in service mounted read-only, which can be looked at; a disk missing cannot, and goes failed first | §9, §18, §25 |
 | `online` | `failed` | `disk fail`: failed even if it comes back | §18 |
 | `missing` | `failed` | `disk fail` | §18 |
-| `failed` | `retired` | out of the configuration | §9, §18 |
+| `failed` | `retired` | out of the configuration, what is planned on it dropped in the catalog alone (flaw 30) | §9, §18, §25 |
 | `retired` | `online` | the configuration lists it again | §9 |
 
 | Bug | Transition | What went wrong | Where |

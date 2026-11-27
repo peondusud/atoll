@@ -54,6 +54,12 @@ type TrashStart struct {
 	// ViewFree says that it waits while an operation of the view no pass has taken in touches Path: ErrViewHolds, read
 	// in the transaction that journals it, as the SSD cache's transfer reads it (specs.md §19, flaw 10).
 	ViewFree bool
+	// HeldFree says that it waits while the view holds a write open on the copy at Path on Disk, or runs an operation it
+	// has not finished at, below or above Path: ErrViewHolds, read in the transaction that journals it, as atoll
+	// conflicts resolve reads it (specs.md §15.7, §21.2; conformance/models/README.md, flaw 26). An operation done waits
+	// for nothing more: the resolve looked at the copy as it is, and no pass takes in a write to a file in conflict,
+	// which would hold the resolve for good.
+	HeldFree bool
 }
 
 // eventData is the data of an event (specs.md §9).
@@ -117,6 +123,11 @@ func BeginTrash(ctx context.Context, db *sql.DB, s *TrashStart) (*Op, error) {
 func beginTrashTx(ctx context.Context, tx *sql.Tx, s *TrashStart) (*Op, error) {
 	if s.ViewFree {
 		if touched, err := viewTouches(ctx, tx, s.Path); err != nil || touched {
+			return nil, cmpErr(err, ErrViewHolds)
+		}
+	}
+	if s.HeldFree {
+		if held, err := viewHolds(ctx, tx, s.Disk, s.Path); err != nil || held {
 			return nil, cmpErr(err, ErrViewHolds)
 		}
 	}
@@ -593,6 +604,82 @@ func Undo(ctx context.Context, db *sql.DB, op *Op, warn bool, nowNS int64) error
 	return nil
 }
 
+// DropPlannedOn undoes, in the catalog alone, every operation left planned on a failed disk that atoll disk remove takes
+// out: nothing reads or writes that disk again, so no reprise ends them (failed-remove-drops, the maintainer's remedy
+// of flaw 30, 2026-11-26; specs.md §17.2, §18, §25). Each is undone, with an op-undone event, as a reprise that
+// undoes one writes; a move to the trash loses its trash row; the row of Atoll's own view that names one is undone with
+// it, as the view writes nothing to a failed disk either; a copy that was to be made there goes, with its job. Nothing on
+// the disk is touched. It gives how many it undid.
+func DropPlannedOn(ctx context.Context, db *sql.DB, disk string, nowNS int64) (int, error) {
+	n := 0
+	err := inTransaction(ctx, db, func(tx *sql.Tx) error {
+		list, err := plannedOn(ctx, tx, disk)
+		if err != nil {
+			return err
+		}
+		for i := range list {
+			op := &list[i]
+			if err := writeEvent(ctx, tx, nowNS, "warning", "op-undone", op, ""); err != nil {
+				return err
+			}
+			if err := markOp(ctx, tx, op.ID, OpUndone); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, undoTrashSQL, []byte(op.Path), op.ID); err != nil {
+				return fmt.Errorf("trash: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE view_ops SET state = ? WHERE op_id = ? AND state = ?", OpUndone, op.ID, OpPlanned); err != nil {
+				return fmt.Errorf("view journal: %w", err)
+			}
+			if op.Kind != OpCreate || op.Path2 == "" {
+				continue
+			}
+			var fileID int64
+			err := tx.QueryRowContext(ctx, `SELECT file_id FROM jobs WHERE kind = 'replicate' AND dst_disk = ? AND payload IS NOT NULL
+				AND json_extract(payload, '$.part') = ?`, disk, op.Path2).Scan(&fileID)
+			switch {
+			case isNoRows(err):
+			case err != nil:
+				return fmt.Errorf("jobs: %w", err)
+			default:
+				if err := cancelPending(ctx, tx, fileID, disk); err != nil {
+					return err
+				}
+			}
+		}
+		n = len(list)
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("disk %q: %w", disk, err)
+	}
+	return n, nil
+}
+
+// plannedOn gives every operation left planned on a disk, the view's included, by id.
+func plannedOn(ctx context.Context, tx *sql.Tx, disk string) ([]Op, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, kind, path, COALESCE(path2, x''), COALESCE(file_key, '') FROM ops
+		WHERE disk_id = ? AND state = 'planned' ORDER BY id`, disk)
+	if err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var list []Op
+	for rows.Next() {
+		op := Op{Disk: disk}
+		var path, path2 []byte
+		if err := rows.Scan(&op.ID, &op.Kind, &path, &path2, &op.FileKey); err != nil {
+			return nil, fmt.Errorf("journal: %w", err)
+		}
+		op.Path, op.Path2 = string(path), string(path2)
+		list = append(list, op)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("journal: %w", err)
+	}
+	return list, nil
+}
+
 // plannedOpsSQL leaves out the operations of Atoll's own view, which only its own reprise resolves (specs.md §21.2).
 const plannedOpsSQL = `
 	SELECT id, disk_id, kind, path, COALESCE(path2, x''), COALESCE(file_key, ''), COALESCE(link, 0) FROM ops
@@ -777,6 +864,25 @@ func TrashEntryByRow(ctx context.Context, db *sql.DB, row int64) (TrashEntry, bo
 		return TrashEntry{}, false, err
 	}
 	return list[0], true, nil
+}
+
+// backedSQL asks whether another disk holds a copy of the file at a path, with a hash, that the catalog calls ok, at
+// that path and not found gone: through the unique index of the files' paths, then the copies of that file.
+const backedSQL = `SELECT EXISTS(SELECT 1 FROM files f JOIN copies k ON k.file_id = f.id
+	WHERE f.lpath = ?1 AND f.blake3 = ?2 AND k.disk_id <> ?3 AND k.state = 'ok' AND k.gone_ns IS NULL AND k.old_lpath IS NULL)`
+
+// Backed says whether the catalog has a copy of an entry's file that holds its version on another disk: what a surplus
+// or rebalance entry needs to go for room, a look then finding it so (specs.md §17; conformance/models/README.md, flaw
+// 28, the maintainer's remedy surplus-looked). An entry with no hash holds a version nothing can be compared with.
+func Backed(ctx context.Context, db *sql.DB, e *TrashEntry) (bool, error) {
+	if len(e.Hash) == 0 {
+		return false, nil
+	}
+	var backed bool
+	if err := db.QueryRowContext(ctx, backedSQL, []byte(e.Path), e.Hash, e.Disk).Scan(&backed); err != nil {
+		return false, fmt.Errorf("%q: %w", e.Path, err)
+	}
+	return backed, nil
 }
 
 // TrashEntryOfOp gives the entry an operation sent to the trash from a path, and false when it is gone, or the

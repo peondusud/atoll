@@ -420,3 +420,42 @@ func TestTheModifyGuardReadsItsDay(t *testing.T) {
 		t.Errorf("after an answer to the day: %+v, %v", read, err)
 	}
 }
+
+// What the rejects of the mass-modification guard of a disk covered is read by their greatest up_to, whatever answer
+// came after them and however long ago, as no reject lapses (specs.md §15.6; flaw 27 of conformance/models/README.md,
+// the maintainer's remedy reject-kept): a clock set back between two rejects leaves the later one an earlier up_to,
+// which must not give back to the guard what the first kept.
+func TestTheRejectsOfTheModifyGuardAreKept(t *testing.T) {
+	db, _ := newPool(t)
+	if read, err := ReadModifyGuard(t.Context(), db, "t1", 10, 50, 1000); err != nil || read.RejectUpTo.Valid || read.Rejected(0) {
+		t.Fatalf("no reject: %+v, %v", read, err)
+	}
+	answer := func(guardNS int64, kind string, nowNS int64) {
+		t.Helper()
+		if err := WriteModifyGuardEvent(t.Context(), db, "t1", "", guardNS); err != nil {
+			t.Fatal(err)
+		}
+		if upTo, err := AnswerModifyGuard(t.Context(), db, "t1", kind, nowNS); err != nil || !upTo.Valid || upTo.Int64 != guardNS {
+			t.Fatalf("%+v, %v", upTo, err)
+		}
+	}
+	answer(100, EventModifyGuardReject, 110)
+	// A confirm of a later hold, given long after: the reject still covers what it covered, and the confirm the rest.
+	answer(200, EventModifyGuardConfirm, 210)
+	read, err := ReadModifyGuard(t.Context(), db, "t1", 5000, 50, 1000)
+	if err != nil || !read.Lapsed || !read.Rejected(100) || read.Rejected(101) || read.Answers(150) {
+		t.Errorf("%+v, %v", read, err)
+	}
+	// The clock set back: a hold at 50, rejected, and one of another disk, rejected later still.
+	answer(50, EventModifyGuardReject, 60)
+	if err := WriteModifyGuardEvent(t.Context(), db, "t2", "", 900); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AnswerModifyGuard(t.Context(), db, "t2", EventModifyGuardReject, 910); err != nil {
+		t.Fatal(err)
+	}
+	read, err = ReadModifyGuard(t.Context(), db, "t1", 70, 50, 1000)
+	if err != nil || read.RejectUpTo.Int64 != 100 || !read.Rejected(100) || read.Rejected(101) {
+		t.Errorf("after a clock set back: %+v, %v", read, err)
+	}
+}
