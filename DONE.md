@@ -2,6 +2,15 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The maintainer's answers of 2026-11-27 on the refresh (specs.md §15.13, §27)
+
+The maintainer answered four questions: the option put first each time but one.
+
+- **The race in the daemon's test under systemd is fixed in the daemon**, not only in the test. A disk lost and remounted after a USB reset has its mergerfs branch taken out about 0.2 s later by the pass its loss started, so its files are gone from mergerfs's view until the next check. The pass is to spare a disk its remount brought back: it reads the disk's state again before it takes the branch out. The fix comes with a test first and qemu on both kernels.
+- **TLC moves to Java 25, the latest LTS** (Temurin 25), rather than staying on 21. This one is not the option put first. All the instances are to be run again there, and the time compared.
+- **CLAUDE.md's line naming TLC's image** is updated at the maintainer's word once the Temurin 25 image is pinned. **test/qemu's default timeouts** are raised to 6,000 s for the tests and 8,000 s for a guest: the whole of `test/loopdev` on mainline without KVM took some 3,700 s. The CI, with KVM, does not reach them.
+- **The refresh's choices made alone** (the entry below) are confirmed together.
+
 ## Every module, tool, image and action at its newest stable release, and the qemu guest on Linux 7.3.6, 2026-11-27 (specs.md §26, §27)
 
 The refresh before the next pull request that the maintainer asked for on 2026-11-26, with his rules for it: every module, tool, container image and GitHub action at its newest stable release, the rule of 14 days waived, prereleases left out; `modernc.org/libc` and `modernc.org/memory` at the versions `modernc.org/sqlite` requires, never on their own; no new direct dependency, a change of license reported; images by digest and actions by commit, each checked against the registry or the tag on GitHub; a newer Go patch taken, a new minor reported; the guest's mainline kernel at the newest 7.3 patch, a newer series reported. Commits `e1e810d` (modules), `b2173e3` (images), `eb4be75` (actions), `842f811` (kernel), and this record.
@@ -19,7 +28,7 @@ The refresh before the next pull request that the maintainer asked for on 2026-1
   - Linux 6.12.118+deb13: the first run **passes** (about 2,700 s); under systemd, `TestTheDaemonUnderSystemd/ext4_on_a_partition_of_a_SCSI_disk` failed once, "the disk was not mounted again by the daemon within 3 minutes" after 39 s, a race of the test that no bump touches, then passed four times in a row (`COUNT=4`), every other test of the units passing. The race, from the daemon's log: after the reset its remount came first, at the check every 30 s that found the disk lost, then the pass that loss started took the remounted disk's branch out of mergerfs 0.2 s later, until a later check confirmed it back; the test's look fell between the two, saw the new source with both branches and left its wait, and its next look, right after, found one branch. Recorded in TODO.md, as the maintainer's to choose.
   - Linux 7.3.6: a first try ended at `test/qemu/run.sh`'s default `TIMEOUT` of 3000 s, with no failure, in `TestARenameBackMissedByADiskUnmountedOnEachDriver`, as the 7.3 run holds the tests of the type `ntfs` besides (3,378 s on 7.3.5 on 2026-11-22); again with `TIMEOUT=6000s` and `QEMU_TIMEOUT=8000`, both runs **pass**, the first in about 3,220 s, the guest 3,663 s in all.
 - **Not run**: `make release-snapshot`, as neither GoReleaser nor syft changed; the CI on GitHub, as nothing is pushed.
-- **Choices made alone, to confirm**:
+- **Choices made alone, confirmed by the maintainer on 2026-11-27** ("Tout confirmer", the answers above):
   - Temurin 21.0.13.1_2 taken though its index has no arm64 image yet, rather than 21.0.13_9;
   - Java 21 kept rather than 25 or 26, as a new series;
   - `genproto` left at the commits the modules require, and the modules only in the graph left as they are;

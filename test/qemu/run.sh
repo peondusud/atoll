@@ -126,7 +126,7 @@ fi
 if [ -x "$built/atoll" ]; then
 	cp "$built/atoll" /usr/local/bin/atoll || exit 2
 fi
-common=(-test.count="${COUNT:-1}" -test.timeout="${TIMEOUT:-3000s}")
+common=(-test.count="${COUNT:-1}" -test.timeout="${TIMEOUT:-6000s}")
 [ "${VERBOSE:-0}" = 1 ] && common+=(-test.v)
 args=("${common[@]}")
 [ -n "${RUN:-}" ] && args+=(-test.run="$RUN")
@@ -206,7 +206,7 @@ boot() {
 		serial=(-serial file:/dl/cover.serial)
 	fi
 	echo "######## $name"
-	timeout "${QEMU_TIMEOUT:-3600}" qemu-system-x86_64 "${accel[@]}" -smp "$cpus" -m "${QEMU_MEMORY:-6144}" \
+	timeout "${QEMU_TIMEOUT:-8000}" qemu-system-x86_64 "${accel[@]}" -smp "$cpus" -m "${QEMU_MEMORY:-6144}" \
 		-no-reboot -nic none -display none -monitor none -serial stdio "${serial[@]}" \
 		-kernel "$kernel" -initrd "$initrd" -append "console=ttyS0 rdinit=/init panic=-1 loglevel=3" | tee /tmp/console
 	local code

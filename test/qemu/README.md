@@ -36,8 +36,8 @@ Environment variables of the second command, passed with `-e NAME=value` (`make 
 | `SYSTEMD_RUN` | `UnderSystemd$`, or none when `RUN` is set | the `-test.run` pattern of the second run, under systemd; empty for no second run. `RUN='^$' SYSTEMD_RUN='UnderSystemd$'` runs only the tests of the units |
 | `COUNT` | `1` | how many times each test runs |
 | `VERBOSE` | `0` | `1` lists every test as it passes, fails or is skipped |
-| `TIMEOUT` | `3000s` | the tests' own timeout, in each guest |
-| `QEMU_TIMEOUT` | `3600` | seconds before a guest is stopped |
+| `TIMEOUT` | `6000s` | the tests' own timeout, in each guest: the whole of `test/loopdev` on mainline without KVM took some 3,700 s on 2026-11-27 |
+| `QEMU_TIMEOUT` | `8000` | seconds before a guest is stopped |
 | `QEMU_MEMORY` | `6144` | the guest's memory in MiB; the loop images take up to 2 GiB of it |
 | `SOAK` | none | runs `TestDaemonSoak` for that long, such as `4h`: the daemon that runs for good under a writer, its memory logged every tenth of the run. Raise `TIMEOUT` and `QEMU_TIMEOUT` past it, by 20 minutes for the first pass |
 | `SOAK_FILES` | `2000` | the files each disk of the soak starts with; past 2,000, its volumes are sized for them, and its first pass has 10 ms a file more |
