@@ -463,17 +463,31 @@ func TestTheDaemonUnderSystemd(t *testing.T) {
 			must(t, "dmsetup", "rename", m.name, renamed)
 			must(t, "dmsetup", "mknodes")
 			// A check every 30 s, as the unit has it; a mount that fails, as one while the old FUSE process still holds the
-			// device, is tried again at the next.
+			// device, is tried again at the next. The new mount and both branches count once they agree over a check: a
+			// remount that gives the dead superblock (specs.md §22) shows the new source, with the branch still there,
+			// until the pass after it finds the disk missing and takes the branch out. The branch of a disk the remount
+			// brought back stays (§15.13): one seen going after both agreed is said in the log.
 			remounted := func() bool {
 				source, err := exec.CommandContext(t.Context(), "findmnt", "-n", "-o", "SOURCE", at).Output()
 				return err == nil && strings.TrimSpace(string(source)) == "/dev/mapper/"+renamed &&
 					slices.Equal(branchesOf(t, pool), []string{keepMedia, atMedia})
 			}
-			for deadline := time.Now().Add(3 * time.Minute); !remounted() && time.Now().Before(deadline); {
-				time.Sleep(time.Second)
+			const overACheck = 35 * time.Second
+			var since time.Time
+			for deadline := time.Now().Add(4 * time.Minute); time.Now().Before(deadline); time.Sleep(time.Second) {
+				switch ok := remounted(); {
+				case !ok && !since.IsZero():
+					t.Logf("the new mount and both branches held for %v, then no longer: waiting again", time.Since(since).Round(time.Second))
+					since = time.Time{}
+				case ok && since.IsZero():
+					since = time.Now()
+				}
+				if !since.IsZero() && time.Since(since) >= overACheck {
+					break
+				}
 			}
-			if !remounted() {
-				t.Fatal("the disk was not mounted again by the daemon within 3 minutes")
+			if since.IsZero() || time.Since(since) < overACheck {
+				t.Fatal("the disk was not mounted again by the daemon, both branches there, over a check within 4 minutes")
 			}
 			if data, err := os.ReadFile(filepath.Join(atMedia, "Shared", "before.mkv")); err != nil || string(data) != "a film" {
 				t.Errorf("the disk's content once mounted again: %q, %v", data, err)
