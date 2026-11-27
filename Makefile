@@ -73,7 +73,7 @@ qemu-build:
 # the host: only Docker (test/qemu/README.md). QEMU_CACHE, a folder of the host, keeps the packages and
 # the kernel it downloads from one run to the next, as the CI's qemu job does. debian:13 by its digest, as
 # test/ci/run.sh names it: a tag can be moved, a digest cannot.
-QEMU_IMAGE := debian@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+QEMU_IMAGE := debian@sha256:3cda3ca472ce45507a5109c6a3907093e24d9ae67d55954c9a07a45665dafba2
 QEMU_RUN = docker run --rm $(if $(wildcard /dev/kvm),--device /dev/kvm) -e KERNELS -e MAINLINE -e RUN -e SYSTEMD_RUN -e COUNT -e VERBOSE \
 	$(if $(QEMU_CACHE),-v "$(abspath $(QEMU_CACHE)):/var/cache/atoll-qemu" -e CACHE=/var/cache/atoll-qemu)
 test-qemu: qemu-build
