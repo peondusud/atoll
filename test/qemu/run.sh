@@ -20,7 +20,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 built=${BUILT:-/qemu}
 kernels=${KERNELS:-debian mainline}
-mainline=${MAINLINE:-v7.3.5}
+mainline=${MAINLINE:-v7.3.6}
 cache=${CACHE:-}
 cover_out=${COVER_OUT:-}
 
