@@ -29,16 +29,19 @@
    copy, then the copies by hash: one version, the file ok; two, a conflict, every version kept; then the swap, the old
    catalog kept, never removed. What the old catalog planned, held, rejected or knew of a disk missing is lost with it.
    Atoll's own view (atoll mount, §21.2) is a process of its own: it opens the catalog once, as it starts, presents
-   from it the copies it knows, and journals in it what it holds open, never taking the catalog's lock.
+   from it the copies it knows, and journals in it what it holds open, never taking the catalog's lock. A rebuild and
+   the view exclude each other (§9, §21.2): the rebuild starts only while no view runs, and a view only while no
+   rebuild does, the lock on the catalog's folder that each holds for as long as it runs.
 
    A user edits a copy in place or deletes it directly on a data disk, or a program writes the file through the view: it
    opens it, writes it, closes it; the user may reject a modification the guard holds; the world loses a disk and brings
    it back, mounts one read-only, and lets the retention of an entry of the trash pass; Atoll's process may be killed
    between any two steps, a rebuild's included; the view may be stopped and started again.
 
-   Flaw 35, open (README.md): the new catalog knows nothing of what the view holds open, and the view goes on with the
-   catalog it opened, set aside by the swap: the transfer moves and purges a file under the program writing it through
-   the view. The remedies proposed, in Fixes, are the maintainer's to choose.
+   Flaw 35, fixed (README.md): the new catalog knew nothing of what the view held open, and the view went on with the
+   catalog it opened, set aside by the swap, so that the transfer moved and purged a file under the program writing it
+   through the view. rebuild-view, the maintainer's remedy of 2026-11-27, is what every instance does: a rebuild and
+   the view exclude each other, a lock on the catalog's folder, the view's shared, the rebuild's exclusive.
 
    What it leaves out: other files, folders, renames and names (Nested.tla's, ViewNames.tla's, Collisions.tla's); the
    link guard's links/, whose ids a new catalog starts past as it starts its operations (§9); a trash entry that is no
@@ -69,8 +72,8 @@ CONSTANTS
 Disks == 1..NDisks
 Data == IF Cache THEN Disks \ {1} ELSE Disks
 Gens == 1..(MaxRebuild + 1)
-\* the remedies proposed for flaw 35 (README.md): rebuild-view and view-follows hold, rebuild-holds holds not
-FixNames == {"rebuild-view", "view-follows", "rebuild-holds"}
+\* flaw 35 is fixed, with rebuild-view, what every instance does (README.md): no remedy
+FixNames == {}
 
 ASSUME /\ NDisks \in 2..3 /\ Cache \in BOOLEAN /\ AtStart \subseteq Disks /\ AtStart # {} /\ TrashAt \subseteq Disks
        /\ (Cache => AtStart = {1})
@@ -120,8 +123,8 @@ InTrash(d) == {e.v : e \in w.tr[d]}
 Flag(f) == ghost' = [ghost EXCEPT !.flags = @ \cup f]
 \* a user's write over a version: what the user wrote last on a copy is a head, what it wrote over no longer is
 HeadsAfter(old, new) == (ghost.heads \ {old}) \cup (IF new > 0 THEN {new} ELSE {})
-\* the catalog the view journals in: the one it opened at its start; with view-follows, the one at the catalog's path
-VCat == IF "view-follows" \in Fixes THEN gen ELSE vw.cat
+\* the catalog the view journals in: the one it opened at its start
+VCat == vw.cat
 \* the copy the view presents (§7, §21.2): of the copies its catalog records in sync, the cache's first, then by position
 Presented(c) == LET in == {d \in Disks : c.row[d].on /\ c.row[d].v = c.fv /\ c.st = "ok" /\ w.up[d]}
                 IN IF in = {} THEN 0 ELSE CHOOSE d \in in : \A e \in in : d <= e
@@ -190,8 +193,8 @@ VStop ==
     /\ UNCHANGED <<cats, gen, kept, rb, pc, ghost>>
 VStart ==
     /\ "view" \in UserActs /\ ~vw.on
-    \* rebuild-view: the view and a rebuild exclude each other, the view starting only once no rebuild runs
-    /\ "rebuild-view" \in Fixes => rb.ph = "idle"
+    \* the view's side of the lock, shared: never while a rebuild holds it (rebuild-view, flaw 35)
+    /\ rb.ph = "idle"
     /\ vw' = [vw EXCEPT !.on = TRUE, !.cat = gen]
     /\ cats' = [cats EXCEPT ![gen].holds = {}]
     /\ UNCHANGED <<w, gen, kept, rb, pc, ghost>>
@@ -399,7 +402,8 @@ Clean(d) ==
    of first, so that none runs while it does. *)
 RbStart ==
     /\ "rebuild" \in AtollActs /\ w.rebuilds < MaxRebuild /\ rb.ph = "idle" /\ pc = "idle"
-    /\ "rebuild-view" \in Fixes => ~vw.on
+    \* the rebuild's side of the lock, exclusive: never while a view holds it (rebuild-view, flaw 35)
+    /\ ~vw.on
     /\ LET up == {x \in Disks : w.up[x]}
            named == UNION {{e.id : e \in w.tr[d]} \cup {p.id : p \in w.tmp[d]} : d \in up}
        IN rb' = [ph |-> "list", cat |-> [Empty(Max(named) + 1) EXCEPT !.counted = up], seen |-> {}]
@@ -422,9 +426,7 @@ RbSwap ==
     /\ LET c == rb.cat
            vs == {c.row[d].v : d \in {x \in Disks : c.row[x].on}}
            made == [c EXCEPT !.st = IF vs = {} THEN "none" ELSE IF Cardinality(vs) = 1 THEN "ok" ELSE "conflict",
-                             !.fv = Max(vs),
-                             \* view-follows, rebuild-holds: what the view holds open carried into the new catalog
-                             !.holds = IF Fixes \cap {"view-follows", "rebuild-holds"} # {} THEN cats[gen].holds ELSE {}]
+                             !.fv = Max(vs)]
        IN /\ cats' = [cats EXCEPT ![gen + 1] = made]
           /\ Flag(IF Cardinality(vs) > 1 /\ made.st = "ok" THEN {"rebuilt-one"} ELSE {})
     /\ gen' = gen + 1

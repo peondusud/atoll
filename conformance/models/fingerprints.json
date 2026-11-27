@@ -26,7 +26,7 @@
     {
       "section": "9",
       "title": "## 9. Data model (SQLite)",
-      "sha256": "89e87eaabe62e579410aaf5cf00533c32db733a7b6b4b2571966e8fa1de68e8e"
+      "sha256": "cf7230d900aeb242b9510748a4cfdb8e8a6be8b12261531e9395e68cf58b36bb"
     },
     {
       "section": "10",
@@ -166,7 +166,7 @@
     {
       "section": "21.2",
       "title": "### 21.2 Phase 2a: Atoll's own view on Linux (FUSE)",
-      "sha256": "64259f910d49df8e0c1a212fdfedbf09a67ee0f2f4b69b935cb993384ce15bba"
+      "sha256": "7a89efefd113a484ba38980967942668a7ab388824b6d0380fdb43194378bd3f"
     },
     {
       "section": "22",

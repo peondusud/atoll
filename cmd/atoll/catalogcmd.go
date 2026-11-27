@@ -242,6 +242,12 @@ func catalogRebuild(ctx context.Context, c *config.Config, flags map[string]bool
 	if err != nil {
 		return failure(stderr, err)
 	}
+	// Atoll's own view and a rebuild exclude each other, from the rebuild's start to its end (specs.md §9, §21.2).
+	releaseView, err := lockForRebuild(c)
+	if err != nil {
+		return failure(stderr, err)
+	}
+	defer releaseView()
 	there, err := fsx.Exists(file)
 	if err != nil {
 		return failure(stderr, fmt.Errorf("catalog rebuild: %w", err))
