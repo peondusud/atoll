@@ -2,6 +2,19 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The replication modes: tests rather than a TLA+ model, 2026-11-27 (specs.md §12.3, §14.1)
+
+The last of the maintainer's models by risk (TODO.md), after flaw 35's fix, on the same branch: no module, as TLA+ adds little to the modes, and one test added where the tests left a gap. No change to the code or to `specs.md`.
+
+- **Why no model**: each mode is a rule a copy's start reads: the clock against `replication.window` (`scheduled`, read as the copy is about to start), `settle` since the file was first seen (`deferred`, and `immediate` with no ripe close), the watcher's group of a close that ripened (`immediate`), and `atoll replicate`'s release (`manual`, `--now` ignoring the window); a refresh of a stale copy reads none. What interleaves with a copy, its looks at its source before and after the read, a write meanwhile, a crash, a disk lost, is `Replication.tla`'s, whose copy may start at any step. A model would make the window and `settle` booleans, and its invariants would say the rules again.
+- **What holds each** (`conformance/models/README.md`, What it leaves out): `TestScheduledCopiesWaitForTheirWindow` (outside the window, waiting; inside, copied; `--now` at once), `TestARefreshOfAScheduledFileWaitsForNoWindow`, `TestARunReadsTheClockAsItGoes` (a window closing during a copy: it ends past it, no other starts), `TestAPassCopiesOnceSettled` and `TestAChangedSourceWaitsForSettle` (`deferred`), `TestImmediateCopiesOnceClosed`, `TestClosedPaths` and on the loop devices `TestImmediateCopiesOnClose` (`immediate`: closed and stable, otherwise `settle`), `TestReplicateReleasesManualFiles` and `TestReplicateForceRuns`; a copy of a source written during it dropped as `changed` (`Replication.tla`, the tests of `jobs`).
+- **Added**: `TestAManualFileWaitsForReplicateAndItsRefreshForNothing` (`internal/jobs/manualmode_test.go`): a file in `manual` mode copied by no pass over hours, `settle` past, `unprotected`; `atoll replicate` makes its copy; a user's edit then makes it stale, and the pass that takes the edit in refreshes it with no `atoll replicate`, as refreshing ignores the mode. It passed at once: no flaw.
+- **Checked**: in the CI's image, `go test -race` of `internal/jobs` (1,208 s), the new test among them; gofmt; `go vet` of `internal/jobs` with each of the five build tags; golangci-lint of it with three, 0 issues; `go test ./conformance/models`; the whole TLC set unchanged, at 42 min 36 s of TLC (flaw 35's run), under 45 minutes, so the CI's `tla` job stays one.
+- **Choices made alone, to confirm**:
+  - no TLA+ module for the modes, the tests of the code holding them, as the coordinator's brief allowed when TLA+ adds little;
+  - `immediate` taken as §14.1 says it: closed and stable once the watcher's group of a close ripened, `settle` since the file was first seen otherwise, a copy of a file still being written then dropped as `changed` by its looks at the source rather than kept from starting;
+  - the CI's `tla` job left whole, no instance added.
+
 ## Flaw 35 of the TLA+ models fixed with the maintainer's remedy, and §9 corrected, 2026-11-27 (specs.md §9, §21.2, §25)
 
 With his remedy of 2026-11-27 (the entry below), `rebuild-view`, in the form TLC checked, and §9's two sentences as he chose. On the branch `worktree-agent-aaf1b008b9d88cd66` from `beta`'s `94002de`. No contract change: no new file, key or exit code.
