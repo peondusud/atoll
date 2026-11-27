@@ -17,7 +17,7 @@ set -u
 export MSYS_NO_PATHCONV=1
 
 # .github/workflows/ci.yml and test/ci/run.sh name the same image, by its digest, its tag after it.
-image=eclipse-temurin@sha256:897ec01ae1350622de0d5393a48a4ffffee8fe1609f248f4389578b919eaf9f5 # 21.0.13.1_2-jre-noble
+image=eclipse-temurin@sha256:2ec98aa522c472deadfd2b7c5b39bca680e33ef522a53a72f10789bdf89a6bb5 # 25.0.5.1_2-jre-noble
 version=1.7.4
 sum=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 url=https://github.com/tlaplus/tlaplus/releases/download/v$version/tla2tools.jar
@@ -60,6 +60,42 @@ command -v java >/dev/null || {
 	echo "no java here: run test/tla/run.sh without --inside, which needs only Docker" >&2
 	exit 2
 }
+
+# fetch URL FILE downloads URL into FILE: with curl where there is one; otherwise, as in Temurin's images of Java 25,
+# which have neither curl nor wget, by HTTP/1.0 over openssl s_client, its certificate and host name verified and its
+# redirects followed, the response's body cut from its head by perl. Either way, the SHA-256 checked after it is what
+# vouches for the bytes.
+fetch() {
+	if command -v curl >/dev/null; then
+		curl -fsSL --retry 3 -o "$2" "$1"
+		return
+	fi
+	local url=$1 hop rest host path headers status
+	for hop in 1 2 3 4 5; do
+		case $url in
+		https://*) rest=${url#https://} ;;
+		*) break ;;
+		esac
+		host=${rest%%/*} path=/${rest#*/}
+		[ "$rest" = "$host" ] && path=/
+		printf 'GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: atoll-test-tla\r\n\r\n' "$path" "$host" |
+			openssl s_client -quiet -verify_return_error -verify_hostname "$host" -servername "$host" \
+				-connect "$host:443" >"$2.http" 2>/dev/null || break
+		headers=$(perl -0777 -ne 'print $1 if /\A(.*?)\r\n\r\n/s' "$2.http")
+		status=$(sed -n '1s/^HTTP\/[0-9.]* \([0-9]*\).*/\1/p' <<<"$headers")
+		case $status in
+		200)
+			perl -0777 -pe 's/\A.*?\r\n\r\n//s' "$2.http" >"$2" && rm -f "$2.http"
+			return
+			;;
+		301 | 302 | 303 | 307 | 308) url=$(sed -n 's/^[Ll]ocation: *//p' <<<"$headers" | tr -d '\r' | head -n 1) ;;
+		*) break ;;
+		esac
+	done
+	rm -f "$2.http"
+	return 1
+}
+
 cache=${TLA_CACHE:-bin/tla}
 case $cache in
 /*) ;;
@@ -70,8 +106,9 @@ mkdir -p "$cache" "$top/bin/tla" || exit 2
 if ! echo "$sum  $jar" | sha256sum -c --status 2>/dev/null; then
 	echo "downloading tla2tools.jar $version"
 	rm -f "$jar.part"
-	curl -fsSL --retry 3 -o "$jar.part" "$url" || {
+	fetch "$url" "$jar.part" || {
 		echo "cannot download $url" >&2
+		rm -f "$jar.part"
 		exit 2
 	}
 	if ! echo "$sum  $jar.part" | sha256sum -c --status; then

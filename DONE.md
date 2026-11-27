@@ -2,6 +2,18 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## TLC on Java 25, the latest LTS, 2026-11-27 (specs.md §27)
+
+The maintainer's choice of 2026-11-27 (below): TLC moves from Java 21 to Java 25. One commit, after the branch's fix.
+
+- **The image**: `eclipse-temurin:25.0.5.1_2-jre-noble`, Adoptium's `jdk-25.0.5.1+2` of 2026-11-18, its newest release of Java 25, on Ubuntu 24.04; pinned by `sha256:2ec98aa522c472deadfd2b7c5b39bca680e33ef522a53a72f10789bdf89a6bb5`, the index Docker Hub's registry gives the tag, which the official images' library names with `25-jre-noble`; amd64 and arm64 in it. In `.github/workflows/ci.yml` (the `tla` job), `test/ci/run.sh`, `test/tla/run.sh` and `conformance/models/README.md`; the `Makefile` names no image of TLC, its `model-check` running `test/tla/run.sh`. `docs/threat-model.md`'s G21 records the digests of 2026-11-22 as that day's, unchanged.
+- **No curl in it**: Adoptium's images of Java 25 have neither curl nor wget, which those of Java 21 keep "for historical reasons" (adoptium/containers, issue 255): `test/tla/run.sh` could not download `tla2tools.jar` there, on a fresh checkout or a cache the CI misses. It now fetches with curl where there is one, and otherwise by HTTP/1.0 over `openssl s_client`, the certificate and the host name verified, redirects followed, the body cut from the response by perl, both in the image; the SHA-256 checked after it, unchanged, is what vouches for the bytes. Tried in the image: the jar of GitHub's release, 2,274,532 bytes, its SHA-256 the one pinned; a 404, a URL not `https`, an expired certificate and a wrong host name each fail with nothing left behind. Everything still needs only Docker.
+- **tla2tools 1.7.4 on Java 25**: neither fails nor warns. Every one of the 167 instances passes as expected, each with the same count of distinct states as on Java 21, in 38 min 23 s of TLC, for 38 min 50 s on Java 21.0.13.1 the same day, on the same machine; no line of any log says "warning", "deprecated", "Unsafe", "restricted method" or "exception", as on Java 21. Each log names "Eclipse Adoptium 25.0.5.1". The run is on the branch's fix, `aba95d3`, whose models and instances are those of this run.
+- **CLAUDE.md**, the maintainer's to update: its line on model checking names `eclipse-temurin:21.0.13_9-jre-noble`, now `eclipse-temurin:25.0.5.1_2-jre-noble`.
+- **Choices made alone, to confirm**:
+  - the fetch without curl in `test/tla/run.sh`, so that everything keeps needing only Docker, rather than the CI's `tla` job running on the runner, which has curl, and the image through `docker run`;
+  - the JRE image kept, as asked, rather than the JDK's, which has no curl either.
+
 ## A disk its remount brought back keeps its mergerfs branch, 2026-11-27 (specs.md §15.13)
 
 The maintainer's answer of 2026-11-27 (below): the race `TestTheDaemonUnderSystemd` showed in qemu is fixed in the daemon, not only in the test. A disk lost after a USB reset is found `missing` by a check, which tries its remount at once; the remount brought it back before the pass the loss calls for, and that pass walked it, its own mount check finding it there, but the loop still held it `missing` from the check, so the pass took its branch out of mergerfs, about 0.2 s after the remount, until the check after it found the disk back: its files were gone from the merged view for up to 30 s. One commit, on `beta`'s `17eed6f`.
