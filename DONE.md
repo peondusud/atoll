@@ -2,6 +2,12 @@
 
 Finished work, newest first. Each item names its commits; unless it says otherwise, they are on `claude/funny-allen-jyq7pa` (pull request #2). Open work is in [TODO.md](TODO.md), lessons in [LESSONS.md](LESSONS.md).
 
+## The CI's TLC in two halves that run at once, 2026-11-28 (specs.md §27)
+
+- **Found on pull request #31**: the `tla` job was cancelled at its 60 minutes (run 46131774868), its last instances still running on a slower runner. The whole set had taken 37 minutes on GitHub on 2026-11-27, and 43 min 46 s on this machine since observation 4's instances. The maintainer had planned the split once it passed 45 minutes (2026-11-25).
+- **The split**: `test/tla/run.sh` takes `TLA_PART=K/N`, which runs one instance in N by name from the Kth (84 and 83 of the 167). The CI's `tla-part` runs the two halves at once, each with 60 minutes. A job still named `tla`, the check the branch's protection asks for, passes only when both halves did, and fails, rather than being skipped, when one did not. Locally, `test/tla/run.sh` and `test/ci/run.sh` still run the whole set.
+- **Checked**: `bash -n` on the script; actionlint 1.7.7 on `ci.yml`, with no finding; the halves counted. The two halves' first run is this pull request's CI.
+
 ## The maintainer's answers of 2026-11-28 on observation 4 and the change time's window (specs.md §16, §21.2)
 
 - **Observation 4, closed** (the entry below): its choices made alone are confirmed together, the redirect to the old folder's name read-only among them.

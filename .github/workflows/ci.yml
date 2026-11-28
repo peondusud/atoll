@@ -149,14 +149,18 @@ jobs:
 
   # The TLA+ model of conformance/models/, each instance against what it expects (specs.md §27), by TLC in the image of
   # test/tla/run.sh, which runs it there with --inside: 2 workers, the jar's SHA-256 checked, the jar kept in the cache.
-  tla:
+  # The model in two halves that run at once, every other instance by name each (test/tla/run.sh, TLA_PART): the whole
+  # took 37 minutes on GitHub's runners on 2026-11-27, and passed the 60 the maintainer gave it on a slower one on
+  # 2026-11-28, as he had planned the split once it passed 45.
+  tla-part:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: eclipse-temurin@sha256:2ec98aa522c472deadfd2b7c5b39bca680e33ef522a53a72f10789bdf89a6bb5 # 25.0.5.1_2-jre-noble
-    # The instances of 2026-11-22, the view's and the renames', took the whole to some 32 minutes on a loaded machine;
-    # those of 2026-11-24, the view's names and folders below folders, to 33 minutes on this machine, some 37 expected
-    # on GitHub's: 60, as the maintainer chose on 2026-11-24, rather than fewer instances.
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -167,6 +171,23 @@ jobs:
           key: tla2tools-${{ hashFiles('test/tla/run.sh') }}
           restore-keys: tla2tools-
       - run: bash test/tla/run.sh --inside
+        env:
+          TLA_PART: ${{ matrix.part }}/2
+
+  # The check the branch's protection asks for, by its name: it passes only when both halves did, and fails, rather than
+  # being skipped, when one did not.
+  tla:
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: tla-part
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Both halves passed
+        env:
+          RESULT: ${{ needs.tla-part.result }}
+        run: |
+          echo "the halves: $RESULT"
+          test "$RESULT" = success
 
   govulncheck:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
