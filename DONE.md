@@ -24,6 +24,8 @@ TODO.md's item of the gates, the next step of the hardening, in two parts: the w
   - the weekly workflow capped too, though only one of its jobs died so, rather than `mutation.yml` alone;
   - `sed -u`, so that a job's log shows how far it got;
   - `trash.go:1265:36` and `1451:18` named equivalent rather than left living, and `158:38` and `187:38` kept named.
+- **Confirmed on GitHub** (2026-11-28), on `fbed43d`. The nightly `mutation.yml`, the pure core, passed for the first time (run 46089171526), each package over its gate. The weekly matrix passed too (run 46089174216): `trash` 93.89 % and 91.30 %, `watch` 95.31 % and 81.54 %, `ops` 96.24 % and 76.00 %, its coverage exactly at its gate, and `jobs`, its parts merged, 84.22 % and 89.29 %. Each part of `jobs` is only measured, as `test/ci/mutation.sh` now has it.
+
 
 ## TLC on Java 25, the latest LTS, 2026-11-27 (specs.md §27)
 
