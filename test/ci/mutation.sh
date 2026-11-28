@@ -32,7 +32,9 @@ operators="--invert-assignments --invert-bitwise --invert-bwassign --invert-logi
 # out, in neither score. That first run takes its build from go's cache, where each mutant builds its package and the
 # test binary again: at gremlins' own 3, a fast package on a loaded machine had a third of its mutants timed out,
 # among them mutants the tests let live, so hidden from the score (glob: 59 timed out and 15 lived at 3, 15 and 22
-# at 20, on 2026-11-21). At 20 a timed-out mutant is a loop the mutant made endless.
+# at 20, on 2026-11-21). At 20 a timed-out mutant is a loop the mutant made endless. One that grows a slice in it
+# takes the machine's memory long before: mutation.yml and mutation-weekly.yml cap their container's, so that the
+# kernel ends that test binary, never the runner.
 timeout_coefficient=20
 # The packages whose mutants run only the tests that reach them, MUTATION_BY_TEST in place of the list. gremlins' first
 # run is then the whole of their tests, and a mutant's a part of them: for jobs, whose tests take most of an hour with
@@ -144,10 +146,11 @@ for pkg in "$@"; do
 		coefficient=$by_test_coefficient
 		;;
 	esac
-	# One operator a word, split on purpose.
+	# One operator a word, split on purpose. sed -u passes each of gremlins' lines on as it comes, not by blocks of 4
+	# KiB, so that the log of a job a runner left shows how far it got.
 	# shellcheck disable=SC2086
 	${shim[@]+"${shim[@]}"} "$out/gremlins" unleash --workers "$workers" --timeout-coefficient "$coefficient" $operators \
-		${excludes[@]+"${excludes[@]}"} -o "$out/$name.json" "$pkg" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | tee "$log"
+		${excludes[@]+"${excludes[@]}"} -o "$out/$name.json" "$pkg" 2>&1 | sed -u 's/\x1b\[[0-9;]*m//g' | tee "$log"
 	status=${PIPESTATUS[0]}
 	spent=$(($(date +%s) - start))
 	if [ "$status" != 0 ] || ! grep -q '^Killed: ' "$log"; then

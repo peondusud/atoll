@@ -25,6 +25,17 @@ func TestATransferPurgesOnlyWhileTheDataCopiesHold(t *testing.T) {
 			}
 			b.write("t2", "a", "edited since")
 		}, OutcomeTrashed, 0},
+		{"a stale copy edited, before one that holds", func(b *bench) {
+			if _, err := b.db.ExecContext(b.t.Context(), "UPDATE copies SET state = 'stale' WHERE disk_id = 't1'"); err != nil {
+				b.t.Fatal(err)
+			}
+			b.write("t1", "a", "edited since")
+		}, OutcomeTrashed, 0},
+		{"no data copy the catalog calls ok", func(b *bench) {
+			if _, err := b.db.ExecContext(b.t.Context(), "UPDATE copies SET state = 'stale' WHERE disk_id IN ('t1', 't2')"); err != nil {
+				b.t.Fatal(err)
+			}
+		}, OutcomeChanged, 1},
 	} {
 		b := newBench(t)
 		tc.dress(b)

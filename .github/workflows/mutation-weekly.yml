@@ -31,8 +31,12 @@ jobs:
   mutation:
     name: mutation (${{ matrix.package }})
     runs-on: ubuntu-latest
-    # The image of ci.yml and test/ci/run.sh.
-    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    container:
+      # The image of ci.yml and test/ci/run.sh.
+      image: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+      # 12 GB of the runner's 16, and no swap, as in mutation.yml: a mutant that grows a slice in an endless loop ends
+      # in the container, its test binary killed, never the runner (watch's, on 2026-11-24, in parseInotify's loop).
+      options: --memory=12g --memory-swap=12g
     # Under the 6 hours GitHub gives a job.
     timeout-minutes: 330
     strategy:
@@ -84,7 +88,10 @@ jobs:
   jobs-parts:
     name: mutation (jobs, ${{ matrix.part }})
     runs-on: ubuntu-latest
-    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    container:
+      image: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+      # As for mutation above.
+      options: --memory=12g --memory-swap=12g
     timeout-minutes: 330
     strategy:
       fail-fast: false
