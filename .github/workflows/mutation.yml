@@ -33,8 +33,15 @@ concurrency:
 jobs:
   mutation:
     runs-on: ubuntu-latest
-    # The image of ci.yml and test/ci/run.sh.
-    container: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+    container:
+      # The image of ci.yml and test/ci/run.sh.
+      image: golangci/golangci-lint@sha256:fbfcfd12a6f8d7f1b97b3362ca80fc2a244d46863148c73cb88e7793af96c481 # v2.15.0
+      # 12 GB of the runner's 16, and no swap: a mutant that stops a loop's index and grows a slice in it takes
+      # gigabytes a second (glob's tokenize with i += w made i = w: 2 GB in 2.5 s), and its time is up only at 20
+      # times the tests' own (test/ci/mutation.sh). With no cap the runner's memory went first, and the runner with it,
+      # each night 35 to 47 s into glob (2026-11-23 to 27). Under the cap the kernel ends the test binary that took it,
+      # go test fails, and gremlins counts the mutant killed.
+      options: --memory=12g --memory-swap=12g
     timeout-minutes: 240
     steps:
       # A dispatch mutates the branch it was started on.

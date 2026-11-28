@@ -75,6 +75,11 @@ func TestAResolveLeavesWhatAProgramWritesThroughTheView(t *testing.T) {
 			if err != nil || !strings.HasPrefix(string(got), late) {
 				t.Errorf("the copy the view held: %q, %v", got, err)
 			}
+			// FUSE tells the view of the close by RELEASE, after close(2) returned: the view lets go of its hold then
+			// (view_ops back to done), which a resolve right after the close could precede (the CI, 2026-11-28).
+			waitFor(t, "the view to let go of the file", func() bool {
+				return b.text("SELECT count(*) FROM view_ops WHERE state = 'open'") == "0"
+			})
 			sum, outcomes = b.resolve("a.mkv", keep)
 			if !sum.Resolved || outcomes[held] != trash.OutcomeTrashed {
 				t.Errorf("resolved %v, outcomes %v", sum.Resolved, outcomes)

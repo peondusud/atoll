@@ -12,6 +12,9 @@
 # SHA-256 checked, and never committed. TLC runs with 2 workers and a heap of 2 GiB, in a container of 2 CPUs and
 # 3 GiB, so that it leaves the machine to whatever else runs there. Each instance's log goes to bin/tla/<name>.log. The
 # exit code is 0 when every instance gave what it expects, 1 otherwise, and 2 when nothing could run.
+#
+# TLA_PART=K/N runs the Kth of N parts of every instance: by name, one in N from the Kth, as the CI's two halves run
+# them at once. With instances named, it changes nothing.
 set -u
 # Git Bash on Windows rewrites what looks like a path, /src included, into a Windows one.
 export MSYS_NO_PATHCONV=1
@@ -52,8 +55,8 @@ if [ "$inside" = 0 ]; then
 	# Made here, by the host's account: on Docker Desktop for Windows, the container's account may not make a folder in
 	# the bind mount (found on a fresh checkout, 2026-11-19).
 	mkdir -p bin/tla || exit 2
-	exec docker run --rm --cpus 2 --memory 3g --user "$(id -u):$(id -g)" -v "$host:/src" -w /src "$image" \
-		bash test/tla/run.sh --inside "$@"
+	exec docker run --rm --cpus 2 --memory 3g --user "$(id -u):$(id -g)" -v "$host:/src" -w /src \
+		-e TLA_PART="${TLA_PART:-}" "$image" bash test/tla/run.sh --inside "$@"
 fi
 
 command -v java >/dev/null || {
@@ -126,6 +129,26 @@ if [ $# -eq 0 ]; then
 	# By name, in byte order.
 	LC_COLLATE=C
 	set -- *.cfg
+	if [ -n "${TLA_PART:-}" ]; then
+		part=${TLA_PART%/*} parts=${TLA_PART#*/}
+		case "$part/$parts" in
+		*[!0-9/]* | /* | */ | 0/* | */0)
+			echo "TLA_PART=$TLA_PART: give K/N, 1 <= K <= N" >&2
+			exit 2
+			;;
+		esac
+		[ "$part" -le "$parts" ] || {
+			echo "TLA_PART=$TLA_PART: give K/N, 1 <= K <= N" >&2
+			exit 2
+		}
+		i=0 mine=()
+		for cfg in "$@"; do
+			[ $((i % parts + 1)) -eq "$part" ] && mine+=("$cfg")
+			i=$((i + 1))
+		done
+		set -- "${mine[@]}"
+		echo "part $part of $parts: $# instances"
+	fi
 fi
 
 took() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }

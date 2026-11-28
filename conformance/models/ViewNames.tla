@@ -1057,16 +1057,19 @@ ViewJournalTrue == ghost.flags \cap {"done-wrong", "undone-wrong"} = {}
    operations, and as long as no user acted directly on a disk, a file the view presents can be opened there: what it
    presents from a disk is at that path on it, and of a file it presents from the catalog, a copy at its path on a disk
    that is there is at the path presented, as the view's open gives way to the next copy that holds the file at its
-   path (flaw 9's remedy); once nothing of the view is planned, as what a planned operation presents is what it is
-   to do. No instance checks it: it fails for the window of one pass (README.md, observation 4). *)
+   path (flaw 9's remedy), or below a folder's old name on a disk that missed that folder's rename, which a read opens
+   there (observation 4's remedy, the maintainer, 2026-11-28); once nothing of the view is planned, as what a planned
+   operation presents is what it is to do. Every safety instance of the module checks it since (README.md). *)
 Openable(p) ==
     LET s == Resolved(p, OpenOps)
         w == PresentFile(p, OpenOps)
     IN \/ w.k = "none"
        \/ s.k = "disk" /\ (~Up(w.d) \/ At(w.d, p) # 0)
+       \* the presented path, or, for reading, the file's name below a folder's old name on a disk that missed that
+       \* folder's rename (view.Tree.Open, observation 4, the maintainer's remedy of 2026-11-28)
        \/ s.k = "cat" /\ LET f == Min(CatFiles(CatPath(s.ps)))
                              holding == {e \in Disks : CopyAtPath(f, e) /\ Up(e)}
-                         IN holding = {} \/ \E e \in holding : At(e, p) # 0
+                         IN holding = {} \/ \E e \in holding : \E i \in 1..Len(s.ps) : At(e, s.ps[i]) # 0
 ViewReadable == (vpc = VIdle /\ ~ghost.direct /\ \A v \in VIds : vops[v].st # "planned") => \A p \in Paths : Openable(p)
 
 (* Atoll's own work never takes from a folder the name a user gave it through the view after Atoll decided that work:

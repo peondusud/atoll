@@ -18,7 +18,11 @@ mutation ./internal/value 95 85
 # to a whole percent, set on 2026-11-22 at 83 and 53, 82 and 90, 82 and 79, and raised the same day by tests, the
 # maintainer away, to confirm (DONE.md): ops 94.94 and 76.93, trash 93.89 and 91.25, watch 94.19 and 80.47, the named
 # equivalents left out. trash's coverage stays at 90 and watch's efficacy at 93: 91 would leave one mutant of margin,
-# and 94 two. Each is raised as its mutants that live are killed or named.
+# and 94 two. Each is raised as its mutants that live are killed or named. On d8c0e1d (2026-11-28, run 46076407647,
+# DONE.md), the named equivalents followed to where the fixes of flaws 24 to 35 moved them: ops 96.24 and 76.00, its
+# coverage at its gate to the mutant, which one more mutant no test reaches takes under; watch 95.31 and 81.54; trash
+# 92.78, under its gate, then 93.57 and 91.30 with tests, trash.go measured again locally and merged with the run's
+# other files (93.89 with two more mutants those tests kill, checked by hand).
 mutation ./internal/ops 94 76
 mutation ./internal/trash 93 90
 mutation ./internal/watch 93 80

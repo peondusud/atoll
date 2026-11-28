@@ -130,6 +130,22 @@ func (t *Tree) Open(ctx context.Context, path string, n *Node) (fsx.File, error)
 			first = err
 		}
 	}
+	if fsx.IsAbsent(first) && n.Kind == NodeFile && !n.Ignored {
+		// Below a folder the view renamed, a disk that missed the rename, as one with no handle as it ran, holds the
+		// file at the old name until a pass takes the rename there: the same disk is read there, for reading alone
+		// (specs.md §21.2; conformance/models/README.md, observation 4, the maintainer's remedy, 2026-11-28).
+		old, err := t.oldNames(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range old {
+			for _, disk := range order {
+				if f, err := t.openOn(disk, p); err == nil {
+					return f, nil
+				}
+			}
+		}
+	}
 	// The copy presented may have just left its name, as a move of Atoll's own to the trash leaves it until its commit:
 	// the next copy in sync, in the order of §7, is opened in its place (specs.md §21.2; conformance/models/README.md,
 	// flaw 9, the maintainer's remedy).
@@ -145,6 +161,20 @@ func (t *Tree) Open(ctx context.Context, path string, n *Node) (fsx.File, error)
 		}
 	}
 	return nil, first
+}
+
+// oldNames gives the names a path had below the folders the view renamed that no pass has taken in, the oldest first,
+// the path itself left out: none when no such rename is at or above it, or when it presents what is not the catalog's.
+func (t *Tree) oldNames(ctx context.Context, path string) ([]string, error) {
+	ops, err := t.ops(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s := Resolve(ops, path)
+	if s.Kind != FromCatalog || len(s.Paths) < 2 {
+		return nil, nil
+	}
+	return s.Paths[:len(s.Paths)-1], nil
 }
 
 // nextCopies gives the disks of the other copies that hold a file at its path, those Open did not try, in the order of
